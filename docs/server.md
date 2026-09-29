@@ -301,7 +301,7 @@ GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequa
 | `parseByteRange(header, size)` | Range parsing for `streamBinaryFile` (above). |
 | `isAllowedHubUrl(url, hosts)` | A hub download must be **https** and either on the fixed GitHub host set or any `*.githubusercontent.com`. Checked on the initial URL **and every redirect hop** in `/api/hub/file`, which follows redirects manually (`redirect: "manual"`) so a `github.com → attacker` redirect can't cause SSRF. |
 
-Additional hardening in the stores: content hashes for basemaps/flags are **always computed server-side** — trusting a client hash would let a caller poison the dedup index so a later genuine upload is silently discarded (`server/basemapStore.js:104-110`, `server/flagStore.js:33-35`). Deletes are **soft** (`moveDirectoryToTrash`, `server/libraryStore.js:1804-1842`) with a Windows-specific retry-then-copy fallback for locked directories.
+Additional hardening in the stores: content hashes for basemaps/flags are **always computed server-side** — trusting a client hash would let a caller poison the dedup index so a later genuine upload is silently discarded (`server/basemapStore.js:104-110`, `server/flagStore.js:33-35`). A saved flag must be a base64 image data URL of a known type (png, jpeg, webp, gif, svg) of at most 2 MB decoded; `server/flagValidation.js` holds that rule and the web build's flag store imports it, so the website and the Android app keep and refuse the same flags as the desktop. Deletes are **soft** (`moveDirectoryToTrash`, `server/libraryStore.js:1804-1842`) with a Windows-specific retry-then-copy fallback for locked directories.
 
 ---
 

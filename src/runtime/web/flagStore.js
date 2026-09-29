@@ -16,6 +16,8 @@ import { STORES, idbGetAll, idbPut, idbDelete } from "./idb.js";
 // the Android app, whose http origin has no crypto.subtle — a flag upload
 // there used to throw right here.
 import { sha256Hex } from "../sha256.js";
+// The same rule as the desktop library, so a flag one build keeps the other does too.
+import { validateFlagDataUrl } from "../../../server/flagValidation.js";
 
 const slug = (raw, fallback = "flag") =>
   String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
@@ -32,7 +34,7 @@ const listFlags = async () => {
 
 const createFlag = async (body = {}) => {
   const dataUrl = String(body.dataUrl || "");
-  if (!dataUrl.startsWith("data:image/")) throw new Error("A flag must be an image data URL.");
+  validateFlagDataUrl(dataUrl);
   const flags = await listFlags();
   const contentHash = await sha256Hex(dataUrl);
   const existing = flags.find((f) => f.contentHash === contentHash);

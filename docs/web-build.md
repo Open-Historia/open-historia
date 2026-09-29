@@ -285,7 +285,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 |---|---|---|
 | `mapeditor/*` | `handleMapEditor` (`editorStore.js`) | map-editor documents in the `mapeditorDocs` store; each write also writes its summary to `mapeditorMeta`, and the list is built from those summaries, so opening the Documents menu never loads a whole map |
 | `basemaps/*` | `handleBasemaps` (`basemapStore.js`) | basemap meta + payload (two stores) |
-| `flags/*` | `handleFlags` (`flagStore.js`) | flag records |
+| `flags/*` | `handleFlags` (`flagStore.js`) | flag records, validated by the desktop's own rule (`server/flagValidation.js`: known image type, base64, at most 2 MB) |
 | `ui-settings/*` | `handleUiSettings` (`settingsStore.js:82`) | UI settings persisted in `kv` |
 | `lang/*` | `handleLang` (`settingsStore.js`) | language packs: the static `/lang/*.json` Vite copies to the site, merged over the IndexedDB overlay of AI translations (shipped wins; see [Languages & Translation](i18n.md)) |
 
