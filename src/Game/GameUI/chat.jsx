@@ -63,6 +63,13 @@ const selectGameIdentity = (game) => ({
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
+// A chat's id is a string once stored (gameState.js normalizeChatEntry), so a
+// new chat is given one from the start, and ids are compared as strings: a
+// numeric id from before never matched its stored copy, and every message
+// after the first store sync was shown but not saved.
+const newChatId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const sameChatId = (a, b) => a != null && b != null && String(a) === String(b);
+
 const saveAllChats = async (chats) => {
     try {
         await writeChatsState(chats);
@@ -3261,7 +3268,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // The list row is the thread as shown; the conversation gets the stored one,
     // which is what it writes back.
     const openChatFromList = (chat) => {
-        setActiveChat(chats.find((entry) => entry.id === chat.id) ?? chat);
+        setActiveChat(chats.find((entry) => sameChatId(entry.id, chat.id)) ?? chat);
         setHeldUnreadId(null);
         setChatReadState(chat, true);
     };
@@ -3336,7 +3343,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 if (signature(saved) === signature(prev)) return prev;
                 setActiveChat((ac) => {
                     if (!ac) return ac;
-                    const updated = saved.find((c) => c.id === ac.id);
+                    const updated = saved.find((c) => sameChatId(c.id, ac.id));
                     // Only adopt storage's copy when it has MORE messages (an
                     // outreach note landed); otherwise the in-panel state wins.
                     return updated && (updated.messages?.length ?? 0) > (ac.messages?.length ?? 0) ? updated : ac;
@@ -3366,9 +3373,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const handleMessagesUpdate = (chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") recordRecentDiplomaticOutgoing(chatId);
         setChats(prev => {
-            const updated = prev.map(c => c.id === chatId ? { ...c, messages: newMessages } : c);
+            const updated = prev.map(c => sameChatId(c.id, chatId) ? { ...c, messages: newMessages } : c);
             saveAllChats(updated);
-            setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
+            setActiveChat(ac => sameChatId(ac?.id, chatId) ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
     };
@@ -3379,13 +3386,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // live in world state, so they are written there rather than on the chat.
     const handleThreadUpdate = (chatId, { events, countries, title, polls, demands, cursors, committed = false }) => {
         setChats((prev) => {
-            const updated = prev.map((c) => (c.id === chatId
+            const updated = prev.map((c) => (sameChatId(c.id, chatId)
                 ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls, demands: demands ?? c.demands }
                 : c));
             // Institutional one-request turns are already committed atomically
             // with their legal governance/world/event changes in gameplay.js.
             if (!committed) saveAllChats(updated);
-            setActiveChat((ac) => (ac?.id === chatId ? updated.find((c) => c.id === chatId) ?? ac : ac));
+            setActiveChat((ac) => (sameChatId(ac?.id, chatId) ? updated.find((c) => sameChatId(c.id, chatId)) ?? ac : ac));
             return updated;
         });
         if (!committed && cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
@@ -3522,7 +3529,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
+        const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
         setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
@@ -3540,11 +3547,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // question of which one really deleted it.
     const handleDeleteChat = (id) => {
         setChats(prev => {
-            const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
+            const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
             saveAllChats(updated);
             return updated;
         });
-        if (activeChat?.id === id) setActiveChat(null);
+        if (sameChatId(activeChat?.id, id)) setActiveChat(null);
     };
 
     // Lifecycle invitation/application threads are purpose-built negotiations,
@@ -3643,7 +3650,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
                 return prev;
             }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code }], messages: [], status: "open" };
+            const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
             saveAllChats(u);
             setView("chats");
@@ -3714,7 +3721,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
                 <ConversationView key={String(activeChat.id)} chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
-                draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
+                draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
             ) : (
@@ -3775,7 +3782,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 onThreadUpdate={handleThreadUpdate}
                                 unread={unreadIds.has(String(channel.id))}
                                 onToggleRead={() => toggleActiveChatRead(channel)}
-                                draft={composerDraft?.chatId === channel.id ? composerDraft.text : ""}
+                                draft={sameChatId(composerDraft?.chatId, channel.id) ? composerDraft.text : ""}
                                 onDraftApplied={() => setComposerDraft(null)}
                                 onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
                                 onLifecycleResult={adoptInstitutionalResult}
