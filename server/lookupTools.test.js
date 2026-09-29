@@ -103,6 +103,39 @@ test("list_powers: exact names, counts by current control, the player flagged", 
   assert.deepEqual(run("list_powers", { query: "russ" }).powers.map((power) => power.name), ["Russian Federation"]);
 });
 
+test("list_powers: landless polities in the present are listed, the player's group polity marked", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      polityOverrides: {
+        ...WORLD.polityOverrides,
+        "Free Kharkiv Brigades": { name: "Free Kharkiv Brigades", status: "active" },
+        GXL: { name: "Government in Exile", aliases: [] },
+        "Old Kingdom": { name: "Old Kingdom", status: "dissolved" },
+        "Sleeping Khanate": { name: "Sleeping Khanate", status: "dormant" },
+      },
+      groups: { "Free Kharkiv Brigades": { description: "Partisans." } },
+      groupAreas: { "ukr-kharkiv": "Free Kharkiv Brigades" },
+    },
+    player: "Free Kharkiv Brigades",
+  });
+  const out = executeLookup(ctx, "list_powers", {});
+  assert.deepEqual(out.powers, [
+    { name: "Russian Federation", regions: 3 },
+    { name: "Ukraine", regions: 3 },
+    { name: "Free Kharkiv Brigades", regions: 0, landless: true, player: true, alsoGroup: true },
+    // Keyed by a legacy code: listed by the label every other function resolves.
+    { name: "GXL", regions: 0, landless: true },
+  ]);
+  assert.equal(out.count, 4);
+  // What list_powers names, power_info answers.
+  assert.equal(executeLookup(ctx, "power_info", { name: "GXL" }).regions, 0);
+  assert.equal(executeLookup(ctx, "power_info", { name: "Government in Exile" }).name, "GXL");
+  // A landless polity is also a close name for an unknown one.
+  assert.deepEqual(executeLookup(ctx, "list_regions", { owner: "Free Kharkiv" }).didYouMean, ["Free Kharkiv Brigades"]);
+});
+
 test("list_regions: one power's regions with ids, paged", () => {
   const all = run("list_regions", { owner: "Ukraine" });
   assert.equal(all.total, 3);

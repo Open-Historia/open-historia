@@ -77,7 +77,8 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "list_powers",
     description:
       "Every power on the map, by its EXACT name (the only spelling any owner field accepts), with how many "
-      + "regions it holds. Call this before naming a power you have not seen spelled in this conversation.",
+      + "regions it holds; a polity that holds none (a government in exile, the polity of a group of the same name) "
+      + "is listed as landless. Call this before naming a power you have not seen spelled in this conversation.",
     schema: object("Optional filter.", { query: text("Optional substring to filter names by (case-insensitive).") }),
   },
   {
@@ -432,6 +433,17 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     for (const alias of array(record?.aliases)) declareOwner(alias, label);
   }
   const resolveOwner = (token) => ownerByFold.get(foldRegionKey(token)) ?? "";
+  // Polities in the present that hold no region of this map: a government in
+  // exile, a landless country from the Countries tab, the polity of a player who
+  // leads a group. Each by the label resolveOwner answers with, so a name
+  // list_powers gives back resolves in every other function.
+  const landless = [];
+  for (const [token, record] of Object.entries(polities)) {
+    const status = clean(record?.status).toLowerCase();
+    if (status && status !== "active") continue;
+    const label = resolveOwner(token);
+    if (label && !ownerRows.has(label) && !landless.includes(label)) landless.push(label);
+  }
 
   // Neighbours: the map author's declared adjacencies when the catalog carries
   // them (either direction counts), else bounding-box adjacency from geometry —
@@ -499,7 +511,7 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     .filter((event) => event && typeof event === "object");
 
   return {
-    rows, byId, ownerRows, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
+    rows, byId, ownerRows, landless, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
   };
@@ -634,11 +646,12 @@ const countriesOf = (rows) => {
 // ahead of a fragment and the nearer length first, then a spelling a letter or
 // two off. Suggestions only: the name asked for still names nobody.
 const DID_YOU_MEAN = 8;
+const powerLabels = (context) => [...context.ownerRows.keys(), ...array(context.landless)];
 const closestPowers = (context, token) => {
   const key = foldRegionKey(token);
   if (key.length < 2) return [];
   const ranked = [];
-  for (const label of context.ownerRows.keys()) {
+  for (const label of powerLabels(context)) {
     const folded = foldRegionKey(label);
     const [shorter, longer] = folded.length <= key.length ? [folded, key] : [key, folded];
     const at = shorter.length >= 3 ? longer.indexOf(shorter) : -1;
@@ -667,7 +680,7 @@ const unknownPower = (context, token) => {
   }
   return {
     error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
-    powers: [...context.ownerRows.keys()].sort().slice(0, 60),
+    powers: powerLabels(context).sort().slice(0, 60),
   };
 };
 
@@ -894,8 +907,18 @@ export const executeLookup = (context, name, args = {}) => {
   switch (name) {
     case "list_powers": {
       const query = foldRegionKey(a.query);
-      const powers = [...context.ownerRows.entries()]
-        .map(([label, rows]) => ({ name: label, regions: rows.length, ...(label === context.player ? { player: true } : {}) }))
+      const groups = normalizeGroups(context.world?.groups);
+      const power = (label, regions, landless) => ({
+        name: label,
+        regions,
+        ...(landless ? { landless: true } : {}),
+        ...(label === context.player ? { player: true } : {}),
+        ...(Object.hasOwn(groups, label) ? { alsoGroup: true } : {}),
+      });
+      const powers = [
+        ...[...context.ownerRows.entries()].map(([label, rows]) => power(label, rows.length, false)),
+        ...array(context.landless).map((label) => power(label, 0, true)),
+      ]
         .filter((power) => !query || foldRegionKey(power.name).includes(query))
         .sort((x, y) => y.regions - x.regions || x.name.localeCompare(y.name));
       return { count: powers.length, powers: powers.slice(0, 250) };
