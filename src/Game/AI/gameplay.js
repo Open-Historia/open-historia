@@ -147,6 +147,7 @@ import {
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
+import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport } from "./agentReports.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment } from "../../runtime/spySeal.js";
 import {
@@ -6778,9 +6779,11 @@ export const interveneAfterEvent = async (keptCount) => {
     const receipt = mergeReceipts(createApplicationReceipt(), journal.receipt ?? null);
     noteReceipt(receipt, "withheld", describeIntervention({ kept, dropped, closingDate }));
     // A budget with nothing left: history consolidation, the tracked stats and
-    // every other optional pass ask it first and stand down.
-    const requests = createJumpBudget({ cap: 1 });
-    requests.take("intervene");
+    // every other optional pass ask it first and stand down. Shaped like a
+    // skip's (createJumpRequests): the passes read requests.budget, and a bare
+    // budget made each of them throw instead.
+    const requests = { saving: true, budget: createJumpBudget({ cap: 1 }), used: 0, refused: 0 };
+    requests.budget.take("intervene");
     const applied = await applySimulationResult({
       baseActions: bundle.actions,
       baseChats: bundle.chats,
@@ -7066,6 +7069,7 @@ const applySimulationResult = async ({
     context: result?.breadthRepairContext,
     mode: result.mode,
     signal: projects?.signal,
+    requests,
   });
   if (breadthRepair?.events?.length) {
     // New storyline ids ride on their own repair events before any filtering,
@@ -7973,10 +7977,18 @@ const applySimulationResult = async ({
   // there when the player opens the Spy tab, but never allowed to fail the turn.
   // While requests are being saved the reports came with the turn review, in its
   // one request, and are only filed here; a turn with no review (a resolved
-  // interactive event, a game-master command) waits for the next skip's. Otherwise each
-  // agent makes its own request, as before.
+  // interactive event, a game-master command) waits for the next skip's. With
+  // saving off, after a time skip only, each agent due a report makes its own
+  // request (refreshSpyIntercepts).
   if (review) await fileReviewedAgentReports(review);
-  else if (!savingRequests()) await refreshSpyIntercepts();
+  else if (!savingRequests() && (result.mode === "jump" || result.mode === "auto")) {
+    await refreshSpyIntercepts({
+      round: Number(nextGame.round) || 0,
+      originDate: normalizeString(baseGame.gameDate),
+      signal: projects?.signal,
+      requests,
+    });
+  }
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId });
   // And the advisor flags each new paper in its conversation.
@@ -8401,8 +8413,9 @@ const buildWorldInitiativeContextBackground = async (bundle, options = {}, signa
 // (idleDeadline.js explains why repairs ignore "Limit AI generation"), and at
 // `hardLimitMs` when the caller has a time budget to keep. The abort is on a
 // local controller: the caller's `signal` stays un-aborted, so its catch sees an
-// ordinary failure, while the player's Cancel still cancels.
-const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null } = {}) => {
+// ordinary failure, while the player's Cancel still cancels. `onRequest` counts
+// the call in what the skip cost (jumpTaskOptions(requests, "repair")).
+const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null, onRequest = null } = {}) => {
   const now = () =>
     typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -8421,6 +8434,7 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
           taskKey,
           tool,
           lookups,
+          ...(onRequest ? { onRequest } : {}),
         }),
       { taskKey, signal, hardLimitMs },
     );
@@ -8479,6 +8493,8 @@ const runTargetedWorldMotionRepair = async ({
   // Filled in on failure, so the pass can tell a repair stopped by its time
   // budget from one that failed (repairSkipStorylineMotion).
   outcome = null,
+  // Counts the request in what the skip cost.
+  onRequest = null,
 } = {}) => {
   const prior = issue?.prior;
   const attempted = issue?.update;
@@ -8617,6 +8633,7 @@ const runTargetedWorldMotionRepair = async ({
       taskKey: "worldMotionRepair",
       tool: getGameplayTool("worldMotionRepair"),
       lookups: buildTaskLookups(bundle),
+      onRequest,
     });
 
     const rawText =
@@ -8805,6 +8822,7 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
       // runs out, so the budget caps the pass, not only when repairs start.
       hardLimitMs: motionRepairTimeRemainingMs(budget),
       outcome: repairOutcome,
+      onRequest: jumpTaskOptions(state.requests, "repair").onRequest,
     });
     const settledAs = settleMotionRepairCall(issue, {
       budget,
@@ -8989,6 +9007,8 @@ const runWorldBreadthRepair = async ({
   survivorCount = 0,
   consequenceSignal = null,
   signal,
+  // Counts the request in what the skip cost.
+  onRequest = null,
 } = {}) => {
   const maxEvents = Math.max(0, Math.min(
     WORLD_BREADTH_REPAIR_EVENT_LIMIT,
@@ -9157,6 +9177,7 @@ const runWorldBreadthRepair = async ({
       signal,
       taskKey: "worldBreadthRepair",
       tool: getGameplayTool("jumpForward"),
+      onRequest,
     });
 
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
@@ -9284,6 +9305,8 @@ const maybeRepairWorldBreadthAfterCuration = async ({
   context,
   mode = "jump",
   signal,
+  // The time skip this repair belongs to (createJumpRequests), for its count.
+  requests = null,
 } = {}) => {
   const analysis = context?.analysis;
   const slate = normalizeArray(analysis?.explorationSlate);
@@ -9354,6 +9377,7 @@ const maybeRepairWorldBreadthAfterCuration = async ({
     survivorCount,
     consequenceSignal,
     signal,
+    onRequest: jumpTaskOptions(requests, "repair").onRequest,
   });
 
   if (!repair) {
@@ -10115,7 +10139,17 @@ const sanitizeTrackedStatsPatch = (value, statIndexRows = DEFAULT_STAT_INDEX_ROW
   return Object.keys(patch).length ? patch : null;
 };
 
-const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {}) => {
+// Asked of the skip's budget first, like the standard refresh. Refused, the
+// refresh stays due and the skip goes on without it.
+const takeTrackedStatsRequest = (requests, due) => {
+  if (!requests || requests.budget.take("stats")) return true;
+  logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
+    countries: due.map((entry) => entry.polity),
+  });
+  return false;
+};
+
+const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null } = {}) => {
   const game = normalizeGameData(bundle?.game);
   let world = normalizeWorldState(bundle?.world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);
@@ -10163,6 +10197,7 @@ const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {
     pendingBaselinePolities: pendingBaseline,
   }, { playerCountry: game?.country });
   if (!due.length) return world;
+  if (!takeTrackedStatsRequest(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic scenario-defined National Stats auditor.
 
@@ -10199,6 +10234,7 @@ For each country include only values that genuinely changed.`;
         signal,
         reasoningEnabled: false,
         taskKey: "countryStatSheet",
+        ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
         ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? { deadline: Date.now() + 90000 } : {}),
       },
     );
@@ -10260,7 +10296,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   if (!parseIsoDate(currentDate)) return world;
   const statSheetDefinition = await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }));
   if (statSheetDefinition.custom) {
-    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition });
+    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests });
   }
   const statIndexDefinition = await loadStatIndexDefinition().catch(() => ({ custom: false, rows: DEFAULT_STAT_INDEX_ROWS }));
   const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
@@ -10326,12 +10362,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   }, { playerCountry: game?.country });
 
   if (!due.length) return world;
-  if (requests && !requests.budget.take("stats")) {
-    logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
-      countries: due.map((entry) => entry.polity),
-    });
-    return world;
-  }
+  if (!takeTrackedStatsRequest(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic national-statistics auditor.
 
@@ -10992,7 +11023,9 @@ const playersAgentIn = (bundle, target) => {
     entry.owner === player && entry.target === target && (entry.status === "active" || entry.status === "turned"));
 };
 
-export const gatherIntelligence = async (target, { signal, requestKind } = {}) => {
+// `requests` is the time skip the report belongs to (createJumpRequests), so it
+// is asked of that skip's budget and counted in what the skip cost.
+export const gatherIntelligence = async (target, { signal, requestKind, requests = null } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
   const bundle = await readGameStateBundle({ force: true });
@@ -11005,6 +11038,7 @@ export const gatherIntelligence = async (target, { signal, requestKind } = {}) =
     userMessage: prepared.userMessage,
     variables: prepared.variables,
     ...(requestKind ? { requestKind } : {}),
+    ...jumpTaskOptions(requests, "spies"),
   });
   return storeSpyReport(bundle, spy, payload);
 };
@@ -11080,18 +11114,27 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
   }
 };
 
-export const refreshSpyIntercepts = async () => {
+// With saving off, after a time skip: the agents due a report of their own
+// (agentReports.js) make one request each — not every agent after every turn,
+// which cost a player with five agents five requests a skip. On the skip's
+// signal, so Cancel stops them, and counted in what the skip cost.
+// `round` is the round the skip produced and `originDate` the date it started.
+export const refreshSpyIntercepts = async ({ round = 0, originDate = "", signal = null, requests = null } = {}) => {
   if (!isActiveFeatureEnabled("espionage")) return;
   let world;
+  let filed;
   try {
     world = normalizeWorldState(await readWorldState({ force: true }));
+    filed = normalizeIntercepts(await readInterceptsState({ force: true }).catch(() => ({})));
   } catch {
     return;
   }
   const player = normalizeString((await readGameData()).country);
-  for (const spy of activeSpies(world, player)) {
+  const { justPlaced, overdue } = agentsDueToReport({ agents: activeSpies(world, player), filed, round, originDate });
+  for (const spy of [...justPlaced, ...overdue]) {
+    if (signal?.aborted) return;
     try {
-      await gatherIntelligence(spy.target);
+      await gatherIntelligence(spy.target, { signal, requests });
     } catch (error) {
       console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
     }
@@ -13583,10 +13626,6 @@ const curatorUnavailable = (candidates) => ({
   underrepresentedDomains: [],
 });
 
-// An agent's report rides along on any review; by itself it asks for one only
-// when it has gone this many rounds without being refreshed.
-const AGENT_REPORT_EVERY_ROUNDS = 3;
-
 const unitDirectorVariables = (input, game) => ({
   unitDirectorCandidates: JSON.stringify(input.candidates, null, 2),
   unitDirectorUnits: JSON.stringify(input.units, null, 2),
@@ -13737,17 +13776,16 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     //   - its report is AGENT_REPORT_EVERY_ROUNDS rounds old, and this is one of
     //     the rounds reports are collected on.
     // Every other skip it simply rides along when something else asks.
+    // The calendar is agentReports.js's, shared with the reports made with
+    // saving off.
     const filed = normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})));
-    const originDate = normalizeString(bundle.game?.gameDate);
-    const collectionRound = round % AGENT_REPORT_EVERY_ROUNDS === 0;
-    const justPlaced = agents.filter((spy) => !filed?.[spy.target]
-      && normalizeString(spy.deployedAt) && originDate && compareGameDates(spy.deployedAt, originDate) >= 0);
-    const overdue = collectionRound
-      ? agents.filter((spy) => {
-        const last = Number(filed?.[spy.target]?.round);
-        return !Number.isFinite(last) || last > round || round - 1 - last >= AGENT_REPORT_EVERY_ROUNDS;
-      })
-      : [];
+    const { justPlaced, overdue } = agentsDueToReport({
+      agents,
+      filed,
+      round,
+      originDate: normalizeString(bundle.game?.gameDate),
+      collectionRounds: true,
+    });
     if (justPlaced.length) reasons.push(`${justPlaced.length} newly placed agent(s) have not reported yet`);
     else if (overdue.length) reasons.push(`${overdue.length} agent report(s) are ${AGENT_REPORT_EVERY_ROUNDS}+ rounds old`);
   }
