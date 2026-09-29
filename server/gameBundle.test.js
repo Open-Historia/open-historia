@@ -210,7 +210,7 @@ test("a bundle whose schema is not ours is refused, and says so", () => {
   const result = runStore(root, `
     const reject = (bundle) => { try { store.importGameBundle(bundle); return null; } catch (error) { return error.message; } };
     ${report(`{
-      wrongSchema: reject({ schema: "pax-historia-scenario-bundle/2", data: {}, game: {} }),
+      wrongSchema: reject({ schema: "open-historia-scenario-bundle/2", data: {}, game: {} }),
       noSchema: reject({ data: {}, game: {} }),
       notAnObject: reject("nope"),
       count: store.getGameCatalog().games.length,

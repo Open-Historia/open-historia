@@ -1,5 +1,5 @@
 /*! Open Historia — portions (download handling for the WebView shell) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-package io.github.arkniem.paxhistoria;
+package io.github.arkniem.openhistoria;
 
 import android.content.ComponentCallbacks2;
 import android.content.Intent;

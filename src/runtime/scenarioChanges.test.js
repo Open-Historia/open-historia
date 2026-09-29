@@ -26,7 +26,7 @@ const region = (id, owner, geometry, extra = {}) => ({ type: "Feature", geometry
 const embedded = (data) => ({ mode: "embedded", data });
 
 const baseBundle = () => ({
-  schema: "pax-historia-scenario-bundle/2",
+  schema: "open-historia-scenario-bundle/2",
   scenario: { name: "Old World", heroTitle: "Old World", heroSubtitle: "A world.", description: "A world.", subtitle: "Base", features: {} },
   data: {
     game: { country: "Alpha", startDate: "1900-01-01", gameDate: "1900-01-01", language: "English" },

@@ -66,3 +66,4 @@ export const loadRegionLabelGeometry = async () => {
 
   return regionLabelGeometryPromise;
 };
+

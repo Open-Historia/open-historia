@@ -63,6 +63,7 @@ import {
   getBasemapPayload,
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
+import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
   hubCacheUsage,
@@ -1411,6 +1412,12 @@ const hubCachePaths = (fileUrl) => {
   const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
   return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
 };
+// What players downloaded before 2026-09-29 says the project's earlier name in
+// its schema; the cache keeps it under the current one (scenarioBundleNames.js).
+// Once, in the background: startup never waits for it.
+renameHubCacheBundles(HUB_CACHE_DIR)
+  .then((count) => { if (count) console.log(`[hub] ${count} downloaded scenario(s) renamed to the current bundle name.`); })
+  .catch((error) => console.warn("[hub] cache rename failed:", error.message));
 
 // Leftover downloads from a crash, and anything past the size cap, go at
 // startup (server/hubCache.js).
@@ -1450,6 +1457,22 @@ app.get("/api/hub/file", async (req, res) => {
       let cachedType = "application/octet-stream";
       try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
       touchEntry(cache.body);
+      // A copy cached before the startup rename reached it is renamed now;
+      // once that pass has left its marker, every copy carries the name.
+      if (!fs.existsSync(path.join(HUB_CACHE_DIR, HUB_CACHE_NAMES_MARKER))) {
+        const cached = await renameScenarioBundleBytes(fs.readFileSync(cache.body));
+        if (cached.changed) {
+          try {
+            writeFileAtomic(cache.body, cached.bytes);
+          } catch {
+            // Served renamed either way.
+            res.setHeader("Cache-Control", "no-store");
+            setHubFileGuards(res);
+            res.setHeader("Content-Type", cachedType);
+            return res.send(cached.bytes);
+          }
+        }
+      }
       return sendHubFile(res, cache.body, cachedType);
     }
 
@@ -1492,6 +1515,9 @@ app.get("/api/hub/file", async (req, res) => {
     fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
     const download = `${cache.body}.${process.pid}.${crypto.randomUUID()}.tmp`;
     await saveCappedBody(upstream.body, download, HUB_MAX_BUNDLE_BYTES);
+    // Kept and handed on under the current bundle name, whatever the post says.
+    const renamed = await renameScenarioBundleBytes(fs.readFileSync(download));
+    if (renamed.changed) fs.writeFileSync(download, renamed.bytes);
     try {
       fs.writeFileSync(cache.type, contentType);
       fs.renameSync(download, cache.body);

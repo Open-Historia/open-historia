@@ -164,7 +164,7 @@ Rewrites a record whose owners are GADM codes into one keyed by country **names*
 
 ### Export / import bundles
 
-- `exportScenarioBundle(id)` — every export is full (`mode: "full"`): the cover, colours, flags, tags, geometry, background and any custom PMTiles archive travel whenever the scenario has them. There is no light mode any more; an older `mode: "light"` bundle still imports. Geometry and the other JSON assets are embedded as JSON, not base64, matching the desktop store (see `docs/server.md`); the cover and PMTiles archives are still base64. Schema `pax-historia-scenario-bundle/2`.
+- `exportScenarioBundle(id)` — every export is full (`mode: "full"`): the cover, colours, flags, tags, geometry, background and any custom PMTiles archive travel whenever the scenario has them. There is no light mode any more; an older `mode: "light"` bundle still imports. Geometry and the other JSON assets are embedded as JSON, not base64, matching the desktop store (see `docs/server.md`); the cover and PMTiles archives are still base64. Schema `open-historia-scenario-bundle/2`.
 - `importScenarioBundle` / `updateScenarioFromBundle` accept any schema in `ACCEPTED_BUNDLE_SCHEMAS` (v1 + v2), and lay down each asset through one `applyScenarioBundleAsset`, as the desktop store does: geometry that travelled as JSON is stored, one that travelled as base64 is decoded, and only an asset the bundle does not embed is cleared (the hub Update once had its own copy without the JSON branch and deleted a map's regions, cities and basemap). Note the **JSON-descriptor gotcha**: `colors`/`flags`/`tags` descriptors carry the **object itself** in `descriptor.data`, not base64 — passing them through `base64ToBytes` (as geojson/pmtiles do) made `atob` throw and broke import of every flag/tag-carrying preset (e.g. WWII).
 - Hub provenance (`hubOrigin`, `hubPublished`, `hubReviews`) follows the desktop store's rules through the same `server/hubProvenance.js`. `hubOrigin` is stamped **last** by an import. Any later edit keeps it and stamps `editedAt`, which stops hub updates from overwriting the player's work while keeping the original for **Suggest changes**. `hubOrigin: null` unlinks the scenario. A body carrying only provenance is bookkeeping (`writeScenarioMeta(record, updates, { touch: false })`: no `updatedAt`, no `editedAt`). See [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went).
 
@@ -204,7 +204,7 @@ A faithful mirror of the constants and pure helpers in `server/libraryStore.js`.
 | `UPLOADABLE_SCENARIO_ASSET_KEYS` | `cover` + optional + pmtiles + geojson |
 | `UPLOADABLE_GAME_ASSET_KEYS` | `cover` only |
 
-`SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2"` — the **only** compatibility gate on a file strangers swap; the schema string moves with the owner rename so an old build can't silently mis-resolve a name-keyed bundle.
+`SCENARIO_BUNDLE_SCHEMA = "open-historia-scenario-bundle/2"` — the **only** compatibility gate on a file strangers swap; the schema string moves with the owner rename so an old build can't silently mis-resolve a name-keyed bundle. `isScenarioBundleSchema` (mirrored from `server/libraryStore.js`) reads format 1 and 2 under any `<name>-scenario-bundle` name, so files written under the project's earlier name import unchanged.
 
 ### `resolveOwnerRef(value, world)`
 

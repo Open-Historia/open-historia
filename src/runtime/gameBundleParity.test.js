@@ -26,7 +26,10 @@ import {
   GAME_BUNDLE_DATA_KEYS,
   GAME_BUNDLE_SCHEMA,
   OPTIONAL_GAME_BUNDLE_KEYS,
+  SCENARIO_BUNDLE_SCHEMA,
+  SCENARIO_BUNDLE_SCHEMA_PATTERN,
   TEMPLATE_WORLD_OVERRIDE_KEYS,
+  isScenarioBundleSchema,
 } from "./web/storeConstants.js";
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
@@ -63,11 +66,21 @@ test("both stores write and accept the same schema string", () => {
   assert.ok(ACCEPTED_GAME_BUNDLE_SCHEMAS.has(GAME_BUNDLE_SCHEMA));
 });
 
-test("the schema carries this project's name, not the one it is an alternative to", () => {
-  // The scenario bundle's "pax-historia-scenario-bundle/2" is a frozen wire
-  // format kept for the bundles players already hold. A format minted now has no
-  // such debt, and nothing else of ours should be named after another product.
+test("the schemas carry this project's name, not the one it is an alternative to", () => {
   assert.match(GAME_BUNDLE_SCHEMA, /^open-historia-game-bundle\//);
+  assert.equal(SCENARIO_BUNDLE_SCHEMA, "open-historia-scenario-bundle/2");
+  assert.equal(SERVER_STORE.match(/const SCENARIO_BUNDLE_SCHEMA = "([^"]+)"/)?.[1], SCENARIO_BUNDLE_SCHEMA, "both stores write the same name");
+  assert.equal(SERVER_STORE.match(/const SCENARIO_BUNDLE_SCHEMA_PATTERN = (\/.+\/);/)?.[1], String(SCENARIO_BUNDLE_SCHEMA_PATTERN), "and read the same ones");
+});
+
+test("a scenario bundle written under an earlier name still imports; a newer format does not", () => {
+  assert.equal(isScenarioBundleSchema(SCENARIO_BUNDLE_SCHEMA), true);
+  // Format 2 and the unversioned format 1, under whatever name they were written.
+  assert.equal(isScenarioBundleSchema("earlier-name-scenario-bundle/2"), true);
+  assert.equal(isScenarioBundleSchema("earlier-name-scenario-bundle"), true);
+  assert.equal(isScenarioBundleSchema("open-historia-scenario-bundle/3"), false, "a format this build does not know");
+  assert.equal(isScenarioBundleSchema(GAME_BUNDLE_SCHEMA), false, "a game is not a scenario");
+  assert.equal(isScenarioBundleSchema(undefined), false);
 });
 
 test("both stores carry the same set of game data keys", () => {

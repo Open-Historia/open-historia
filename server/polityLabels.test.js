@@ -360,7 +360,7 @@ test("CP4 compact diagonal geometry may beat the horizontal readability preferen
   assert.equal(label.properties.placementInside, true);
 });
 
-test("R6 balanced Pax fit uses a polity's dominant axis without overfilling it", () => {
+test("R6 balanced atlas fit uses a polity's dominant axis without overfilling it", () => {
   const result = buildPolityLabelCollections({
     type: "FeatureCollection",
     features: [

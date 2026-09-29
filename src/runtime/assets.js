@@ -560,7 +560,7 @@ const persistResponse = async (url, response) => {
 };
 
 const buildRuntimeCacheUrl = (key) =>
-  `${origin || "https://pax-historia.local"}/__runtime-cache/${encodeURIComponent(key)}.json`;
+  `${origin || "https://open-historia.local"}/__runtime-cache/${encodeURIComponent(key)}.json`;
 
 const fetchWithPersistence = async (
   url,

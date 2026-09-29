@@ -25,15 +25,15 @@ test("PTR scenario recovery does not key the renderer to the mutable runtime ass
 });
 
 test("scenario recovery keeps the accepted political-fill and flood baseline intact", () => {
-  assert.match(nations, /const buildPaxPoliticalFillOpacity = \(hiddenExpression = null\) => \[/);
+  assert.match(nations, /const buildPoliticalFillOpacity = \(hiddenExpression = null\) => \[/);
   assert.match(nations, /createOwnershipFloodCustomLayer/);
   assert.match(nations, /const OWNERSHIP_FLOOD_PREP_BUDGET_MS = 350/);
   assert.match(
     nations,
-    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?buildPaxPoliticalFillOpacity\(\[/,
+    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?buildPoliticalFillOpacity\(\[/,
   );
   assert.doesNotMatch(
     nations,
-    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?\[\s*"case",[\s\S]*?PAX_POLITICAL_FILL_OPACITY/,
+    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,
   );
 });
