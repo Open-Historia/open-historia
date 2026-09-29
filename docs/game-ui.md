@@ -208,7 +208,7 @@ Section tabs (`SectionTabs`): scenarios show `overview | world | features | prom
 
 Footer: **Save** (`handleSave`), **🗺️ Open Map Editor** (scenario only — `openMapEditorFor` loads current geometry/owners/cities/palette/flags/background then opens the lazy `MapEditor` at z 10050; on apply → `applyMapToScenario`), **Suggest changes** (only on a scenario downloaded from the hub, `record.hubOrigin`; see [§4.8](#48-suggested-changes)), **Delete** (if `record.canDelete`, `window.confirm`).
 
-Save is careful: scenario/game meta writes merge `currentGame`/`currentWorld` so a partial write never wipes `startDate`/`gameDate`/`round` or `polityOverrides`/`ownerCodes` (the "Undated" and wiped-map bugs called out in comments).
+Save is careful: scenario writes merge `currentGame`/`currentWorld` so a partial write never wipes `startDate`/`gameDate`/`round` or `polityOverrides`/`ownerCodes` (the "Undated" and wiped-map bugs called out in comments). A game's Save sends only the fields changed in the form (`changedFields`, `src/runtime/editorForm.js`) as `gamePatch`/`worldPatch`, which the store merges into the files as they are now: the drawer can stay open over the map while turns are played, and writing back the `game.json`/`world.json` it loaded rolled the date, round, borders, units and polities back. Both stores resolve a patched player country against the stored world with the patch merged in, not the patch alone.
 
 ### 4.7 Hub update detection
 

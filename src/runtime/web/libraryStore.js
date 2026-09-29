@@ -929,10 +929,11 @@ const applyJsonMutations = (record, body, canonicalize, kind) => {
   // parallel country.
   ensureOwnerSchema(record, kind);
   // The world these refs resolve against: the one in this same body if there is
-  // one, else what the record already holds.
+  // one, else what the record already holds (with a worldPatch merged in, as it
+  // is about to be: the patch alone carries no polities and no ownerSchema).
   const worldContext = () =>
     (body.world && typeof body.world === "object" ? body.world
-      : body.worldPatch && typeof body.worldPatch === "object" ? body.worldPatch
+      : body.worldPatch && typeof body.worldPatch === "object" ? { ...jsonAsset(record, "world"), ...body.worldPatch }
         : jsonAsset(record, "world"));
   // The *Patch branches used to spread raw while their full-value twins
   // canonicalized, so the same edit landed differently depending on which shape

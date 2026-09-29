@@ -2296,9 +2296,12 @@ const updateScenario = (scenarioId, body = {}) => {
   // written in the same call if there is one, else what is already on disk. It is
   // needed even for the game write — game.country is an owner reference, and a
   // preset's "ROM" reaches "Roman Empire" only through its polityOverrides.
+  // A worldPatch is merged into the stored world, so that world is the context:
+  // the patch alone carries no polities and no ownerSchema.
   const scenarioWorldContext = () =>
     (world && typeof world === "object" ? world
-      : worldPatch && typeof worldPatch === "object" ? worldPatch
+      : worldPatch && typeof worldPatch === "object"
+        ? { ...readJsonFile(getScenarioJsonPath(scenarioId, "world"), JSON_ASSET_DEFAULTS.world), ...worldPatch }
         : readJsonFile(getScenarioJsonPath(scenarioId, "world"), JSON_ASSET_DEFAULTS.world));
 
   if (game && typeof game === "object") {
@@ -2422,9 +2425,12 @@ const updateGame = (
 
   // See the note in updateScenario: game.country is an owner reference and needs
   // the world to resolve a preset's polity.
+  // A worldPatch is merged into the stored world, so that world is the context:
+  // the patch alone carries no polities and no ownerSchema.
   const gameWorldContext = () =>
     (world && typeof world === "object" ? world
-      : worldPatch && typeof worldPatch === "object" ? worldPatch
+      : worldPatch && typeof worldPatch === "object"
+        ? { ...readJsonFile(getGameJsonPath(gameId, "world"), JSON_ASSET_DEFAULTS.world), ...worldPatch }
         : readJsonFile(getGameJsonPath(gameId, "world"), JSON_ASSET_DEFAULTS.world));
 
   if (game && typeof game === "object") {

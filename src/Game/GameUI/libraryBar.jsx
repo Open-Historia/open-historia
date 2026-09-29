@@ -64,7 +64,7 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
 import { createLatestRequest } from "../../runtime/latestRequest.js";
-import { followSavedFields } from "../../runtime/editorForm.js";
+import { changedFields, followSavedFields } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { buildScenarioCountryOptions, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
@@ -2696,33 +2696,32 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         setEditorDetails(details);
         setEditorState(buildScenarioEditorState(details));
       } else {
-        const currentGame = editorDetails.data?.game ?? {};
-        const currentWorld = editorDetails.data?.world ?? {};
+        // Only what was changed in the form, as patches the store merges into
+        // the files as they are now. The drawer can stay open over the game
+        // while turns are played, and writing back the game.json and world.json
+        // it loaded rolled back the date, round, borders, units and polities.
+        const baseline = buildGameEditorState(editorDetails);
+        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+        const worldPatch = changedFields(editorState, baseline, [
+          "labelFont",
+          "labelHaloColor",
+          "labelTextColor",
+          "language",
+          "simulationRules",
+          "startingTimelineText",
+        ]);
         const details = await saveGame(editorDetails.game.id, {
           accentColor: editorState.accentColor,
           description: editorState.description,
           eyebrow: editorState.eyebrow,
           features: editorState.features,
-          game: {
-            ...currentGame,
-            country: editorState.country,
-            gameDate: editorState.gameDate,
-            language: editorState.language,
-          },
+          ...(Object.keys(gamePatch).length ? { gamePatch } : null),
           heroSubtitle: editorState.heroSubtitle,
           heroTitle: editorState.heroTitle,
           name: editorState.name,
           prompts,
           subtitle: editorState.subtitle,
-          world: {
-            ...currentWorld,
-            labelFont: editorState.labelFont,
-            labelHaloColor: editorState.labelHaloColor,
-            labelTextColor: editorState.labelTextColor,
-            language: editorState.language,
-            simulationRules: editorState.simulationRules,
-            startingTimelineText: editorState.startingTimelineText,
-          },
+          ...(Object.keys(worldPatch).length ? { worldPatch } : null),
         });
         setEditorDetails(details);
         setEditorState(buildGameEditorState(details));
