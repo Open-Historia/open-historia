@@ -73,6 +73,18 @@ test("a member the map lacks is left out instead of refusing the institution", a
   assert.equal(result.pauseReason, "model-call-budget");
 });
 
+test("member rows that name no polity fail the institution instead of resolving it without them", async () => {
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint: withUncoveredInstitution(),
+    inputs,
+    maxModelCalls: 1,
+    callModel: async () => membersAnswer(["A", { polityKey: " ", status: "member", role: "member" }]),
+  });
+  assert.deepEqual(result.membership.resolvedInstitutionIds, []);
+  assert.equal(result.attempts["institution-membership-resolution:pact"], 1);
+  assert.ok(result.warnings.some((warning) => /2 invalid row\(s\)/.test(warning)));
+});
+
 test("an institution the model keeps answering wrongly is deferred after its bounded attempts, not paused on every Resume", async () => {
   let calls = 0;
   const result = await runSimplePoliticalWorldV2({

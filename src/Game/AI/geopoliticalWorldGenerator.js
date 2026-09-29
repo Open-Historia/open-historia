@@ -831,12 +831,19 @@ const resolveInstitutionMemberRows = ({ institution, field, world, allowedByLowe
   const seen = new Set();
   let invalidRows = 0;
   for (const raw of rows) {
-    const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
+    // A row that names no polity at all (a bare string, a blank key) is a
+    // malformed answer, not a member to leave out: skipping it would resolve
+    // the institution with members silently missing.
+    if (!clean(raw?.polityKey)) {
+      invalidRows += 1;
+      continue;
+    }
+    const polityKey = canonicalPolity(raw.polityKey, world, allowedByLower);
     if (!polityKey) {
       // A real member the scenario's map does not have cannot be a member in
       // this scenario. Leaving it out is the correct membership, so it must
       // not refuse the institution's other members.
-      warnings.push(`${institution.name}: left out ${clean(raw?.polityKey) || "<blank>"}, which is not a polity in this scenario.`);
+      warnings.push(`${institution.name}: left out ${clean(raw.polityKey)}, which is not a polity in this scenario.`);
       continue;
     }
     // Duplicate positive rows do not make an exhaustive member list
