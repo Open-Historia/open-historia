@@ -1285,8 +1285,15 @@ const TimelineSkipPanel = ({
         <RequestsTodayCaption />
         </div>
 
-        {/* The events are in the Events panel; this is for a player who came back to cancel. */}
-        {isLoading && <SkipProgressRow label={progressLabel} onCancel={onCancel} />}
+        {/* The events are in the Events panel; this is for a player who came back to cancel.
+            A held turn's retry shows it too: it can run for minutes, and this
+            is its only Cancel when the skip is not watched live. */}
+        {isLoading && (
+            <SkipProgressRow
+            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : "")}
+            onCancel={onCancel}
+            />
+        )}
 
         {error && (
             <div
@@ -2088,7 +2095,10 @@ const DateWidget = ({
     }
 
     const runJump = async (days, mode = "jump") => {
-        if (!gameData || days == null || isLoading) {
+        // A held turn's retry holds the controller too: a skip started under it
+        // would run a second turn from the same pre-jump world, and the later
+        // write would replace the earlier.
+        if (!gameData || days == null || isLoading || jumpAbortRef.current) {
             return;
         }
 
@@ -2281,9 +2291,13 @@ const DateWidget = ({
     // Finish a held turn by re-running ONLY the board call. The events are not
     // regenerated: they are already valid, and on a slow model regenerating them
     // is the difference between a few seconds and several minutes.
+    //
+    // Busy like a skip (isLoading): it writes a turn like one, so the skips,
+    // Auto-jump and Undo wait for it, and its Cancel is the skip's.
     const retryHeldProjects = async () => {
-        if (isRetryingProjects) return;
+        if (isRetryingProjects || isLoading || jumpAbortRef.current) return;
         setIsRetryingProjects(true);
+        setIsLoading(true);
         setProjectsRetries((count) => count + 1);
         const startedAt = Date.now();
         const controller = new AbortController();
@@ -2300,6 +2314,8 @@ const DateWidget = ({
                 round: result.game?.round ?? 0,
                 events: result.events?.length ?? 0,
             });
+            // The turn is written: its events, as a skip that lands shows them.
+            setPanel("history");
         } catch (retryError) {
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
@@ -2316,16 +2332,21 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsRetryingProjects(false);
+            setIsLoading(false);
+            // Between turns, as after a skip.
+            setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
     // Finish a held jump by re-running ONLY the segment that failed and the ones
     // after it. The segments already generated are not regenerated: they are
     // valid, and on a slow model each one may have cost minutes.
+    // Busy like a skip, for the same reasons as the board retry above.
     const retryHeldSegment = async () => {
-        if (isRetryingSegment) return;
+        if (isRetryingSegment || isLoading || jumpAbortRef.current) return;
         const live = getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
         setIsRetryingSegment(true);
+        setIsLoading(true);
         setSkipInFlight(live);
         setSegmentRetries((count) => count + 1);
         setJumpProgress("");
@@ -2383,10 +2404,12 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsRetryingSegment(false);
+            setIsLoading(false);
             setSkipInFlight(false);
             setJumpProgress("");
             setStreamedEvents([]);
             setLiveStageBase(null);
+            setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
@@ -2436,7 +2459,9 @@ const DateWidget = ({
     // hide the very thing the player just acted on. The Timeline panel's own
     // undo button still switches, since that is where it is already looking.
     const runUndo = async ({ stayOnHistory = false } = {}) => {
-        if (isLoading || undoCount <= 0) {
+        // Never under a skip or a retry still running: it would write its turn
+        // on top of the one this rolls back to.
+        if (isLoading || jumpAbortRef.current || undoCount <= 0) {
             return false;
         }
 
@@ -2488,7 +2513,7 @@ const DateWidget = ({
     // the panel then shows the shorter turn, fully revealed.
     const runIntervene = async () => {
         const keep = Math.max(1, visibleEventCount);
-        if (isLoading || !canInterveneTurn) return false;
+        if (isLoading || jumpAbortRef.current || !canInterveneTurn) return false;
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
