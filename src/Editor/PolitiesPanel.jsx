@@ -229,27 +229,18 @@ const PolitiesPanel = ({
   // Removing a polity is a map operation: its regions become unowned, the
   // claims in its name are dropped, and the record (with its colour, flag and
   // tags) goes with them. Deleting only the record used to leave the regions
-  // keyed to it, so the polity came straight back.
+  // keyed to it, so the polity came straight back. The confirm counts come from
+  // the usage scan the list already holds: no map serialisation, and the
+  // selection is left alone until the author says yes.
   const removeFromMap = () => {
     if (!current?.key) return;
     const key = current.key;
-    const owned = api?.selectOwner?.(key, { zoom: false }) || [];
-    const disputed = (api?.serializeRegions?.()?.features || []).filter((feature) =>
-      Array.isArray(feature?.properties?.claimants) && feature.properties.claimants.includes(key));
     const summary = [
-      owned.length ? `${owned.length} region(s) become unowned` : "",
-      disputed.length ? `${disputed.length} claim(s) are dropped` : "",
+      current.regionCount ? `${current.regionCount} region(s) become unowned` : "",
+      current.claimantCount ? `${current.claimantCount} claim(s) are dropped` : "",
     ].filter(Boolean).join(" and ");
     if (!window.confirm(`Remove “${current.name}” from the map?${summary ? ` ${summary};` : ""} its colour, flag and tags go with it.`)) return;
-    if (api?.removeOwners) api.removeOwners([key]);
-    else {
-      if (owned.length) api?.setRegionAttrs?.(owned, { owner: null });
-      for (const feature of disputed) {
-        const id = String(feature?.properties?.id ?? feature?.id ?? "");
-        if (!id) continue;
-        api?.setRegionAttrs?.([id], { claimants: feature.properties.claimants.filter((claimant) => claimant !== key) });
-      }
-    }
+    api?.removeOwners?.([key]);
     removePolity?.(key);
     setBulkSelected((previous) => { const next = new Set(previous); next.delete(key); return next; });
     setSelectedKey("");
