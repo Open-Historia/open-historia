@@ -11,7 +11,7 @@
 //
 // Usage:
 //   node scripts/fetch-map-assets.mjs            # verify sha256, re-fetch anything that differs
-//   node scripts/fetch-map-assets.mjs --ensure   # faster: only fetch files that are missing / wrong size
+//   node scripts/fetch-map-assets.mjs --ensure   # faster: hash only files not verified since they last changed
 //   ... --progress                               # also print `@progress {"asset","received","total"}` lines while downloading
 //
 // Manifest paths are relative to the current directory, except that the server
@@ -24,15 +24,34 @@
 // Best-effort: it never exits non-zero, so it can never block a launch or an
 // update. On any problem it warns and leaves the existing file in place.
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { open, readFile, stat, mkdir, rename, unlink } from "node:fs/promises";
+import { createReadStream, realpathSync } from "node:fs";
+import { open, readFile, writeFile, stat, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MANIFEST = path.join(here, "map-assets.json");
 
-const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+// Which files were hashed and passed, keyed by their path on disk:
+// { sha256, size, mtimeMs }. Lives in the current directory, next to the
+// install it describes.
+const VERIFIED_STATE_NAME = ".map-assets-verified.json";
+
+const readVerified = async (file) => {
+  try {
+    const parsed = JSON.parse(await readFile(file, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+// Hashes a file as a stream, so checking a 100 MB archive does not load it whole.
+const sha256File = async (file) => {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+};
 
 const PREFIXES = [
   ["public/assets/", "assetsDir"],
@@ -82,6 +101,7 @@ export const syncMapAssets = async ({
   assetsDir = "",
   dataDir = "",
   ensure = false,
+  stateFile = "",
   progress = false,
   progressEveryMs = 250,
   now = Date.now,
@@ -91,6 +111,9 @@ export const syncMapAssets = async ({
 }) => {
   const { owner, repo, release, assets = [] } = manifest;
   const base = `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release)}`;
+
+  const verified = stateFile ? await readVerified(stateFile) : {};
+  const nextVerified = {};
 
   let present = 0;
   let downloaded = 0;
@@ -104,14 +127,33 @@ export const syncMapAssets = async ({
       continue;
     }
 
-    // Already have the right bytes? --ensure trusts the size; a full run also
-    // verifies the SHA-256 so a changed map (uploaded to the same release) is
-    // picked up and a truncated/corrupt file is repaired.
+    // Already have the right bytes?
+    //
+    // --ensure used to trust the SIZE alone, so a file of the right length that
+    // was damaged on disk (a disk error, an antivirus, a hand-copied file) was
+    // never looked at again and drew broken tiles forever. Now the hash a file
+    // passed is remembered with its size and mtime: --ensure re-hashes only when
+    // there is no such stamp or the file changed since (so a normal launch is
+    // still a stat per file), and a full run always re-hashes.
+    const stamp = verified[dst];
     try {
       const info = await stat(dst);
       if (info.size === asset.bytes) {
-        if (ensure) { present += 1; continue; }
-        if (sha256(await readFile(dst)) === asset.sha256) { present += 1; continue; }
+        const stampMatches = stamp
+          && stamp.sha256 === asset.sha256
+          && stamp.size === info.size
+          && stamp.mtimeMs === info.mtimeMs;
+        if (ensure && stampMatches) {
+          present += 1;
+          nextVerified[dst] = stamp;
+          continue;
+        }
+        if ((await sha256File(dst)) === asset.sha256) {
+          present += 1;
+          nextVerified[dst] = { sha256: asset.sha256, size: info.size, mtimeMs: info.mtimeMs };
+          continue;
+        }
+        warn(`  [warn] ${asset.asset} is the right size but not the published bytes; downloading it again.`);
       }
     } catch {
       /* missing — fall through and download */
@@ -143,11 +185,25 @@ export const syncMapAssets = async ({
       await rename(tmp, dst);
       report(asset.bytes, true);
       downloaded += 1;
+      // Remember what was just proved, so --ensure need not re-hash 100 MB on
+      // every launch to know this is still the file that was verified.
+      try {
+        const info = await stat(dst);
+        nextVerified[dst] = { sha256: asset.sha256, size: info.size, mtimeMs: info.mtimeMs };
+      } catch { /* the stamp only saves a re-hash */ }
     } catch (error) {
       warn(`  [warn] could not download ${asset.asset} (${error.message}); the map may not display.`);
       await unlink(tmp).catch(() => {});
       failed += 1;
     }
+  }
+
+  // Best effort: a missing or unwritable stamp file only means the next --ensure
+  // hashes again, which is correct, just slower.
+  if (stateFile) {
+    try {
+      await writeFile(stateFile, `${JSON.stringify(nextVerified, null, 2)}\n`);
+    } catch { /* not worth a warning */ }
   }
 
   if (downloaded || failed) {
@@ -179,6 +235,7 @@ const main = async () => {
     assetsDir: process.env.OH_ASSETS_DIR || "",
     dataDir: process.env.OH_DATA_DIR || "",
     ensure: process.argv.includes("--ensure"),
+    stateFile: path.join(process.cwd(), VERIFIED_STATE_NAME),
     progress: process.argv.includes("--progress"),
   });
 };
