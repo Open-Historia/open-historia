@@ -35,6 +35,7 @@ import {
 } from "../Game/AI/providerConfig.js";
 import { isRatingEnabled, isTelemetryEnabled } from "../Game/AI/telemetry.js";
 import { requestDay, requestSettings } from "../Game/AI/requestBudget.js";
+import { deviceProfileForLog } from "./deviceProfile.js";
 
 const onOff = (value) => (value ? "on" : "off");
 
@@ -73,6 +74,9 @@ registerSettingsSnapshot("Map", () => [
     ["Hide country labels", onOff(getMapSetting(MAP_SETTING_KEYS.hideCountryLabels))],
     ["Disable idle globe rotation", onOff(getMapSetting(MAP_SETTING_KEYS.disableIdleRotation))],
     ["Disable camera movement during events", onOff(getMapSetting(MAP_SETTING_KEYS.disableEventCamera))],
+    // What decides the worker count, whole-archive warming, the regions parse
+    // hold and globe lighting: "map is slow" and "grey map" start here.
+    ["Performance mode", deviceProfileForLog()],
 ]);
 
 // Every entry of the Fallback list, in order, with the state it is in: "which

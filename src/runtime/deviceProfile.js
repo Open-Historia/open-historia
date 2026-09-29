@@ -15,7 +15,8 @@
 //
 // localStorage "oh_device_profile" = "constrained" or "full" overrides the
 // guess: for trying the phone path on a desktop, or giving a strong tablet the
-// fast one. Decided once per page load, so every caller agrees.
+// fast one. Settings > Map > Performance mode writes it. Decided once per page
+// load, so every caller agrees; a change applies after a reload.
 import { isNativeBuild } from "./native/bridge.js";
 
 export const DEVICE_PROFILE_OVERRIDE_KEY = "oh_device_profile";
@@ -50,11 +51,55 @@ const readSignals = () => {
   };
 };
 
-let constrained = null;
+// The signals the page loaded with, and what they decided.
+let loaded = null;
 
 export const isConstrainedDevice = () => {
-  if (constrained === null) constrained = classifyDevice(readSignals());
-  return constrained;
+  if (loaded === null) {
+    const signals = readSignals();
+    loaded = { signals, constrained: classifyDevice(signals) };
+  }
+  return loaded.constrained;
+};
+
+// The override as stored: "constrained", "full", or "" for the guess.
+export const getDeviceProfileOverride = () => {
+  const stored = readSignals().override;
+  return stored === "constrained" || stored === "full" ? stored : "";
+};
+
+export const setDeviceProfileOverride = (value) => {
+  try {
+    if (value === "constrained" || value === "full") globalThis.localStorage?.setItem(DEVICE_PROFILE_OVERRIDE_KEY, value);
+    else globalThis.localStorage?.removeItem(DEVICE_PROFILE_OVERRIDE_KEY);
+  } catch {
+    // Storage blocked: the guess stands.
+  }
+};
+
+// Which signal decided, in classifyDevice's order, for the Logging file.
+export const deviceProfileReason = ({ native = false, touchOnly = false, deviceMemoryGb = null, override = "" } = {}) => {
+  if (override === "constrained" || override === "full") return "override";
+  if (native) return "Android app";
+  if (touchOnly) return "touch-only screen";
+  const memory = Number(deviceMemoryGb);
+  if (deviceMemoryGb != null && Number.isFinite(memory) && memory > 0) return `${memory} GB of memory reported`;
+  return "memory not reported";
+};
+
+// "low memory (touch-only screen)": the profile this page is running with and
+// why, plus what a reload would change it to when the override has changed.
+export const describeDeviceProfile = ({ running, now = running } = {}) => {
+  const name = (constrained) => (constrained ? "low memory" : "full");
+  const current = classifyDevice(running);
+  const next = classifyDevice(now);
+  const text = `${name(current)} (${deviceProfileReason(running)})`;
+  return next === current ? text : `${text}; ${name(next)} after a reload`;
+};
+
+export const deviceProfileForLog = () => {
+  isConstrainedDevice();
+  return describeDeviceProfile({ running: loaded.signals, now: readSignals() });
 };
 
 // MapLibre's worker pool and how many tiles and images it fetches and decodes at

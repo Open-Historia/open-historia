@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import { createMemoryStorage, requestSettings } from "../Game/AI/requestBudget.js";
 import { buildSettingsReport } from "./debugLog.js";
+import { getDeviceProfileOverride, setDeviceProfileOverride } from "./deviceProfile.js";
 import { MAP_SETTING_KEYS } from "./mapSettings.js";
 import "./settingsLog.js";
 
@@ -27,4 +28,16 @@ test("AI lookup functions: the file says when Save AI requests is keeping them o
     assert.equal(await line("AI lookup functions"), "AI lookup functions: off");
     requestSettings.setSaveRequests(true);
     assert.equal(await line("AI lookup functions"), "AI lookup functions: off");
+});
+
+test("Performance mode: the profile running, why, and what a reload would change it to", async () => {
+    // Node has no touch screen and reports no memory: the full path.
+    assert.equal(await line("Performance mode"), "Performance mode: full (memory not reported)");
+    setDeviceProfileOverride("constrained");
+    assert.equal(getDeviceProfileOverride(), "constrained");
+    assert.equal(await line("Performance mode"), "Performance mode: full (memory not reported); low memory after a reload");
+    setDeviceProfileOverride("");
+    assert.equal(getDeviceProfileOverride(), "");
+    assert.equal(localStorage.getItem("oh_device_profile"), null, "Auto removes the override");
+    assert.equal(await line("Performance mode"), "Performance mode: full (memory not reported)");
 });

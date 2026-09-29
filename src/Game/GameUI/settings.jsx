@@ -91,6 +91,7 @@ import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtim
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
 
 const baseStyle = {
@@ -1848,6 +1849,37 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
 
+// Which path the map takes on this device (runtime/deviceProfile.js). Auto is
+// the guess; the choice is read once, when the game loads.
+const PERFORMANCE_MODES = [
+    { key: "", label: "Auto" },
+    { key: "constrained", label: "Low memory" },
+    { key: "full", label: "Full" },
+];
+
+const PerformanceModeSetting = () => {
+    const [mode, setMode] = useState(() => getDeviceProfileOverride());
+    const running = isConstrainedDevice();
+    const choose = (value) => {
+        setDeviceProfileOverride(value);
+        const next = getDeviceProfileOverride();
+        setMode(next);
+        logSettingChange("Performance mode", PERFORMANCE_MODES.find((entry) => entry.key === next)?.label ?? "Auto");
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle} htmlFor="game-performance-mode">Performance mode</label>
+        <select id="game-performance-mode" value={mode} onChange={(event) => choose(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        {PERFORMANCE_MODES.map((entry) => <option key={entry.key || "auto"} value={entry.key} style={{ color: "black" }}>{entry.label}</option>)}
+        </select>
+        <div style={helperStyle}>
+        Auto picks Low memory in the Android app, on a touch screen with no mouse, and on a device with 4 GB of memory or less: the map loads in smaller steps with fewer workers. Full is faster on a strong tablet, and Low memory can steady a weak computer. A change applies after the game is reloaded.
+        </div>
+        <div style={helperStyle}>{running ? "Running now: Low memory." : "Running now: Full."}</div>
+        </div>
+    );
+};
+
 // How much of each time skip is about the player's own country (AI/playerFocus.js).
 // Kept with the GAME rather than on this device, unlike its neighbours in this
 // section: a Spotlight war campaign should not decide how the next sandbox game
@@ -2150,6 +2182,7 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <PerformanceModeSetting />
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
