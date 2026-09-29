@@ -26,7 +26,7 @@ const body = (source, start) => {
 test("a failed turn review holds the turn before anything is applied", () => {
     const finish = body(gameplay, "const finishTimelineJump = async");
     const review = finish.indexOf('checks.run("review", () => runTurnReview(');
-    const hold = finish.indexOf("setPendingChecksJump(");
+    const hold = finish.indexOf("holdTurn(HELD_TURN.checks, { context, state })");
     const thrown = finish.indexOf("throw checksHeldError(");
     const applied = finish.indexOf("applySimulationResult(");
     assert.ok(review > -1 && hold > review, "the hold follows the review");
@@ -53,23 +53,43 @@ test("a failed check made inside the apply holds the turn at the last point befo
     const write = apply.indexOf("await writeCanonicalTurnState(");
     assert.ok(hold > -1 && write > hold, "held before the write");
     const finish = body(gameplay, "const finishTimelineJump = async");
-    assert.match(finish, /if \(error\?\.checksHeld\) setPendingChecksJump\(\{ context, state \}\)/);
+    assert.match(finish, /if \(error\?\.heldKind === HELD_TURN\.checks\) holdTurn\(HELD_TURN\.checks, \{ context, state \}\)/);
 });
 
 test("Continue accepts the failed checks; Retry keeps the answers that came back", () => {
     const retry = body(gameplay, "export const retryPendingChecksJump = async");
-    assert.match(retry, /setPendingChecksJump\(null\)[\s\S]*finishTimelineJump\(/, "released before the attempt, so a turn is never applied twice");
+    assert.match(retry, /holdTurn\(HELD_TURN\.checks, null\)[\s\S]*finishTimelineJump\(/, "released before the attempt, so a turn is never applied twice");
     assert.match(retry, /if \(withoutFailedChecks\) state\.checks\?\.accept\(\)/);
 });
 
 test("a new time skip abandons a turn held on a check", () => {
-    assert.match(body(gameplay, "export const simulateTimelineJump = async"), /discardPendingChecksJump\(\)/);
+    assert.match(body(gameplay, "export const simulateTimelineJump = async"), /discardHeldTurns\(\)/);
 });
 
 test("the timeline shows a held turn with retry, continue and discard", () => {
-    assert.match(time, /jumpError\?\.checksHeld/);
-    assert.match(time, /retryPendingChecksJump\(\{ signal: controller\.signal, onProgress: showSkipPhase, withoutFailedChecks \}\)/);
+    assert.match(time, /jumpError\?\.heldKind/);
+    assert.match(time, /retryPendingChecksJump\(\{ \.\.\.options, withoutFailedChecks \}\)/);
     assert.match(time, /Retry the checks/);
     assert.match(time, /Continue without them/);
-    assert.match(time, /onClick=\{onDiscardChecks\}/);
+    assert.match(time, /onClick=\{onDiscard\}/);
+});
+
+test("the checks' held error names the kind the registry holds it under", async () => {
+    // turnChecks.js is import-free, so it spells the kind out; this keeps the
+    // two from drifting apart.
+    const { HELD_TURN } = await import("./simulationStatus.js");
+    const { checksHeldError } = await import("./turnChecks.js");
+    assert.equal(checksHeldError([]).heldKind, HELD_TURN.checks);
+});
+
+test("a held turn of any kind keeps the idle pulse from writing, until discarded", async () => {
+    const { HELD_TURN, discardHeldTurns, holdTurn, isSimulationBusy, getHeldTurn } = await import("./simulationStatus.js");
+    for (const kind of Object.values(HELD_TURN)) {
+        holdTurn(kind, { held: kind });
+        assert.equal(isSimulationBusy(), true);
+        assert.deepEqual(getHeldTurn(kind), { held: kind });
+        discardHeldTurns();
+        assert.equal(isSimulationBusy(), false);
+        assert.equal(getHeldTurn(kind), null);
+    }
 });

@@ -74,7 +74,9 @@ export const checksHeldError = (failures) => {
         + `turn did not all come back, so nothing has been saved yet: ${what}. `
         + "Retry the checks, continue without them, or discard the turn.",
     );
-    error.checksHeld = true;
+    // simulationStatus.js HELD_TURN.checks; spelled out to keep this file
+    // import-free (checksHold.test.js pins the two together).
+    error.heldKind = "checks";
     error.failedChecks = list.map(({ key }) => key);
     return error;
 };

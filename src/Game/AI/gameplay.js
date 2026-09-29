@@ -379,20 +379,15 @@ import {
 } from "./scriptedEventResolution.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
+  HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
   beginSimulation,
-  discardPendingJumpSegment,
-  discardPendingProjectsJump,
-  discardPendingChecksJump,
+  discardHeldTurns,
   endSimulation,
-  getPendingJumpSegment,
-  getPendingProjectsJump,
-  getPendingChecksJump,
+  getHeldTurn,
+  holdTurn,
   isSimulationBusy,
   setChatGenerationInFlight,
-  setPendingJumpSegment,
-  setPendingProjectsJump,
-  setPendingChecksJump,
 } from "./simulationStatus.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -4156,7 +4151,7 @@ const projectsHeldError = (cause) => {
     + `saved yet: ${cause?.message || "the board task returned no usable answer"}. `
     + "Retry the board to finish the turn, or discard it and run the turn again.",
   );
-  error.projectsHeld = true;
+  error.heldKind = HELD_TURN.board;
   error.cause = cause;
   return error;
 };
@@ -4166,7 +4161,7 @@ const projectsHeldError = (cause) => {
 // ten minutes. Because nothing was written, this is the same code path as the
 // first attempt rather than a second one to keep in step.
 export const retryPendingProjectsJump = async ({ signal } = {}) => {
-  const heldProjectsJump = getPendingProjectsJump();
+  const heldProjectsJump = getHeldTurn(HELD_TURN.board);
   if (!heldProjectsJump) throw new Error("There is no turn waiting on the Projects board.");
   const { applyArgs } = heldProjectsJump;
   beginSimulation();
@@ -4174,7 +4169,7 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     // Released BEFORE the attempt, so a turn can never be applied twice, and
     // re-held only if the BOARD fails again — a failure after that point is a
     // different situation and must not pretend otherwise.
-    setPendingProjectsJump(null);
+    holdTurn(HELD_TURN.board, null);
     // The RETRY's signal, not the held turn's — that one belongs to a request
     // that already finished, and if the player cancelled it this call would abort
     // before it started.
@@ -4185,9 +4180,9 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     // are seeded on the round.
     return await applySimulationResult(applyArgs);
   } catch (error) {
-    if (error?.projectsHeld) {
+    if (error?.heldKind === HELD_TURN.board) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
-      setPendingProjectsJump({ applyArgs });
+      holdTurn(HELD_TURN.board, { applyArgs });
     }
     throw error;
   } finally {
@@ -4441,11 +4436,11 @@ const activeCampaignId = () => {
   }
 };
 
-// activeSimulations, pendingProjectsJump and pendingJumpSegment moved to
+// activeSimulations and the held turns (HELD_TURN) moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
 // this module. Reached through the accessors below; see that file for why.
 //
-// pendingProjectsJump: a turn whose events are generated and validated but NOT
+// HELD_TURN.board: a turn whose events are generated and validated but NOT
 // yet written, because the Projects & Operations board could not be brought in
 // step with them. Nothing is applied while it is set. That is deliberate and is
 // what keeps the retry honest: the board's ops must ride in on the events that
@@ -4454,12 +4449,12 @@ const activeCampaignId = () => {
 // bypass to add. If it cannot be resolved the turn fails like any other and the
 // player rolls back.
 //
-// pendingJumpSegment: a jump whose segments are part-generated, where one
+// HELD_TURN.segment: a jump whose segments are part-generated, where one
 // segment failed, the ones before it are still in hand, and NOTHING has been
 // written. Held so the player is told which segment failed and can retry just
 // that segment or discard the turn (see runJumpSegments).
 //
-// pendingChecksJump: a jump whose every segment is in hand but whose turn
+// HELD_TURN.checks: a jump whose every segment is in hand but whose turn
 // review (runTurnReview) did not come back, so the units, territory,
 // structures, board and agents' reports it answers for were never decided.
 // Nothing is written. The player retries the review, takes the turn without it
@@ -4471,13 +4466,8 @@ const activeCampaignId = () => {
 const motionRepairFailures = new Map();
 
 export {
+  HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
-  discardPendingJumpSegment,
-  discardPendingProjectsJump,
-  discardPendingChecksJump,
-  hasPendingJumpSegment,
-  hasPendingProjectsJump,
-  hasPendingChecksJump,
   isChatGenerationLikely,
   isSimulationBusy,
 } from "./simulationStatus.js";
@@ -4496,7 +4486,7 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
     + "Retry that segment to carry on from where it stopped, or discard the turn — the game stays on "
     + "its current date either way.",
   );
-  error.segmentHeld = true;
+  error.heldKind = HELD_TURN.segment;
   error.segmentIndex = segmentIndex;
   error.segmentCount = segmentCount;
   error.completedSegments = completedSegments;
@@ -7920,7 +7910,7 @@ const applySimulationResult = async ({
         ? reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap })
         // Kept with the turn's checks only so that retrying another check does
         // not ask the board again; its own failure throws and holds the turn
-        // on the board (projectsHeld), as before.
+        // on the board (HELD_TURN.board), as before.
         : await boardCheck(() => generateProjectOps(
           // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
           // read before the turn ran, so its board carries none of this turn's
@@ -13142,7 +13132,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   try {
     return await applyScene(Boolean(scene?.board));
   } catch (error) {
-    if (!error?.projectsHeld) throw error;
+    if (error?.heldKind !== HELD_TURN.board) throw error;
     logDebugEvent("turn", "Scene outcome: the Board did not update, so the Scene was written without it.", error, { problem: true });
     return applyScene(false);
   }
@@ -13849,7 +13839,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
     // Held, not lost. state.nextSegment still points at the segment that failed,
     // so a retry resumes with exactly that one.
-    setPendingJumpSegment({ context, state });
+    holdTurn(HELD_TURN.segment, { context, state });
     console.warn(`[ai] jump segment ${segmentIndex + 1}/${segmentCount} failed (${reason}) — the turn is held.`);
     logDebugEvent("warn", "[turn] A jump segment failed; the turn is HELD and nothing was written.", {
       completedSegments: state.segmentPayloads.length,
@@ -14524,7 +14514,7 @@ const fileReviewedAgentReports = async (review) => {
 const finishTimelineJump = async ({ context, signal, state }) => {
   const { baseColors, bundle, mode, targetDate } = context;
   // Every segment is in hand, so there is no longer a jump to resume.
-  setPendingJumpSegment(null);
+  holdTurn(HELD_TURN.segment, null);
 
   // One round out of every segment. applySimulationResult advances the round
   // exactly once, and the dedupeGeneratedEvents pass inside it already collapses
@@ -14551,7 +14541,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // Held here rather than at the write when the one request is what failed:
   // nothing after it has anything to go on.
   if (checksHoldTurn(checks)) {
-    setPendingChecksJump({ context, state });
+    holdTurn(HELD_TURN.checks, { context, state });
     throw checksHeldError(checks.failures());
   }
 
@@ -14674,10 +14664,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     }
     return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
   } catch (error) {
-    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs });
+    if (error?.heldKind === HELD_TURN.board) holdTurn(HELD_TURN.board, { applyArgs });
     // A check made inside the apply failed (the timeline clean-up): held by
     // the checks, like the rest, so the same Retry and Continue answer it.
-    if (error?.checksHeld) setPendingChecksJump({ context, state });
+    if (error?.heldKind === HELD_TURN.checks) holdTurn(HELD_TURN.checks, { context, state });
     throw error;
   }
 };
@@ -14688,9 +14678,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // The A/B lab is observational and must not touch any live pending/simulation
   // state, even when one of its candidate generations fails.
   if (!evaluationMode) {
-    discardPendingProjectsJump();
-    discardPendingJumpSegment();
-    discardPendingChecksJump();
+    discardHeldTurns();
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
@@ -14849,7 +14837,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
 // segment failed, so this is the same code path as the first attempt rather than
 // a second one to keep in step.
 export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } = {}) => {
-  const heldSegment = getPendingJumpSegment();
+  const heldSegment = getHeldTurn(HELD_TURN.segment);
   if (!heldSegment) throw new Error("There is no jump waiting on a failed segment.");
   const { context, state } = heldSegment;
   beginSimulation();
@@ -14883,13 +14871,13 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
 // are asked again: the segments are in hand and are not regenerated, and a
 // check that answered keeps its answer. Re-holds itself on another failure.
 export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailedChecks = false } = {}) => {
-  const held = getPendingChecksJump();
+  const held = getHeldTurn(HELD_TURN.checks);
   if (!held) throw new Error("There is no turn waiting on its review.");
   const { context, state } = held;
   beginSimulation();
   try {
     // Released before the attempt, so a turn can never be applied twice.
-    setPendingChecksJump(null);
+    holdTurn(HELD_TURN.checks, null);
     // The checks that answered are given their answers back either way; the
     // failed ones are asked again, or taken as they failed.
     if (withoutFailedChecks) state.checks?.accept();
