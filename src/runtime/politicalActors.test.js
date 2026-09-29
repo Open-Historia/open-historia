@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyPoliticalActorMetadataPatch,
+  ensurePoliticalProfile,
   getPoliticalProfile,
   normalizePoliticalActors,
 } from "./politicalActors.js";
@@ -64,6 +65,29 @@ test("political profile lookup bridges stock map names to formal modern actor id
   assert.equal(getPoliticalProfile(world, "Poland")?.polityKey, "Republic of Poland");
   assert.equal(getPoliticalProfile(world, "POL")?.polityKey, "Republic of Poland");
   assert.equal(getPoliticalProfile(world, "Ukraine")?.polityKey, "Ukraine");
+});
+
+test("a polity of its own never borrows another polity's actor through the stock-country bridge", () => {
+  const declared = makeWorld();
+  declared.polityOverrides.Russia = { name: "Russia", aliases: [], code: "Russia", status: "active" };
+  assert.equal(getPoliticalProfile(declared, "Russia"), null);
+  assert.equal(getPoliticalProfile(declared, "Russian Federation")?.polityKey, "Russian Federation");
+
+  const ensured = ensurePoliticalProfile(declared, "Russia");
+  assert.equal(ensured.polityKey, "Russia");
+  assert.equal(declared.politicalActors.byPolity["Russian Federation"].leader, "Vladimir Putin");
+  assert.equal(getPoliticalProfile(declared, "Russia"), ensured);
+
+  const owner = makeWorld();
+  owner.regionOwnershipOverrides = { "RUS.1_1": "Russia", "RUS.2_1": "Russian Federation" };
+  assert.equal(getPoliticalProfile(owner, "Russia"), null);
+
+  // A map owner whose actor sits under a name that is not a polity of its own
+  // still finds it.
+  const legacy = makeWorld();
+  legacy.regionOwnershipOverrides = { "POL.1_1": "Poland" };
+  delete legacy.polityOverrides["Republic of Poland"];
+  assert.equal(getPoliticalProfile(legacy, "Poland")?.polityKey, "Republic of Poland");
 });
 
 test("legacy political metadata migration helper remains available without making Stats the normal write authority", () => {

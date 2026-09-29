@@ -851,6 +851,15 @@ function candidatesForPolity(world, key) {
     return [...new Set(out.filter(Boolean))];
 }
 
+// Every name the world knows as a polity of its own: a declared record key or a
+// map owner.
+function ownPolityNames(world) {
+    const names = new Set(Object.keys(world?.polityOverrides || {}).map(clean));
+    for (const owner of Object.values(world?.regionOwnershipOverrides || {})) names.add(clean(owner));
+    names.delete("");
+    return names;
+}
+
 export function getPoliticalProfile(world, polityKey) {
     const byPolity = world?.politicalActors?.byPolity;
     if (!byPolity) return null;
@@ -889,7 +898,16 @@ export function getPoliticalProfile(world, polityKey) {
 
     const stockCode = resolveStockCountryCode(polityKey);
     if (stockCode) {
+        // Polity names are exact keys. A name the world knows as a polity in its
+        // own right never borrows the actor of ANOTHER polity just because both
+        // names map to the same stock country ("Russia" founded next to the
+        // "Russian Federation" gets its own actor, not the Federation's).
+        const ownPolities = ownPolityNames(world);
+        const requested = clean(polityKey);
+        const isOtherPolity = (token) => clean(token) !== requested && ownPolities.has(clean(token));
+        const requestedIsOwnPolity = ownPolities.has(requested);
         for (const [actorKey, actor] of Object.entries(byPolity)) {
+            if (requestedIsOwnPolity && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
             const actorTokens = [actorKey, actor?.polityKey, actor?.name].filter(Boolean);
             if (actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) return actor;
         }
