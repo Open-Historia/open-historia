@@ -1,7 +1,8 @@
 /*! Open Historia — time-skip timeline dates © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The dates a time skip's answer may carry: validateTimelineDates decides
 // whether the strict attempt is rejected and re-asked, clampTimelineDates is
-// the final attempt's salvage that pulls stray dates into the window.
+// the final attempt's salvage that pulls stray dates into the window;
+// validatePregameEvents does both for the pre-game backstory.
 //
 // Game dates in any year — a year before AD 1 carries a leading minus and
 // counts backwards with no year zero (runtime/gameDates.js). Never compare two
@@ -100,4 +101,40 @@ export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) 
     event.date = date;
     previous = date;
   }
+};
+
+// ---- Pre-game history -------------------------------------------------------
+// Pre-game backstory dates must sit strictly before round one. Strict/salvage
+// like the jump validators: attempt 1 returns corrective errors the model can
+// fix, attempt 2 drops what cannot be placed instead of rejecting the turn.
+// Non-Gregorian scenarios ("1200 BCE") skip date checks entirely — the model
+// is told to match the scenario's own dating style and we take it at its word.
+export const validatePregameEvents = (candidate, { startDate, strict }) => {
+  const events = normalizeArray(candidate?.events);
+  if (events.length === 0) return "$.events must contain at least one pre-game event.";
+  if (!parseGameDate(startDate)) return "";
+  if (strict) {
+    let previous = "";
+    for (let index = 0; index < events.length; index += 1) {
+      const date = normalizeString(events[index]?.date);
+      if (!parseGameDate(date)) {
+        return `$.events[${index}].date must be a real YYYY-MM-DD date.`;
+      }
+      if (compareGameDates(date, startDate) >= 0) {
+        return `$.events[${index}].date must be strictly before the game start date ${startDate} — these events are pre-game history.`;
+      }
+      if (previous && compareGameDates(date, previous) < 0) {
+        return `$.events[${index}].date must not be earlier than the previous event — order the backstory chronologically.`;
+      }
+      previous = date;
+    }
+    return "";
+  }
+  candidate.events = events
+    .filter((event) => {
+      const date = normalizeString(event?.date);
+      return parseGameDate(date) && compareGameDates(date, startDate) < 0;
+    })
+    .sort((a, b) => compareGameDates(a.date, b.date));
+  return "";
 };

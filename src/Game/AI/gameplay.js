@@ -2,7 +2,7 @@
 import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
-import { clampTimelineDates, validateTimelineDates } from "./timelineDates.js";
+import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
 import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
@@ -15621,42 +15621,6 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
   } finally {
     eventReactionInFlight = false;
   }
-};
-
-// ---- Pre-game history -------------------------------------------------------
-// Pre-game backstory dates must sit strictly before round one. Strict/salvage
-// like the jump validators: attempt 1 returns corrective errors the model can
-// fix, attempt 2 drops what cannot be placed instead of rejecting the turn.
-// Non-Gregorian scenarios ("1200 BCE") skip date checks entirely — the model
-// is told to match the scenario's own dating style and we take it at its word.
-const validatePregameEvents = (candidate, { startDate, strict }) => {
-  const events = normalizeArray(candidate?.events);
-  if (events.length === 0) return "$.events must contain at least one pre-game event.";
-  if (!parseIsoDate(startDate)) return "";
-  if (strict) {
-    let previous = "";
-    for (let index = 0; index < events.length; index += 1) {
-      const date = normalizeString(events[index]?.date);
-      if (!parseIsoDate(date)) {
-        return `$.events[${index}].date must be a real YYYY-MM-DD date.`;
-      }
-      if (compareGameDates(date, startDate) >= 0) {
-        return `$.events[${index}].date must be strictly before the game start date ${startDate} — these events are pre-game history.`;
-      }
-      if (previous && compareGameDates(date, previous) < 0) {
-        return `$.events[${index}].date must not be earlier than the previous event — order the backstory chronologically.`;
-      }
-      previous = date;
-    }
-    return "";
-  }
-  candidate.events = events
-    .filter((event) => {
-      const date = normalizeString(event?.date);
-      return parseIsoDate(date) && compareGameDates(date, startDate) < 0;
-    })
-    .sort((a, b) => compareGameDates(a.date, b.date));
-  return "";
 };
 
 // ---- Round-zero ledger bootstrap --------------------------------------------

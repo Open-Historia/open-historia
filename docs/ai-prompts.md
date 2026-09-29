@@ -333,7 +333,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** On the first open of a fresh game with a "World Before Round One" briefing, write 4–10 dated events **strictly before** the start date. Runs once (the `simulationHistory` entry doubles as the done-marker); events carry **no impacts** (world already reflects them); clock stays at start, round stays 1.
 - **Prompt:** `tasks.pregameHistory`. **Entry:** `maybeGeneratePregameHistory` `gameplay.js`.
 - **Tool/schema:** `submit_pregame_history` / `PREGAME_HISTORY_SCHEMA`: `{ events[1..12] { date,title,description,importance,kind }, summary }` — note the impact-free `pregameEventSchema`.
-- **Validation:** `validatePregameEvents` — strict/salvage: all dates before start, chronological; non-Gregorian scenarios skip date checks. No fallback (silent null on failure).
+- **Validation:** `validatePregameEvents` (`timelineDates.js`, tested in `timelineDates.test.js`) — strict/salvage: all dates before start, chronological; non-Gregorian scenarios skip date checks. No fallback (silent null on failure).
 
 ### 7.11 `gameMaster` — direct map/state cheat
 - **Purpose:** Apply an explicit player/GM request to the map/world; never argue or refuse.
