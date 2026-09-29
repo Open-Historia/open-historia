@@ -17,7 +17,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 |---|---|---|
 | `mapRef` | `App.jsx` `useRef` handed to `<Map>` | Passed to `DateWidget`, `Toolbar`→n/a, `Search`, `ForcesPanel`; components call `mapRef.current.flyTo/fitBounds/getMap()` to move the camera |
 | `isGlobeEnabled` / `setIsGlobeEnabled` | `App.jsx` state (persisted `localStorage["Globe"]`) | Fed to `SettingsMenu`'s **3D Globe** toggle; `App.jsx` re-projects the map |
-| `isTerrainEnabled` / `setIsTerrainEnabled` | `App.jsx` state (persisted `localStorage["Terrain"]`) | Fed to `SettingsMenu`'s **3D Terrain** toggle |
+| `isTerrainEnabled` / `setIsTerrainEnabled` | `App.jsx` state (persisted `localStorage["Terrain"]`; before the first choice, off on a device `isConstrainedDevice()` calls constrained and on elsewhere) | Fed to `SettingsMenu`'s **3D Terrain** toggle |
 
 ### 1.2 Local state in `Main`
 

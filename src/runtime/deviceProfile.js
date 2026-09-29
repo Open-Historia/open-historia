@@ -4,7 +4,8 @@
 // of the map's costs land all at once: the regions file parsed by two readers,
 // a burst of tile workers, the globe's lighting redrawn on every frame of a
 // drag. On a constrained device those are staggered or throttled (Nations.jsx,
-// Map/mapLibreSetup.js, GlobeEffects.jsx); everywhere else they run flat out.
+// Map/mapLibreSetup.js, GlobeEffects.jsx), and 3D Terrain starts off until
+// the player turns it on (App.jsx); everywhere else they run flat out.
 //
 // Constrained is any of: the Android app; a touch-only screen (nothing can
 // hover and the pointer is a finger: a phone or a tablet, in any browser); a
