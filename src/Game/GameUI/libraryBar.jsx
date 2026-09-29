@@ -61,7 +61,7 @@ import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from 
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
-import { fetchHubPosts, fetchPostComments, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { fetchHubPosts, fetchPostComments, hubUpdateAvailable, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
@@ -2156,13 +2156,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   }, [menuOpen, activeTab, scenarios]);
 
   // An edited copy is never overwritten: its player suggests their changes to
-  // the post instead, and keeps their copy.
-  const scenarioUpdateAvailable = (scenario) => Boolean(
-    scenario.hubOrigin &&
-    !scenario.hubOrigin.editedAt &&
-    hubPostById?.[scenario.hubOrigin.postId]?.bundleUrl &&
-    hubPostById[scenario.hubOrigin.postId].bundleUrl !== scenario.hubOrigin.bundleUrl,
-  );
+  // the post instead, and keeps their copy. The Community tab's cards ask the
+  // same question (runtime/hubPosts.js).
+  const scenarioUpdateAvailable = (scenario) =>
+    hubUpdateAvailable(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
@@ -3908,7 +3905,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   </div>
                 }
               >
-                <CommunityPanel fullPage onImported={() => setActiveTab("scenarios")} />
+                <CommunityPanel fullPage onPlay={handleScenarioPlay} />
               </Suspense>
             ) : activeTab === "games" ? (
               loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (

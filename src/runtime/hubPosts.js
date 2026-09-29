@@ -160,6 +160,51 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   return posts;
 };
 
+// ---- the library's copies of hub posts ----------------------------------------
+
+// Whether a copy downloaded from a post can take the post's newer file: it came
+// from that post, the player has not edited it (an edited copy is never
+// overwritten — its player suggests their changes instead), and the post's
+// file is not the one it was imported from. The Scenarios tab's Update button
+// and the Community tab's "Update available" both ask this.
+export const hubUpdateAvailable = (scenario, post) => Boolean(
+  scenario?.hubOrigin &&
+  !scenario.hubOrigin.editedAt &&
+  post?.bundleUrl &&
+  Number(post.id) === Number(scenario.hubOrigin.postId) &&
+  post.bundleUrl !== scenario.hubOrigin.bundleUrl,
+);
+
+// The library's scenarios that came from each hub post, by post id.
+export const hubCopiesByPostId = (scenarios) => {
+  const byPost = new Map();
+  for (const scenario of Array.isArray(scenarios) ? scenarios : []) {
+    const postId = Number(scenario?.hubOrigin?.postId);
+    if (!Number.isInteger(postId) || postId <= 0) continue;
+    byPost.set(postId, [...(byPost.get(postId) ?? []), scenario]);
+  }
+  return byPost;
+};
+
+// What the library holds of one post, and the copy to play:
+//   null      — nothing;
+//   "current" — an unedited copy of the post's current file;
+//   "update"  — only unedited copies the post has moved past;
+//   "edited"  — only copies the player has changed.
+// An unedited copy wins over an edited one, and among several the one touched
+// last (updatedAt is a real timestamp, not a game date).
+export const hubCopyStatus = (copies, post) => {
+  const list = Array.isArray(copies) ? copies : [];
+  if (!list.length) return { status: null, copy: null };
+  const latest = (entries) =>
+    entries.reduce((best, entry) => (String(entry?.updatedAt ?? "") > String(best?.updatedAt ?? "") ? entry : best), entries[0]);
+  const unedited = list.filter((entry) => !entry?.hubOrigin?.editedAt);
+  const current = unedited.filter((entry) => !hubUpdateAvailable(entry, post));
+  if (current.length) return { status: "current", copy: latest(current) };
+  if (unedited.length) return { status: "update", copy: latest(unedited) };
+  return { status: "edited", copy: latest(list) };
+};
+
 // A file on the hub (a bundle, a suggestion), through the allowlisted
 // /api/hub/file proxy: GitHub's attachments send no CORS headers.
 export const downloadHubFile = async (fileUrl) => {
