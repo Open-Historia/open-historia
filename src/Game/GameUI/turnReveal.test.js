@@ -17,6 +17,7 @@ import {
   eventDisclosureKey,
   liveEventCard,
   resolveRevealCarry,
+  turnRecordId,
 } from "./turnReveal.js";
 
 // ---- streamed cards ----------------------------------------------------------
@@ -62,6 +63,28 @@ test("the live record skips what is not an event and reads its title off the maj
   assert.equal(record.title, "The big one");
   assert.equal(record.rangeLabel, "Jun 28, 1914 -> Jul 28, 1914");
   assert.equal(buildLiveTurnRecord({ events: undefined, fromDate: "", toDate: "", round: 1 }).eventCount, 0);
+});
+
+// ---- a written turn's identity ------------------------------------------------
+
+test("a 6-hour skip that keeps the date is a new turn, not the one before it", () => {
+  const before = { date: "1941-06-22", fromDate: "1941-06-21", toDate: "1941-06-22", round: 5, eventIds: ["event-ai-r0005-19410622-001"] };
+  const sixHours = { date: "1941-06-22", fromDate: "1941-06-22", toDate: "1941-06-22", round: 6, eventIds: ["event-ai-r0006-19410622-001"] };
+  assert.notEqual(turnRecordId(sixHours), turnRecordId(before));
+  // Even with no events to tell them apart.
+  assert.notEqual(turnRecordId({ ...sixHours, eventIds: [] }), turnRecordId({ ...before, eventIds: [] }));
+});
+
+test("a Game Master record on the turn's own round and date is told apart from it", () => {
+  const turn = { toDate: "1941-06-22", round: 6, eventIds: ["event-ai-r0006-19410622-001"] };
+  const gm = { toDate: "1941-06-22", round: 6, eventIds: ["gm-event-1"], transactionId: "gm-tx-9" };
+  assert.notEqual(turnRecordId(gm), turnRecordId(turn));
+});
+
+test("the same entry always has the same id, so a re-read world keeps the reveal", () => {
+  const entry = { toDate: "1941-06-22", round: 6, eventIds: ["a", "b"] };
+  assert.equal(turnRecordId({ ...entry }), turnRecordId(entry));
+  assert.equal(typeof turnRecordId(null), "string");
 });
 
 // ---- carrying the reveal -------------------------------------------------------

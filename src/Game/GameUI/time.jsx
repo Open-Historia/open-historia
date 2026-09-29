@@ -61,6 +61,7 @@ import {
     resolvePolityName,
     resolveRegionName,
     resolveRevealCarry,
+    turnRecordId,
 } from "./turnReveal.js";
 
 dayjs.extend(advancedFormat);
@@ -471,7 +472,7 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
         eventCount: events.length,
         events,
         fromDate,
-        id: `${entry.toDate || entry.date || index}-${index}`,
+        id: turnRecordId(entry, index),
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
@@ -2119,8 +2120,8 @@ const DateWidget = ({
         setSkipInFlight(live);
         setJumpProgress("");
         setStreamedEvents([]);
-        // A carry the last turn never consumed, because a skip landing on the
-        // same date leaves the record's identity unchanged, must not reach this one.
+        // A carry the last turn never consumed (a failed or cancelled skip
+        // leaves the newest record where it was) must not reach this one.
         revealCarryRef.current = null;
         if (live) {
             setOpenMapChanges(new Set());

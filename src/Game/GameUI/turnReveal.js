@@ -87,6 +87,24 @@ export const buildLiveTurnRecord = ({ events, fromDate, toDate, round, rangeLabe
 };
 
 // ---------------------------------------------------------------------------
+// A written turn's identity
+// ---------------------------------------------------------------------------
+
+// Which turn a simulationHistory entry is, for everything the panel keys on it:
+// the reveal, the staged base, the category filter. The date alone is not a
+// turn: a 6-hour skip lands on the date it left, and its record took the id of
+// the turn before it, so the panel kept that turn's reveal count and staged
+// the new turn's events onto the world from before the old one. The round
+// moves with every turn; the entry's own transaction or first event id tells a
+// Game Master record from the turn it shares a round and a date with.
+export const turnRecordId = (entry, index = 0) => {
+    const date = entry?.toDate || entry?.date || index;
+    const round = Number(entry?.round) || 0;
+    const own = entry?.transactionId || (Array.isArray(entry?.eventIds) ? entry.eventIds[0] : "") || "";
+    return `${date}-r${round}${own ? `-${own}` : ""}-${index}`;
+};
+
+// ---------------------------------------------------------------------------
 // Carrying the reveal from the streamed cards to the written turn
 // ---------------------------------------------------------------------------
 
