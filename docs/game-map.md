@@ -229,39 +229,60 @@ The shapes come from the regions worker, asked outside the political pipeline �
 
 ## 7. Country / owner labels
 
-Two label render paths, selected by the world flag:
+Which labels a map draws:
 
-| State | Point labels | Curved labels |
-|---|---|---|
-| `!worldKnown` | empty | empty (no flash before load) |
-| `customFlag` (custom map) | `ownerLabelData` (per-owner) | empty |
-| stock world | `pointLabelData` | `curvedLabelData` |
+| State | Labels |
+|---|---|
+| `!worldKnown` | none (no flash before load) |
+| `customFlag` (a game's own regions) | live polity labels from the political worker, drawn by the **polity-name renderer (PTR)**; the MapLibre `country-*-live-*` layers are its fallback |
+| stock world | `pointLabelData` / `curvedLabelData` from `countryLabels.js` on the MapLibre layers `country-labels` / `country-curved-labels` |
 
 ### Stock labels — `src/runtime/countryLabels.js`
 
 `loadCountryLabelCollections({ force, ownedCodes })` reads the **z0 tile** of `countries.pmtiles`, decodes it, and for each country builds either a **curved** multi-glyph label (one Point feature per letter, following the country's principal axis — `buildCurvedLabelPath` + `buildCurvedLabelGlyphFeatures`) or a single **point** label when the shape is too compact/round to curve text along. Names run through `resolveCountryDisplayName` + `translateLabel` (labels are baked into map features, not DOM, so they must be pre-translated). `ownedCodes` filters out countries owning no territory this scenario (so modern names don't float over medieval land). Results are cached in runtime JSON, keyed on `tile-hash + byteLength + archiveUrl + language + owner-set` (`COUNTRY_LABELS_CACHE_KEY = "country-labels-v3"`; an empty build is served once but never cached, since an empty z0 read is almost always a degraded tile, not a label-less world).
 
-### Owner labels for custom maps — `buildOwnerLabelCollection` (`Nations.jsx:343`)
+### Live polity labels — `src/Game/Map/vnext/polityLabels.js`
 
-The stock pipeline labels *modern* countries, which is wrong on scenario maps (it printed "Russia"/"Ukraine" over the USSR). Instead, one label per **owner per contiguous landmass**:
+The stock pipeline labels *modern* countries, which is wrong on scenario maps (it printed "Russia"/"Ukraine" over the USSR). On a game's own map the political worker (`vnext/polityBoundariesWorker.js`) lays out one label per polity from the regions it owns, and re-lays only the owners a turn changed:
 
-1. `buildRegionAdjacency` (`Nations.jsx:278`) — which regions physically touch, by hashing every vertex on a ~11 m (`1e-4°`) grid. Geometry-only, so it's memoized per world and survives ownership changes.
-2. Union-find groups same-owner **adjacent** regions into one territory each. Contiguity (not distance) is what keeps a colony separate from its metropole (France's mainland vs French West Africa) while keeping a touching chain like Siberia a single label.
-3. `mergeOwnerClusters` then does a small centroid mop-up (`CLUSTER_JOIN_DEGREES = 10`) to fold islands into nearby mainland and heal adjacency near-misses.
-4. Each cluster becomes a Point feature named by `polityOverrides[owner].name || countryNameByCode.get(owner) || owner`, run through `resolveCountryDisplayName` + `translateLabel`, uppercased. Every owner keeps its largest cluster; extra clusters must clear `MIN_CLUSTER_AREA = 1.5` (deg²).
+1. `aggregatePolityGeometry` (`vnext/polityGeometry.js`) gathers each owner's polygons and notes the stock country (`gid0`) each came from.
+2. `buildPolityLabelCollections` groups them into landmasses. The **core** — the polity's one logical label — is the largest landmass holding its home country (the stock country most of its regions came from), so a dependency larger than the home ground (Greenland) does not take the name; a map without stock countries uses the largest landmass. Every other landmass of consequence carries the owner's name too, as a `sovereign-secondary` site. No polity name is special-cased.
+3. The display name comes from the main thread (`polityOverrides` map label or name, `resolveCountryDisplayName`, `translateLabel`), rebaked on `i18n:updated`.
 
-`ownerLabelData` recomputes as `regionOwnershipOverrides` poll in, so **labels follow conquests**. A `labelEpoch` (bumped on the `i18n:updated` event) forces a rebuild when translations land.
+The worker returns `labelData` (one row per polity), `pointLabelData` / `lineLabelData` for the MapLibre layers, and `ptrLabelData` (every label site with its territorial envelope) for PTR.
+
+### The polity-name renderer (PTR) — `src/Game/Map/labels/`
+
+PTR is the default renderer for live polity labels: one WebGL custom layer, `polity-text-renderer`, that draws each name as a raster ribbon bent along a single arc across the territory. `Nations.jsx` mounts it through `PolityTextLayer.jsx` whenever a game's own map has live labels and country labels are not hidden.
+
+- **Records.** `buildPolityTextPtr1Records` (`polityTextRecords.js`) turns `ptrLabelData` into one record per label site, largest first.
+- **Measure, then place.** `polityTextSync.js` measures each record with the real browser font (`measurePolityTextRenderRecord`), then solves the arc placement in `polityTextPlacementWorker.js` (30 s budget on first mount) and finalises the entries. The layer is created with the whole set and added under the city layers.
+- **Incremental updates.** Each new records snapshot is diffed against the fingerprints of the published set (`polityTextContinuity.js`); only changed records are prepared. They are published at once with a quick envelope placement, then refined in the worker (4 s budget) and published again. Keys still on the quick placement sit in `unrefinedKeys` and are refined by the next pass if a newer snapshot cancels the solve. Only a newer snapshot cancels a solve; style events (`styledata`, `load`, `idle`, `projectiontransition`) only re-add a missing layer.
+- **Swap.** `replacePreparedEntries` holds the new set as pending; the old labels keep drawing until every visible new label is uploaded, then the sets swap and the old textures are freed. Textures upload lazily, 12 per frame. A layer removed with the style (a lost WebGL context) keeps the pending set and draws it when added back.
+- **Zoom.** Names fade in over 0.18 zoom from each record's `minZoom`, start fading out at `POLITY_TEXT_FADE_OUT_START_ZOOM` (z5.0) and are gone at `POLITY_TEXT_MAX_ZOOM` (z6.2) (`polityTextLayout.js`).
+
+**Legacy fallback.** The MapLibre live layers (`country-labels-live-*`, `country-line-labels-live-*`) stay mounted. While PTR has mounted records, every owner PTR draws is filtered out of them (`legacyPtrOwnerFilter`), so they show only a polity PTR could not prepare. They show everything while PTR waits for its first records, when it fails to mount, or when it is turned off. The scenario loading screen waits for PTR's first mount unless it failed.
+
+**Switches** (read once per map mount):
+
+| Switch | Effect |
+|---|---|
+| `?legacyPolityText=1`, or `localStorage["oh:polityTextRendererPtr1"] = "0"` | PTR off; the MapLibre layers draw every name |
+| `?ptr1PolityTextDebug=1`, or `localStorage["oh:polityTextRendererPtr1Debug"] = "1"` | Draws each label's baseline and logs mounts, updates and every label (off by default; warnings and errors always log) |
+| `?ptr0PolityText=1`, or `localStorage["oh:polityTextRendererPtr0"] = "1"` | Only with PTR off: a single magenta RUSSIAN FEDERATION test label, to check the WebGL path |
+
+**Probe.** `globalThis.__OH_POLITY_TEXT_PTR__` holds the renderer's live status (`mounted`, `failed`, `waitingForStyle`, `preparing`, `recordCount`, `owners`, `preparationMs`, `placementWorkerMs`, `lastMountError`, …). Timings also land in `__OH_MAP_SOURCE_PERF__` (`ptrPreparationMs`, `ptrIncrementalFirstPaintMs`, …).
 
 ### Label layers & styling
 
-Both label sources feed `type:"symbol"` layers (`country-labels`, `country-curved-labels`). Shared config:
+The MapLibre label sources (stock, and the live fallback) feed `type:"symbol"` layers. Shared config:
 
 | Property | Value |
 |---|---|
 | `text-font` | `labelFontStack` = `[world.labelFont || "Georgia", "Georgia", "Times New Roman", "Palatino Linotype", "serif"]` (drawn locally as a CSS font-family — MapLibre v5 has no glyphs endpoint here) |
-| `text-size` | `buildCountryTextSize(mult, isGlobe, prop)` — exponential-in-zoom with a stop at every integer zoom, each the uncapped size, so the two sizes MapLibre mixes per tile are exactly 2× apart and a label doubles with the map. MapLibre itself clamps glyphs at 255 px, so `buildCountryTextOpacity` keys each layer's `text-opacity` to the same size expression and fades a label out between 140 and 230 px, on top of the layer's zoom ramp (z5.8–z7.1) |
+| `text-size` | `buildCountryTextSize(mult, isGlobe, prop)` — exponential-in-zoom with a stop at every integer zoom, each the uncapped size, so the two sizes MapLibre mixes per tile are exactly 2× apart and a label doubles with the map. MapLibre itself clamps glyphs at 255 px, so `buildCountryTextOpacity` keys each layer's `text-opacity` to the same size expression and fades a label out between 140 and 230 px, on top of the layer's zoom ramp |
 | `text-color` / `text-halo-color` | `world.labelTextColor || "#FFFFFF"` / `world.labelHaloColor || "rgba(0,0,0,0.5)"` |
-| `text-opacity` | the layer's ramp (`STOCK_LABEL_RAMP`, `LIVE_LABEL_RAMP`…) fading to 0 at `LABEL_MAX_ZOOM` z7.5, times the pixel-size fade (labels fade out as you zoom in and cities take over) |
+| `text-opacity` | the layer's ramp (`STOCK_LABEL_RAMP`, `LIVE_LABEL_RAMP`…) times the pixel-size fade. Every layer's `maxzoom` is `LABEL_MAX_ZOOM`, which is PTR's `POLITY_TEXT_MAX_ZOOM` (z6.2). The ramps still carry stops up to z7.0 from the old z7.5 ceiling, so these labels are cut off at z6.2 while still mostly opaque rather than faded out |
 | `visibility` | `none` when `hideCountryLabels` map setting is on |
 | `text-pitch/rotation-alignment` | `"map"`, `text-keep-upright:false` |
 
@@ -351,11 +372,10 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | `maxBounds` lat `-80…85` | `<Map>` | Keep the camera in the usable latitude band |
 | PMTiles `maxzoom 8` | `countries-source`, `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
 | `custom-regions-fill-far maxzoom 7` | seed-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
-| Polity names end at z7.5 | `LABEL_MAX_ZOOM` (every label layer's `maxzoom` and ramp, `Nations.jsx`), `POLITY_TEXT_MAX_ZOOM` (`labels/polityTextLayout.js`) | Names fade over the last half zoom and stop at 7.5; past that the map is provinces and cities |
+| Polity names end at z6.2 | `POLITY_TEXT_MAX_ZOOM` / `POLITY_TEXT_FADE_OUT_START_ZOOM` (`labels/polityTextLayout.js`), `LABEL_MAX_ZOOM` (every MapLibre label layer's `maxzoom`, `Nations.jsx`) | PTR names fade from z5.0 and are gone at z6.2; the MapLibre label layers stop at the same zoom. Past that the map is provinces and cities |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |
 | Pixel-ratio switch z4.5 / z5 | `applyDynamicPixelRatio` | Soften the whole-world view; hysteresis prevents flapping |
 | Cities `minzoom 3.4`, city thresholds step by zoom | `Cities.jsx` | Thin out symbols as you zoom out |
-| Label `text-opacity` fades to 0 by z8 | `labelLayerPaint` | Country/owner labels hand the screen to city labels on zoom in |
 | Markers labels `minzoom 2.6` | `MarkersLayer.jsx` | Structure names appear slightly earlier than cities |
 
 ---
