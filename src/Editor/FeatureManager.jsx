@@ -17,6 +17,9 @@ import { estimateJsonBytes, importAllCities, importMajorCities } from "./citiesI
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
+// "All cities…" asks first from this many new cities on.
+const LARGE_CITY_IMPORT = 1000;
+
 const SYMBOLS = [
   { value: "square", label: "Square" },
   { value: "circle", label: "Circle" },
@@ -105,8 +108,12 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     try {
       const cities = mode === "all" ? await importAllCities() : await importMajorCities();
       const added = mergeImportedFeatures(features, cities).added;
-      if (mode === "all" && added > 0) {
-        const megabytes = Math.max(1, Math.round((estimateJsonBytes(cities) * (added / cities.length)) / 1e6));
+      // Only a large addition asks: topping up a map that already holds the
+      // seed adds a handful, which neither weighs anything nor reads as
+      // "so many cities".
+      if (mode === "all" && added >= LARGE_CITY_IMPORT) {
+        const mb = (estimateJsonBytes(cities) * (added / cities.length)) / 1e6;
+        const megabytes = mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
         const question = `Add ${added.toLocaleString()} cities to this map? That is about ${megabytes} MB more in the map, its saves and the scenario, and so many cities can make the Workshop and the game slow, especially on phones.`;
         if (!window.confirm(question)) return;
       }
