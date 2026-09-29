@@ -508,7 +508,9 @@ const PolitiesPanel = ({
                 onClick={() => {
                   const next = clean(draftName);
                   const previousKey = current.key;
-                  renamePolity?.(previousKey, next);
+                  // A refused rename (the name is another polity's) leaves the
+                  // panel on the country it was showing.
+                  if (renamePolity?.(previousKey, next) !== true) return;
                   setBulkSelected((previous) => {
                     if (!previous.has(previousKey)) return previous;
                     const updated = new Set(previous);

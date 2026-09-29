@@ -1081,19 +1081,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           upsertPolity={d.upsertPolity}
           // Renaming re-keys the polity on the map (regions, claims) and in the
           // document (record, colour, flag, tags, cities) in one go.
+          // Answers whether the rename happened, so the panel follows only an
+          // accepted one. A clash is with a registered polity or an owner or
+          // claimant already on the map.
           renamePolity={(key, nextName) => {
             const from = String(key || "").trim();
             const to = String(nextName || "").trim();
-            if (!from || !to || from === to) return;
-            const clash = Object.keys(d.polities || {}).find((other) => samePolityName(other, to) && !samePolityName(other, from));
+            if (!from || !to || from === to) return false;
+            const names = [...Object.keys(d.polities || {}), ...(api?.listPolityUsage?.() || []).map((row) => row.key)];
+            const clash = names.find((other) => samePolityName(other, to) && !samePolityName(other, from));
             if (clash) {
               window.alert(`“${to}” is already the name of another polity (“${clash}”). A rename cannot merge two countries.`);
-              return;
+              return false;
             }
             api?.renameOwner?.(from, to);
             d.renamePolity(from, to);
             if (paintOwner === from) setPaintOwner(to);
             if (paintOnlyOwner === from) setPaintOnlyOwner(to);
+            return true;
           }}
           removePolity={d.removePolity}
           removePolities={d.removePolities}
