@@ -94,7 +94,7 @@ const MODE_OPTIONS = [
   {
     id: POLITICAL_WORLD_GENERATION_MODES.BASIC,
     label: "Basic",
-    description: "The player's country and countries at war get full detail, and every other country gets its basic identity only. The AI's answers are the shortest.",
+    description: "The player's country and countries at war get full detail, and every other country gets standard detail, even one that already has Political Actors. The AI's answers are the shortest.",
   },
 ];
 
