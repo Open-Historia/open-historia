@@ -583,15 +583,7 @@ const seedOf = (phrase, seedText) => hashText(`${asText(phrase).toLowerCase()}|$
 // the holder of a province or city in the phrase the map does know ("Djibo,
 // Soum"). Countries mentioned elsewhere in an event are never used.
 const countryInPhrase = (phrase, gazetteer) => {
-    const parts = asText(phrase).split(",").map((part) => stripArticle(part.trim())).filter(Boolean);
-    const named = [];
-    for (const part of [...parts].reverse()) {
-        named.push(part);
-        const inside = part.match(/\bin\s+(.+)$/i);
-        if (inside) named.push(stripArticle(inside[1]));
-        const possessive = part.match(/^(.+?)['’]s\b/);
-        if (possessive) named.push(stripArticle(possessive[1]));
-    }
+    const named = namedInPhrase(phrase);
     for (const token of named) {
         const country = landedPolity(gazetteer.find(token, { exact: true }));
         if (country) return country;
@@ -605,24 +597,67 @@ const countryInPhrase = (phrase, gazetteer) => {
     return null;
 };
 
+// Every name a phrase gives, the last part first: "Djibo, Burkina Faso" gives
+// Burkina Faso, then Djibo; "in" and a possessive give the name they carry.
+const namedInPhrase = (phrase) => {
+    const parts = asText(phrase).split(",").map((part) => stripArticle(part.trim())).filter(Boolean);
+    const named = [];
+    for (const part of [...parts].reverse()) {
+        named.push(part);
+        const inside = part.match(/\bin\s+(.+)$/i);
+        if (inside) named.push(stripArticle(inside[1]));
+        const possessive = part.match(/^(.+?)['’]s\b/);
+        if (possessive) named.push(stripArticle(possessive[1]));
+    }
+    return named;
+};
+
 const insideAny = (point, regions) => asArray(regions).some((region) => pointInGeometry(point, region.geometry));
 
-// Near the capital when the map marks one — within APPROXIMATE_KM, on the
-// country's own land, the bearing and distance taken from the thing's name so a
-// replayed turn puts it back in the same spot — otherwise inside the country.
-const approximatePoint = (country, gazetteer, seed) => {
-    const regions = asArray(country.regions);
-    const capital = gazetteer.capitalOf?.(country.name) ?? null;
-    if (capital?.point) {
-        const first = seed % 360;
-        const reach = 10 + (seed % (APPROXIMATE_KM - 10));
-        for (const km of [reach, reach / 2, reach / 4]) {
-            for (let step = 0; step < 8; step += 1) {
-                const point = offsetPoint(capital.point, (first + step * 45) % 360, km);
-                if (insideAny(point, regions)) return { point, near: asText(capital.name) };
-            }
+// A province or city the phrase names beside the unknown town: "Stranraer,
+// Scotland".
+const anchorInPhrase = (phrase, gazetteer) => {
+    for (const token of namedInPhrase(phrase)) {
+        const thing = gazetteer.find(token, { exact: true });
+        if (thing?.kind === "region" || thing?.kind === "city") return thing;
+    }
+    return null;
+};
+
+// A spot by an anchor on the country's own land: inside a province, or within
+// APPROXIMATE_KM of a point, the bearing and distance taken from the thing's
+// name so a replayed turn puts it back in the same spot. null when the anchor
+// is not the country's.
+const nearAnchor = (anchor, regions, seed) => {
+    if (anchor?.region?.geometry) {
+        const point = interiorPoint(anchor.region.geometry, { seed });
+        return point && insideAny(point, regions) ? { point, near: asText(anchor.name) } : null;
+    }
+    if (!anchor?.point) return null;
+    const first = seed % 360;
+    const reach = 10 + (seed % (APPROXIMATE_KM - 10));
+    for (const km of [reach, reach / 2, reach / 4]) {
+        for (let step = 0; step < 8; step += 1) {
+            const point = offsetPoint(anchor.point, (first + step * 45) % 360, km);
+            if (insideAny(point, regions)) return { point, near: asText(anchor.name) };
         }
-        if (insideAny(capital.point, regions)) return { point: capital.point, near: asText(capital.name) };
+    }
+    return insideAny(anchor.point, regions) ? { point: anchor.point, near: asText(anchor.name) } : null;
+};
+
+// Where a thing goes in a country when its town is not on the map, the most
+// particular first: a province or city the phrase names; one the event's own
+// words name in that country (`context`); the country's capital; its interior.
+const approximatePoint = (country, gazetteer, seed, { phrase = "", context = "" } = {}) => {
+    const regions = asArray(country.regions);
+    const anchors = [
+        anchorInPhrase(phrase, gazetteer),
+        ...(asText(context) ? asArray(gazetteer.placesNamedIn?.(context, country.name)) : []),
+        gazetteer.capitalOf?.(country.name) ?? null,
+    ];
+    for (const anchor of anchors) {
+        const spot = anchor ? nearAnchor(anchor, regions, seed) : null;
+        if (spot) return spot;
     }
     const region = heartland(regions);
     const point = region && interiorPoint(region.geometry, { seed });
@@ -636,14 +671,14 @@ const approximatePoint = (country, gazetteer, seed) => {
 // `approximate`: when nothing in the phrase is on the map, give the thing an
 // approximate placement and return `approximate: { asked, country, near }`
 // alongside the point (`near` is "" when the country marks no capital).
-export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "", approximate = false } = {}) => {
+export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "", approximate = false, context = "" } = {}) => {
     const exact = resolveExactly(phrase, gazetteer, { seedText, owner });
     if (!exact.error || !approximate) return exact;
     try {
         const country = countryInPhrase(phrase, gazetteer)
             ?? (asText(owner) ? landedPolity(gazetteer.find(asText(owner), { exact: true })) : null);
         if (!country) return exact;
-        const spot = approximatePoint(country, gazetteer, seedOf(phrase, seedText));
+        const spot = approximatePoint(country, gazetteer, seedOf(phrase, seedText), { phrase, context });
         if (!spot) return exact;
         return {
             ...done(spot.point, "approximate", gazetteer, country.name),
