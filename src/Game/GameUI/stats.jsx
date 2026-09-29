@@ -1214,18 +1214,15 @@ const HistoricalTrackingModal = ({
     // Which countries the automatic refresh can carry, by the scheduler's own
     // rule (isTrackedStatSheetReady) under the key it looks sheets up by. A
     // country without one is skipped every turn until its first reading, which
-    // the label used to hide by calling any sheet at all ready.
-    const readyKeys = useMemo(() => {
-        const customKeys = statSheetDefinition?.custom ? statSheetKeys(statSheetDefinition) : null;
-        const ready = new Set();
-        for (const [key, sheet] of Object.entries(world?.countryStats || {})) {
-            if (isTrackedStatSheetReady(sheet, customKeys)) ready.add(lowerText(key));
-        }
-        return ready;
-    }, [world, statSheetDefinition]);
+    // the label used to hide by calling any sheet at all ready. The key is exact,
+    // as the scheduler's is: a polity's name is its identity.
+    const customSheetKeys = useMemo(
+        () => (statSheetDefinition?.custom ? statSheetKeys(statSheetDefinition) : null),
+        [statSheetDefinition],
+    );
     const sheetReady = useCallback(
-        (key) => readyKeys.has(lowerText(trackingCandidates.index.canonicalKey(key) || key)),
-        [readyKeys, trackingCandidates],
+        (key) => isTrackedStatSheetReady(world?.countryStats?.[trackingCandidates.index.canonicalKey(key) || key], customSheetKeys),
+        [world, customSheetKeys, trackingCandidates],
     );
     // When the refresh last ran, per country and for the whole batch — written
     // by the scheduler after every skip, and shown nowhere until now.
@@ -1233,11 +1230,10 @@ const HistoricalTrackingModal = ({
         () => normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry }),
         [world, playerCountry],
     );
-    const lastRefreshOf = useCallback((key) => {
-        const canonical = lowerText(trackingCandidates.index.canonicalKey(key) || key);
-        const entry = Object.entries(refreshRecord.lastAutoRefreshByPolity || {}).find(([polity]) => lowerText(polity) === canonical);
-        return entry ? entry[1] : "";
-    }, [refreshRecord, trackingCandidates]);
+    const lastRefreshOf = useCallback(
+        (key) => refreshRecord.lastAutoRefreshByPolity?.[trackingCandidates.index.canonicalKey(key) || key] || "",
+        [refreshRecord, trackingCandidates],
+    );
     const filteredCandidates = useMemo(
         () => filterHistoricalTrackingCandidateRows(candidateRows, search),
         [candidateRows, search],
