@@ -118,6 +118,7 @@ import {
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
+import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
@@ -2317,7 +2318,12 @@ const buildPlacementGazetteer = (context, world) => {
     ];
     return found.filter((place) => place.at >= 0).sort((a, b) => a.at - b.at);
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf, placesNamedIn };
+  // Whether two names are one polity as the map knows them (an alias, a code).
+  const samePolity = (a, b) => {
+    const key = (name) => fold(context.resolveOwner(name) || name);
+    return Boolean(key(a)) && key(a) === key(b);
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf, placesNamedIn, samePolity };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2332,7 +2338,10 @@ const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 // who holds the ground it landed on (`groundOwner`) and whether the owner it was
 // given holds any land at all (`ownerHoldsLand`) — what the director's rules
 // need to catch a structure credited to a polity that no longer has a country.
-const resolvePlacements = async (containers, world, { receipt = null, noteGround = false } = {}) => {
+// `formations` are [{ owner, point }] the caller knows will stand by the end of
+// this turn besides the world's units: a unit Director's moves, for the
+// structure Director's posts (militaryPosts.js).
+const resolvePlacements = async (containers, world, { receipt = null, noteGround = false, formations = [] } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
@@ -2402,9 +2411,10 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
     // leaves the unit where it stands.
     //
     // A NEW unit or structure whose place is not on the map at all gets an
-    // approximate placement (AI/placement.js): near the capital of the country the
-    // phrase names, inside it when it marks none, or in its owner's own land. Seen in a live game (2026-09-27):
-    // a base at "Djibo, Burkina Faso" was dropped because the map has no Djibo.
+    // approximate placement (AI/placement.js): by a province or city the phrase or
+    // the event names, near the country's capital, inside it, or in its owner's
+    // own land. Seen in a live game (2026-09-27): a base at "Djibo, Burkina Faso"
+    // was dropped because the map has no Djibo.
     const approximated = (() => {
       if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !entry.phrase) return null;
       const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
@@ -2526,10 +2536,51 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       if (holds !== null) target.ownerHoldsLand = holds;
     }
   }
+  refuseUndeployedPosts({ containers, placing, world, gazetteer, formations, receipt });
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
   }
   return { placed, spaced };
+};
+
+// A garrison or base on another power's land needs one of its owner's
+// formations there to deploy it (militaryPosts.js): standing within reach, or
+// sent or raised there by this same payload or turn. One that has none is taken
+// out of its payload, and the model is told to move a formation there first. A
+// post on its owner's own land is placed as ordered.
+const refuseUndeployedPosts = ({ containers, placing, world, gazetteer, formations, receipt }) => {
+  const pointOf = (lng, lat) => (Number.isFinite(Number(lng)) && Number.isFinite(Number(lat)) ? [Number(lng), Number(lat)] : null);
+  const posts = placing.filter((entry) => (entry.spawn || entry.build) && isMilitaryPost(entry.target, entry.family));
+  if (!posts.length) return;
+  const deployed = [
+    ...normalizeArray(world?.units)
+      .filter((unit) => normalizeString(unit?.type).toLowerCase() !== "garrison")
+      .map((unit) => ({ owner: unit.ownerCode, point: pointOf(unit.lng, unit.lat) })),
+    ...placing
+      .filter((entry) => entry.family === "unit" && !posts.includes(entry))
+      .map((entry) => ({ owner: entry.owner, point: pointOf(entry.target[entry.lngKey], entry.target[entry.latKey]) })),
+    ...normalizeArray(formations),
+  ].filter((formation) => formation.point);
+  let refused = 0;
+  for (const entry of posts) {
+    const point = pointOf(entry.target[entry.lngKey], entry.target[entry.latKey]);
+    const owner = entry.markerOwner || entry.owner;
+    const groundOwner = point ? normalizeString(gazetteer.regionAt(point)?.owner) : "";
+    if (!point || !postWantsFormation({ owner, groundOwner, point, formations: deployed, same: gazetteer.samePolity })) continue;
+    entry.target.refusedPost = true;
+    refused += 1;
+    noteReceipt(receipt, "dropped", describeRefusedPost({ title: entry.title, name: entry.name, owner, groundOwner }));
+  }
+  if (!refused) return;
+  // Out of the payload in place, as the rest of placement edits it.
+  const isRefused = (op, key) => ((op?.[key] && typeof op[key] === "object") ? op[key] : op)?.refusedPost === true;
+  for (const { impacts } of normalizeArray(containers)) {
+    for (const [list, key] of [[impacts?.unitOps, "unit"], [impacts?.markerOps, "marker"]]) {
+      if (!Array.isArray(list)) continue;
+      for (let index = list.length - 1; index >= 0; index -= 1) if (isRefused(list[index], key)) list.splice(index, 1);
+    }
+  }
+  logDebugEvent("turn", `Placement: ${refused} garrison(s) or base(s) on another power's land refused, with none of the owner's formations there.`);
 };
 
 // The system prompt a task is sent: its template rendered with the variables,
@@ -13848,6 +13899,8 @@ const UNIT_DIRECTOR_INSTRUCTION =
   // A player's order to place a garrison became a march of the one
   // armoured division there (2026-09-29): a garrison is fixed where it is put.
   + "A garrison placed, stationed or established at a named place is likewise new: spawn it there with type \"garrison\"; never march an existing field formation in its place. "
+  // A player asked for it (2026-09-29), and placement enforces it (militaryPosts.js).
+  + "On the power's own land a garrison is placed directly. On another power's land one of the power's formations must stand there or arrive there in the same event: when none does, move a formation there and place the garrison on a later turn. "
   + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
@@ -13858,6 +13911,20 @@ const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit directo
 
 // The director's orders may say where in words too. Placed here, before the
 // director's own rules measure the move, because those rules read coordinates.
+// Where the events' own units stand once they are applied: the formations a
+// Director's garrison or base may be deployed by (militaryPosts.js).
+const formationsInEvents = (events, world) => normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.unitOps).map((op) => {
+  const kind = normalizeString(op?.op).toLowerCase();
+  if (kind === "spawn") {
+    const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
+    if (normalizeString(unit.type).toLowerCase() === "garrison") return null;
+    return { owner: unit.ownerCode, point: [Number(unit.lng), Number(unit.lat)] };
+  }
+  if (kind !== "move") return null;
+  const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
+  return mover ? { owner: mover.ownerCode, point: [Number(op.toLng), Number(op.toLat)] } : null;
+})).filter((formation) => formation && formation.point.every(Number.isFinite));
+
 const placeDirectorOrders = async (payload, world, events, receipt = null) => {
   const orders = normalizeArray(payload?.eventOrders);
   if (!orders.length) return payload;
@@ -13867,7 +13934,7 @@ const placeDirectorOrders = async (payload, world, events, receipt = null) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt });
+    await resolvePlacements(containers, world, { receipt, formations: formationsInEvents(events, world) });
   } catch (error) {
     console.warn("[unit director] the orders' places could not be resolved; the orders stand as written.", error);
   }
@@ -13879,7 +13946,10 @@ const territoryDirectorUnavailable = () => ({
 });
 
 const STRUCTURE_DIRECTOR_INSTRUCTION =
-  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. Return JSON only.";
+  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. "
+  // Enforced in placement (militaryPosts.js); said here so the model plans for it.
+  + "A garrison, base or fort on another power's land stands only where one of its owner's formations is there or arriving; on the owner's own land it needs none. "
+  + "Return JSON only.";
 const structureDirectorUnavailable = () => ({ eventOrders: [], summary: "Structure director unavailable; no structures added." });
 
 const structureDirectorVariables = (input, game) => ({
@@ -13901,9 +13971,13 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt, noteGround: true });
+    await resolvePlacements(containers, world, { receipt, noteGround: true, formations: formationsInEvents(events, world) });
   } catch (error) {
     console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
+  }
+  // A post refused for want of a formation to deploy it (refuseUndeployedPosts).
+  for (const order of orders) {
+    if (Array.isArray(order?.structures)) order.structures = order.structures.filter((marker) => marker?.refusedPost !== true);
   }
   return payload;
 };
