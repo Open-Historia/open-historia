@@ -4,7 +4,7 @@
 // bundled into the web build (dynamically imported behind import.meta.env.VITE_OH_WEB).
 
 const DB_NAME = "open-historia-web";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 // Object stores mirror the server's on-disk stores (see server/libraryStore.js,
 // mapEditorStore.js, basemapStore.js, flagStore.js). "kv" holds the small
@@ -24,7 +24,7 @@ export const STORES = {
   basemapPayload: "basemapPayload",
   flags: "flags",
   kv: "kv",
-  // Lean per-record projections (id, meta, cover, counts — NEVER the embedded
+  // Lean per-record projections (id, meta, cover marker, counts — NEVER the embedded
   // ~100MB pmtiles/geojson or game snapshots) used to build the library menu
   // WITHOUT structured-cloning every full scenario/game into memory. Derived +
   // self-healing, never a source of truth — see libraryStore.js catalog builders.
@@ -33,6 +33,15 @@ export const STORES = {
   // The same for Workshop documents: the eight-field summary the Documents menu
   // lists, so opening it never loads a whole saved map (one shipped map is 54 MB).
   mapeditorMeta: "mapeditorMeta",
+  // Version 5. Scenario and game covers, one row each keyed "scenario:<id>" or
+  // "game:<id>": the records and their lean rows keep only a marker, so listing
+  // the library or loading a game never copies cover bytes it does not show.
+  covers: "covers",
+  // A game's restore points, one row each (server/restorePoints.js), and their
+  // order per game: reading a game record no longer deserialises up to twelve
+  // whole worlds, and a turn writes one row instead of all of them.
+  snapshots: "snapshots",
+  snapshotIndex: "snapshotIndex",
 };
 
 let dbPromise = null;
@@ -125,6 +134,23 @@ export const idbPutPair = (storeA, valueA, storeB, valueB) =>
       promisifyRequest(tx.objectStore(storeA).put(valueA)),
       promisifyRequest(tx.objectStore(storeB).put(valueB)),
     ]));
+
+// Several rows of one store by key, in one transaction; undefined for a key with
+// no row.
+export const idbGetMany = (store, keys) =>
+  runTx(store, "readonly", (tx) => Promise.all(keys.map((key) => promisifyRequest(tx.objectStore(store).get(key)))));
+
+// Reads and writes across several stores in ONE readwrite transaction, so they
+// commit or roll back together. `fn` gets { get, put, delete } bound to it and
+// must await only these (awaiting anything else lets the transaction commit
+// early).
+export const idbTransaction = (storeNames, fn) =>
+  runTx(storeNames, "readwrite", (tx) => fn({
+    get: (store, key) => promisifyRequest(tx.objectStore(store).get(key)),
+    getAllKeys: (store) => promisifyRequest(tx.objectStore(store).getAllKeys()),
+    put: (store, value) => promisifyRequest(tx.objectStore(store).put(value)),
+    delete: (store, key) => promisifyRequest(tx.objectStore(store).delete(key)),
+  }));
 
 export const idbDelete = (store, key) =>
   runTx(store, "readwrite", (tx) => promisifyRequest(tx.objectStore(store).delete(key)));

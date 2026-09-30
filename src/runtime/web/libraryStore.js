@@ -5,7 +5,7 @@
 // (src/runtime/library.js, assets.js) works exactly as against the real server.
 // Web build only.
 
-import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
+import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbGetMany, idbTransaction, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
 import { serializeByKey, serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
 import { importedGameScenarioId } from "../../../server/hubProvenance.js";
@@ -37,6 +37,7 @@ import {
   migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
 } from "../../../server/ownerMigration.js";
+import { planRestorePointSlots, publicRestorePointIndex } from "../../../server/restorePoints.js";
 import { coverObjectUrl } from "./coverUrls.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
 import { onMemoryPressure } from "../memoryPressure.js";
@@ -46,8 +47,14 @@ const GAME_MANIFEST_KEY = "game-manifest";
 const META_KEYS = ["accentColor", "countryNameOverrides", "description", "eyebrow", "features", "heroSubtitle", "heroTitle", "name", "subtitle"];
 
 // --- Record accessors -----------------------------------------------------
-// scenario record: { id, meta, json:{7}, colors?, geojson:{...}, pmtiles:{...}, cover?:{contentType,bytes} }
-// game record:     { id, meta, json:{7}, colors?, snapshots?, cover?:{contentType,bytes} }
+// scenario record: { id, meta, json:{7}, colors?, geojson:{...}, pmtiles:{...}, cover?:{contentType,byteLength,key} }
+// game record:     { id, meta, json:{7}, colors?, cover?:{contentType,byteLength,key} }
+//
+// A cover's bytes and a game's restore points have stores of their own (idb.js
+// version 5; see putRecord below). A record written before that still carries
+// them inline, cover as { contentType, bytes } and restore points as
+// record.snapshots (or record.json.snapshots); it is read where it is until its
+// next put, or migrateStoreLayout, moves them.
 
 const getScenario = (id) => idbGet(STORES.scenarios, id);
 const getGame = (id) => idbGet(STORES.games, id);
@@ -77,12 +84,112 @@ const projectGameMeta = (record) => {
     eventCount: Array.isArray(events) ? events.length : 0,
     pendingActions: Array.isArray(actions)
       ? actions.filter((e) => String(e?.status ?? "").trim() !== "resolved").length : 0,
+    // False once the record's restore points are in their own store (a row
+    // written before that has no such field); migrateStoreLayout reads it.
+    inlineRestorePoints: gameSnapshots(record) !== undefined,
   };
 };
 
-// Record + its lean index row commit atomically, so the menu index is never stale.
-const putScenario = (record) => idbPutPair(STORES.scenarios, record, STORES.scenarioMeta, projectScenarioMeta(record));
-const putGame = (record) => idbPutPair(STORES.games, record, STORES.gameMeta, projectGameMeta(record));
+// --- Covers and restore points, in stores of their own --------------------
+// A cover's bytes are one row of STORES.covers, keyed "scenario:<id>" or
+// "game:<id>". The record and its lean catalog row keep a marker,
+// { contentType, byteLength, key }, `key` naming the row the bytes are in, so a
+// catalog listing or a game load copies no cover bytes; the menu reads them only
+// to make an object URL it has not made yet (coverUrl).
+const coverKey = (kind, id) => `${kind}:${id}`;
+const coverMarker = (cover, key) => ({
+  contentType: cover.contentType || "application/octet-stream",
+  byteLength: cover.bytes?.byteLength ?? cover.byteLength ?? 0,
+  key,
+});
+
+// A cover to give another record: bytes are copied, a marker is kept as it is
+// and its put copies the row it names (putRecord).
+const copyCover = (cover) =>
+  (!cover ? undefined : cover.bytes ? { contentType: cover.contentType, bytes: cover.bytes.slice() } : { ...cover });
+
+// The cover's bytes, from where the record (or its catalog row) keeps them:
+// inline in one written before version 5, else the covers store.
+const readCover = async (kind, id, holder) => {
+  const cover = holder?.cover;
+  if (!cover) return null;
+  if (cover.bytes) return { contentType: cover.contentType, bytes: cover.bytes };
+  const row = await idbGet(STORES.covers, cover.key || coverKey(kind, id));
+  return row?.bytes ? { contentType: row.contentType, bytes: row.bytes } : null;
+};
+
+// A game's restore points are one row each of STORES.snapshots, in the order
+// its STORES.snapshotIndex row lists them (server/restorePoints.js). Reading the
+// game record no longer deserialises up to twelve whole worlds, and a turn
+// writes the one restore point it adds instead of all of them.
+const restorePointSlotFor = (gameId) => (id, attempt) => `${gameId}/${id || "restore-point"}${attempt ? `~${attempt}` : ""}`;
+
+const storeRestorePointRows = async (tx, gameId, list, { reuse = true } = {}) => {
+  const prior = (await tx.get(STORES.snapshotIndex, gameId))?.entries ?? [];
+  const { entries, writes, drops } = planRestorePointSlots(prior, list, { slotFor: restorePointSlotFor(gameId), reuse });
+  for (const { slot, snapshot } of writes) await tx.put(STORES.snapshots, { id: slot, snapshot });
+  for (const slot of drops) await tx.delete(STORES.snapshots, slot);
+  if (entries.length) await tx.put(STORES.snapshotIndex, { id: gameId, entries });
+  else await tx.delete(STORES.snapshotIndex, gameId);
+};
+
+const storedRestorePointEntries = async (gameId) => (await idbGet(STORES.snapshotIndex, gameId))?.entries ?? [];
+
+// Every restore point of a game, newest first.
+const readRestorePoints = async (record) => {
+  const inline = gameSnapshots(record);
+  if (inline) return inline;
+  const entries = await storedRestorePointEntries(record.id);
+  if (!entries.length) return [];
+  const rows = await idbGetMany(STORES.snapshots, entries.map((entry) => entry.slot));
+  return rows.filter((row) => row?.snapshot && typeof row.snapshot === "object").map((row) => row.snapshot);
+};
+
+// Their id, round and dates only: what the undo counter and the reveal ask first.
+const readRestorePointIndex = async (record) =>
+  publicRestorePointIndex(gameSnapshots(record) ?? await storedRestorePointEntries(record.id));
+
+// A record, its lean catalog row, its cover and (a game's) restore points, in
+// one transaction, so the menu index is never stale and a cover or a restore
+// point is never left behind or found missing. A cover that arrives as bytes (an
+// upload, the seed, a record from before version 5) goes into the covers store;
+// a marker naming another record's row (a copy, a fork) gets a row of its own; no
+// cover deletes the row. Restore points on the record (setGameSnapshots, or a
+// record from before version 5) replace the stored ones, writing only those not
+// stored already (`reuseRestorePoints: false` writes them all); a record without
+// them leaves the stored ones as they are.
+const putRecord = (kind, record, { reuseRestorePoints = true } = {}) => {
+  const game = kind === "game";
+  const [recordStore, metaStore, project] = game
+    ? [STORES.games, STORES.gameMeta, projectGameMeta]
+    : [STORES.scenarios, STORES.scenarioMeta, projectScenarioMeta];
+  const own = coverKey(kind, record.id);
+  const cover = record.cover;
+  const restorePoints = game ? gameSnapshots(record) : undefined;
+  if (restorePoints) {
+    delete record.snapshots;
+    if (record.json) delete record.json.snapshots;
+  }
+  const stores = [recordStore, metaStore, STORES.covers, ...(game ? [STORES.snapshots, STORES.snapshotIndex] : [])];
+  return idbTransaction(stores, async (tx) => {
+    if (cover?.bytes) {
+      await tx.put(STORES.covers, { id: own, contentType: cover.contentType || "application/octet-stream", bytes: cover.bytes });
+      record.cover = coverMarker(cover, own);
+    } else if (cover && cover.key !== own) {
+      const row = cover.key ? await tx.get(STORES.covers, cover.key) : null;
+      if (row?.bytes) await tx.put(STORES.covers, { ...row, id: own });
+      record.cover = row?.bytes ? coverMarker(row, own) : undefined;
+    } else if (!cover) {
+      await tx.delete(STORES.covers, own);
+    }
+    if (restorePoints) await storeRestorePointRows(tx, record.id, restorePoints, { reuse: reuseRestorePoints });
+    await tx.put(recordStore, record);
+    await tx.put(metaStore, project(record));
+  });
+};
+
+const putScenario = (record) => putRecord("scenario", record);
+const putGame = (record, options) => putRecord("game", record, options);
 
 // Every runtime asset of a web game lives in its one record, so any change to a
 // game is a read-modify-write of the whole save. Done outside the write queue, a
@@ -91,11 +198,11 @@ const putGame = (record) => idbPutPair(STORES.games, record, STORES.gameMeta, pr
 // turn. `mutate` edits the record in place; the read and the put both happen
 // inside the queue (writeQueue.js). Never call this from code already holding
 // the queue — it would wait on itself.
-const mutateGame = (id, mutate) => serializeWrite(async () => {
+const mutateGame = (id, mutate, putOptions) => serializeWrite(async () => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
   await mutate(record);
-  await putGame(record);
+  await putGame(record, putOptions);
   return record;
 });
 
@@ -233,7 +340,7 @@ const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
   const usage = await getScenarioUsageCounts(gameMetas);
   const orderedIds = resolveOrderedIds(manifest.order, new Set(byId.keys()), DEFAULT_SCENARIO_ID);
 
-  const scenarios = orderedIds.map((id) => {
+  const scenarios = (await Promise.all(orderedIds.map(async (id) => {
     const proj = byId.get(id);
     if (!proj) return null;
     const meta = readScenarioMeta(id, proj.meta ?? {});
@@ -244,10 +351,10 @@ const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
       assetStatus,
       cacheToken,
       canDelete: true,
-      coverImageUrl: assetStatus.cover ? coverObjectUrl(`scenario:${id}`, cacheToken, proj.cover) : null,
+      coverImageUrl: assetStatus.cover ? await coverUrl("scenario", id, cacheToken, proj.cover) : null,
       gameCount: usage.get(id) ?? 0,
     };
-  }).filter(Boolean);
+  }))).filter(Boolean);
 
   const selectedScenarioId = scenarios.some((s) => s.id === manifest.selectedScenarioId)
     ? manifest.selectedScenarioId : (scenarios[0]?.id ?? "");
@@ -255,6 +362,15 @@ const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
     await saveScenarioManifest({ order: orderedIds, selectedScenarioId });
   }
   return { activeScenarioId: selectedScenarioId, scenarios, selectedScenarioId };
+};
+
+// A cover's object URL for a listing, from the catalog row's marker: the bytes
+// are read from the covers store only for a URL not made yet. A row written
+// before version 5 still carries the bytes themselves.
+const coverUrl = async (kind, id, token, cover) => {
+  const key = coverKey(kind, id);
+  if (!cover || cover.bytes) return coverObjectUrl(key, token, cover ?? null);
+  return coverObjectUrl.known(key, token, cover) ?? coverObjectUrl(key, token, await readCover(kind, id, { cover }));
 };
 
 const getScenarioUsageCounts = async (gameMetas) => {
@@ -274,14 +390,14 @@ const getGameCatalog = async (scenarioCatalog, gameMetas) => {
   const byId = new Map(metas.map((r) => [r.id, r]));
   const orderedIds = resolveOrderedIds(manifest.order, new Set(byId.keys()), DEFAULT_GAME_ID);
 
-  const games = orderedIds.map((id) => {
+  const games = (await Promise.all(orderedIds.map(async (id) => {
     const proj = byId.get(id);
     if (!proj) return null;
     const meta = readGameMeta(id, proj.meta ?? {});
     const assetStatus = proj.assetStatus ?? {};
     const scenario = scenarioLookup.get(meta.scenarioId) ?? missingScenarioSummary(meta.scenarioId);
     const cacheToken = `${id}-${meta.updatedAt}`;
-    const ownCoverImageUrl = assetStatus.cover ? coverObjectUrl(`game:${id}`, cacheToken, proj.cover) : null;
+    const ownCoverImageUrl = assetStatus.cover ? await coverUrl("game", id, cacheToken, proj.cover) : null;
     return {
       ...meta,
       assetStatus,
@@ -302,7 +418,7 @@ const getGameCatalog = async (scenarioCatalog, gameMetas) => {
         ? meta.importedScenarioName || scenario?.name || meta.scenarioId
         : scenario?.name ?? meta.scenarioId,
     };
-  }).filter(Boolean);
+  }))).filter(Boolean);
 
   const activeGameId = games.some((g) => g.id === manifest.activeGameId) ? manifest.activeGameId : (games[0]?.id ?? "");
   if (activeGameId !== manifest.activeGameId) await saveGameManifest({ activeGameId, order: orderedIds });
@@ -591,9 +707,9 @@ const ensureOwnerSchema = (record, kind, context = {}) => {
     if (migrated.regions) record.geojson.regionsGeojson = migrated.regions;
     // Roll-back points hold a full nested copy of every owner-keyed structure and
     // are blind-written back over live state, with no marker to catch a stale one.
-    if (gameSnapshots(record)) {
-      delete record.snapshots;
-      delete record.json.snapshots;
+    // An empty list on the record: its put empties the restore-point store too.
+    if (kind === "game") {
+      setGameSnapshots(record, []);
       warn("discarded roll-back snapshots — they predate the owner rename");
     }
     // World last: it carries the marker, so a failure leaves the record unmarked
@@ -725,6 +841,12 @@ const readRuntimeJsonAsset = async (assetKey, known) => {
     return parseJsonValue(value, cloneJson(EMPTY_FEATURE_COLLECTION));
   }
 
+  // Restore points are the game's alone, from their own store.
+  if (assetKey === "snapshots" || assetKey === "snapshotsIndex") {
+    if (!activeGame) return cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {});
+    return assetKey === "snapshots" ? readRestorePoints(activeGame) : readRestorePointIndex(activeGame);
+  }
+
   // Scenario-authored Stats sheet definitions are canonical while the linked
   // scenario exists. Games own the generated VALUES (world.countryStats and
   // customStats), not the schema that says which rows the scenario tracks.
@@ -772,38 +894,25 @@ const readRuntimeJsonAsset = async (assetKey, known) => {
   return cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {});
 };
 
-// A game's restore points live at record.snapshots, where the running game reads
-// and writes them. The per-game route a game zip moves them through used
-// record.json.snapshots instead, so a web export carried none and an import put
-// them where Roll back never looked. A game imported before that was fixed still
-// holds them there; they are read from it until the next write moves them.
+// Restore points a record carries itself: every game's, before they got a store
+// of their own (putRecord moves them there), and a list about to be put
+// (setGameSnapshots). The per-game route a game zip moves them through once used
+// record.json.snapshots, so a game imported then holds them there; they are
+// read from it until the next put moves them.
 const gameSnapshots = (record) =>
   (Array.isArray(record?.snapshots) ? record.snapshots
     : Array.isArray(record?.json?.snapshots) ? record.json.snapshots : undefined);
 
+// The game's restore points become `snapshots` when the record is next put.
 const setGameSnapshots = (record, snapshots) => {
   record.snapshots = snapshots;
   if (record.json) delete record.json.snapshots;
 };
 
 // The stored value for a runtime key on a record, or undefined if "no file".
+// Restore points are not on the record (readRestorePoints).
 const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
   if (OPTIONAL_JSON_ASSET_KEYS.includes(assetKey)) return record[assetKey];
-  if (assetKey === "snapshots") return scenarioScope ? undefined : gameSnapshots(record); // snapshots are game-only
-  // Derived, read-only: the same projection the desktop server keeps on disk.
-  if (assetKey === "snapshotsIndex") {
-    if (scenarioScope) return undefined;
-    const list = gameSnapshots(record) ?? [];
-    return {
-      entries: list.map((snap) => ({
-        id: snap?.id ?? "",
-        round: snap?.round ?? null,
-        fromDate: snap?.fromDate ?? "",
-        toDate: snap?.toDate ?? "",
-        capturedAt: snap?.capturedAt ?? "",
-      })),
-    };
-  }
   if (assetKey === "intercepts") return scenarioScope ? undefined : record.json?.intercepts; // spy reports: game-only, plain json slot
   if (JSON_ASSET_KEYS.includes(assetKey)) return record.json?.[assetKey];
   return undefined;
@@ -992,7 +1101,7 @@ const copyOptionalJsonAssets = (target, source) => {
 
 const copyScenarioOptionalAssets = (target, source) => {
   copyOptionalJsonAssets(target, source);
-  target.cover = source.cover ? { contentType: source.cover.contentType, bytes: source.cover.bytes.slice() } : undefined;
+  target.cover = copyCover(source.cover);
   target.geojson = {};
   for (const key of SCENARIO_GEOJSON_ASSET_KEYS) if (source.geojson?.[key] !== undefined) target.geojson[key] = cloneJson(source.geojson[key]);
   target.pmtiles = {};
@@ -1143,8 +1252,11 @@ const setSelectedScenario = async (scenarioId) => {
 const deleteScenario = async (id) => {
   const usage = await getScenarioUsageCounts();
   if ((usage.get(id) ?? 0) > 0) throw new Error("This scenario is still used by one or more games.");
-  await idbDelete(STORES.scenarios, id);
-  try { await idbDelete(STORES.scenarioMeta, id); } catch { /* reconcile drops it next build */ }
+  await idbTransaction([STORES.scenarios, STORES.scenarioMeta, STORES.covers], async (tx) => {
+    await tx.delete(STORES.scenarios, id);
+    await tx.delete(STORES.scenarioMeta, id);
+    await tx.delete(STORES.covers, coverKey("scenario", id));
+  });
   coarseRegions.forget(id);
   const manifest = await getScenarioManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listScenarioIds(), DEFAULT_SCENARIO_ID);
@@ -1167,7 +1279,7 @@ const createGame = async (body = {}) => {
     record.json = {};
     for (const key of JSON_ASSET_KEYS) record.json[key] = cloneJson(source.json?.[key] ?? JSON_ASSET_DEFAULTS[key]);
     copyOptionalJsonAssets(record, source);
-    record.cover = source.cover ? { contentType: source.cover.contentType, bytes: source.cover.bytes.slice() } : undefined;
+    record.cover = copyCover(source.cover);
   } else {
     const nextScenarioId = trimmed(body.scenarioId) || DEFAULT_SCENARIO_ID;
     // Server calls getScenarioSummary here, which THROWS on an unknown id → 400.
@@ -1301,9 +1413,20 @@ const setActiveGame = async (gameId) => {
   return getLibraryCatalog();
 };
 
+// The record goes with its row, its cover and every restore point stored under
+// its id (found by key, so one a lost index row no longer lists goes too).
 const deleteGame = async (id) => {
-  await idbDelete(STORES.games, id);
-  try { await idbDelete(STORES.gameMeta, id); } catch { /* reconcile drops it next build */ }
+  const stores = [STORES.games, STORES.gameMeta, STORES.covers, STORES.snapshots, STORES.snapshotIndex];
+  await idbTransaction(stores, async (tx) => {
+    const prefix = `${id}/`;
+    for (const slot of await tx.getAllKeys(STORES.snapshots)) {
+      if (String(slot).startsWith(prefix)) await tx.delete(STORES.snapshots, slot);
+    }
+    await tx.delete(STORES.snapshotIndex, id);
+    await tx.delete(STORES.covers, coverKey("game", id));
+    await tx.delete(STORES.games, id);
+    await tx.delete(STORES.gameMeta, id);
+  });
   const manifest = await getGameManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listGameIds(), DEFAULT_GAME_ID);
   const activeGameId = manifest.activeGameId === id ? (remaining[0] ?? "") : manifest.activeGameId;
@@ -1357,8 +1480,9 @@ const coarseRegionsText = (record) => coarseRegions.text(record.id, record.geojs
 
 const scenarioAssetResponse = async (record, key, rangeHeader, { coarse = false } = {}) => {
   if (key === COVER_IMAGE_ASSET_KEY) {
-    if (!record.cover) throw new Error("Asset not found");
-    return binaryResponse(record.cover.bytes, record.cover.contentType || "application/octet-stream", rangeHeader);
+    const cover = await readCover("scenario", record.id, record);
+    if (!cover) throw new Error("Asset not found");
+    return binaryResponse(cover.bytes, cover.contentType || "application/octet-stream", rangeHeader);
   }
   if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
     if (record[key] === undefined) throw new Error("Asset not found");
@@ -1417,8 +1541,9 @@ const exportScenarioBundle = async (id) => {
   for (const key of JSON_ASSET_KEYS) data[key] = cloneJson(jsonAsset(record, key));
 
   const assets = {};
-  assets.cover = record.cover
-    ? { contentType: record.cover.contentType, data: bytesToBase64(record.cover.bytes), encoding: "base64", fileName: "cover-image.bin", mode: "embedded" }
+  const cover = await readCover("scenario", id, record);
+  assets.cover = cover
+    ? { contentType: cover.contentType, data: bytesToBase64(cover.bytes), encoding: "base64", fileName: "cover-image.bin", mode: "embedded" }
     : { fileName: "cover-image.bin", mode: "default" };
   const optionalJsonFileNames = { colors: "colors.json", flags: "flags.json", tags: "tags.json", stats: "stats.json" };
   for (const key of OPTIONAL_JSON_ASSET_KEYS) {
@@ -1758,6 +1883,45 @@ export const ensureSeeded = async () => {
   await syncBuiltInScenarioFromSeed();
 };
 
+// Moves what records written before idb.js version 5 still carry into the
+// stores made for it, once. Until then, and for any record it has not reached,
+// every reader takes the old place (readCover, readRestorePoints), and a
+// record's next put moves it anyway (putRecord).
+// - Covers move from the lean catalog rows, which hold the same bytes as their
+//   records, so no record is loaded for them. The record keeps its now-spare
+//   copy until its next put; it is the same cover, and readCover takes either.
+// - Restore points are inside the game records, so each game that may still
+//   carry them is loaded once, one at a time, through the write queue (a turn
+//   commit cannot land between the read and the put).
+// Run after boot (index.js), not before it: it can take a while on a big
+// library, nothing waits on it, and a run cut short picks up where it stopped.
+const STORE_LAYOUT_KEY = "store-layout";
+const STORE_LAYOUT = 5;
+
+const moveCoverOutOfRow = (kind, metaStore, id) => idbTransaction([metaStore, STORES.covers], async (tx) => {
+  const row = await tx.get(metaStore, id);
+  if (!row?.cover?.bytes) return;
+  const own = coverKey(kind, id);
+  await tx.put(STORES.covers, { id: own, contentType: row.cover.contentType || "application/octet-stream", bytes: row.cover.bytes });
+  await tx.put(metaStore, { ...row, cover: coverMarker(row.cover, own) });
+});
+
+export const migrateStoreLayout = async () => {
+  if ((await kvGet(STORE_LAYOUT_KEY, 0)) >= STORE_LAYOUT) return;
+  for (const row of await readScenarioMetas()) {
+    if (row.cover?.bytes) await moveCoverOutOfRow("scenario", STORES.scenarioMeta, row.id);
+  }
+  for (const row of await readGameMetas()) {
+    if (row.cover?.bytes) await moveCoverOutOfRow("game", STORES.gameMeta, row.id);
+    if (row.inlineRestorePoints === false) continue;
+    await serializeWrite(async () => {
+      const record = await getGame(row.id);
+      if (record && gameSnapshots(record) !== undefined) await putGame(record);
+    });
+  }
+  await kvPut(STORE_LAYOUT_KEY, STORE_LAYOUT);
+};
+
 // --- Router handlers ------------------------------------------------------
 export const handleLibrary = async ({ method }) => {
   if (method !== "GET") return null;
@@ -1833,7 +1997,8 @@ const scenarioBundleBytes = async (scenarioId) => {
   for (const key of OPTIONAL_JSON_ASSET_KEYS) total += jsonTextLength(record[key]);
   for (const key of SCENARIO_GEOJSON_ASSET_KEYS) total += jsonTextLength(record.geojson?.[key]);
   for (const key of PMTILES_ASSET_KEYS) total += base64Length(record.pmtiles?.[key]);
-  total += base64Length(record.cover?.bytes);
+  // A cover's marker carries its byteLength (putRecord).
+  total += base64Length(record.cover?.bytes ?? record.cover);
   return total;
 };
 
@@ -1980,16 +2145,17 @@ const importGameBundle = async (bundle) => {
   return getGameDetails(id);
 };
 
-// The same slot the running game uses (gameSnapshots), so a zip carries the
+// The same store the running game uses (readRestorePoints), so a zip carries the
 // restore points Roll back and Intervene see, and an imported zip's reach them.
+// Every one is written, since they come from another game.
 const readGameSnapshots = async (id) => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
-  return gameSnapshots(record) ?? [];
+  return readRestorePoints(record);
 };
 
 const writeGameSnapshots = async (id, snapshots) => {
-  await mutateGame(id, (record) => setGameSnapshots(record, Array.isArray(snapshots) ? snapshots : []));
+  await mutateGame(id, (record) => setGameSnapshots(record, Array.isArray(snapshots) ? snapshots : []), { reuseRestorePoints: false });
   return { ok: true };
 };
 
@@ -2061,8 +2227,9 @@ export const handleGames = async ({ method, segments, body, rawBody, contentType
       const key = decodeURIComponent(segments[2]);
       if (method === "GET") {
         const record = await getGame(id);
-        if (!record || key !== COVER_IMAGE_ASSET_KEY || !record.cover) throw new Error("Asset not found");
-        return binaryResponse(record.cover.bytes, record.cover.contentType || "application/octet-stream", rangeHeader);
+        const cover = record && key === COVER_IMAGE_ASSET_KEY ? await readCover("game", id, record) : null;
+        if (!cover) throw new Error("Asset not found");
+        return binaryResponse(cover.bytes, cover.contentType || "application/octet-stream", rangeHeader);
       }
       if (method === "PUT") return jsonResponse(await uploadGameAsset(id, key, rawBody, contentType));
       if (method === "DELETE") return jsonResponse(await removeGameAsset(id, key));
@@ -2103,3 +2270,4 @@ export const handleRuntimeJson = async ({ method, segments, body, prefer }) => {
     return errorResponse(error.message, method === "GET" ? 404 : 400);
   }
 };
+

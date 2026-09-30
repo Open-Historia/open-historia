@@ -93,7 +93,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 
 ## 4. IndexedDB layer (`idb.js`)
 
-A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
+A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 5`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
 
 | Store (`STORES`) | keyPath | Mirrors server on-disk store |
 |---|---|---|
@@ -104,11 +104,14 @@ A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4
 | `basemapPayload` | `id` | basemap binary payloads |
 | `flags` | `id` | flag records |
 | `kv` | `key` | small singletons (manifests, ui-settings, `seeded`) |
-| `scenarioMeta` | `id` | lean projection of each scenario (meta, cover, asset status) that the library menu is built from — no geometry or tiles |
-| `gameMeta` | `id` | lean projection of each game (meta, cover, country, date, round, counts) — no snapshots or full JSON |
+| `scenarioMeta` | `id` | lean projection of each scenario (meta, cover marker, asset status) that the library menu is built from — no geometry or tiles |
+| `gameMeta` | `id` | lean projection of each game (meta, cover marker, country, date, round, counts, `inlineRestorePoints`) — no restore points or full JSON |
 | `mapeditorMeta` | `id` | the eight-field summary of each map-editor document the Documents menu lists (the desktop store's `.summary.json`) |
+| `covers` | `id` | version 5: one cover's bytes, `{ id: "scenario:<id>" or "game:<id>", contentType, bytes }` |
+| `snapshots` | `id` | version 5: one restore point, `{ id: "<gameId>/<restore point id>", snapshot }` (the desktop's `storage/snapshots/<id>.json`) |
+| `snapshotIndex` | `id` | version 5: a game's restore points in order, newest first, `{ id: gameId, entries: [{ id, round, fromDate, toDate, capturedAt, slot }] }` (the desktop's `storage/snapshots-index.json`) |
 
-Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbPut`, `idbPutPair` / `idbDeletePair` (a record and its lean index row in one transaction), `idbDelete`, `reconcileMetaIndex` (build a listing from an index store, backfilling a missing row one record at a time and dropping orphans), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
+Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbGetMany` (several rows of one store in one transaction), `idbPut`, `idbPutPair` / `idbDeletePair` (a record and its lean index row in one transaction), `idbTransaction(stores, fn)` (reads and writes across several stores in one readwrite transaction; `fn` gets `{ get, getAllKeys, put, delete }` and must await only those), `idbDelete`, `reconcileMetaIndex` (build a listing from an index store, backfilling a missing row one record at a time and dropping orphans), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
 
 ---
 
@@ -116,16 +119,20 @@ Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `
 
 A byte-faithful browser port of `server/libraryStore.js`. Backs `/api/library`, `/api/scenarios*`, `/api/games*`, `/api/runtime/json*`, `/api/runtime/pmtiles*`.
 
-### Record shapes (all live in one IndexedDB record)
+### Record shapes
 
 ```
 scenario:  { id, meta, json:{actions,advisor,chat,events,game,prompts,world},
              colors?, flags?, geojson:{regionsGeojson,citiesGeojson,backgroundData},
-             pmtiles:{cities,countries,regions}, cover?:{contentType,bytes} }
-game:      { id, meta, json:{…7…}, colors?, flags?, snapshots?, cover?:{contentType,bytes} }
+             pmtiles:{cities,countries,regions}, cover?:{contentType,byteLength,key} }
+game:      { id, meta, json:{…7…}, colors?, flags?, cover?:{contentType,byteLength,key} }
 ```
 
-Restore points have one slot, `record.snapshots`: the runtime `snapshots`/`snapshotsIndex` keys and the game-zip route `/api/games/:id/snapshots` all read and write it. A game imported before the zip route used it has them in `record.json.snapshots`; they are read from there until the next write moves them.
+A cover's bytes and a game's restore points have stores of their own (version 5), so loading a game record, which every runtime read and write does, no longer deserialises up to twelve whole worlds (about 21 MB late in a campaign), and a listing copies no cover bytes. `putRecord` writes a record with its lean row, its cover and its restore points in one transaction:
+
+- **Covers.** The record and its row keep a marker, `{ contentType, byteLength, key }`, `key` naming the `covers` row. A cover that arrives as bytes (an upload, the seed) goes into `covers` and becomes a marker; a marker naming another record's row (a copied game, a scenario seeded from another, the built-in's forks) gets a row of its own; no cover deletes the row. `readCover` reads the bytes for the cover routes and the scenario export.
+- **Restore points.** One `snapshots` row each, in the order the game's `snapshotIndex` row lists them. The runtime `snapshots` key and the game-zip route `/api/games/:id/snapshots` still read and write the whole list (`readRestorePoints`; `snapshotsIndex` reads only the index row), but a list set on the record (`setGameSnapshots`) is stored by `putRecord` through the planner the desktop store uses (`server/restorePoints.js`): only the restore points not stored already are written, and the rows the new list no longer names are deleted, so a turn writes one row. The zip route writes every one (`reuseRestorePoints: false`). A record without a list leaves the stored ones alone; the owner-rename migration sets an empty list, which empties them. Deleting a game deletes its cover and every row under `<gameId>/`.
+- **Saves from before version 5** keep the cover as `{ contentType, bytes }` on the record and its row, and restore points in `record.snapshots` (or `record.json.snapshots`, where a zip import once put them). Every reader takes them from there, and the record's next put moves them. `migrateStoreLayout` moves the rest once, 15 s after boot (`index.js`), and records `store-layout: 5` in `kv` when done: covers from the lean rows, which hold the same bytes, without loading any record (the record keeps its spare copy until its next put), and restore points by loading each game whose row does not say `inlineRestorePoints: false`, one at a time through the write queue. A run cut short starts again on the next boot.
 
 Unlike the server (which splits a scenario across many files on disk), a web record holds `world`/`game`/`colors`/`geojson` together, so owner migration is **synchronous and in-place** — nothing to keep in step across files. Gathering what a record resolves against (a game's scenario, migrated first; the stock world for a scenario without a map) is async (`migrateOwnerSchema`), and runs one record at a time (`serializeByKey`, `writeQueue.js`): a game opening fires several runtime reads together, and each would otherwise migrate the game against its own, possibly unmigrated, copy of the scenario.
 
@@ -136,6 +143,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 | `scenario-manifest` | `{ order[], selectedScenarioId }` | scenario order + which is selected |
 | `game-manifest` | `{ activeGameId, order[] }` | game order + which is active |
 | `seeded` | `boolean` | one-time seed flag |
+| `store-layout` | `number` | `5` once `migrateStoreLayout` has moved every older save's covers and restore points |
 
 ### Catalog composition
 
@@ -154,13 +162,13 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 `writeRuntimeJsonAsset(key, value)` writes onto the active game (auto-creating one from the selected scenario if none exists), canonicalizing country refs on the way in: `world`→`canonicalizeWorldCountryRefs`, `game`→`canonicalizeGameCountry`, `colors`→`canonicalizeColorKeys`. `flags` are **not** canonicalized (a flag key is always the raw code the editor painted). The geometry keys (`regionsGeojson`, `citiesGeojson`, `backgroundData`) are written to the active game's **scenario** instead, as on the desktop: the two FeatureCollections must be one (`{}` is refused, so an empty body cannot erase a map), and a game whose scenario is gone is refused rather than given a new one.
 
-What a runtime read or write costs: the active game comes from the `game-manifest` plus one record read (`getActiveGameRecord`; the game catalog is only the fallback when the manifest names nothing that exists), is loaded **once** per read and handed down to the scenario lookups, and a write's reply is read from the record it just put. A PUT carrying `Prefer: return=minimal` (the rollback archive, `writeJson(..., { echo: false })`) gets `204` with `Preference-Applied` and no reply at all, as on the desktop; `router.js` passes the header in `ctx.prefer`. The pmtiles checks (`hasScenarioPmtilesOverride`, and `getScenarioPmtilesOverride` before it serves anything) answer from the lean rows: the manifest's active game, its `gameMeta` row's `scenarioId`, that scenario's `scenarioMeta` row's `assetStatus[key]`. Only a scenario that does serve its own archive is loaded, to slice its bytes; a missing row falls back to loading the records. Still open: restore points live inside the game record, so every load of it deserialises them, and the catalog rows still carry cover bytes (`coverObjectUrl` builds the menu's cover URLs from them).
+What a runtime read or write costs: the active game comes from the `game-manifest` plus one record read (`getActiveGameRecord`; the game catalog is only the fallback when the manifest names nothing that exists), is loaded **once** per read and handed down to the scenario lookups, and a write's reply is read from the record it just put. A PUT carrying `Prefer: return=minimal` (the rollback archive, `writeJson(..., { echo: false })`) gets `204` with `Preference-Applied` and no reply at all, as on the desktop; `router.js` passes the header in `ctx.prefer`. The pmtiles checks (`hasScenarioPmtilesOverride`, and `getScenarioPmtilesOverride` before it serves anything) answer from the lean rows: the manifest's active game, its `gameMeta` row's `scenarioId`, that scenario's `scenarioMeta` row's `assetStatus[key]`. Only a scenario that does serve its own archive is loaded, to slice its bytes; a missing row falls back to loading the records. The game record itself is lean: its restore points and cover bytes live in their own stores (see Record shapes).
 
 Every runtime asset of a game lives in its one record, so every change to a game is a read-modify-write of the whole save. All of them run through one write queue (`writeQueue.js` `serializeWrite`): the turn commit, the runtime JSON writes, and `mutateGame(id, fn)`, which the game routes use (`updateGame`, the play stamp, cover upload and removal, the restore-point route, the built-in scenario's fork and refresh). A write outside the queue could read the record before a turn commit and put its stale copy back after it. Code already inside the queue must not call `mutateGame` (it would wait on itself); `createGame`, which the runtime writers call from inside it, stamps its play count before its first put for that reason.
 
 ### Owner-schema migration (`ensureOwnerSchema`)
 
-Rewrites a record whose owners are GADM codes into one keyed by country **names**. It *imports* `server/ownerMigration.js` (pure ESM, so Vite bundles it) and calls the same `migrateOwnerRecord` the desktop store does — one resolver, one context, no drift. `migrateOwnerSchema` gathers that context first (`ownerMigrationContext`), as `server/libraryStore.js` does: a **game** resolves against its **scenario's** `countryNameOverrides` and regions (read-only) and inherits the scenario's polity `mapRefs`, after the scenario itself migrates (a web game record carries neither regions nor name overrides, so alone it named e.g. wwii-1939's THA "Thailand" while the map said "Siam"); a **scenario** without a map of its own borrows the stock world as read-only context. It runs on read and before an update, once per `kind:id` (`migratedRecords` set), persists through `putGame`/`putScenario` so the menu's meta rows follow, and discards roll-back `snapshots` (they predate the rename and are blind-written back with no staleness marker).
+Rewrites a record whose owners are GADM codes into one keyed by country **names**. It *imports* `server/ownerMigration.js` (pure ESM, so Vite bundles it) and calls the same `migrateOwnerRecord` the desktop store does — one resolver, one context, no drift. `migrateOwnerSchema` gathers that context first (`ownerMigrationContext`), as `server/libraryStore.js` does: a **game** resolves against its **scenario's** `countryNameOverrides` and regions (read-only) and inherits the scenario's polity `mapRefs`, after the scenario itself migrates (a web game record carries neither regions nor name overrides, so alone it named e.g. wwii-1939's THA "Thailand" while the map said "Siam"); a **scenario** without a map of its own borrows the stock world as read-only context. It runs on read and before an update, once per `kind:id` (`migratedRecords` set), persists through `putGame`/`putScenario` so the menu's meta rows follow, and discards the game's roll-back restore points (an empty list, which its put stores; they predate the rename and are blind-written back with no staleness marker).
 
 ### Export / import bundles
 
@@ -176,11 +184,11 @@ If the `seeded` kv flag is unset and no `default` scenario exists, write `defaul
 
 ## 6. Cover images — and why they differ from the server
 
-`COVER_IMAGE_ASSET_KEY = "cover"`; a cover is stored on the record as `{ contentType, bytes:Uint8Array }`. The **displayed** cover in a catalog summary differs by build:
+`COVER_IMAGE_ASSET_KEY = "cover"`; a cover's bytes are a row of the `covers` store and the record keeps a marker (`{ contentType, byteLength, key }`, see Record shapes). The **displayed** cover in a catalog summary differs by build:
 
 | | Server build | Web build |
 |---|---|---|
-| `coverImageUrl` value | a **fetchable path** via `buildScenarioAssetUrl(id,"cover",token)` → `/api/scenarios/:id/assets/cover?token=…` (`server/libraryStore.js`) | a **`blob:` object URL** via `coverObjectUrl(key, cacheToken, cover)` (`src/runtime/web/coverUrls.js`), made from the lean meta row's cover bytes, called from the scenario and game summaries in `libraryStore.js` |
+| `coverImageUrl` value | a **fetchable path** via `buildScenarioAssetUrl(id,"cover",token)` → `/api/scenarios/:id/assets/cover?token=…` (`server/libraryStore.js`) | a **`blob:` object URL** via `coverUrl` → `coverObjectUrl(key, cacheToken, cover)` (`src/runtime/web/coverUrls.js`), called from the scenario and game summaries in `libraryStore.js`. The lean row's marker names the version (`coverObjectUrl.known`), so the bytes are read from `covers` only for a URL not made yet |
 
 **Why:** the library UI renders the cover in an `<img src>`. On the server that `src` is a normal HTTP URL the browser fetches directly. In the web build there is no server, and — critically — an `<img>` load does **not** pass through the patched `window.fetch`, so a `/api/scenarios/:id/assets/cover` `src` would hit the network and 404 to the SPA fallback instead of reaching the interceptor. An object URL over the stored bytes makes the image render with **zero network round-trip**, straight from IndexedDB. Each cover gets one object URL per version of its record, handed out again on every listing and revoked when the cover changes; it replaced a base64 `data:` URL rebuilt on every listing, which churned hundreds of MB on a phone while a game loaded (`coverUrls.test.js` pins it). (The interceptor *does* still serve a direct `GET /api/scenarios/:id/assets/cover` — `scenarioAssetResponse` — for code paths that go through `fetch`, e.g. export; it's only the `<img>` display path that needs the object URL.)
 
