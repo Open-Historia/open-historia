@@ -48,7 +48,7 @@ import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
-import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
+import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -3051,6 +3051,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Which tab of the new-game dialog: pick an existing country, or invent one.
   const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction" | "group"
   const [pickerGroups, setPickerGroups] = useState([]);
+  // "Play as a group" only for a scenario with groups switched on
+  // (server/gameFeatures.js): a game made from one with them off has none.
+  const pickerOffersGroups = isFeatureEnabled(normalizeFeatureSettings(countryPicker?.features), "groups");
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
@@ -3675,7 +3678,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ) : (
               <>
                 <div style={{ fontWeight: 800, fontSize: "1rem" }}>
-                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" ? "Play as a group" : "Choose your country"}
+                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" && pickerOffersGroups ? "Play as a group" : "Choose your country"}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.6rem" }}>
                   Starting “{countryPicker.name}”
@@ -3713,6 +3716,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Create a faction
                     </button>
+                    {pickerOffersGroups && (
                     <button
                       type="button"
                       className="oh-tap-row"
@@ -3727,9 +3731,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Play as a group
                     </button>
+                    )}
                   </div>
                 )}
-                {pickerTab === "group" && !playGameId ? (
+                {pickerTab === "group" && pickerOffersGroups && !playGameId ? (
                   <>
                     {/* A group controls an area without owning it (runtime/groups.js):
                         lead one of the scenario's, or make one. */}

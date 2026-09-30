@@ -722,9 +722,10 @@ const WorldMap = ({ isGlobe = false }) => {
   }, [polityLabelCollections]);
 
   // Where each group's label sits, for the place search: the only place a group can be found.
+  // None while groups are switched off for this game, as none is drawn.
   useEffect(() => {
-    publishGroupIndex(groupAreaData.labels?.features);
-  }, [groupAreaData]);
+    publishGroupIndex(groupsOn ? groupAreaData.labels?.features : null);
+  }, [groupAreaData, groupsOn]);
 
   // Development-time proof instead of screenshot guesswork. One authoritative
   // record per polity is exposed for inspection and the known regression set is

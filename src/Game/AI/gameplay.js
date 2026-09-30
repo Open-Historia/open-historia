@@ -15,7 +15,7 @@ import {
 } from "../../runtime/scenarioPrehistory.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
-import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
   createApplicationReceipt,
@@ -136,12 +136,13 @@ import {
   normalizeGameplayPayload,
   validateGameplayPayload,
   withIntelligenceRating,
+  withoutGroupOps,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
-import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
+import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
 import { createLookupCarry } from "./toolTurns.js";
 import {
   BACKGROUND_REQUEST,
@@ -1540,7 +1541,7 @@ const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, m
   if (!lookupFunctionsEnabled()) return null;
   const context = lazyLookupContext(bundle, { audience, mapSource });
   return {
-    tools: LOOKUP_TOOLS,
+    tools: lookupToolsFor({ groups: isActiveFeatureEnabled("groups") }),
     ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
     execute: async (name, args) => executeLookup(await context(), name, args),
   };
@@ -1609,6 +1610,7 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, renderedReg
           units: normalizeArray(world.units),
           player: normalizeString(bundle?.game?.country),
           audience,
+          groups: isActiveFeatureEnabled("groups"),
         });
       })();
     }
@@ -2010,6 +2012,16 @@ const JUMP_LIVE_STATE_BANNER = [
   "============================================================",
 ].join("\n");
 
+// Groups switched off for this game (server/gameFeatures.js): a tool shown to
+// the model without groupOps (gameplaySchemas.js withoutGroupOps), and the Game
+// Master's contract without the lines that teach them, built once.
+const forActiveFeatures = (tool) => (isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool));
+let gameMasterPromptNoGroups = null;
+const gameMasterPromptWithoutGroups = () => {
+  gameMasterPromptNoGroups ??= withoutGroupOpsLines(NATIVE_GAME_MASTER_PROMPT);
+  return gameMasterPromptNoGroups;
+};
+
 // Groups (runtime/groups.js): the rule and the current areas, on every jump,
 // because the world may found one at any time.
 const buildJumpGroupsBlock = (groupsContext) => [
@@ -2109,9 +2121,7 @@ ${brief}`);
   else if (stats.customStatIndices) blocks.push(scenarioStatIndicesDirective(stats.statIndexRows));
 
   // Groups switched off for this game: their lever goes with their rule.
-  blocks.push(isActiveFeatureEnabled("groups")
-    ? JUMP_LEVERS
-    : JUMP_LEVERS.split("\n").filter((line) => !line.startsWith("• groupOps ")).join("\n"));
+  blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
   if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
@@ -2177,7 +2187,10 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   const customStatIndices = Boolean(!customFullStatSheet && statIndexDefinition?.custom && statIndexKeys.length);
   // The GM operational contract is native behaviour: a campaign's frozen
   // gameMaster prompt would silently roll the transaction semantics back.
-  const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
+  // Groups switched off for this game: the contract without its groups rule.
+  const promptTemplate = taskKey === "gameMaster"
+    ? (isActiveFeatureEnabled("groups") ? NATIVE_GAME_MASTER_PROMPT : gameMasterPromptWithoutGroups())
+    : prompts.tasks[taskKey];
   // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
   const jumpTask = JUMP_TASK_KEYS.has(taskKey);
   if (jumpTask) {
@@ -2747,9 +2760,9 @@ const runJsonTask = async (taskKey, {
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
   if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
-    const batchTool = customFullStatSheet
+    const batchTool = forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
     if (batchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
@@ -2798,9 +2811,9 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const taskTool = customFullStatSheet
+  const taskTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
   // withIntelligenceRating).
@@ -8146,6 +8159,7 @@ const buildTargetLedger = async (bundle, code, world, { statSheet = true } = {})
     ownerOf: (regionId) => world.regionOwnershipOverrides?.[regionId] ?? regionOwner.get(regionId) ?? "",
     puppetStates: isActiveFeatureEnabled("puppetStates"),
     espionage: isActiveFeatureEnabled("espionage"),
+    groups: isActiveFeatureEnabled("groups"),
     statSheet,
   }).join("\n");
 };
@@ -9141,7 +9155,7 @@ const runWorldBreadthRepair = async ({
       userMessage,
       signal,
       taskKey: "worldBreadthRepair",
-      tool: getGameplayTool("jumpForward"),
+      tool: forActiveFeatures(getGameplayTool("jumpForward")),
       onRequest,
     });
 

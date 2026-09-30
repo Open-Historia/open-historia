@@ -30,6 +30,7 @@ import { isRelayRefusal, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -3175,7 +3176,8 @@ ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 // (gameplay.js lookupFunctionsEnabled), since each round is a request.
 // Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
 // Save AI requests promises: the names it needs instead of looking them up.
-const advisorGroupCount = (world) => Object.keys(normalizeGroups(world?.groups)).length;
+// Neither while groups are switched off for the game (server/gameFeatures.js).
+const advisorGroupCount = (world) => (isActiveFeatureEnabled("groups") ? Object.keys(normalizeGroups(world?.groups)).length : 0);
 const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 // The map indexed for the lookups, the player's government asking, not the
 // narrator (audience.js).
