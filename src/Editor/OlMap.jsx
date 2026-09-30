@@ -2537,6 +2537,12 @@ const OlMap = ({
       },
       undo: () => doUndo(),
       redo: () => doRedo(),
+      // A document-only step ({ undo, redo }: documentUndo.js), such as the
+      // Features panel's Delete All, joins the region operations on the one
+      // stack, so Ctrl+Z and the toolbar's Undo take it back in turn.
+      pushStep: (step) => {
+        if (step) pushCmd(step);
+      },
       restyle: () => {
         regionLayer.changed();
         labelLayer.changed();
