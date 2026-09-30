@@ -14,7 +14,7 @@ import {
 } from "../../runtime/assets.js";
 import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
 import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, interveneAfterEvent, loadParkedTurn, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { PARKED_TURN_STALE_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { PARKED_TURN_STALE_NOTE, discardParkedTurn, discardPendingJumpSegment,discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -2535,6 +2535,9 @@ const DateWidget = ({
     // Throw the kept skip away. Nothing of it was ever written.
     const discardHeldParked = async () => {
         setParkedHeld(false);
+        // Released at once, as the other discards are, so the campaign is not
+        // busy for a tick while the lazy module loads; the stored copy follows.
+        discardParkedTurn();
         try {
             await discardKeptTurn();
         } catch (discardError) {

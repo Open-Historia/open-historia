@@ -3792,15 +3792,15 @@ export const applyParkedTurn = async ({ signal } = {}) => {
       await forgetStoredParkedTurn(applyArgs.campaignId);
     } else if (error?.campaignSwitched) {
       parkFinishedTurn(parked);
-    } else if (error?.name === "AbortError" || signal?.aborted) {
-      // Cancelled before the write, it is still to be applied; after it (a step
-      // past the commit that stopped on the Cancel), the turn is written.
-      if (await heldTurnIsStale(applyArgs.baseGame)) await forgetStoredParkedTurn(applyArgs.campaignId);
-      else parkFinishedTurn(parked);
-    } else {
-      // The write itself failed: an ordinary turn failure from here, as for a
-      // held turn's retry.
+    } else if (await heldTurnIsStale(applyArgs.baseGame)) {
+      // A step past the commit stopped (on the Cancel, or failed): the turn is
+      // written, and its stored copy goes.
       await forgetStoredParkedTurn(applyArgs.campaignId);
+    } else {
+      // Cancelled, or the write failed: nothing was written, and the turn is
+      // still paid for, so it stays kept (stored copy and all) for Apply or
+      // Discard rather than being lost with every request it cost.
+      parkFinishedTurn(parked);
     }
     throw error;
   } finally {
