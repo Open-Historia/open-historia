@@ -24,6 +24,7 @@ import {
   normalizeHubPublished,
   normalizeHubReviews,
 } from "./hubProvenance.js";
+import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
 const SCENARIO_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
@@ -416,16 +417,20 @@ const OPTIONAL_JSON_ASSET_FILES = {
 // so it is never copied into new games, embedded in scenario exports, or dragged
 // into the polled details bundle — a snapshot list holds full prior state and can
 // be large. Read/written only through the /api/runtime/json/snapshots endpoint.
+// Kept one file each under RESTORE_POINT_DIR (see storeRestorePoints); the
+// single snapshots.json is where an older install kept them all, read and moved
+// on first use.
 const RUNTIME_ONLY_JSON_ASSET_FILES = {
   snapshots: "storage/snapshots.json",
-  // Derived, read-only projection of snapshots.json: id/round/dates, no state.
-  // The undo counter polled the real thing per turn, parsing 8+ MB for a length.
+  // The restore points' order and id/round/dates, no state. The undo counter
+  // polled the real archive per turn, parsing 8+ MB for a length.
   snapshotsIndex: "storage/snapshots-index.json",
   // What the player's spies have intercepted, keyed by target polity. Its own
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
 };
+const RESTORE_POINT_DIR = "storage/snapshots";
 
 const TURN_COMMIT_ASSET_KEYS = ["actions", "chat", "events", "game", "colors", "world"];
 const TURN_COMMIT_JOURNAL_FILE = "storage/turn-commit-journal.json";
@@ -3093,10 +3098,9 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   // are blind-written back over live state on restore, with no marker of their own
   // to catch. Rather than migrate that surface, drop them: a stale restore point
   // would re-inject every code-keyed structure at once, silently.
-  if (paths.snapshots && fs.existsSync(paths.snapshots)) {
+  if (paths.discardSnapshots) {
     try {
-      fs.rmSync(paths.snapshots);
-      warn("discarded roll-back snapshots — they predate the owner rename");
+      if (paths.discardSnapshots()) warn("discarded roll-back snapshots — they predate the owner rename");
     } catch { /* best effort */ }
   }
 
@@ -3177,7 +3181,7 @@ const ensureGameOwnerSchema = (gameId) => {
       tags: getGameJsonPath(gameId, "tags"),
       events: path.join(getGameDirectory(gameId), "storage", "events.json"),
       chat: path.join(getGameDirectory(gameId), "storage", "chat.json"),
-      snapshots: getGameJsonPath(gameId, "snapshots"),
+      discardSnapshots: () => discardRestorePoints(gameId),
       // From the SCENARIO — the same two inputs the scenario resolved against, so
       // one token cannot mean two things inside one game.
       meta: getScenarioMetaPath(parentId),
@@ -3237,45 +3241,89 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
   return { contentType: "application/json; charset=utf-8", sourcePath };
 };
 
-// What the rollback list shows, minus `state` (~700 KB per entry, up to 12).
-const snapshotIndexEntry = (snap) => ({
-  id: snap?.id ?? "",
-  round: snap?.round ?? null,
-  fromDate: snap?.fromDate ?? "",
-  toDate: snap?.toDate ?? "",
-  capturedAt: snap?.capturedAt ?? "",
-});
-
-const writeSnapshotIndex = (gameId, snapshots, stamp = "") => {
-  const list = Array.isArray(snapshots) ? snapshots : [];
-  const target = getGameJsonPath(gameId, "snapshotsIndex");
-  ensureDirectory(path.dirname(target));
-  writeJsonFile(target, { stamp, entries: list.map(snapshotIndexEntry) });
+// Restore points, one file each (server/restorePoints.js): storage/snapshots/
+// holds them and storage/snapshots-index.json their order, newest first, with
+// id/round/dates and the file each is in. A turn writes the one it adds and
+// deletes the one that falls off the end, where it used to rewrite the whole
+// archive (up to twelve worlds, 8-21 MB); a reader after one restore point
+// (the staged reveal) reads one file.
+//
+// An older install kept them all in storage/snapshots.json. The first read or
+// write moves them into files and deletes it; one that will not parse is
+// renamed out of the way rather than deleted.
+const RESTORE_POINT_INDEX_VERSION = 2;
+const restorePointDirectory = (gameId) => path.join(getGameDirectory(gameId), RESTORE_POINT_DIR);
+const restorePointFileFor = (id, attempt) => {
+  const base = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : "restore-point";
+  return attempt ? `${base}-${attempt}.json` : `${base}.json`;
 };
 
-// The write path refreshes the index for free; this covers a cold index, a zip
-// import, or a file edited outside the app.
-const ensureSnapshotIndexFresh = (gameId) => {
-  const source = getGameJsonPath(gameId, "snapshots");
-  const indexPath = getGameJsonPath(gameId, "snapshotsIndex");
-  if (!fs.existsSync(source)) {
-    // The owner-rename migration deletes snapshots outright. A surviving index
-    // would advertise turns that cannot be restored, so it goes with them.
-    if (fs.existsSync(indexPath)) {
-      try { fs.rmSync(indexPath); } catch { /* best effort */ }
-    }
-    return;
+const readRestorePointIndex = (gameId) => {
+  const index = readJsonFile(getGameJsonPath(gameId, "snapshotsIndex"), null);
+  // An index of the old kind (a stamp, no files) only described snapshots.json.
+  return index?.version === RESTORE_POINT_INDEX_VERSION && Array.isArray(index.entries) ? index.entries : [];
+};
+
+// Replaces the game's restore points with `list`, writing only those not
+// already stored (`reuse: false` writes them all, for a list from outside).
+const storeRestorePoints = (gameId, list, { reuse = true } = {}) => {
+  const directory = restorePointDirectory(gameId);
+  const { entries, writes } = planRestorePointSlots(readRestorePointIndex(gameId), list, { slotFor: restorePointFileFor, reuse });
+  // The files first, then the index that names them, then whatever it no longer
+  // names (the restore point that fell off the end, or a file a crash left).
+  for (const { slot, snapshot } of writes) writeJsonFileAtomic(path.join(directory, slot), snapshot);
+  writeJsonFileAtomic(getGameJsonPath(gameId, "snapshotsIndex"), { version: RESTORE_POINT_INDEX_VERSION, entries });
+  const named = new Set(entries.map((entry) => entry.slot));
+  let present = [];
+  try { present = fs.readdirSync(directory); } catch { /* no restore points at all */ }
+  for (const name of present) {
+    if (!named.has(name)) fs.rmSync(path.join(directory, name), { force: true, recursive: true });
   }
-  let stamp = "";
+  fs.rmSync(getGameJsonPath(gameId, "snapshots"), { force: true });
+  return entries;
+};
+
+const moveLegacyRestorePoints = (gameId) => {
+  const legacyPath = getGameJsonPath(gameId, "snapshots");
+  if (!fs.existsSync(legacyPath)) return;
+  let list = null;
   try {
-    const stat = fs.statSync(source);
-    stamp = `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  } catch {
+    list = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+  } catch (error) {
+    console.warn(`[restore points] ${gameId}: snapshots.json could not be read: ${error.message}`);
+  }
+  if (!Array.isArray(list)) {
+    // Read as none before too; kept for whoever wants to look at it.
+    try { fs.renameSync(legacyPath, `${legacyPath}.unreadable`); } catch { /* best effort */ }
     return;
   }
-  const cached = readJsonFile(indexPath, null);
-  if (cached?.stamp === stamp && Array.isArray(cached.entries)) return;
-  writeSnapshotIndex(gameId, readJsonFile(source, []), stamp);
+  storeRestorePoints(gameId, list, { reuse: false });
+};
+
+// The index entries, each with its file.
+const readRestorePointEntries = (gameId) => {
+  moveLegacyRestorePoints(gameId);
+  return readRestorePointIndex(gameId);
+};
+
+// Every restore point, newest first. One whose file is gone is left out.
+const readRestorePoints = (gameId) => {
+  const directory = restorePointDirectory(gameId);
+  return readRestorePointEntries(gameId)
+    .map((entry) => readJsonFile(path.join(directory, entry.slot), null))
+    .filter((snap) => snap && typeof snap === "object");
+};
+
+// Deletes every restore point a game has, in either layout. True if it had any.
+const discardRestorePoints = (gameId) => {
+  const targets = [
+    getGameJsonPath(gameId, "snapshots"),
+    getGameJsonPath(gameId, "snapshotsIndex"),
+    restorePointDirectory(gameId),
+  ];
+  const had = fs.existsSync(targets[0]) || readRestorePointIndex(gameId).length > 0;
+  for (const target of targets) fs.rmSync(target, { force: true, recursive: true });
+  return had;
 };
 
 const turnCommitJournalPath = (gameId) => path.join(getGameDirectory(gameId), TURN_COMMIT_JOURNAL_FILE);
@@ -3394,7 +3442,21 @@ const readRuntimeJsonAsset = (assetKey) => {
   const activeGame = getActiveGameSummary();
   if (activeGame?.id) ensureGameOwnerSchema(activeGame.id);
 
-  if (assetKey === "snapshotsIndex" && activeGame?.id) ensureSnapshotIndexFresh(activeGame.id);
+  // One file each, assembled here (storeRestorePoints).
+  if (assetKey === "snapshots" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: readRestorePoints(activeGame.id),
+      sourcePath: restorePointDirectory(activeGame.id),
+    };
+  }
+  if (assetKey === "snapshotsIndex" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: publicRestorePointIndex(readRestorePointEntries(activeGame.id)),
+      sourcePath: getGameJsonPath(activeGame.id, "snapshotsIndex"),
+    };
+  }
 
   const scenario = getActiveRuntimeScenarioSummary();
 
@@ -3618,17 +3680,10 @@ const writeRuntimeJsonAsset = (assetKey, value, { readBack = true } = {}) => {
     canonical = canonicalizeColorKeys(value, activeWorld());
   }
 
-  const targetPath = getGameJsonPath(activeGameId, assetKey);
-  writeJsonFile(targetPath, canonical);
-  // From the array already in hand, so a turn never reparses to stay in step.
-  if (assetKey === "snapshots") {
-    try {
-      const stat = fs.statSync(targetPath);
-      writeSnapshotIndex(activeGameId, canonical, `${stat.size}:${Math.round(stat.mtimeMs)}`);
-    } catch {
-      // A missing index just means the next read rebuilds it.
-    }
-  }
+  // Restore points go one file each: the turn's new one is written, the rest
+  // are already there.
+  if (assetKey === "snapshots") storeRestorePoints(activeGameId, canonical);
+  else writeJsonFile(getGameJsonPath(activeGameId, assetKey), canonical);
   writeGameMeta(activeGameId, {});
   return readBack ? readRuntimeJsonAsset(assetKey) : null;
 };
@@ -4225,17 +4280,18 @@ const importGameBundle = (bundle) => {
 
 // Restore points move as text on the CLIENT side, so the browser never parses
 // them. The server is not the memory-constrained end, so here they are ordinary
-// JSON: the route parses the body, this writes it.
+// JSON: the route parses the body, this writes it (one file each, as a turn
+// does; every one is written, since they come from another game).
 const readGameSnapshots = (gameId) => {
   ensureGameStore();
   getGameSummary(gameId);
-  return readJsonFile(getGameJsonPath(gameId, "snapshots"), []);
+  return readRestorePoints(gameId);
 };
 
 const writeGameSnapshots = (gameId, snapshots) => {
   ensureGameStore();
   getGameSummary(gameId);
-  writeJsonFile(getGameJsonPath(gameId, "snapshots"), Array.isArray(snapshots) ? snapshots : []);
+  storeRestorePoints(gameId, Array.isArray(snapshots) ? snapshots : [], { reuse: false });
   return { ok: true };
 };
 
