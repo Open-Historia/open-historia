@@ -1249,7 +1249,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         setRunKind("political-world-unified");
         setExpandedPolity("");
         setProgressInfo(null);
-        setProgress(`Restored combined Political World review without any AI calls: ${restoredPipeline.politics?.generatedPolities ?? 0} Political Actors and ${restoredPipeline.governingAlignment?.generatedPolities ?? 0} governing-alignment patches preserved. You can retry geopolitics only.`);
+        setProgress(`Restored combined Political World review without any AI calls: ${restoredPipeline.politics?.generatedPolities ?? 0} Political Actors and ${restoredPipeline.governingAlignment?.generatedPolities ?? 0} governing-alignment patches preserved.`);
       } else {
         const restored = restoreResultFromDiagnostic(diagnostic, {
           scenarioId: details?.scenario?.id,
