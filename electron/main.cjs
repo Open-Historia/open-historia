@@ -14,6 +14,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
+const { runLaunchUpdate } = require("./launchUpdate.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the beta build (`npm run dist:win:beta` and the beta release workflow); the
@@ -223,8 +224,11 @@ const setupAutoUpdater = () => {
     warn: (message) => logMain("warn", "updater", message),
     error: (message) => logMain("error", "updater", message),
   };
-  // The banner decides when to download — a player on a metered connection
-  // should not have ~100MB pulled out from under them by opening the game.
+  // Nothing downloads on its own. Opening the game downloads and installs a
+  // waiting update with a progress bar and a button to open the game now
+  // (electron/launchUpdate.cjs, from boot()); one found while the game is open
+  // waits for the banner's button — ~100MB is not pulled out from under a player
+  // mid-session on a metered connection.
   autoUpdater.autoDownload = false;
   // If they download but never press Restart, it installs on the next quit
   // instead of being thrown away.
@@ -244,9 +248,11 @@ const setupAutoUpdater = () => {
 // Published on globalThis for server.js, which is imported into THIS process and
 // serves /api/app-update/{status,download,restart} straight off it. Called from
 // boot() before the server starts, so the routes are never live without it.
+// Returns the updater (null where the app cannot update itself) for the launch
+// check in boot().
 const installAutoUpdater = () => {
   const autoUpdater = setupAutoUpdater();
-  if (!autoUpdater) return;
+  if (!autoUpdater) return null;
   globalThis.__ohAutoUpdate = {
     status: () => updateState,
     download: () => {
@@ -291,6 +297,7 @@ const installAutoUpdater = () => {
     // quitAndInstall tears the process down immediately.
     restart: () => { setTimeout(() => autoUpdater.quitAndInstall(true, true), 400); },
   };
+  return autoUpdater;
 };
 
 const APP_ROOT = path.join(__dirname, "..");
@@ -452,6 +459,21 @@ const waitForSetupChoice = () =>
 const sendToSetup = (channel, payload) => {
   if (setupWindow && !setupWindow.isDestroyed()) setupWindow.webContents.send(channel, payload);
 };
+
+// One setup window for everything shown before the game: an update installing at
+// launch, then the map download if one is needed.
+const openSetupWindow = async () => {
+  if (setupWindow) return;
+  setupWindow = createSetupWindow();
+  await setupWindow.loadFile(path.join(__dirname, "setup.html"));
+  setupWindow.show();
+};
+
+// "Open the game now" while an update downloads at launch.
+const waitForUpdateLater = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:update-later", () => resolve());
+  });
 
 // Electron builds NO context menu on its own — a right-click just does
 // nothing, in an editable field or not. Chrome's spellchecker (spellcheck:
@@ -674,15 +696,29 @@ const startServer = async () => {
 };
 
 const boot = async () => {
-  installAutoUpdater();
+  const updater = installAutoUpdater();
+  // Opening the game installs a waiting update before anything else starts
+  // (electron/launchUpdate.cjs); the banner is for one found while it is open.
+  // Nothing here may stop the game opening: any failure opens it as before.
+  const launchUpdate = await runLaunchUpdate({
+    updater,
+    fs,
+    recordFile: path.join(USER_ROOT, "launch-update.json"),
+    showWindow: openSetupWindow,
+    send: (payload) => sendToSetup("setup:update", payload),
+    waitForLater: waitForUpdateLater,
+    log: logMain,
+  }).catch((error) => {
+    logMain("warn", "updater.launchFailed", String(error?.message || error));
+    return { installing: false };
+  });
+  ipcMain.removeHandler("setup:update-later");
+  // Quitting into the installer, which reopens the game on the new version.
+  if (launchUpdate.installing) return;
   relocateLegacyStockMap();
   let pending = missingAssets();
   while (pending.length) {
-    if (!setupWindow) {
-      setupWindow = createSetupWindow();
-      await setupWindow.loadFile(path.join(__dirname, "setup.html"));
-      setupWindow.show();
-    }
+    await openSetupWindow();
     const totalBytes = pending.reduce((sum, asset) => sum + asset.bytes, 0);
     let doneBytes = 0;
     let currentAsset = "";

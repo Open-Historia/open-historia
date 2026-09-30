@@ -35,6 +35,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The app downloads its own updates and opens Android's installer on them
+         (UpdatePlugin.java). Android still asks the player to confirm each one,
+         and the first time to allow installs from Open Historia. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- An export is saved into Downloads/Open Historia (src/runtime/native/fileSave.js).
          Android 11 and newer let an app create files there with no permission at
          all, so these stop at Android 10 (API 29), where the Filesystem plugin asks

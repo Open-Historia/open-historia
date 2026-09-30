@@ -182,7 +182,7 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts`), so the editor
 
 ### The desktop app
 
-Players install the Electron app from the `desktop-stable` release (§2); there are no launcher or update scripts any more. `npm run dist:win` (and the other `dist:*` scripts) builds an installer locally the way `desktop-installer.yml` does. The app downloads the world map on first launch with `scripts/fetch-map-assets.mjs` and, on Windows and Linux, updates itself from its release's `latest*.yml` feed (`electron-updater`).
+Players install the Electron app from the `desktop-stable` release (§2); there are no launcher or update scripts any more. `npm run dist:win` (and the other `dist:*` scripts) builds an installer locally the way `desktop-installer.yml` does. The app downloads the world map on first launch with `scripts/fetch-map-assets.mjs` and, on Windows and Linux, updates itself from its release's `latest*.yml` feed (`electron-updater`): opening the app installs a waiting update before the game window opens (`electron/launchUpdate.cjs`; see [delivery-and-deploy.md §11.1](delivery-and-deploy.md#111-how-an-installed-game-updates)).
 
 ---
 

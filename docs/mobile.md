@@ -49,6 +49,10 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 About 61 MB (the debug build measured 61.4 MB on 2026-09-22): the bundle (~14 MB compressed once the website-only images are pruned), 35 MB of pmtiles stored as-is, and ~33 MB of JSON that deflates to roughly 8 MB. The 55 MB desktop-only GeoJSON variants never ship; the web-sized ones do.
 
+## Updates
+
+Opening the app installs a waiting update: the first update check after the page loads downloads the new APK under a cover with a progress bar and opens Android's installer on it (`UpdatePlugin.java`, `src/runtime/native/appInstaller.js`). Android asks the player to confirm, and the first time to allow installs from Open Historia. An update found while the game is open waits for the banner's **Update now**. See [delivery-and-deploy.md §11.1](delivery-and-deploy.md#111-how-an-installed-game-updates).
+
 ## Verification
 
 Checked on 2026-09-22 on the Android 15 emulator (x86_64 Google APIs image, WebView 124, 4 GB), driven over the WebView's DevTools socket (`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`), with the network off — airplane mode and Wi-Fi and mobile data, because airplane mode alone leaves the emulator's network up:

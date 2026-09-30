@@ -37,12 +37,14 @@
       }
       .actions button.quiet { color: #f4ead0; background: transparent; border-color: rgba(212, 175, 55, .3); }
       .actions button:disabled { opacity: .5; cursor: default; }
+      .update { margin-top: 14px; }
+      .update[hidden] { display: none; }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <h1>Setting up Open Historia</h1>
-      <p>Downloading the world map. This happens once — it is not downloaded again on future launches.</p>
+      <h1 id="title">Setting up Open Historia</h1>
+      <p id="lede">Downloading the world map. This happens once — it is not downloaded again on future launches.</p>
       <div class="bar"><i id="fill"></i></div>
       <div class="row">
         <span class="pct" id="pct">Starting…</span>
@@ -56,6 +58,12 @@
           <button type="button" class="quiet" id="skip">Continue without the map</button>
         </div>
       </div>
+      <div class="update" id="update" hidden>
+        <p>Or play on this version now: the update then installs when you close the game.</p>
+        <div class="actions">
+          <button type="button" class="quiet" id="later">Open the game now</button>
+        </div>
+      </div>
     </div>
     <script>
       const fill = document.getElementById("fill");
@@ -65,9 +73,54 @@
       const failedCount = document.getElementById("failedCount");
       const retry = document.getElementById("retry");
       const skip = document.getElementById("skip");
+      const title = document.getElementById("title");
+      const lede = document.getElementById("lede");
+      const update = document.getElementById("update");
+      const later = document.getElementById("later");
       const mb = (n) => (n / 1e6).toFixed(0);
 
+      // The same window shows two things: an update installing as the game opens
+      // (electron/launchUpdate.cjs), then the map download when one is needed.
+      const showMapDownload = () => {
+        document.title = "Setting up Open Historia";
+        title.textContent = "Setting up Open Historia";
+        lede.textContent = "Downloading the world map. This happens once — it is not downloaded again on future launches.";
+        update.hidden = true;
+      };
+
+      window.ohSetup.onUpdate(({ version, percent, installing, opening, failed: updateFailed }) => {
+        document.title = "Updating Open Historia";
+        title.textContent = "Updating Open Historia";
+        lede.textContent = version
+          ? `Version ${version} is downloading. The game opens on it as soon as it is installed — your games are kept.`
+          : "A new version is downloading. The game opens on it as soon as it is installed — your games are kept.";
+        file.textContent = "";
+        if (opening) {
+          update.hidden = true;
+          pct.textContent = updateFailed ? "The update did not download. Opening the game…" : "Opening the game…";
+          return;
+        }
+        const value = Math.max(0, Math.min(100, Number(percent) || 0));
+        fill.style.width = `${value}%`;
+        if (installing) {
+          update.hidden = true;
+          pct.textContent = "Installing — the game reopens by itself in a few seconds.";
+          return;
+        }
+        pct.textContent = `${Math.round(value)}%`;
+        update.hidden = false;
+      });
+
+      later.addEventListener("click", () => {
+        later.disabled = true;
+        pct.textContent = "Opening the game…";
+        // The download may have finished a moment earlier, and with it the wait
+        // for this button: nothing to tell then.
+        window.ohSetup.updateLater().catch(() => {});
+      });
+
       window.ohSetup.onProgress(({ asset, received, total }) => {
+        showMapDownload();
         failed.hidden = true;
         const ratio = total > 0 ? Math.min(1, received / total) : 0;
         fill.style.width = `${(ratio * 100).toFixed(1)}%`;

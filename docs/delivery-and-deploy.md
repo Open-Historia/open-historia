@@ -306,11 +306,11 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 
 | Surface | Landing branch | Build artifact | Delivery mechanism | Player action |
 |---|---|---|---|---|
-| **Desktop (stable)** | `main` | Installers on `desktop-stable` | `desktop-installer.yml` (dispatch from `main` / `desktop-v*` tag) | Install once; the app offers updates from `desktop-stable` (macOS: install the new zip by hand) |
-| **Desktop (beta)** | `beta` | `Open-Historia-Beta-*` installers on `desktop-beta` | `desktop-beta.yml` (dispatch from `beta` / `desktop-beta-v*` tag) | Install from the pre-release, beside the stable app; updates from `desktop-beta` |
-| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; the app self-updates from `android/latest.json` |
-| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; self-updates from `android-beta/latest.json` |
-| **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — next page load |
+| **Desktop (stable)** | `main` | Installers on `desktop-stable` | `desktop-installer.yml` (dispatch from `main` / `desktop-v*` tag) | Install once; opening the app installs a waiting update from `desktop-stable` (§11.1; macOS: install the new zip by hand) |
+| **Desktop (beta)** | `beta` | `Open-Historia-Beta-*` installers on `desktop-beta` | `desktop-beta.yml` (dispatch from `beta` / `desktop-beta-v*` tag) | Install from the pre-release, beside the stable app; opening it installs a waiting update from `desktop-beta` |
+| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; opening the app downloads a waiting update from `android/latest.json` and opens Android's installer on it (§11.1) |
+| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; updates the same way from `android-beta/latest.json` |
+| **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
 | **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | Live, no rebuild |
@@ -322,6 +322,19 @@ Key asymmetries a newcomer should internalize:
 - **`alpha` ships nothing on its own** — it reaches users only once bridged into `beta`/`main`.
 - **Worker code and website move together** through the admin-panel deploy engine, precisely to stop merged worker code from sitting undeployed.
 - **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit.
+
+### 11.1 How an installed game updates
+
+Opening the game installs a waiting update; the update banner (`src/runtime/AppUpdateBanner.jsx`) is only for an update found while the game is already open (asked for 2026-09-29). The banner still checks every 3 minutes and when the window comes back into view.
+
+| Build | As the game opens | While it is open |
+|---|---|---|
+| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. | The banner: **Update now** downloads, **Restart now** installs. |
+| **Website** | The first `version.json` check after the page loads, if it answers within 15 s (`LAUNCH_UPDATE_WINDOW_MS`), reloads onto the new bundle under a cover. | The banner's **Update now** reloads. |
+| **Android** | The same first check (`/api/app-update` → the release's `latest.json`): a cover downloads the APK with a progress bar (`UpdatePlugin.java`, `OhUpdate`, through `src/runtime/native/appInstaller.js`) and opens Android's installer on it. Android asks the player to confirm, and the first time to allow installs from the app (`REQUEST_INSTALL_PACKAGES`); it refuses an APK not signed with the installed app's key. **Not now** cancels the download. The APK is kept in the app's cache under its build number, so closing the installer and tapping **Update now** later does not download it again; it is deleted once the app is on that build. | The banner's **Update now** does the same download in the banner; after a failure it falls back to the phone's browser, as every update used to. |
+| **macOS** | Nothing: Squirrel.Mac needs a signed app, and the build is unsigned. | The banner links to the new zip. |
+
+A build that fails at launch twice (a desktop download that fails; a website reload that lands on the same old bundle; an APK that downloads but is not installed) is left to the banner: the desktop counts in `launch-update.json` in the app's user-data folder, the page in `localStorage` `oh-launch-update` (`appUpdate.js` `shouldUpdateAtLaunch`). A newer build starts again from zero.
 
 ---
 

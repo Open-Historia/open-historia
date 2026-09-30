@@ -32,11 +32,13 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Before super.onCreate, which is where Capacitor loads its plugins.
+        registerPlugin(UpdatePlugin.class);
         registerPlugin(BackgroundPausePlugin.class);
         super.onCreate(savedInstanceState);
-        // The WebView itself cannot download files. Hand any download (the
-        // self-update APK) to the system browser, which downloads it and lets
-        // the user tap to install.
+        // The WebView itself cannot download files. Hand any download to the
+        // system browser. The app's own updates no longer come this way
+        // (UpdatePlugin downloads them and opens the installer); this is the
+        // fallback for a page that has no plugin to ask.
         WebView webView = getBridge().getWebView();
         if (webView != null) {
             webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
