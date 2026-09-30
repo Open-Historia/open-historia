@@ -1699,6 +1699,38 @@ export const loadRollbackSnapshotIndex = async () => {
   return Array.isArray(data?.entries) ? data.entries : [];
 };
 
+// One restore point by id, or null when the game has none by that id. From the
+// archive when this tab already holds it (a turn's capture primes it), else just
+// that one from the store (/api/runtime/snapshots/:id): the staged reveal and
+// viewAsSeen want one world, and the archive is up to twelve. Shared, not a
+// copy: a caller that changes any of it copies that part first.
+export const loadRollbackSnapshot = async (snapshotId) => {
+  const id = String(snapshotId ?? "").trim();
+  if (!id) return null;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.id === id) ?? null;
+  try {
+    const { response } = await fetchWithPersistence(withRuntimeToken(`/api/runtime/snapshots/${encodeURIComponent(id)}`), {
+      bypassPersistentCache: true,
+    });
+    return await response.json();
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
+};
+
+// The restore point a turn started from, found by its dates (fromDate, toDate)
+// in the index and read alone, or null. Only one that holds a world counts.
+export const loadTurnRestorePoint = async ({ fromDate, toDate } = {}) => {
+  const spans = (entry) => entry?.fromDate === fromDate && entry?.toDate === toDate;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.state?.world && spans(snap)) ?? null;
+  const entry = (await loadRollbackSnapshotIndex()).find(spans);
+  const snap = entry?.id ? await loadRollbackSnapshot(entry.id) : null;
+  return snap?.state?.world && spans(snap) ? snap : null;
+};
+
 // The stock world's regions into `seen` (id -> { country, countryCode, id,
 // name }), from the tile archive. Shared by the active game's catalog and by a
 // catalog built for any map (buildRegionCatalogForMap).

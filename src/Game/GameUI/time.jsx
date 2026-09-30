@@ -10,10 +10,11 @@ import {
     getPrimedScenarioRegionCatalog,
     loadCountryNames,
     loadRegionCatalog,
+    loadRollbackSnapshot,
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
@@ -3013,11 +3014,13 @@ const DateWidget = ({
     // engaged for that turn.
     //
     // Only while there is something left to reveal, and only once the snapshot
-    // index says the archive holds this turn: the archive is up to twelve whole
-    // worlds, and it was read (and on a miss read again on every open) for a
+    // index says the archive holds this turn; then only that one restore point
+    // is read (loadRollbackSnapshot), not the archive of up to twelve whole
+    // worlds, which was read (and on a miss read again on every open) for a
     // turn already seen whole, after a reload, or one no restore point spans.
     // The index is a few hundred bytes, so an index miss is simply asked again
-    // next time (it can read empty at boot); an archive miss is remembered.
+    // next time (it can read empty at boot); a restore point that turns out
+    // not to hold the turn's world is remembered.
     const needsStaging = revealNeedsStaging(latestTurnRecord, visibleEventCount);
     const stagingMissRef = React.useRef("");
     useEffect(() => {
@@ -3034,16 +3037,16 @@ const DateWidget = ({
         }
         let cancelled = false;
         (async () => {
-            if (!findTurnSnapshot(await loadRollbackSnapshotIndex(), record) || cancelled) return;
-            const snapshots = await loadRollbackSnapshots();
+            const entry = findTurnSnapshot(await loadRollbackSnapshotIndex(), record);
+            if (!entry || cancelled) return;
+            const match = await loadRollbackSnapshot(entry.id);
             if (cancelled) return;
-            const match = findTurnSnapshot(snapshots.filter((snap) => snap?.state?.world), record);
-            if (!match) {
+            if (!match?.state?.world || !findTurnSnapshot([match], record)) {
                 stagingMissRef.current = record.id;
                 return;
             }
-            // A copy of the one world staged: the list is the shared archive
-            // (gameplay.js loadRollbackSnapshots), never to be written into.
+            // A copy of the one world staged: the restore point may be the
+            // shared archive's (loadRollbackSnapshot), never to be written into.
             setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
         })().catch(() => {
             /* no snapshot — reveal without staging */

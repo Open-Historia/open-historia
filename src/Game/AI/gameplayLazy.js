@@ -38,7 +38,6 @@ export const maybeGeneratePregameHistory = async (...args) => (await gameplay())
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
-export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
 export const rollBackToSnapshot = async (...args) => (await gameplay()).rollBackToSnapshot(...args);
 // Intervene: stop the last turn after the events revealed so far (intervene.js).
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);

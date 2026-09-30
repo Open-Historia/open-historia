@@ -709,6 +709,20 @@ test("a save from before the new stores reads as it is, and is moved once", asyn
   assert.deepEqual(getLog, [], "done once");
 });
 
+test("one restore point is read by its id, from its own row or an older save's list", async () => {
+  await reset();
+  const id = await newGame("Revealing");
+  ok(await runtime("PUT", "snapshots", [restorePoint(2), restorePoint(1)]));
+  const one = (snapshotId) => call(store.handleRuntimeSnapshot, "GET", `snapshots/${snapshotId}`);
+  getLog.length = 0;
+  assert.deepEqual(ok(await one("snap-1")), restorePoint(1));
+  assert.deepEqual(getLog.filter((name) => name === "snapshots"), ["snapshots"], "that one row, not the others");
+  assert.equal((await one("snap-9")).status, 404);
+
+  makeLegacy(id);
+  assert.deepEqual(ok(await one("snap-1")), SNAPSHOT, "an older save's inline list is read too");
+});
+
 test("a save from before the new stores is moved by its own next write too", async () => {
   await reset();
   const id = await newGame("Old save, played");

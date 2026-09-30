@@ -31,6 +31,7 @@ import {
   readGameSnapshots,
   readRuntimeJsonAsset,
   resolveRuntimeGeojsonAsset,
+  resolveRuntimeRestorePoint,
   removeGameAsset,
   removeScenarioAsset,
   resolveGameUploadAsset,
@@ -953,6 +954,22 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.type("application/json");
     res.send(JSON.stringify(asset.data));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// One of the active game's restore points, by id: the staged reveal needs the
+// world one turn started from, not the whole archive of twelve. Sent from its
+// file as stored, never parsed here.
+app.get("/api/runtime/snapshots/:snapshotId", (req, res) => {
+  try {
+    const sourcePath = resolveRuntimeRestorePoint(req.params.snapshotId);
+    if (!sourcePath) {
+      sendError(res, 404, new Error(`Restore point not found: ${req.params.snapshotId}`));
+      return;
+    }
+    streamBinaryFile(req, res, sourcePath, "application/json; charset=utf-8");
   } catch (error) {
     sendError(res, 404, error);
   }

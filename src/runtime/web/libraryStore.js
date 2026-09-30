@@ -149,6 +149,15 @@ const readRestorePoints = async (record) => {
 const readRestorePointIndex = async (record) =>
   publicRestorePointIndex(gameSnapshots(record) ?? await storedRestorePointEntries(record.id));
 
+// One restore point by id, or null.
+const readRestorePoint = async (record, snapshotId) => {
+  if (!snapshotId) return null;
+  const inline = gameSnapshots(record);
+  if (inline) return inline.find((snap) => snap?.id === snapshotId) ?? null;
+  const entry = (await storedRestorePointEntries(record.id)).find((candidate) => candidate.id === snapshotId);
+  return entry ? (await idbGet(STORES.snapshots, entry.slot))?.snapshot ?? null : null;
+};
+
 // A record, its lean catalog row, its cover and (a game's) restore points, in
 // one transaction, so the menu index is never stale and a cover or a restore
 // point is never left behind or found missing. A cover that arrives as bytes (an
@@ -2271,3 +2280,19 @@ export const handleRuntimeJson = async ({ method, segments, body, prefer }) => {
   }
 };
 
+// GET /api/runtime/snapshots/:id — one of the active game's restore points (the
+// server twin: resolveRuntimeRestorePoint). The staged reveal needs the world one
+// turn started from, not the archive of twelve.
+export const handleRuntimeSnapshot = async ({ method, segments }) => {
+  if (method !== "GET" || segments[0] !== "snapshots" || !segments[1]) return null;
+  const snapshotId = decodeURIComponent(segments[1]);
+  try {
+    const activeGame = await getActiveGameRecord();
+    // The rename migration discards restore points that predate it.
+    if (activeGame) await migrateOwnerSchema(activeGame, "game");
+    const snapshot = activeGame ? await readRestorePoint(activeGame, snapshotId) : null;
+    return snapshot ? jsonResponse(snapshot) : errorResponse(`Restore point not found: ${snapshotId}`, 404);
+  } catch (error) {
+    return errorResponse(error.message, 404);
+  }
+};

@@ -3314,6 +3314,13 @@ const readRestorePoints = (gameId) => {
     .filter((snap) => snap && typeof snap === "object");
 };
 
+// The file holding one restore point, found by its id, or null.
+const restorePointPath = (gameId, snapshotId) => {
+  const entry = readRestorePointEntries(gameId).find((candidate) => candidate.id && candidate.id === snapshotId);
+  const target = entry ? path.join(restorePointDirectory(gameId), entry.slot) : null;
+  return target && fs.existsSync(target) ? target : null;
+};
+
 // Deletes every restore point a game has, in either layout. True if it had any.
 const discardRestorePoints = (gameId) => {
   const targets = [
@@ -4295,6 +4302,17 @@ const writeGameSnapshots = (gameId, snapshots) => {
   return { ok: true };
 };
 
+// One of the active game's restore points, by id: the file to send, or null.
+// The staged reveal wants one world, not the archive of twelve.
+const resolveRuntimeRestorePoint = (snapshotId) => {
+  ensureGameStore();
+  const activeGame = getActiveGameSummary();
+  if (!activeGame?.id) return null;
+  // The rename migration discards restore points that predate it.
+  ensureGameOwnerSchema(activeGame.id);
+  return restorePointPath(activeGame.id, String(snapshotId ?? ""));
+};
+
 export {
   createGame,
   createScenario,
@@ -4317,6 +4335,7 @@ export {
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
+  resolveRuntimeRestorePoint,
   resolveRuntimeGeojsonAsset,
   removeGameAsset,
   removeScenarioAsset,

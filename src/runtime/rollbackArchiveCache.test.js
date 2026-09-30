@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JSON_URLS, readJson, setRuntimeAssetEndpoints, writeJson } from "./assets.js";
+import { JSON_URLS, loadRollbackSnapshot, loadTurnRestorePoint, readJson, setRuntimeAssetEndpoints, writeJson } from "./assets.js";
 
 const stored = new Map();
 const gets = [];
@@ -25,6 +25,8 @@ globalThis.fetch = async (url, { method = "GET", body } = {}) => {
     return new Response(null, { status: 204 });
   }
   gets.push(key);
+  // One restore point by id (/api/runtime/snapshots/:id): a 404 when there is none.
+  if (key.includes("/api/runtime/snapshots/") && !stored.has(key)) return new Response("{}", { status: 404 });
   return new Response(stored.get(key) ?? "[]", { status: 200, headers: { "Content-Type": "application/json" } });
 };
 
@@ -58,4 +60,30 @@ test("another game's archive is read from the store, never the last game's", asy
   const list = await read();
   assert.equal(gets.length, 1);
   assert.deepEqual(list, []);
+});
+
+// The staged reveal and viewAsSeen want the one world a turn started from.
+const oneRestorePoint = { id: "snap-9", fromDate: "1915-01-01", toDate: "1915-02-01", state: { world: { note: "before" } } };
+
+test("with the archive in memory, one restore point is taken from it, with no fetch", async () => {
+  setRuntimeAssetEndpoints({ token: "game-c" });
+  await writeJson(JSON_URLS.snapshots, [oneRestorePoint], { cacheClone: false, cloneResult: false, echo: false });
+  gets.length = 0;
+  assert.equal(await loadRollbackSnapshot("snap-9"), oneRestorePoint);
+  assert.equal(await loadTurnRestorePoint({ fromDate: "1915-01-01", toDate: "1915-02-01" }), oneRestorePoint);
+  assert.equal(await loadRollbackSnapshot("snap-none"), null);
+  assert.deepEqual(gets, []);
+});
+
+test("without it, the index and that one restore point are read, never the archive", async () => {
+  setRuntimeAssetEndpoints({ token: "game-d" });
+  const one = `/api/runtime/snapshots/snap-9?v=game-d`;
+  stored.set(String(JSON_URLS.snapshotsIndex), JSON.stringify({ entries: [{ id: "snap-9", fromDate: "1915-01-01", toDate: "1915-02-01" }] }));
+  stored.set(one, JSON.stringify(oneRestorePoint));
+  gets.length = 0;
+  assert.deepEqual(await loadTurnRestorePoint({ fromDate: "1915-01-01", toDate: "1915-02-01" }), oneRestorePoint);
+  assert.deepEqual(gets, [String(JSON_URLS.snapshotsIndex), one]);
+  assert.equal(await loadTurnRestorePoint({ fromDate: "1915-02-01", toDate: "1915-03-01" }), null, "no restore point spans that turn");
+  assert.equal(await loadRollbackSnapshot("snap-gone"), null, "a 404 is none");
+  assert.equal(gets.includes(String(JSON_URLS.snapshots)), false);
 });
