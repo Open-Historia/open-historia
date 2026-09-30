@@ -114,12 +114,12 @@ test("the app wires both halves: the page calls OhBackground.idle, the activity 
   const read = (relative) => fs.readFileSync(new URL(`../../../${relative}`, import.meta.url), "utf8");
   const main = read("src/main.jsx");
   assert.match(main, /if \(import\.meta\.env\.VITE_OH_NATIVE\) installNativeBackgroundPause\(isGenerating\)/);
-  const javaDir = "mobile/android/app/src/main/java/io/github/arkniem/paxhistoria";
+  const javaDir = "mobile/android/app/src/main/java/io/github/arkniem/openhistoria";
   const plugin = read(`${javaDir}/BackgroundPausePlugin.java`);
   assert.match(plugin, /@CapacitorPlugin\(name = "OhBackground"\)/);
   assert.match(plugin, /public void idle\(PluginCall call\)/);
   const activity = read(`${javaDir}/MainActivity.java`);
-  assert.match(activity, /registerPlugin\(BackgroundPausePlugin\.class\);\s*super\.onCreate\(savedInstanceState\);/, "registered before super.onCreate");
+  assert.match(activity, /registerPlugin\(BackgroundPausePlugin\.class\);(\s*registerPlugin\(\w+\.class\);)*\s*super\.onCreate\(savedInstanceState\);/, "registered before super.onCreate");
   assert.match(activity, /view\.pauseTimers\(\)/);
   assert.match(activity, /view\.resumeTimers\(\)/);
 });

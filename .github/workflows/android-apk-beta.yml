@@ -7,7 +7,7 @@ name: Build Android APK (Beta)
 # It is android-apk.yml with the channel set to beta, and the channel is what
 # makes the beta a separate app, as the desktop beta is (desktop-beta.yml):
 #   * mobile/android/app/build.gradle, OH_ANDROID_CHANNEL=beta: its own
-#     application id (io.github.arkniem.paxhistoria.beta), so it installs BESIDE
+#     application id (the stable id + ".beta"), so it installs BESIDE
 #     the stable app rather than over it and keeps its own saves; its own name
 #     and BETA icon.
 #   * VITE_APP_TRACK=beta: its update banner reads android-beta/latest.json

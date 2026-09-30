@@ -17,8 +17,11 @@ export const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
 // the owner rename. In short: it is the ONLY compatibility gate on a file strangers
 // swap, and an old build would otherwise accept a name-keyed bundle and resolve its
 // names down to codes, leaving the player owning nothing.
-export const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
-export const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+// Files written before 2026-09-29 carry the project's earlier name; the pattern
+// reads them too (format 1 or 2 under any name), and every export says this one.
+export const SCENARIO_BUNDLE_SCHEMA = "open-historia-scenario-bundle/2";
+export const SCENARIO_BUNDLE_SCHEMA_PATTERN = /^[a-z][a-z0-9-]*-scenario-bundle(?:\/2)?$/;
+export const isScenarioBundleSchema = (schema) => typeof schema === "string" && SCENARIO_BUNDLE_SCHEMA_PATTERN.test(schema);
 export const SCENARIO_BUNDLE_VERSION = 2;
 export const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 export const COVER_IMAGE_ASSET_KEY = "cover";

@@ -59,6 +59,7 @@ import {
   getBasemapPayload,
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
+import { renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   allowedCorsOrigin,
   crossOriginWriteAllowed,
@@ -1245,6 +1246,12 @@ const hubCachePaths = (fileUrl) => {
   const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
   return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
 };
+// What players downloaded before 2026-09-29 says the project's earlier name in
+// its schema; the cache keeps it under the current one (scenarioBundleNames.js).
+// Once, in the background: startup never waits for it.
+renameHubCacheBundles(HUB_CACHE_DIR)
+  .then((count) => { if (count) console.log(`[hub] ${count} downloaded scenario(s) renamed to the current bundle name.`); })
+  .catch((error) => console.warn("[hub] cache rename failed:", error.message));
 
 app.get("/api/hub/file", async (req, res) => {
   try {
@@ -1260,10 +1267,15 @@ app.get("/api/hub/file", async (req, res) => {
     if (fs.existsSync(cache.body)) {
       let cachedType = "application/octet-stream";
       try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
+      // A copy cached before the startup rename reached it is renamed now.
+      const cached = await renameScenarioBundleBytes(fs.readFileSync(cache.body));
+      if (cached.changed) {
+        try { writeFileAtomic(cache.body, cached.bytes); } catch { /* served renamed either way */ }
+      }
       res.setHeader("Cache-Control", "no-store");
       setHubFileGuards(res);
       res.setHeader("Content-Type", cachedType);
-      return fs.createReadStream(cache.body).pipe(res);
+      return res.send(cached.bytes);
     }
 
     // Follow redirects manually so every hop is re-checked against the host
@@ -1289,10 +1301,12 @@ app.get("/api/hub/file", async (req, res) => {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }
 
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    if (buffer.length > HUB_MAX_BUNDLE_BYTES) {
+    const downloaded = Buffer.from(await upstream.arrayBuffer());
+    if (downloaded.length > HUB_MAX_BUNDLE_BYTES) {
       return sendError(res, 413, new Error("Scenario bundle is too large."));
     }
+    // Kept and handed on under the current bundle name, whatever the post says.
+    const buffer = (await renameScenarioBundleBytes(downloaded)).bytes;
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
     // Cache for next time — best-effort; a cache write failure must not fail the

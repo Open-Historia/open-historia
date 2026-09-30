@@ -332,11 +332,20 @@ const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
 // becomes its own identifier, matches no colour and no region, and the player owns
 // nothing. Rejecting on an unfamiliar schema turns that into "Unsupported scenario
 // bundle", which is a sentence someone can act on.
-const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
-// Every schema this build can READ. v1 bundles — the six on the community release,
-// and everything anyone has ever shared — import fine: they arrive unmarked and the
-// migration names them on first read.
-const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+//
+// The name every export is written with. Files written before 2026-09-29 carry
+// the project's earlier name in the same place; this build reads them too, so
+// nothing anyone already holds stops importing, and whatever it exports again
+// says this name. A build from before then knows only the earlier name and
+// refuses a file written now: its player updates to open it.
+const SCENARIO_BUNDLE_SCHEMA = "open-historia-scenario-bundle/2";
+// Every schema this build can READ: format 2 (owner names) and the unversioned
+// format 1 (codes — the bundles on the community release and everything shared
+// before the owner rename: they arrive unmarked and the migration names them on
+// first read), under this name or an earlier one. Nothing newer: a format this
+// build does not know is refused rather than misread.
+const SCENARIO_BUNDLE_SCHEMA_PATTERN = /^[a-z][a-z0-9-]*-scenario-bundle(?:\/2)?$/;
+const isScenarioBundleSchema = (schema) => typeof schema === "string" && SCENARIO_BUNDLE_SCHEMA_PATTERN.test(schema);
 const SCENARIO_BUNDLE_VERSION = 2;
 
 // The accent a scenario or game wears in the library. The app's old default was
@@ -3572,7 +3581,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   // Accept every schema we can read, not just the one we write — a v1 bundle is
   // still perfectly importable, it just arrives unmarked and gets named by the
   // migration on first read.
-  if (!ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) {
+  if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
 
@@ -3679,7 +3688,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   if (!bundle || typeof bundle !== "object") {
     throw new Error("Scenario bundle must be a JSON object.");
   }
-  if (!ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) {
+  if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
   if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
@@ -3738,9 +3747,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
 // TEXT: parsing a 21 MB snapshots.json costs ~80 MB of heap, nothing here needs
 // to look inside it, and the browser is where that would hurt.
 //
-// The schema string carries THIS project's name. The scenario bundle's
-// "pax-historia-scenario-bundle/2" above is a frozen wire format, kept for the
-// bundles players already hold — not a pattern to copy into a new one.
+// The schema string carries this project's name, as the scenario bundle's does.
 const GAME_BUNDLE_SCHEMA = "open-historia-game-bundle/1";
 const ACCEPTED_GAME_BUNDLE_SCHEMAS = new Set([GAME_BUNDLE_SCHEMA]);
 

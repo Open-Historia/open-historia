@@ -18,7 +18,7 @@ import {
   DEFAULT_SCENARIO_ID, DEFAULT_GAME_ID, EMPTY_FEATURE_COLLECTION, COVER_IMAGE_ASSET_KEY,
   JSON_ASSET_KEYS, STORAGE_JSON_ASSET_KEYS, OPTIONAL_JSON_ASSET_KEYS, RUNTIME_ONLY_JSON_ASSET_KEYS,
   PMTILES_ASSET_KEYS, SCENARIO_GEOJSON_ASSET_KEYS, UPLOADABLE_SCENARIO_ASSET_KEYS, UPLOADABLE_GAME_ASSET_KEYS,
-  JSON_ASSET_DEFAULTS, SCENARIO_BUNDLE_SCHEMA, ACCEPTED_BUNDLE_SCHEMAS, SCENARIO_BUNDLE_VERSION, SUPPORTED_IMAGE_CONTENT_TYPES,
+  JSON_ASSET_DEFAULTS, SCENARIO_BUNDLE_SCHEMA, isScenarioBundleSchema, SCENARIO_BUNDLE_VERSION, SUPPORTED_IMAGE_CONTENT_TYPES,
   DEFAULT_SCENARIO_META, DEFAULT_GAME_META, canonicalizeWorldCountryRefs, canonicalizeGameCountry, canonicalizeColorKeys,
   readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId, normalizePlayCount,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
@@ -1251,7 +1251,7 @@ const exportScenarioBundle = async (id) => {
 const importScenarioBundle = async (bundle) => {
   // Accept every schema we can read, not just the one we write — a v1 bundle
   // imports fine, arriving unmarked and named by the migration on first read.
-  if (!bundle || typeof bundle !== "object" || !ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  if (!bundle || typeof bundle !== "object" || !isScenarioBundleSchema(bundle.schema)) throw new Error("Unsupported scenario bundle.");
   // Hub provenance the community tab attaches to a direct import — stamped
   // LAST so the import's own meta writes don't clear it.
   const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
@@ -1309,7 +1309,7 @@ const importScenarioBundle = async (bundle) => {
 // cleared so a dropped basemap or cover doesn't linger; the new hubOrigin is
 // stamped last (server twin: updateScenarioFromBundle).
 const updateScenarioFromBundle = async (scenarioId, bundle) => {
-  if (!bundle || typeof bundle !== "object" || !ACCEPTED_BUNDLE_SCHEMAS.has(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  if (!bundle || typeof bundle !== "object" || !isScenarioBundleSchema(bundle.schema)) throw new Error("Unsupported scenario bundle.");
   const existing = await getScenario(scenarioId);
   if (!existing) throw new Error(`Scenario not found: ${scenarioId}`);
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};

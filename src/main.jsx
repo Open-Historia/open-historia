@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { installAppHeight } from "./runtime/mobileUi.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
+import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
 import { isGenerating } from "./Game/AI/simulationStatus.js";
 import { startTranslator } from "./runtime/translator.js";
 import {
@@ -46,6 +47,9 @@ const mount = () => {
     // The Android app rests in the background once nothing is being generated
     // (runtime/native/backgroundPause.js).
     if (import.meta.env.VITE_OH_NATIVE) installNativeBackgroundPause(isGenerating);
+    // After Android stopped the page's renderer and the app built the page again,
+    // the diagnostics log says so (runtime/native/rendererRestart.js).
+    if (import.meta.env.VITE_OH_NATIVE) void reportRendererRestart();
 };
 
 // Before anything else runs, so the diagnostics log in Settings covers the whole

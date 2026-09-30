@@ -1,7 +1,8 @@
 /*! Open Historia — SHA-256 that works everywhere the game runs © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // One SHA-256 for the client, with a pure-JS fallback.
 //
-// Why: the Android app's WebView is served from http://app.paxhistoria, and an
+// Why: the Android app's WebView is served from an http:// origin (the hostname
+// in mobile/capacitor.config.json), and an
 // http origin that is not localhost is not a secure context. Chromium withholds
 // crypto.subtle there, so every `crypto.subtle.digest("SHA-256", …)` threw — a
 // flag upload, a basemap dedup and the archive warm all failed on the phone

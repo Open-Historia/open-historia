@@ -27,7 +27,7 @@ const archive = Uint8Array.from({ length: 200_000 }, (_, index) => index % 251);
 const toBase64 = (bytes) => Buffer.from(bytes).toString("base64");
 
 const bundle = () => ({
-    schema: "pax-historia-scenario-bundle",
+    schema: "open-historia-scenario-bundle/2",
     assets: {
         // Small: stays inline.
         colors: { data: { Testland: [1, 2, 3] }, fileName: "colors.json", mode: "embedded" },
