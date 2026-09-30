@@ -155,8 +155,13 @@ test("a checkpoint saved before partial Apply existed reads with an empty log, a
   assert.deepEqual(normalizePoliticalWorldV2Checkpoint(older).partialApplications, []);
 
   const logged = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
-  logged.partialApplications = [{ at: "2026-09-29T00:00:00.000Z", polities: ["Avalon", "Avalon", ""], institutions: true }, "junk"];
+  logged.partialApplications = [
+    { at: "2026-09-29T00:00:00.000Z", polities: ["Avalon", "Avalon", ""], institutions: true, depthByPolity: { Avalon: "standard", "": "rich", Borduria: "" } },
+    { at: "2026-09-29T01:00:00.000Z", polities: ["Borduria"] },
+    "junk",
+  ];
   assert.deepEqual(normalizePoliticalWorldV2Checkpoint(logged).partialApplications, [
-    { at: "2026-09-29T00:00:00.000Z", polities: ["Avalon"], institutions: true },
+    { at: "2026-09-29T00:00:00.000Z", polities: ["Avalon"], institutions: true, depthByPolity: { Avalon: "standard" } },
+    { at: "2026-09-29T01:00:00.000Z", polities: ["Borduria"], institutions: false, depthByPolity: {} },
   ]);
 });

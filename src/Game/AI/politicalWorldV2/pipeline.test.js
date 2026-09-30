@@ -173,10 +173,56 @@ test("after a partial Apply the checkpoint belongs to the saved scenario, so Res
   const kept = await partial.keepPoliticalWorldV2CheckpointAfterPartialApply({ checkpoint, world: applied.world, applied, now: "2026-09-29T00:00:00.000Z" });
   const savedKey = buildPoliticalWorldInputFingerprint({ scenarioId: "partial", scenarioDate: PARTIAL_DATE, world: applied.world });
   assert.equal(checkpointMatchesInput(kept, savedKey), true);
-  assert.deepEqual(kept.partialApplications, [{ at: "2026-09-29T00:00:00.000Z", polities: ["Avalon"], institutions: false }]);
+  assert.deepEqual(kept.partialApplications, [{ at: "2026-09-29T00:00:00.000Z", polities: ["Avalon"], institutions: false, depthByPolity: {} }]);
   assert.equal(kept.pauseReason, "total-model-call-budget", "the rest still waits for more calls");
   assert.deepEqual(kept.coverage["political-actor"], ["Avalon", "Borduria"], "no finished work is thrown away");
   // Applying the finished work again changes nothing.
   const again = partial.applyCompletePoliticalWorldV2Work(applyOptions(kept, applied.world));
   assert.deepEqual(again.world.politicalActors.byPolity.Avalon, applied.world.politicalActors.byPolity.Avalon);
+});
+
+// Behaviourally complete at standard depth, but without the response profiles
+// rich depth asks for.
+const standardActor = (polityKey) => ({
+  polityKey,
+  politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+  government: { form: "Parliamentary republic", ideology: "Pragmatic constitutional government", rulingPartyIds: ["gov"] },
+  parties: [{ id: "gov", name: "Government Party", support: { percent: 55 }, ideology: "Pragmatic", publicPriorities: ["Maintain stability"] }],
+  traits: { pragmatism: 60 },
+  goals: ["Maintain national security"],
+  fears: ["Strategic isolation"],
+  ambitions: ["Improve regional influence"],
+  domesticPressures: ["Budget constraints"],
+  perceptions: { Borduria: { threat: 25 } },
+});
+
+test("a polity applied early keeps the depth it was built at, so Resume does not reopen it", async () => {
+  clearPoliticalWorldV2CheckpointMemoryForTests();
+  const checkpoint = pausedAtCeiling();
+  checkpoint.stagedWorld.politicalActors.byPolity.Avalon = standardActor("Avalon");
+  const before = { Avalon: { depth: "standard" }, Borduria: { depth: "standard" } };
+  const applied = partial.applyCompletePoliticalWorldV2Work(applyOptions(checkpoint));
+  let kept = await partial.keepPoliticalWorldV2CheckpointAfterPartialApply({ checkpoint, world: applied.world, applied, relevanceByPolity: before });
+  assert.deepEqual(kept.partialApplications[0].depthByPolity, { Avalon: "standard" });
+
+  // In balanced mode the actor now in the scenario makes Avalon rich. A second
+  // partial Apply sees that raised depth but keeps the recorded one.
+  const after = { Avalon: { depth: "rich" }, Borduria: { depth: "standard" } };
+  kept = await partial.keepPoliticalWorldV2CheckpointAfterPartialApply({ checkpoint: kept, world: applied.world, applied, relevanceByPolity: after });
+  assert.deepEqual(kept.partialApplications[1].depthByPolity, {});
+
+  let calls = 0;
+  const resumed = await generateOrResumePoliticalWorldV2({
+    scenarioId: "partial",
+    inputs: { scenarioDate: PARTIAL_DATE, world: applied.world, polities: partialPolities, relevanceByPolity: after },
+    maxModelCalls: 1,
+    callModel: async () => { calls += 1; throw new Error("provider unavailable"); },
+  });
+  assert.equal(resumed.partialApplications.length, 2, "Resume kept the checkpoint");
+  assert.deepEqual(
+    resumed.quality.unresolved.filter((item) => item.polityKey === "Avalon" && item.kind === "political-actor"),
+    [],
+    "the finished polity is not reopened at the raised depth",
+  );
+  assert.ok(calls <= 1);
 });

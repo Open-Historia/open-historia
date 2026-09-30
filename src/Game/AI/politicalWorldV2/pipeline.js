@@ -58,6 +58,28 @@ const temporalVerificationRequiredFor = (world, scenarioDate) => {
   return false;
 };
 
+// A partial Apply gives its polities an actor in the saved scenario, and in
+// balanced mode an existing actor raises a polity's depth. Those polities keep
+// the depth their finished work was built at (recorded with the Apply), so
+// Resume never reopens them and spends calls on them again.
+const partialApplyDepths = (checkpoint) => {
+  const depths = {};
+  for (const entry of array(checkpoint?.partialApplications)) {
+    for (const [polity, depth] of Object.entries(entry?.depthByPolity || {})) {
+      if (!Object.hasOwn(depths, polity)) depths[polity] = depth;
+    }
+  }
+  return depths;
+};
+
+const withPartialApplyDepths = (inputs, checkpoint) => {
+  const depths = Object.entries(partialApplyDepths(checkpoint));
+  if (!depths.length) return inputs;
+  const relevanceByPolity = { ...(inputs?.relevanceByPolity || {}) };
+  for (const [polity, depth] of depths) relevanceByPolity[polity] = { ...(relevanceByPolity[polity] || {}), depth };
+  return { ...inputs, relevanceByPolity };
+};
+
 const seedNativePowerEvidence = (world, scenarioDate, polities) => {
   const refreshed = refreshPowerStatus(world, { date: scenarioDate, round: 0, immediate: true });
   const acceptedPolities = activePolityKeys(polities).filter((polity) => isFinitePowerScore(refreshed?.powerStatus?.byPolity?.[polity]?.score));
@@ -212,6 +234,9 @@ const runPoliticalWorldV2 = async ({
       checkpoint = rebased;
       await savePoliticalWorldV2Checkpoint(checkpoint);
     }
+  }
+  if (checkpoint && checkpointMatchesInput(checkpoint, inputFingerprint)) {
+    inputs = withPartialApplyDepths(inputs, checkpoint);
   }
   if (!checkpoint || !checkpointMatchesInput(checkpoint, inputFingerprint)) {
     const bootstrapped = bootstrapPoliticalWorldV2StagedWorld({ inputs });
@@ -433,16 +458,26 @@ export const applyCompletePoliticalWorldV2Work = ({
 // After a partial Apply the saved scenario holds part of the checkpoint's
 // work, so the checkpoint is re-keyed to that scenario as saved. Resume and
 // the final Apply then carry on from it; any later edit by the author still
-// changes the key and stops them.
+// changes the key and stops them. relevanceByPolity is the scenario's
+// relevance from before this Apply: the depth each newly applied polity was
+// built at, which Resume keeps for it.
 export const recordPoliticalWorldV2PartialApply = ({
   checkpoint,
   world = {},
   roundZeroContext = null,
   applied = {},
+  relevanceByPolity = {},
   now = new Date().toISOString(),
 } = {}) => {
   const next = normalizePoliticalWorldV2Checkpoint(checkpoint);
   if (!next) throw new Error("Invalid Political World v2 checkpoint");
+  const polities = array(applied?.polities).map(clean).filter(Boolean);
+  // A polity applied earlier already has its depth recorded; the relevance
+  // passed now counts that earlier Apply's actor and would raise it.
+  const pinned = partialApplyDepths(next);
+  const depthByPolity = Object.fromEntries(polities
+    .filter((polity) => !Object.hasOwn(pinned, polity) && clean(relevanceByPolity?.[polity]?.depth))
+    .map((polity) => [polity, clean(relevanceByPolity[polity].depth)]));
   next.inputFingerprint = buildPoliticalWorldInputFingerprint({
     scenarioId: next.scenarioId,
     scenarioDate: next.scenarioDate,
@@ -451,8 +486,9 @@ export const recordPoliticalWorldV2PartialApply = ({
   });
   next.partialApplications = [...next.partialApplications, {
     at: now,
-    polities: array(applied?.polities).map(clean).filter(Boolean),
+    polities,
     institutions: applied?.institutions === true,
+    depthByPolity,
   }];
   next.updatedAt = now;
   return next;

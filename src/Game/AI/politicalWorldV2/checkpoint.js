@@ -203,7 +203,14 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
   next.ceilingGrants = array(next.ceilingGrants).filter((grant) => grant && typeof grant === "object" && !Array.isArray(grant)).map(clone);
   next.partialApplications = array(next.partialApplications)
     .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
-    .map((entry) => ({ at: clean(entry.at), polities: [...new Set(array(entry.polities).map(clean).filter(Boolean))], institutions: entry.institutions === true }));
+    .map((entry) => ({
+      at: clean(entry.at),
+      polities: [...new Set(array(entry.polities).map(clean).filter(Boolean))],
+      institutions: entry.institutions === true,
+      depthByPolity: Object.fromEntries(Object.entries(object(entry.depthByPolity))
+        .map(([polity, depth]) => [clean(polity), clean(depth)])
+        .filter(([polity, depth]) => polity && depth)),
+    }));
   next.stages = { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending", ...object(next.stages) };
   next.coverage = Object.fromEntries(Object.entries(object(next.coverage)).map(([type, targets]) => [clean(type), [...new Set(array(targets).map(clean).filter(Boolean))]]).filter(([type]) => type));
   next.membership = { resolvedInstitutionIds: [...new Set(array(next?.membership?.resolvedInstitutionIds).map(clean).filter(Boolean))] };

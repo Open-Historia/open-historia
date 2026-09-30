@@ -926,6 +926,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         world: savedInputs.world,
         roundZeroContext: savedInputs.roundZeroContext || null,
         applied: application,
+        relevanceByPolity: freshInputs.relevanceByPolity,
       });
       setV2Checkpoint(kept);
       onDetailsChange?.(saved);
