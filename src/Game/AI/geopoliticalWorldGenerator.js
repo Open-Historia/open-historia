@@ -4,7 +4,6 @@ import { callAI } from "./main.jsx";
 import { checkGeneratedAgreementDates } from "./geopoliticalAgreementDates.js";
 import { parseGeopoliticalArrayText } from "./geopoliticalJsonTransport.js";
 import { toolResponsePayload } from "./toolResponsePayload.js";
-import { resolveGeopoliticalMembershipCoverage } from "./geopoliticalMembershipCoverage.js";
 import { resolveScenarioInstitutionReferenceCatalog } from "./institutionReferenceCatalogs.js";
 import { applyDiplomaticUpdates } from "./nativeDiplomaticDirector.js";
 import {
@@ -35,7 +34,6 @@ import {
   normalizeGeopoliticalInstitutionGovernancePayload,
 } from "./geopoliticalInstitutionGovernance.js";
 
-export const GEOPOLITICAL_WORLD_BATCH_SIZE = 24;
 export const GEOPOLITICAL_WORLD_SCHEMA_VERSION = 2;
 export const GEOPOLITICAL_REGIME_CHARACTERS = Object.freeze([
   "democratic",
@@ -117,13 +115,6 @@ export const GEOPOLITICAL_POWER_SINGLETON_TOOL = shallowTool(
     note: { type: "string", description: "Brief basis for the score." },
   },
   ["polityKey", "strategicWeight"],
-);
-
-export const GEOPOLITICAL_MEMBERSHIP_TOOL = shallowTool(
-  "submit_geopolitical_memberships",
-  "Submit exact-date formal memberships referencing only the fixed institution catalog, plus regimeCharacter only where canonical Political Actors do not already provide it.",
-  { politiesJson: { type: "string", description: "JSON array text: one record per requested polity with memberships[] and regimeCharacter when not already canonical." } },
-  ["politiesJson"],
 );
 
 export const GEOPOLITICAL_INSTITUTION_MEMBERS_TOOL = shallowTool(
@@ -410,11 +401,6 @@ const buildPowerPrompt = ({ scenarioDate, historyAuthority = null, world, scenar
   userMessage: `Scenario context:\n${clean(scenarioContext).slice(0, 5000) || "(none)"}\n\nFull active polity vocabulary for relative comparison:\n${allPolityKeys.join(" | ").slice(0, 16000)}\n\n${accepted.length ? `Already accepted calibration anchors from earlier accepted batches:\n${accepted.map((entry) => `${entry.polityKey}:${entry.strategicWeight}`).join(" | ").slice(0, 8000)}\n\n` : ""}Return exactly one record for each requested polity below:\n${requestedPolities.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}\n\n${singleton ? "This is a ONE-POLITY recovery. Submit the direct tool fields polityKey, strategicWeight, and note. Do not serialize them into powerJson and do not wrap them in an array." : 'powerJson = [{"polityKey":"exact key","strategicWeight":0-100,"note":"brief basis"}].'}`,
 });
 
-const compactMembershipCatalogSummary = (catalog) => array(catalog)
-  .map((institution) => `[${institution.id}] ${institution.shortName || institution.name}`)
-  .join(" | ")
-  .slice(0, 9000);
-
 // normalizeInstitutionRecord stores members as an array of {polity, status,
 // role}; every status it keeps is a positive one.
 const existingInstitutionMembers = (institution) => array(institution?.members)
@@ -471,47 +457,6 @@ ${allPolityKeys.join(" | ").slice(0, 20000)}
 institutionsJson = [{"institutionId":"EXACT id from the list above","members":[{"polityKey":"EXACT active polity key","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":"brief/blank"}]}], one entry per listed institution.`,
 });
 
-const buildMembershipPrompt = ({ scenarioDate, historyAuthority = null, batch, world, scenarioContext, catalog, recovery = false, baseCountryTags = null }) => {
-  if (recovery) {
-    return {
-      systemPrompt: `OpenHistoria membership COVERAGE RECOVERY for ${scenarioDate}. ${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Return EXACTLY one row for every requested polity. Do not omit a polity because it has no memberships or because an accession date is uncertain. Use only exact institution ids from the closed catalog. If membership exists but the exact joinedDate is uncertain, leave joinedDate blank. Keep notes blank/minimal. Preserve an already supplied canonical regimeCharacter; otherwise classify it. No prose outside the tool.`,
-      userMessage: `Closed institution ids:
-${compactMembershipCatalogSummary(catalog) || "(none)"}
-
-Requested polities (${batch.length}) — return all ${batch.length} rows:
-${batch.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}
-
-politiesJson = [{"polityKey":"EXACT requested key","regimeCharacter":"canonical/generated/blank","memberships":[{"institutionId":"EXACT catalog id","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":""}]}].`,
-    };
-  }
-
-  return {
-    systemPrompt: `You assign exact-date FORMAL MEMBERSHIPS and, only where canonical Political Actors do not already provide it, political regime-character classification to OpenHistoria polities.
-
-${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Structured scenario canon outranks external/reference material.
-
-UNIVERSE RULE: use only the institutions in the fixed catalog supplied below. The scenario may be historical, alternate-history, future, or fictional; never import institutions from another universe or timeline.
-
-CRITICAL IDENTITY RULE: the institution catalog below is CLOSED. memberships[].institutionId MUST be one of those exact ids. You cannot create, rename, split, regionalize or duplicate institutions. Never invent a member-specific institution id.
-
-Membership is formal legal/organizational status, not fuzzy alignment. status must be ${INSTITUTION_MEMBER_STATUSES.join(" | ")}; role leader|leading-member|member. For historical baselines, provide the actual accession/status date when confidently known. An active successor institution may legitimately have a joinedDate in a membership-continuous predecessor window declared in the catalog. If membership definitely exists on ${scenarioDate} but the exact accession date is not trustworthy, leave joinedDate blank rather than inventing the scenario start date.
-
-If a requested polity summary already contains canonical regimeCharacter, do NOT reclassify it. Return that exact value unchanged or leave regimeCharacter blank; native code preserves the canonical Political Actor value. Only classify regimeCharacter when canonical Political Actors do not already own the fact. Valid values are democratic | hybrid | authoritarian | totalitarian | theocratic | military | colonial | other.
-
-Return one record for every requested polity even when memberships is empty. No prose outside the tool.`,
-    userMessage: `Scenario context:
-${clean(scenarioContext).slice(0, 4000) || "(none)"}
-
-FIXED institution catalog:
-${catalogSummary(catalog) || "(no strategically relevant formal institutions exist in this scenario/date)"}
-
-Requested polities (${batch.length}):
-${batch.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}
-
-politiesJson = [{"polityKey":"exact key","regimeCharacter":"canonical value, generated value, or blank when canonical supplied","memberships":[{"institutionId":"EXACT catalog id","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":""}]}].`,
-  };
-};
-
 const governanceInstitutionSummary = (institution) => {
   const members = array(institution?.members)
     .filter((member) => member?.status !== "suspended")
@@ -552,28 +497,10 @@ const buildAgreementsPrompt = ({ scenarioDate, historyAuthority = null, scenario
   userMessage: `Scenario context:\n${clean(scenarioContext).slice(0, 5000) || "(none)"}\n\nFixed formal institutions (do not duplicate as agreements):\n${catalogSummary(catalog) || "(none)"}\n\nCanonical polity keys:\n${allPolityKeys.join(" | ").slice(0, 16000)}\n\nagreementsJson = [{"id":"stable id","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other","parties":["exact keys"],"title":"","terms":"","startedDate":"YYYY-MM-DD","endedDate":""}]. Use [] if none qualify.`,
 });
 
-const canonicalPoliticalActorRegimeCharacter = (world, polity) => {
-  const explicit = lower(world?.politicalActors?.byPolity?.[polity]?.politicalSystem?.regimeCharacter);
-  return REGIME_CHARACTER_SET.has(explicit) ? explicit : "";
-};
-
-const legacyRegimeCharacter = (world, polity, baseCountryTags = null) => {
-  const tags = [...resolveCountryTags(baseCountryTags, world, polity), ...array(world?.politicalActors?.byPolity?.[polity]?.tags)].map(lower);
-  if (tags.includes("totalitarian")) return "totalitarian";
-  if (tags.includes("authoritarian")) return "authoritarian";
-  if (tags.includes("democratic")) return "democratic";
-  if (tags.includes("military-junta")) return "military";
-  if (tags.includes("theocratic")) return "theocratic";
-  return "";
-};
-
-const knownRegimeCharacter = (world, polity, baseCountryTags = null) => canonicalPoliticalActorRegimeCharacter(world, polity) || legacyRegimeCharacter(world, polity, baseCountryTags);
-
-
 // Political World v2 one-request domain seams. Each helper performs at most one
 // provider request so the resumable scheduler can budget/checkpoint every call.
-// They deliberately reuse the same normalizers/validators as the legacy
-// monolithic baseline rather than creating a second geopolitical truth model.
+// They share one set of normalizers/validators with
+// applyGeopoliticalWorldBaseline rather than a second geopolitical truth model.
 const geopoliticalJobPolityKeys = (polities = []) => array(polities)
   .map((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey))
   .filter(Boolean);
@@ -1008,273 +935,6 @@ export const generateGeopoliticalAgreementsJob = async ({
     warnings,
     returned: rows.length,
     accepted: agreements.size,
-  };
-};
-
-export const generateGeopoliticalWorldBaseline = async ({
-  scenarioDate,
-  historyAuthority = null,
-  polities = [],
-  world = {},
-  scenarioContext = "",
-  baseCountryTags = null,
-  callModel = callAI,
-  signal,
-  onBatch,
-} = {}) => {
-  const allPolityKeys = array(polities)
-    .map((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey))
-    .filter(Boolean);
-  const requestedPolities = array(polities)
-    .map((entry) => typeof entry === "string" ? { polityKey: clean(entry), active: true } : entry)
-    .filter((entry) => entry?.active !== false && clean(entry?.polityKey))
-    .map((entry) => clean(entry.polityKey));
-  const allowedByLower = new Map(allPolityKeys.map((key) => [lower(key), key]));
-  const warnings = [];
-  const blockingErrors = [];
-  const diagnostics = [];
-  let modelCalls = 0;
-
-  if (!requestedPolities.length) {
-    return { schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION, scenarioDate: clean(scenarioDate), generatedAt: new Date().toISOString(), institutionCatalog: [], records: [], powerCalibration: [], agreements: [], warnings, blockingErrors, diagnostics, unresolvedMembershipPolities: [], unresolvedPowerPolities: [], requestedPolities: 0, modelCalls: 0 };
-  }
-
-  // Phase 1: one global institution catalog. Existing authored institutions are
-  // canonical for their universe. Optional scenario-supplied reference data may
-  // enrich generated records, but it never overrides authored state and core
-  // runtime code contains no knowledge of named institutions.
-  const existingInstitutions = normalizeInstitutions(world?.institutions, world);
-  const institutionReferences = resolveScenarioInstitutionReferenceCatalog(world, { scenarioDate })
-    .map((entry) => normalizeInstitutionRecord(entry, entry?.id, world))
-    .filter(Boolean);
-  const catalogMap = new Map(Object.values(existingInstitutions.byId).map((entry) => [entry.id, entry]));
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const prompt = buildCatalogPrompt({ scenarioDate, historyAuthority, world, scenarioContext, allPolityKeys, references: institutionReferences });
-      modelCalls += 1;
-      const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_INSTITUTION_CATALOG_TOOL, signal, logLabel: "geopolitical institution catalog" });
-      const rawInstitutions = parseArrayText(source.institutionsJson ?? source.institutions);
-      let accepted = 0;
-      for (const raw of rawInstitutions) {
-        const institution = normalizeCatalogInstitution(raw, {
-          world,
-          scenarioDate,
-          warnings,
-          existingInstitutions,
-          references: institutionReferences,
-        });
-        if (!institution) continue;
-        const identityMatch = findInstitutionIdentityMatch(institution, [...catalogMap.values()]);
-        if (identityMatch) {
-          if (!existingInstitutions.byId[identityMatch.id]) warnings.push(`${institution.name}: duplicate generated catalog identity collapsed to canonical id ${identityMatch.id}.`);
-          continue;
-        }
-        catalogMap.set(institution.id, institution);
-        accepted += 1;
-      }
-      diagnostics.push({ phase: "institution-catalog", attempt, returned: rawInstitutions.length, accepted, referenceEntries: institutionReferences.length });
-      break;
-    } catch (error) {
-      diagnostics.push({ phase: "institution-catalog", attempt, error: clean(error?.message || error) });
-      if (attempt === 2) blockingErrors.push(`Institution catalog failed: ${clean(error?.message || error)}`);
-    }
-  }
-
-  // Large worlds get one generic completeness pass. This is universe-agnostic:
-  // it does not know or expect any named organization; it only asks whether the
-  // first model pass omitted strategically material institutions for THIS world.
-  // A second shallow pass is much cheaper than discovering missing institutions
-  // later through broken memberships, and duplicates collapse through identity.
-  if (requestedPolities.length >= 64 && !blockingErrors.some((entry) => entry.startsWith("Institution catalog failed:"))) {
-    try {
-      const prompt = buildCatalogPrompt({
-        scenarioDate,
-        historyAuthority,
-        world,
-        scenarioContext,
-        allPolityKeys,
-        references: institutionReferences,
-        acceptedCatalog: [...catalogMap.values()],
-        completenessPass: true,
-      });
-      modelCalls += 1;
-      const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_INSTITUTION_CATALOG_TOOL, signal, logLabel: "geopolitical institution catalog completeness" });
-      const rawInstitutions = parseArrayText(source.institutionsJson ?? source.institutions);
-      let accepted = 0;
-      for (const raw of rawInstitutions) {
-        const institution = normalizeCatalogInstitution(raw, {
-          world,
-          scenarioDate,
-          warnings,
-          existingInstitutions,
-          references: institutionReferences,
-        });
-        if (!institution) continue;
-        const identityMatch = findInstitutionIdentityMatch(institution, [...catalogMap.values()]);
-        if (identityMatch) continue;
-        catalogMap.set(institution.id, institution);
-        accepted += 1;
-      }
-      diagnostics.push({
-        phase: "institution-catalog-completeness",
-        attempt: 1,
-        returned: rawInstitutions.length,
-        accepted,
-        acceptedTotal: catalogMap.size,
-        referenceEntries: institutionReferences.length,
-      });
-    } catch (error) {
-      diagnostics.push({ phase: "institution-catalog-completeness", attempt: 1, error: clean(error?.message || error) });
-      warnings.push(`Institution catalog completeness pass failed non-fatally: ${clean(error?.message || error)}`);
-    }
-  }
-
-  const institutionCatalog = [...catalogMap.values()].sort((a, b) => a.name.localeCompare(b.name));
-  const catalogById = new Map(institutionCatalog.map((entry) => [entry.id, entry]));
-  const catalogByToken = buildCatalogIdentityIndex(institutionCatalog);
-
-  // A blocked baseline can never be applied (applyGeopoliticalWorldBaseline
-  // refuses it), so once a phase has blocked it no later phase spends a
-  // request. The author retries the whole baseline anyway.
-  const catalogBlocked = blockingErrors.length > 0;
-
-  // Phase 2: global relative power evidence. Native code owns the actual tiers.
-  const powerMap = new Map();
-  let unresolvedPower = [...requestedPolities];
-  for (let attempt = 1; attempt <= 2 && unresolvedPower.length && !catalogBlocked; attempt += 1) {
-    try {
-      const prompt = buildPowerPrompt({ scenarioDate, historyAuthority, world, scenarioContext, requestedPolities: unresolvedPower, allPolityKeys, accepted: [...powerMap.values()], baseCountryTags });
-      modelCalls += 1;
-      const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_POWER_CALIBRATION_TOOL, signal, logLabel: "geopolitical power calibration" });
-      const rows = parseArrayText(source.powerJson ?? source.power);
-      for (const raw of rows) {
-        const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
-        const strategicWeight = Number(raw?.strategicWeight ?? raw?.weight ?? raw?.score);
-        if (!polityKey || powerMap.has(polityKey) || !unresolvedPower.includes(polityKey) || !Number.isFinite(strategicWeight)) continue;
-        powerMap.set(polityKey, { polityKey, strategicWeight: Math.round(clamp(strategicWeight, 0, 100)), note: clean(raw?.note).slice(0, 300) });
-      }
-      unresolvedPower = unresolvedPower.filter((polity) => !powerMap.has(polity));
-      diagnostics.push({ phase: "power-calibration", attempt, returned: rows.length, unresolved: unresolvedPower.length });
-    } catch (error) {
-      diagnostics.push({ phase: "power-calibration", attempt, error: clean(error?.message || error) });
-    }
-  }
-  if (unresolvedPower.length && !catalogBlocked) blockingErrors.push(`Power calibration incomplete for ${unresolvedPower.length} polity/polities: ${unresolvedPower.slice(0, 12).join(", ")}${unresolvedPower.length > 12 ? "…" : ""}.`);
-
-  // Phase 3: membership/regime profiles. Each normal bounded batch runs once.
-  // Every valid row is salvaged; only the final unresolved set is retried.
-  // This prevents one omitted polity from causing a whole large batch to rerun.
-  const normalizeMembershipRows = async (targets, meta = {}) => {
-    const prompt = buildMembershipPrompt({
-      scenarioDate,
-      historyAuthority,
-      batch: targets,
-      world,
-      scenarioContext,
-      catalog: institutionCatalog,
-      recovery: meta.phase && meta.phase !== "memberships",
-      baseCountryTags,
-    });
-    modelCalls += 1;
-    const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_MEMBERSHIP_TOOL, signal, logLabel: "geopolitical memberships" });
-    const rows = parseArrayText(source.politiesJson ?? source.polities);
-    const accepted = [];
-    const acceptedKeys = new Set();
-    for (const raw of rows) {
-      const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
-      if (!polityKey || acceptedKeys.has(polityKey) || !targets.includes(polityKey)) continue;
-      const canonicalRegime = knownRegimeCharacter(world, polityKey, baseCountryTags);
-      const candidateRegime = lower(raw?.regimeCharacter || raw?.regime);
-      const regimeCharacter = canonicalRegime || (REGIME_CHARACTER_SET.has(candidateRegime) ? candidateRegime : "");
-      if (!regimeCharacter) continue;
-      const memberships = [];
-      let invalidMembership = false;
-      for (const membershipRaw of array(raw?.memberships)) {
-        const membership = normalizeMembership(membershipRaw, { catalogById, catalogByToken, scenarioDate, warnings, polityKey });
-        if (!membership) {
-          invalidMembership = true;
-          break;
-        }
-        if (!memberships.some((entry) => entry.institutionId === membership.institutionId)) memberships.push(membership);
-      }
-      if (invalidMembership) continue;
-      acceptedKeys.add(polityKey);
-      accepted.push({ polityKey, regimeCharacter, memberships: memberships.slice(0, 16) });
-    }
-    return accepted;
-  };
-
-  const skipRemainingPhases = blockingErrors.length > 0;
-  if (skipRemainingPhases) {
-    warnings.push(catalogBlocked
-      ? "Skipped the power, membership and standing-agreement requests because the baseline was already blocked."
-      : "Skipped the membership and standing-agreement requests because the baseline was already blocked.");
-  }
-  const membershipCoverage = skipRemainingPhases ? {
-    records: [],
-    diagnostics: [],
-    unresolvedPolities: [...requestedPolities],
-  } : await resolveGeopoliticalMembershipCoverage({
-    requestedPolities,
-    batchSize: GEOPOLITICAL_WORLD_BATCH_SIZE,
-    requestProfiles: normalizeMembershipRows,
-    signal,
-    onProgress: ({ phase, batchIndex, totalBatches, resolvedPolities, totalPolities, unresolvedBatchPolities = [], unresolvedPolities }) => {
-      const unresolvedForWarning = phase === "memberships" ? unresolvedBatchPolities : unresolvedPolities;
-      onBatch?.({
-        phase,
-        batchIndex,
-        totalBatches,
-        resolvedPolities,
-        totalPolities,
-        warning: unresolvedForWarning.length ? `${unresolvedForWarning.length} unresolved in this ${phase === "memberships" ? "batch" : "rescue pass"}` : "",
-      });
-    },
-  });
-  const records = membershipCoverage.records;
-  diagnostics.push(...membershipCoverage.diagnostics);
-  const unresolvedMembershipPolities = membershipCoverage.unresolvedPolities;
-  if (unresolvedMembershipPolities.length && !skipRemainingPhases) {
-    blockingErrors.push(`Membership/regime profile incomplete for ${unresolvedMembershipPolities.length} polity/polities after unresolved-only rescue: ${unresolvedMembershipPolities.slice(0, 24).join(", ")}${unresolvedMembershipPolities.length > 24 ? "…" : ""}.`);
-  }
-
-  // Phase 4: one global agreement pass, avoiding cross-batch duplication.
-  const agreements = new Map();
-  if (!blockingErrors.length) {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        const prompt = buildAgreementsPrompt({ scenarioDate, historyAuthority, scenarioContext, allPolityKeys, catalog: institutionCatalog });
-        modelCalls += 1;
-        const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_AGREEMENTS_TOOL, signal, logLabel: "geopolitical agreements" });
-        const rows = parseArrayText(source.agreementsJson ?? source.agreements);
-        for (const raw of rows) {
-          const agreement = normalizeAgreement(raw, world, allowedByLower, scenarioDate, warnings);
-          if (agreement) agreements.set(agreement.id, agreement);
-        }
-        diagnostics.push({ phase: "agreements", attempt, returned: rows.length, accepted: agreements.size });
-        break;
-      } catch (error) {
-        diagnostics.push({ phase: "agreements", attempt, error: clean(error?.message || error) });
-        if (attempt === 2) warnings.push(`Standing-agreement pass failed after retry: ${clean(error?.message || error)}.`);
-      }
-    }
-  }
-
-  return {
-    schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION,
-    scenarioDate: clean(scenarioDate),
-    generatedAt: new Date().toISOString(),
-    institutionCatalog,
-    records,
-    powerCalibration: [...powerMap.values()],
-    agreements: [...agreements.values()],
-    warnings,
-    blockingErrors,
-    diagnostics,
-    unresolvedMembershipPolities,
-    unresolvedPowerPolities: [...unresolvedPower],
-    requestedPolities: requestedPolities.length,
-    modelCalls,
   };
 };
 
