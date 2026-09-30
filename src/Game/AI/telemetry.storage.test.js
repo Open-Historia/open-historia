@@ -96,6 +96,28 @@ test("only the newest records keep their text in memory; the console still sees 
   assert.equal(seen[0].rawResponse, "ANSWER 0");
 });
 
+// Off is the Android app's default: with no stored copy coming, an older record
+// must still drop its text, or the session holds every prompt whole.
+test("with recording off only the newest records keep their text as well", async (t) => {
+  local.set("ai_debug_telemetry", "0");
+  t.after(() => local.delete("ai_debug_telemetry"));
+  const records = [];
+  for (let index = 0; index < 25; index += 1) records.push(makeRecord(index));
+  await flush();
+  assert.equal(rows.size, 0, "nothing is stored");
+  assert.equal(records.filter((record) => record.systemPrompt === "").length, 5, "the newest 20 whole");
+  assert.equal(records[0].rawResponse, "");
+  assert.equal(records[0].systemPromptChars, 1009, "the counts stay");
+  assert.equal(records[24].rawResponse, "ANSWER 24");
+
+  // A record that finished while recording was off is not waiting on a write
+  // once it is back on.
+  local.delete("ai_debug_telemetry");
+  makeRecord(25);
+  await flush();
+  assert.equal(records[5].systemPrompt, "");
+});
+
 test("a record waiting for its verdict keeps its text, and the verdict reaches the store", async () => {
   const waiting = startAiRecord({ taskKey: "jumpForward", systemPrompt: "WAITING", awaitingOutcome: true });
   finishAiRecord(waiting, { ok: true, rawResponse: "{}" });

@@ -19,7 +19,8 @@
 // add up. Only the newest FULL_TEXT_RECORDS keep their text in memory. An older
 // one, once its stored copy is safely written, keeps its counts and summaries
 // and drops the text, which the console reads back from IndexedDB when it is
-// opened.
+// opened. With recording off there is no stored copy, and an older record drops
+// its text all the same.
 
 const DB_NAME = "oh-debug-telemetry";
 const DB_VERSION = 1;
@@ -252,11 +253,15 @@ const lighten = (record) => {
   }
 };
 
-// Every record past the newest few that is final and safely stored.
+// Every record past the newest few that is final and not waiting on a write:
+// safely stored, or never written because recording was off when it finished
+// (the Android app's default), which leaves no stored copy to wait for.
 const lightenOlderRecords = () => {
   for (let index = 0; index < sessionRecords.length - FULL_TEXT_RECORDS; index += 1) {
     const record = sessionRecords[index];
-    if (lightRecords.has(record) || !record.finished || record.awaitingOutcome || !writes.get(record)?.stored) continue;
+    if (lightRecords.has(record) || !record.finished || record.awaitingOutcome) continue;
+    const state = writes.get(record);
+    if (state && !state.stored) continue;
     lighten(record);
   }
 };
