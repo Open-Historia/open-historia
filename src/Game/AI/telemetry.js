@@ -13,17 +13,22 @@
 // IndexedDB the buffer alone still works — telemetry must never break a turn,
 // so every persistence call is best-effort.
 //
-// Recording is on by default and almost nobody opens the console, so the
-// buffer must not hold every prompt of the session: the prompts and answers
-// are the largest strings in the game, and on a phone they add up. Only the
-// newest FULL_TEXT_RECORDS keep their text in memory. An older one, once its
-// stored copy is safely written, keeps its counts and summaries and drops the
-// text, which the console reads back from IndexedDB when it is opened.
+// Recording is on by default (not in the Android app) and almost nobody opens
+// the console, so the buffer must not hold every prompt of the session: the
+// prompts and answers are the largest strings in the game, and on a phone they
+// add up. Only the newest FULL_TEXT_RECORDS keep their text in memory. An older
+// one, once its stored copy is safely written, keeps its counts and summaries
+// and drops the text, which the console reads back from IndexedDB when it is
+// opened.
 
 const DB_NAME = "oh-debug-telemetry";
 const DB_VERSION = 1;
 const STORE = "generations";
 const MAX_PERSISTED_RECORDS = 200;
+// The stored history's text, in characters (about a byte each for prompts):
+// 200 time skips with a long campaign's prompt are far past this, and the
+// console holds the whole history while it is open.
+const MAX_PERSISTED_BYTES = 16 * 1024 * 1024;
 const MAX_SESSION_RECORDS = 500;
 const FULL_TEXT_RECORDS = 20;
 // Prompts, user messages and answers are kept WHOLE. They used to be clipped
@@ -31,14 +36,26 @@ const FULL_TEXT_RECORDS = 20;
 // short in the console — a jump's prompt is well past 80k — and read as the
 // game sending a truncated prompt. It never did: the provider always got the
 // full text; only this record was cut. Storage is bounded by record COUNT
-// (MAX_SESSION_RECORDS / MAX_PERSISTED_RECORDS), never by trimming their text.
+// (MAX_SESSION_RECORDS / MAX_PERSISTED_RECORDS) and the stored total
+// (MAX_PERSISTED_BYTES, oldest records dropped first), never by trimming their
+// text.
 
 // Settings (localStorage, same pattern as mapSettings/providerConfig).
-// Recording ships ON: only an explicit "0" turns it off. Rating ships OFF: the
-// 1-10 bar after every skip is opt-in, so only an explicit "1" turns it on.
+// Recording ships ON except in the Android app: there only an explicit "1"
+// turns it on, everywhere else only an explicit "0" turns it off. A phone pays
+// most for keeping every prompt, and has the least use for the console. Rating
+// ships OFF: the 1-10 bar after every skip is opt-in, so only an explicit "1"
+// turns it on.
 const TELEMETRY_SETTING_KEY = "ai_debug_telemetry";
 const RATING_SETTING_KEY = "ai_rate_generations";
+// Size of every stored record by id, so trimming to MAX_PERSISTED_BYTES never
+// reads the records themselves.
+const SIZES_KEY = "ai_debug_telemetry_sizes";
 export const TELEMETRY_SETTINGS_EVENT = "oh:telemetry-settings";
+
+// The Android app is the web bundle inside Capacitor, which injects
+// window.Capacitor before the bundle runs (runtime/web/nativeBoot.js).
+const isAndroidApp = () => typeof window !== "undefined" && Boolean(window.Capacitor);
 
 const readFlag = (key, { defaultOn = true } = {}) => {
   try {
@@ -58,7 +75,7 @@ const writeFlag = (key, enabled) => {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(TELEMETRY_SETTINGS_EVENT));
 };
 
-export const isTelemetryEnabled = () => readFlag(TELEMETRY_SETTING_KEY);
+export const isTelemetryEnabled = () => readFlag(TELEMETRY_SETTING_KEY, { defaultOn: !isAndroidApp() });
 export const setTelemetryEnabled = (enabled) => writeFlag(TELEMETRY_SETTING_KEY, enabled);
 export const isRatingEnabled = () => readFlag(RATING_SETTING_KEY, { defaultOn: false });
 export const setRatingEnabled = (enabled) => writeFlag(RATING_SETTING_KEY, enabled);
@@ -108,7 +125,64 @@ const withStore = async (mode, work) => {
   });
 };
 
-const idbPut = (record) => withStore("readwrite", (store) => { store.put(record); });
+// --- The console's copy of the stored history ------------------------------------
+//
+// Read once when the console first asks (getAiRecords), then kept in step with
+// this tab's own writes rather than read again on every refresh, and let go
+// when the console closes (releaseAiRecords). Writes that land while the read
+// is still running are replayed onto it; each is idempotent, so one the read
+// already saw does no harm.
+let history = null; // Map id → stored record
+let historyLoading = null;
+let historyPending = null;
+let historyEpoch = 0;
+
+const followStore = (change) => {
+  if (history) change(history);
+  else if (historyPending) historyPending.push(change);
+};
+
+// --- Stored sizes -----------------------------------------------------------------
+
+// Characters of text a record holds: what dominates its stored size.
+const recordBytes = (record) => {
+  let total = 1024; // everything else on the record
+  for (const field of ["systemPrompt", "userMessage", "rawResponse", "validationError", "error"]) {
+    if (typeof record?.[field] === "string") total += record[field].length;
+  }
+  for (const entry of record?.lookups?.entries ?? []) {
+    if (typeof entry?.response === "string") total += entry.response.length;
+  }
+  return total;
+};
+
+// localStorage, read afresh each time so tabs sharing the store do not undo
+// each other's entries; kept in memory where there is none (private mode).
+let memorySizes = {};
+const readSizes = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SIZES_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return { ...memorySizes };
+  }
+};
+const writeSizes = (sizes) => {
+  memorySizes = sizes;
+  try {
+    localStorage.setItem(SIZES_KEY, JSON.stringify(sizes));
+  } catch { /* memory only */ }
+};
+const sizesTotal = (sizes) => Object.values(sizes).reduce((total, bytes) => total + (Number(bytes) || 0), 0);
+
+const idbPut = async (record) => {
+  await withStore("readwrite", (store) => { store.put(record); });
+  followStore((stored) => stored.set(record.id, record));
+  const sizes = readSizes();
+  sizes[record.id] = recordBytes(record);
+  writeSizes(sizes);
+  if (sizesTotal(sizes) > MAX_PERSISTED_BYTES) trimPersistedRecords().catch(() => {});
+};
 const idbGetAll = async () => {
   const result = await withStore("readonly", (store) => store.getAll());
   return Array.isArray(result) ? result : [];
@@ -120,19 +194,42 @@ const idbKeysOldestFirst = async () => {
   return Array.isArray(result) ? result : [];
 };
 // Merges fields into the stored copy of a record, if there is one; resolves
-// whether there was.
-const idbUpdate = (id, fields) => withStore("readwrite", (store) => {
-  const outcome = { result: false };
+// whether there was. Never text: the record's size does not move.
+const idbUpdate = async (id, fields) => {
+  const updated = await withStore("readwrite", (store) => {
+    const outcome = { result: false };
+    const request = store.get(id);
+    request.onsuccess = () => {
+      if (!request.result) return;
+      store.put({ ...request.result, ...fields });
+      outcome.result = true;
+    };
+    return outcome;
+  });
+  if (updated) {
+    followStore((stored) => {
+      if (stored.has(id)) stored.set(id, { ...stored.get(id), ...fields });
+    });
+  }
+  return updated;
+};
+// One record's size, read on its own: for a record stored before sizes were
+// kept, or by a tab whose entry was lost. Only that record is in memory.
+const idbSizeOf = (id) => withStore("readonly", (store) => {
+  const outcome = { result: null };
   const request = store.get(id);
-  request.onsuccess = () => {
-    if (!request.result) return;
-    store.put({ ...request.result, ...fields });
-    outcome.result = true;
-  };
+  request.onsuccess = () => { outcome.result = request.result ? recordBytes(request.result) : null; };
   return outcome;
 });
-const idbClear = () => withStore("readwrite", (store) => { store.clear(); });
-const idbDeleteMany = (ids) => withStore("readwrite", (store) => { for (const id of ids) store.delete(id); });
+const idbClear = async () => {
+  await withStore("readwrite", (store) => { store.clear(); });
+  followStore((stored) => stored.clear());
+  writeSizes({});
+};
+const idbDeleteMany = async (ids) => {
+  await withStore("readwrite", (store) => { for (const id of ids) store.delete(id); });
+  followStore((stored) => { for (const id of ids) stored.delete(id); });
+};
 
 // --- Record lifecycle ----------------------------------------------------------
 
@@ -192,7 +289,9 @@ const persist = (record) => {
       lightenOlderRecords();
     })
     .catch(() => { /* best-effort persistence */ });
-  if (putCounter % 25 === 0) trimPersistedRecords().catch(() => {});
+  // The first write of a session sizes whatever the store holds from before
+  // (idbPut trims as soon as the known total is over MAX_PERSISTED_BYTES).
+  if (putCounter === 1 || putCounter % 25 === 0) trimPersistedRecords().catch(() => {});
 };
 
 const announceComplete = (record) => {
@@ -355,10 +454,65 @@ export const attachAttemptOutcome = (record, { ok, validationError = "", parsedS
   }
 };
 
-const trimPersistedRecords = async () => {
+// Newest first, a record is kept while the kept ones stay within both
+// MAX_PERSISTED_RECORDS and MAX_PERSISTED_BYTES; the newest is always kept,
+// however large. Sizes come from the size list, and a record missing from it
+// is read once, on its own, to size it.
+let trimming = null;
+let trimAgain = false;
+const trimOnce = async () => {
+  // Read before the ids: a record with an entry here was written before them.
+  const sizes = readSizes();
   const ids = await idbKeysOldestFirst();
-  if (ids.length <= MAX_PERSISTED_RECORDS) return;
-  await idbDeleteMany(ids.slice(0, ids.length - MAX_PERSISTED_RECORDS));
+  const known = {};
+  for (const id of ids) {
+    const bytes = Number(sizes[id]);
+    known[id] = Number.isFinite(bytes) && bytes > 0 ? bytes : await idbSizeOf(id).catch(() => null);
+  }
+  let kept = 0;
+  let total = 0;
+  let cut = 0; // ids[0..cut) go
+  for (let index = ids.length - 1; index >= 0; index -= 1) {
+    const bytes = Number(known[ids[index]]) || 0;
+    if (kept > 0 && (kept >= MAX_PERSISTED_RECORDS || total + bytes > MAX_PERSISTED_BYTES)) {
+      cut = index + 1;
+      break;
+    }
+    kept += 1;
+    total += bytes;
+  }
+  const dropped = ids.slice(0, cut);
+  if (dropped.length) await idbDeleteMany(dropped);
+  // The ids still stored, sized. An entry for a record that is gone (deleted
+  // by another tab, or cleared) goes too; one written while this ran, not in
+  // `ids` yet, stays.
+  const latest = readSizes();
+  const next = {};
+  for (const id of ids.slice(cut)) {
+    const bytes = known[id] ?? latest[id];
+    if (bytes) next[id] = bytes;
+  }
+  for (const [id, bytes] of Object.entries(latest)) {
+    if (!(id in known) && !(id in sizes)) next[id] = bytes;
+  }
+  writeSizes(next);
+};
+const trimPersistedRecords = () => {
+  if (trimming) {
+    trimAgain = true;
+    return trimming;
+  }
+  trimming = (async () => {
+    try {
+      do {
+        trimAgain = false;
+        await trimOnce();
+      } while (trimAgain);
+    } finally {
+      trimming = null;
+    }
+  })();
+  return trimming;
 };
 
 // A compact, schema-agnostic shape summary of a validated payload — enough for
@@ -399,21 +553,46 @@ export const normalizeParsedSummary = (taskKey, parsed) => {
 
 // --- Reading --------------------------------------------------------------------
 
-// Read afresh on every call rather than kept: the history is for the console
-// while it is open, not for the rest of the session. A session record that has
-// dropped its text is shown from its stored copy.
+const loadHistory = () => {
+  if (history) return Promise.resolve(history);
+  if (!historyLoading) {
+    const epoch = historyEpoch;
+    historyPending = [];
+    historyLoading = idbGetAll()
+      .catch(() => []) // memory-only mode
+      .then((stored) => {
+        const loaded = new Map(stored.map((record) => [record.id, record]));
+        for (const change of historyPending ?? []) change(loaded);
+        historyPending = null;
+        historyLoading = null;
+        // Released while it was read: hand it over, keep nothing.
+        if (epoch === historyEpoch) history = loaded;
+        return loaded;
+      });
+  }
+  return historyLoading;
+};
+
+// The stored history is read the first time the console asks and then follows
+// this tab's writes (followStore), so a refresh on every finished call costs
+// nothing; releaseAiRecords lets it go when the console closes, since the
+// history is for the console while it is open, not for the rest of the
+// session. A session record that has dropped its text is shown from its
+// stored copy.
 export const getAiRecords = async () => {
-  let stored = [];
-  try {
-    stored = await idbGetAll();
-  } catch { /* memory-only mode */ }
-  const merged = new Map();
-  for (const record of stored) merged.set(record.id, record);
+  const stored = await loadHistory();
+  const merged = new Map(stored);
   for (const record of sessionRecords) {
     const full = lightRecords.has(record) ? merged.get(record.id) : null;
     merged.set(record.id, full ? { ...full, rating: record.rating, ratedAt: record.ratedAt } : record);
   }
   return [...merged.values()].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+};
+
+// The console closed: drop the stored history it was shown.
+export const releaseAiRecords = () => {
+  historyEpoch += 1;
+  history = null;
 };
 
 export const setGenerationRating = async (recordId, rating) => {
