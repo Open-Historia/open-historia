@@ -669,8 +669,6 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             "institution-discovery": "Discovering institutions…",
             "political-actor": "Constructing Political Actors…",
             "governing-alignment": "Resolving governments and coalitions…",
-            "membership-resolution": "Resolving formal institutional memberships…",
-            "membership-surface": "Reconciling institution memberships…",
             "institution-membership-resolution": "Resolving one uncovered institution's complete membership…",
             "agreement-resolution": "Resolving standing agreements…",
             "power-evidence": "Calibrating geopolitical power evidence…",

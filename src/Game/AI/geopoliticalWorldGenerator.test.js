@@ -19,7 +19,6 @@ registerHooks({
 
 const {
   generateGeopoliticalInstitutionMembersJob,
-  generateGeopoliticalMembershipJob,
   generateGeopoliticalPowerEvidenceJob,
   generateGeopoliticalWorldBaseline,
 } = await import("./geopoliticalWorldGenerator.js");
@@ -176,19 +175,4 @@ test("power and membership prompts show the scenario author's country tags, with
   assert.match(prompts[0], /- Avalon \| authored descriptors: socialist, authoritarian/);
   assert.match(prompts[0], /- Borduria \| authored descriptors: military-junta/);
   assert.doesNotMatch(prompts[0], /Borduria \| authored descriptors: democratic/);
-});
-
-test("a regime character implied by the author's tags outranks the model's classification", async () => {
-  const world = {
-    institutions: { byId: { "north-pact": { id: "north-pact", name: "North Pact", kind: "military_alliance", foundedDate: "1990-01-01" } } },
-  };
-  const result = await generateGeopoliticalMembershipJob({
-    scenarioDate: "2014-03-22",
-    targets: ["Avalon"],
-    polities: ["Avalon"],
-    world,
-    baseCountryTags: { Avalon: ["military-junta"] },
-    callModel: async () => ({ toolInput: { politiesJson: JSON.stringify([{ polityKey: "Avalon", regimeCharacter: "democratic", memberships: [] }]) } }),
-  });
-  assert.deepEqual(result.records.map((record) => [record.polityKey, record.regimeCharacter]), [["Avalon", "military"]]);
 });

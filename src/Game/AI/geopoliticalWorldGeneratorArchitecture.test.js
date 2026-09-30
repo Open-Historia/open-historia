@@ -56,7 +56,6 @@ test("202-polity clean path uses smaller normal membership batches and never meg
 test("all geopolitical model surfaces receive the same reference-authority contract, including the legacy one-shot agreement pass", () => {
   assert.match(generator, /buildCatalogPrompt\(\{ scenarioDate, historyAuthority,/);
   assert.match(generator, /buildPowerPrompt\(\{ scenarioDate, historyAuthority,/);
-  assert.match(generator, /buildMembershipPrompt\(\{ scenarioDate, historyAuthority,/);
   assert.match(generator, /buildInstitutionMembersPrompt\(\{ scenarioDate, historyAuthority,/);
   assert.match(generator, /buildAgreementsPrompt\(\{ scenarioDate, historyAuthority, scenarioContext, allPolityKeys, catalog: institutionCatalog \}\)/);
 });

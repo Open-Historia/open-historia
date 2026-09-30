@@ -1,7 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { estimateNativePowerScore, powerTierForPolity, refreshPowerStatus, refreshPowerStatusForTurn, seedPowerBaselineScore, seedPowerTier } from "./powerStatus.js";
+import { estimateNativePowerScore, normalizePowerStatus, normalizePowerTier, powerTierForPolity, refreshPowerStatus, refreshPowerStatusForTurn, seedPowerBaselineScore } from "./powerStatus.js";
+
+// Puts a polity at a given tier with its native scores, as an authored or
+// earlier-round record would. Only these tests need it; the game seeds power
+// through seedPowerBaselineScore and refreshPowerStatus.
+const seedPowerTier = (worldLike, polity, tierInput, { basis = "generated-estimate", date = "", round = 0 } = {}) => {
+  const world = structuredClone(worldLike || {});
+  const tier = normalizePowerTier(tierInput);
+  if (!polity || !tier) return world;
+  const powerStatus = normalizePowerStatus(world.powerStatus, world);
+  const native = estimateNativePowerScore({ ...world, powerStatus }, polity);
+  powerStatus.byPolity[polity] = {
+    polityKey: polity,
+    tier,
+    score: native.score,
+    strategicWeight: native.strategicWeight,
+    sovereignCapabilityScore: native.sovereignCapabilityScore,
+    institutionalLeverageScore: native.institutionalLeverageScore,
+    strategicActivityScore: native.strategicActivityScore,
+    baselineScore: null,
+    basis,
+    lastUpdatedDate: date,
+    lastUpdatedRound: round,
+    candidateTier: "",
+    candidateRounds: 0,
+    reasons: native.reasons,
+  };
+  return { ...world, powerStatus };
+};
 
 const makePeerWorld = () => ({
   polityOverrides: {
