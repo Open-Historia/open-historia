@@ -23,6 +23,7 @@ import {
   shownTurnIndex,
   turnRecordId,
   warTimelineEventId,
+  warTimelineEventOpensWar,
 } from "./turnReveal.js";
 
 // ---- streamed cards ----------------------------------------------------------
@@ -156,6 +157,25 @@ test("a war links to its first event the Events panel still keeps", () => {
   assert.equal(warTimelineEventId({ sourceEventIds: ["e0"] }, keptTurns), "", "nothing left to show");
   assert.equal(warTimelineEventId({}, keptTurns), "");
   assert.equal(warTimelineEventId(null, keptTurns), "");
+});
+
+// The ledger keeps a war's newest 24 event ids, so on a long war the first id
+// kept is a mid-war event: the link must not call it the war's beginning.
+test("a war's first kept event is its opening only on the turn the war began in", () => {
+  const turns = [
+    { round: 9, eventIds: ["e30", "e31"] },
+    { round: 8, eventIds: ["e20", "e21"] },
+    { round: 7, eventIds: ["e10"] },
+  ];
+  const opening = { createdRound: 7, sourceEventIds: ["e10", "e20", "e30"] };
+  assert.equal(warTimelineEventOpensWar(opening, turns, "e10"), true);
+  const trimmed = { createdRound: 7, sourceEventIds: ["e21", "e30", "e31"] };
+  assert.equal(warTimelineEventId(trimmed, turns), "e21");
+  assert.equal(warTimelineEventOpensWar(trimmed, turns, "e21"), false, "its opening events were trimmed away");
+  assert.equal(warTimelineEventOpensWar(opening, turns, "e20"), false, "not its first event");
+  assert.equal(warTimelineEventOpensWar({ sourceEventIds: ["e21"] }, turns, "e21"), true, "an old record without createdRound");
+  assert.equal(warTimelineEventOpensWar(opening, turns, ""), false);
+  assert.equal(warTimelineEventOpensWar({ createdRound: 7, sourceEventIds: ["e0"] }, turns, "e0"), false, "not kept");
 });
 
 // ---- carrying the reveal -------------------------------------------------------

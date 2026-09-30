@@ -157,6 +157,22 @@ export const warTimelineEventId = (war, history) => {
   return "";
 };
 
+// Whether that event is where the war began. The ledger keeps only a war's
+// newest 24 event ids (nativeWarLedger.js), so on a long war the first id kept
+// is a later event: it is the opening only on the turn the war was started in
+// (the turn's round is the war's createdRound). Old records without either
+// round are taken at their word.
+export const warTimelineEventOpensWar = (war, history, eventId) => {
+  const id = String(eventId ?? "").trim();
+  const first = Array.isArray(war?.sourceEventIds) ? String(war.sourceEventIds[0] ?? "").trim() : "";
+  if (!id || id !== first) return false;
+  const index = findTurnIndexOfEvent(history, id);
+  if (index < 0) return false;
+  const createdRound = Math.trunc(Number(war?.createdRound) || 0);
+  const turnRound = Math.trunc(Number(history[index]?.round) || 0);
+  return createdRound <= 0 || turnRound <= 0 || createdRound === turnRound;
+};
+
 // Another panel asking the Events panel to open on one event: the turn that
 // holds it, revealed through it, scrolled to and marked (time.jsx).
 export const SHOW_EVENT_ON_TIMELINE = "oh:show-event-on-timeline";

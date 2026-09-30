@@ -8,7 +8,7 @@ import { JSON_URLS, getNationFlags, getNationTags, getPrimedScenarioRegionCatalo
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { groupsOnTerritory } from "../../runtime/groups.js";
 import { extendBounds } from "./eventFocus.js";
-import { showEventOnTimeline, warTimelineEventId } from "./turnReveal.js";
+import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } from "./turnReveal.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -631,7 +631,7 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                     causeText: warCauseForDisplay(war?.cause),
                     startedLabel: formatGameDateReadable(war?.startedDate, "D MMM YYYY") || cleanText(war?.startedDate),
                     timelineEventId,
-                    timelineIsFirst: Boolean(timelineEventId) && String(asArray(war?.sourceEventIds)[0] ?? "").trim() === timelineEventId,
+                    timelineIsFirst: warTimelineEventOpensWar(war, world.simulationHistory, timelineEventId),
                 };
             })
             .filter(Boolean)
