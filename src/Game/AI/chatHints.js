@@ -17,17 +17,19 @@
 // also the start of a common military or everyday word is left out
 // ("konuşlandır", deploy, beside "konuşma", talk; the Arabic "إرسال", sending,
 // beside "رسالة", a letter), since a fallback that opens a chat for an
-// invasion order is worse than one that misses a request for talks.
+// invasion order is worse than one that misses a request for talks. Where only
+// some endings of a word are talks, those are written out whole (WHOLE_WORDS):
+// the Russian "встреча", a meeting, beside "встречный удар", a counter-attack.
 
 const WORD_STEMS = [
   // English
-  "chat", "conference", "contact", "diplomac", "meet", "message", "negotiat", "outreach", "parley",
+  "conference", "contact", "diplomac", "meet", "message", "negotiat", "outreach", "parley",
   "peace talk", "reach out", "speak with", "summit", "talk to", "talk with", "talks with",
   // French
   "négoci", "negoci", "pourparler", "diplomat", "sommet", "conférence", "rencontr", "contacter", "discut", "dialogu",
   // Spanish and Portuguese
-  "diplomac", "diplomát", "cumbre", "conferencia", "conferência", "reunión", "reunião", "reunir", "contact", "contat", "mensaje", "mensagem",
-  "convers", "diálogo", "dialogo", "hablar con", "falar com", "cúpula", "charla",
+  "diplomac", "diplomát", "cumbre", "conferencia", "conferência", "reunión", "reunião", "contact", "contat", "mensaje", "mensagem",
+  "conversa", "diálogo", "dialogo", "hablar con", "falar com", "cúpula", "charla",
   // Italian
   "negoziat", "trattativ", "diplomaz", "vertice", "conferenza", "incontr", "contatt", "messaggio", "colloqui", "parlare con",
   // Dutch
@@ -39,10 +41,10 @@ const WORD_STEMS = [
   // Polish
   "negocj", "rozmow", "dyplomac", "dyplomat", "szczyt", "konferencj", "spotka", "wiadomoś", "porozmawia",
   // Russian
-  "переговор", "встреч", "встрет", "дипломат", "связаться", "свяжитесь", "чат", "договор", "саммит", "конференц",
+  "переговор", "дипломат", "связаться", "свяжитесь", "чат", "договор", "саммит", "конференц",
   "контакт", "сообщени", "бесед", "поговорить",
   // Ukrainian
-  "зустр", "зв'яз", "зв’яз", "домовитис", "домовлен", "саміт", "повідомлен", "розмов", "поговорити",
+  "зв'язатис", "зв’язатис", "зв'яжіть", "зв’яжіть", "домовитис", "домовлен", "саміт", "повідомлен", "розмов", "поговорити",
   // Turkish
   "müzakere", "görüşme", "diplomasi", "zirve", "konferans", "buluş", "temas", "iletişim", "mesaj", "sohbet", "konuşma",
   // Indonesian
@@ -51,13 +53,24 @@ const WORD_STEMS = [
   "đàm phán", "thương lượng", "ngoại giao", "hội nghị", "gặp", "liên lạc", "liên hệ", "tin nhắn", "trò chuyện", "đối thoại", "nói chuyện",
 ];
 
+// Whole words, where the stem also starts a military word.
+const WHOLE_WORDS = [
+  // English: "chateau"
+  "chat", "chats",
+  // Russian: "встречный удар", a counter-attack; "встретить огнём", to meet with fire
+  "встреча", "встречи", "встречу", "встрече", "встречей", "встреч", "встречам", "встречах",
+  "встретиться", "встретимся", "встретятся",
+  // Ukrainian: "зустрічний удар", a counter-attack
+  "зустріч", "зустрічі", "зустріччю", "зустрічей", "зустрічам", "зустрічах", "зустрітися", "зустрінемося",
+];
+
 // German compounds put the stem mid-word ("Friedensverhandlungen").
 const GERMAN_STEMS = ["verhandl", "gespräch", "gipfel", "konferenz", "diplomat", "kontakt", "unterred", "sprechen mit"];
 
 // Scripts that join prefixes to a word, or write no spaces.
 const INSIDE_STEMS = [
   // Arabic
-  "فاوض", "دبلوماس", "قمة", "مؤتمر", "لقاء", "اتصال", "رسالة", "محادث", "حوار",
+  "فاوض", "دبلوماس", "مؤتمر", "لقاء", "اتصال", "رسالة", "محادث", "حوار",
   // Persian
   "مذاکره", "دیپلماس", "اجلاس", "کنفرانس", "ملاقات", "دیدار", "تماس", "پیام", "گفتگو", "گفت‌وگو", "صحبت",
   // Urdu
@@ -82,10 +95,11 @@ const alternation = (stems) => [...new Set(stems)].map(escape).join("|");
 
 // A word start: not after a letter, a mark or a digit of any script.
 const AT_WORD_START = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])(?:${alternation(WORD_STEMS)})`, "iu");
+const AS_WHOLE_WORD = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])(?:${alternation(WHOLE_WORDS)})(?![\\p{L}\\p{M}\\p{N}])`, "iu");
 const ANYWHERE = new RegExp(`(?:${alternation([...GERMAN_STEMS, ...INSIDE_STEMS])})`, "iu");
 
 export const looksLikeChatRequest = (text) => {
   const value = String(text ?? "").normalize("NFC");
   if (!value.trim()) return false;
-  return AT_WORD_START.test(value) || ANYWHERE.test(value);
+  return AT_WORD_START.test(value) || AS_WHOLE_WORD.test(value) || ANYWHERE.test(value);
 };

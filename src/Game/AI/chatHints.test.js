@@ -52,6 +52,15 @@ test("an order that is not talks stays an action", () => {
     "Birlikleri sınıra konuşlandır",
     "إرسال قوات إلى الحدود",
     "动员预备役部队",
+    "Begin the conversion of civilian factories to arms production",
+    "Reunir las tropas en la frontera",
+    "Reunir as tropas na fronteira",
+    "Нанести встречный удар по противнику",
+    "Встретить наступление противника огнём артиллерии",
+    "Завдати зустрічного удару",
+    "Налагодити зв'язок між підрозділами",
+    "السيطرة على قمة التل",
+    "Fortify the chateau at Hougoumont",
     "",
     null,
   ];
@@ -62,4 +71,8 @@ test("a stem must start a word where words are written apart", () => {
   assert.equal(looksLikeChatRequest("purchase"), false, "chat inside purchase");
   assert.equal(looksLikeChatRequest("Chat with Japan"), true);
   assert.equal(looksLikeChatRequest("summit in Geneva"), true);
+  assert.equal(looksLikeChatRequest("Iniciar una conversación con Chile"), true);
+  assert.equal(looksLikeChatRequest("Назначить встречу с послом Японии"), true);
+  assert.equal(looksLikeChatRequest("Встретиться с президентом Франции"), true);
+  assert.equal(looksLikeChatRequest("Зв'язатися з урядом Польщі"), true);
 });
