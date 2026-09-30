@@ -1,9 +1,8 @@
 /*! Open Historia — node-side signature verification © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Verifies project-signed artifacts (the node-software update manifest +
-// timestamp) against the pinned root public key, using Node's built-in crypto
-// (no extra dependency). A node applies an update ONLY when the manifest is
-// validly signed, fresher than what it runs, and not expired (see
-// scripts/node-updater.mjs).
+// Verifies project-signed artifacts (such as public/content-manifest.json)
+// against the pinned root public key, using Node's built-in crypto (no extra
+// dependency). scripts/sign-release.mjs checks each signature it writes with
+// it, and server/contentManifest.test.js checks the committed manifest.
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { PINNED_ROOT_KEYS, findPinnedKey } from "../trust/pinned-key.js";

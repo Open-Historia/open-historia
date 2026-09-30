@@ -2,7 +2,7 @@
 
 Open Historia ships with a small **Express** server (`server/server.js`) that is the single backend for the whole app: it serves the built SPA, exposes a JSON/binary REST API under `/api/*`, and reads/writes every piece of persistent state (scenarios, games, map-editor docs, basemaps, flags, language packs, UI settings) as plain files under one writable data directory. There is no database — the on-disk layout under `server/data/` *is* the data model, and each concern gets its own self-contained "store" module. The same `server.js` runs unchanged from a checkout, on Termux, and in-process inside the Electron desktop app; portability comes entirely from the `OH_DATA_DIR` indirection in `server/dataDir.js` (and `OH_ASSETS_DIR` for the stock map archives). The Android app runs no server: it is the web build, whose backend is IndexedDB (see [mobile.md](mobile.md)).
 
-> This page documents the **game server** (`server/server.js`). A second, unrelated entry point — `server/node.js` — is a minimal development stub of a content node (hash-addressed read-only bytes; run separately with `OH_NODE_PORT`). The node hosts actually run is the separate [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) repository; the stub lacks the status/ping/leave/hub endpoints the web client uses. It is out of scope here beyond this note.
+> This page documents the **game server** (`server/server.js`). Content nodes are not part of it: the node software is the separate [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) repository.
 
 ---
 
