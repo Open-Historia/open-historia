@@ -17,6 +17,7 @@ import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
@@ -1490,7 +1491,9 @@ const LANDLESS_PLAYER_TEXT =
 
 const regionNameById = (catalog, id) => (Array.isArray(catalog) ? catalog.find((region) => region?.id === id)?.name : null) || id;
 
-export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null) => {
+// `groups` false while groups are switched off for the game
+// (server/gameFeatures.js): a player leading one reads as a landless polity.
+export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null, { groups = isActiveFeatureEnabled("groups") } = {}) => {
   const playerCode = normalizeString(bundle.game.country);
   if (!playerCode) return "No player polity is currently set.";
   const world = normalizeWorldState(bundle.world);
@@ -1503,10 +1506,10 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null)
   if (!owns) {
     // Leading a group rather than a country (runtime/groups.js): no land, an
     // area it controls, and what it is.
-    const groupCatalog = world.groups && Object.keys(world.groups).length ? (regionCatalog ?? await loadRegions()) : [];
-    const groupText = describePlayerGroupForPrompt(world, playerCode, {
+    const groupCatalog = groups && world.groups && Object.keys(world.groups).length ? (regionCatalog ?? await loadRegions()) : [];
+    const groupText = groups ? describePlayerGroupForPrompt(world, playerCode, {
       regionName: (id) => regionNameById(groupCatalog, id),
-    });
+    }) : "";
     if (groupText) return `None — ${playerCode} is a group, not a country.\n${groupText}`;
     return isPolityLandless(world, playerCode)
       ? LANDLESS_PLAYER_TEXT

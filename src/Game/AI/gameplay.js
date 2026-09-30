@@ -7824,6 +7824,7 @@ const applySimulationResult = async ({
       toDate: nextGame.gameDate || nextGame.startDate || "",
       round: nextGame.round || 0,
       signal: projects?.signal,
+      groups: isActiveFeatureEnabled("groups"),
     });
     nextWorld = political.world;
     const politicalLog = describePoliticalBackgroundResult(political);

@@ -3492,10 +3492,11 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     }
 
     // When the player leads a group rather than a country (runtime/groups.js), the
-    // leader answering it knows what it is dealing with.
+    // leader answering it knows what it is dealing with. Not while groups are
+    // switched off for the game (server/gameFeatures.js), as for the time skip.
     const playerGroupText = await (async () => {
         const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !playerName) return "";
+        if (!worldData?.groups || !playerName || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
         return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });

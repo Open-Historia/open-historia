@@ -105,7 +105,10 @@ test("no lookup answer names a group or its area while groups are off", () => {
   assert.equal(executeLookup(on, "region_info", { regionId: "syr-1" }).controlledByGroup?.name, "Hayat Tahrir al-Sham");
   assert.equal("controlledByGroup" in executeLookup(off, "region_info", { regionId: "syr-1" }), false);
   assert.equal(mentionsGroups(executeLookup(off, "map_around", { regionId: "syr-2", steps: 1 })), false);
-  assert.ok(executeLookup(off, "list_regions", { group: "Hayat Tahrir al-Sham" }).error);
+  const asked = executeLookup(off, "list_regions", { group: "Hayat Tahrir al-Sham" });
+  assert.ok(asked.error);
+  assert.equal(mentionsGroups(asked), false, "not even its error names a group");
+  assert.match(executeLookup(on, "list_regions", {}).error, /group/, "while on, the error offers the group parameter");
   assert.deepEqual(executeLookup(off, "list_groups", {}).groups, []);
   assert.equal(WORLD.groupAreas["syr-1"], "Hayat Tahrir al-Sham", "the world itself keeps them");
 });

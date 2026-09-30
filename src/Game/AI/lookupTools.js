@@ -551,6 +551,7 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     rows, byId, ownerRows, landless, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
+    ...(groups ? {} : { groupsOff: true }),
   };
 };
 
@@ -1035,6 +1036,8 @@ export const executeLookup = (context, name, args = {}) => {
       };
       // A group's area, which crosses countries: each region with its owner, the
       // ids a groupOps release names.
+      // Groups switched off: list_regions takes no group, and says nothing of one.
+      if (!clean(a.owner) && context.groupsOff) return { error: "owner (a power's exact name) is required." };
       if (clean(a.group) && !clean(a.owner)) {
         const { groups, rowsOf } = groupsOnMap(context);
         const group = findGroupKey(groups, a.group);

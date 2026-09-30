@@ -172,6 +172,15 @@ test("groups controlling a polity's regions raise regionalism and security, scal
   assert.ok(smaller.salience < regionalism.salience);
 });
 
+test("with groups switched off for the game, their areas press on no one", () => {
+  const world = territoryWorld();
+  world.groupAreas = { a1: "Cartel", a2: "Cartel", b1: "Rebels" };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22", groups: false });
+  const ids = Object.values(result).flat().map((entry) => entry.source.id);
+  assert.equal(ids.some((id) => id.startsWith("groups:")), false);
+  assert.deepEqual(world.groupAreas, { a1: "Cartel", a2: "Cartel", b1: "Rebels" }, "the world keeps them");
+});
+
 test("occupied ground presses sovereignty and national identity harder than a standing claim", () => {
   const world = territoryWorld();
   world.regionOwnershipOverrides.a1 = "B";
