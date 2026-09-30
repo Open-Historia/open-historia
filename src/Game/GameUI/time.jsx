@@ -798,7 +798,10 @@ const InteractiveOfferStrip = () => {
 // (runtime/applicationReceipt.js): a capture an event narrated that never
 // reached the map, an event kept off the timeline. The next skip's prompt reads
 // the same record; here it is folded away under the turn, and costs nothing.
-// The notes are the engine's own, in English, so the translator leaves them be.
+// Each note is its player sentence (runtime/receiptPlayerNotes.js), which the
+// language packs translate, under the name of the event it concerns, which
+// they leave be. A note saved before those sentences existed is the engine's
+// own English, and is left untranslated too.
 const EngineChangesNote = ({ receipt }) => {
     const [open, setOpen] = useState(false);
     const summary = useMemo(() => describeReceiptForPlayer(receipt), [receipt]);
@@ -817,12 +820,17 @@ const EngineChangesNote = ({ receipt }) => {
         </button>
         {open && (
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "grid", gap: "0.55rem", padding: "0.6rem 0.8rem 0.75rem" }}>
-            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"The engine's own notes on this time skip, as it recorded them for the next one."}</div>
+            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"What the engine left out of this time skip's answer, or changed, before it reached the map and the timeline."}</div>
             {summary.groups.map((group) => (
                 <div key={group.kind} style={{ display: "grid", gap: "0.25rem" }}>
                 <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.7rem", fontWeight: 700 }}>{group.title}</div>
-                <ul data-no-translate style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
-                {group.notes.map((note, index) => <li key={`${group.kind}-${index}`}>{note}</li>)}
+                <ul style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
+                {group.notes.map((note, index) => (
+                    <li key={`${group.kind}-${index}`}>
+                    {note.event && <div data-no-translate style={{ color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>{note.event}</div>}
+                    {note.engine ? <div data-no-translate>{note.text}</div> : <div>{note.text}</div>}
+                    </li>
+                ))}
                 </ul>
                 </div>
             ))}

@@ -369,11 +369,18 @@ test("on the salvage pass a malformed ledger row is dropped and said, not fatal"
   const strict = JSON.parse(JSON.stringify(candidate));
   assert.match(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }), /could not resolve both polities/, "strict: still fatal, naming the row");
 
-  const notes = salvageDiplomaticLedgerPayload(candidate, { world });
+  const playerNotes = [];
+  const notes = salvageDiplomaticLedgerPayload(candidate, { world, playerNotes });
   assert.deepEqual(notes, [
     "Relation update France ↔ Atlantis was dropped: \"Atlantis\" is not a polity on this map.",
     "Agreement phantom-pact end was dropped: no agreement \"phantom-pact\" exists to end.",
     "Agreement eu-turkey-statement start was dropped: fewer than two of its parties are polities on this map.",
+  ]);
+  // The player's sentence for each, at the same index (I278).
+  assert.deepEqual(playerNotes.map((note) => note.text), [
+    "The change in relations between France and Atlantis was not recorded: Atlantis is not a country on this map.",
+    "A change to the agreement \"Phantom Pact\" was not recorded: no such agreement exists.",
+    "The agreement \"EU-Turkey Statement\" was not recorded: fewer than two of its parties are countries on this map.",
   ]);
   assert.equal(typeof candidate.relationUpdates, "string", "rewritten in the form it arrived");
   assert.equal(candidate.relationUpdates.split("\n").length, 1, "the good relation stays");

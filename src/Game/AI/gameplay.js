@@ -27,6 +27,20 @@ import {
   tallyAppliedEvents,
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
+import {
+  basisActionNote,
+  countedNote,
+  eventCountNote,
+  focusShareNote,
+  interventionNote,
+  placementNote,
+  readableReceiptDate,
+  receiptPlayerNote,
+  schemaRemovalNote,
+  unresolvedTerritoryNote,
+  withheldEventNote,
+  worldShareNote,
+} from "../../runtime/receiptPlayerNotes.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
@@ -831,6 +845,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
         "adjusted",
         `"${normalizeString(entry?.title) || `event ${Number(entry?.index) + 1}`}" — kept, but its war link was removed: it narrated combat that could not be tied to a war (${firstComplaintLine(entry?.reason, 90) || "no matching war"}). `
           + "The event stands as history; nothing about the war ledger was assumed from it. Combat that IS part of a war needs event.combatants naming both sides plus a matching warUpdates record.",
+        receiptPlayerNote("warLinkRemoved", {}, normalizeString(entry?.title)),
       );
     }
     candidate.events = normalizeArray(candidate.events).map((event, index) => (
@@ -877,6 +892,9 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
         `War ledger: ${repair.droppedIds.length} war record(s) were dropped`
           + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
           + `because the records could not be tied to their events — ${firstComplaintLine(first)}`,
+        repair.droppedIds.length
+          ? countedNote(repair.droppedIds.length, "warRecordsOne", "warRecordsMany")
+          : countedNote(repair.strippedEvents, "warLinksOne", "warLinksMany"),
       );
     }
     warError = "";
@@ -890,7 +908,9 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
   // strict pass still rejects, with the exact row named, for the one retry
   // legacy mode allows.
   if (!strict) {
-    for (const note of salvageDiplomaticLedgerPayload(candidate, { world })) noteReceipt(receipt, "dropped", note);
+    const playerNotes = [];
+    salvageDiplomaticLedgerPayload(candidate, { world, playerNotes })
+      .forEach((note, index) => noteReceipt(receipt, "dropped", note, playerNotes[index]));
   }  const diplomaticError = validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true });
   if (diplomaticError) return diplomaticError;
 
@@ -1033,7 +1053,7 @@ const screenSegmentPayload = (payload, {
       screened.dropped.map((entry) => `"${entry?.title || entry?.id}" (${entry?.route})`).join(", "),
     );
     // Runs only on an accepted segment, so these go straight onto the turn's receipt.
-    for (const entry of screened.dropped) noteReceipt(state.receipt, "withheld", describeWithheldEvent(entry));
+    for (const entry of screened.dropped) noteReceipt(state.receipt, "withheld", describeWithheldEvent(entry), withheldEventNote(entry));
   }
   payload.events = screened.events;
   // Canonical events the screen kept off the timeline still happened: the board
@@ -1887,7 +1907,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       if (byPhrase?.error) {
         noteReceipt(receipt, "adjusted",
           `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
-          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
+          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`,
+          placementNote("region", { name: entry.name, region: resolved.regionName || entry.regionId, eventTitle: entry.title }));
       }
       target[lngKey] = resolved.lng;
       target[latKey] = resolved.lat;
@@ -1902,7 +1923,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       noteReceipt(receipt, "adjusted",
         `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}. `
         + `It was raised in ${homeland.regionName || entry.owner}, inside ${entry.owner}'s own territory, rather than left off the map. `
-        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.");
+        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.",
+        placementNote("home", { name: entry.name, region: homeland.regionName || entry.owner, owner: entry.owner, eventTitle: entry.title }));
       target[lngKey] = homeland.lng;
       target[latKey] = homeland.lat;
       if (homeland.regionId) target.regionId = homeland.regionId;
@@ -1921,7 +1943,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
         `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}.`
         + (near.length ? ` Did you mean ${near.map((name) => `"${name}"`).join(" or ")}?` : "")
-        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."));
+        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."),
+        placementNote(hasCoordinates ? "coordinates" : "nowhere", { name: entry.name, eventTitle: entry.title }));
       if (!hasCoordinates) continue;
     }
     delete target.at;
@@ -1936,7 +1959,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     if (entry.raisedOnLand && !gazetteer.regionAt([lng, lat])) {
       const ashore = gazetteer.nearestLand([lng, lat], 150);
       if (ashore) {
-        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a land unit"} was placed in the sea and was moved ashore to ${ashore.region.name}. Place land forces with \`at\` and a place name rather than coordinates.`);
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a land unit"} was placed in the sea and was moved ashore to ${ashore.region.name}. Place land forces with \`at\` and a place name rather than coordinates.`,
+          placementNote("ashore", { name: entry.name, region: ashore.region.name, eventTitle: entry.title }));
         lng = Number(ashore.point[0].toFixed(5)); lat = Number(ashore.point[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = ashore.region.id;
@@ -5903,7 +5927,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         path: "$.impacts",
       }];
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
-  const drop = (path, text) => noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`);
+  // `key` and `params`: the player's sentence (runtime/receiptPlayerNotes.js).
+  const drop = (path, text, key, params = {}) => noteReceipt(
+    receipt,
+    "dropped",
+    `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`,
+    receiptPlayerNote(key, params, titleAt(path)),
+  );
 
   // actionIds are stable queue references, not prose hints. Do not guess missing
   // links here; only ensure every link the model DID write points at a current
@@ -5912,7 +5942,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     const actionRefs = validateQueuedActionIds(candidate.events, actions, { strict });
     if (actionRefs.error) return actionRefs.error;
     if (actionRefs.removed) {
-      noteReceipt(receipt, "dropped", `${actionRefs.removed} stale or unknown actionId reference${actionRefs.removed === 1 ? " was" : "s were"} removed from generated events; only exact ids of current queued Actions may resolve an order.`);
+      noteReceipt(receipt, "dropped", `${actionRefs.removed} stale or unknown actionId reference${actionRefs.removed === 1 ? " was" : "s were"} removed from generated events; only exact ids of current queued Actions may resolve an order.`,
+        countedNote(actionRefs.removed, "staleOrderLinksOne", "staleOrderLinksMany"));
     }
   }
 
@@ -5929,7 +5960,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     impacts.regionControlOps = screened.regionControlOps;
     impacts.regionClaims = screened.regionClaims;
     for (const action of screened.actions) {
-      noteReceipt(receipt, "adjusted", describeBasisAction(action, { eventTitle: titleAt(path) }));
+      noteReceipt(receipt, "adjusted", describeBasisAction(action, { eventTitle: titleAt(path) }), basisActionNote(action, { eventTitle: titleAt(path) }));
       console.info(`[ai] ${path}.${action.family}: basis "${action.basis}" on ${action.region} — ${action.outcome === "claimed" ? "recorded as a claim" : "not applied"}.`);
     }
   }
@@ -5969,7 +6000,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // Salvage: the resolver has already left these out of the payload. The turn is
   // kept — and the model, which still believes the land moved, is told it did not.
   for (const entry of unresolvedTransfers) {
-    noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionTransfers", titleAt(entry?.path)));
+    noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionTransfers", titleAt(entry?.path)), unresolvedTerritoryNote(entry, "regionTransfers", titleAt(entry?.path)));
   }
   const unresolvedControlOps = await resolveRegionControlOps(containers, world, {
     exactRegionIdsOnly: resolvedRegionIdsOnly,
@@ -5981,7 +6012,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     return buildControlFeedback(unresolvedControlOps);
   }
   for (const entry of unresolvedControlOps) {
-    noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)));
+    noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)), unresolvedTerritoryNote(entry, "regionControlOps", titleAt(entry?.path)));
   }
   // Units and structures placed by name (`at`), and everything placed kept clear
   // of what already stands (resolvePlacements above). Never an error: a place
@@ -6075,27 +6106,27 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       } catch (error) {
         const reason = `argsJson is not valid JSON: ${error?.message || error}`;
         if (strict) return `${operationPath} was refused: ${reason}`;
-        drop(path, `a Political Actor operation was dropped — ${reason}.`);
+        drop(path, `a Political Actor operation was dropped — ${reason}.`, "politicalRefused");
         continue;
       }
       if (!args || typeof args !== "object" || Array.isArray(args)) {
         const reason = "argsJson must decode to a JSON object";
         if (strict) return `${operationPath} was refused: ${reason}.`;
-        drop(path, `a Political Actor operation was dropped — ${reason}.`);
+        drop(path, `a Political Actor operation was dropped — ${reason}.`, "politicalRefused");
         continue;
       }
       const operation = { ...args, op: normalizeString(packed?.op), polityKey: normalizeString(packed?.polityKey) };
       const shapeError = validatePoliticalActorOperationShape(operation, { allowNativeDerived: false });
       if (shapeError) {
         if (strict) return `${operationPath} was refused: ${shapeError}`;
-        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${shapeError}`);
+        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${shapeError}`, "politicalRefused");
         continue;
       }
       const nativeOutcome = applyPoliticalActorOperation(politicalValidationWorld, operation);
       if (!nativeOutcome?.applied) {
         const reason = normalizeString(nativeOutcome?.error) || "native Political Actor state validation refused it";
         if (strict) return `${operationPath} was refused: ${reason}`;
-        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${reason}`);
+        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${reason}`, "politicalRefused");
         continue;
       }
       keptPoliticalOps.push(packed);
@@ -6121,6 +6152,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       receipt,
       "short",
       `"${issue.title || `event ${issue.index + 1}`}" kept without changing the Political Actor ledger: ${firstComplaintLine(issue.message, 180)}`,
+      receiptPlayerNote("politicalNotRecorded", {}, issue.title),
     );
   }
 
@@ -6152,7 +6184,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       if (outcome.rejected.length) {
         const reason = normalizeString(outcome.rejected[0]?.reason) || "native institution law refused it";
         if (strict) return `${operationPath} was refused: ${reason}`;
-        drop(path, `an institution lifecycle operation was dropped — ${reason}`);
+        drop(path, `an institution lifecycle operation was dropped — ${reason}`, "institutionRefused");
         continue;
       }
       lifecycleValidationWorld = outcome.world;
@@ -6169,7 +6201,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const countries = await resolveInvitees(createdChat?.countries, world, generatedPolities);
       if (countries.length === 0) {
         if (strict) return `${path}.createdChats[${index}].countries must contain at least one known polity.`;
-        drop(path, `the chat "${normalizeString(createdChat?.title) || "(untitled)"}" was not opened — none of its participants is a polity on this map.`);
+        drop(path, `the chat "${normalizeString(createdChat?.title) || "(untitled)"}" was not opened — none of its participants is a polity on this map.`, normalizeString(createdChat?.title) ? "chatNotOpened" : "untitledChatNotOpened", { title: normalizeString(createdChat?.title) });
         continue; // salvage: drop the unresolvable chat, keep the turn
       }
       if (strict) {
@@ -6189,7 +6221,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       if (operation.op === "spawn") {
         if (!normalizeString(operation.unit?.name) || !normalizeString(operation.unit?.ownerCode)) {
           if (strict) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
-          drop(path, "a unit spawn was dropped — it had no name or no ownerCode, so no formation appeared.");
+          drop(path, "a unit spawn was dropped — it had no name or no ownerCode, so no formation appeared.", "unitNotRaised");
           continue;
         }
         const spawnedId = normalizeString(operation.unit?.id);
@@ -6207,12 +6239,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const unitOpName = normalizeString(operation.op) || "unit";
       if (!unitId) {
         if (strict) return `${operationPath}.unitId must not be blank.`;
-        drop(path, `a ${unitOpName} operation was dropped — it named no unitId, so no formation changed.`);
+        drop(path, `a ${unitOpName} operation was dropped — it named no unitId, so no formation changed.`, "unitOrderNoUnit");
         continue;
       }
       if (!unitIds.has(unitId)) {
         if (strict) return `${operationPath}.unitId does not identify an existing unit.`;
-        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no unit has that id (it may have been destroyed or never existed).`);
+        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no unit has that id (it may have been destroyed or never existed).`, "unitOrderUnknownUnit", { unit: unitId });
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
@@ -6231,18 +6263,18 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const marker = operation.marker ?? operation;
         if (!normalizeString(marker?.name)) {
           if (strict) return `${operationPath}.marker.name must not be blank.`;
-          drop(path, "a structure was not built — the build operation gave it no name.");
+          drop(path, "a structure was not built — the build operation gave it no name.", "structureUnnamed");
           continue;
         }
         if (!Number.isFinite(Number(marker?.lng)) || !Number.isFinite(Number(marker?.lat))) {
           if (strict) return `${operationPath}.marker must carry numeric lng and lat coordinates.`;
-          drop(path, `"${normalizeString(marker?.name)}" was not built — the build operation carried no numeric lng and lat.`);
+          drop(path, `"${normalizeString(marker?.name)}" was not built — the build operation carried no numeric lng and lat.`, "structureNowhere", { name: normalizeString(marker?.name) });
           continue;
         }
       } else if (op === "remove" || op === "destroy") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
           if (strict) return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
-          drop(path, "a structure removal was dropped — it named nothing to remove.");
+          drop(path, "a structure removal was dropped — it named nothing to remove.", "structureRemovalUnnamed");
           continue;
         }
       }
@@ -6260,7 +6292,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const operationPath = `${path}.reports[${index}]`;
       if (!operation) {
         if (strict) return `${operationPath} must be a report operation: create with a title, a body and visibleTo, or share with a reportId and visibleTo.`;
-        drop(path, "a report was dropped — it carried no document to write and no report to widen.");
+        drop(path, "a report was dropped — it carried no document to write and no report to widen.", "reportEmpty");
         continue;
       }
       if (operation.visibleTo.length) {
@@ -6268,11 +6300,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const unknown = operation.visibleTo.filter((name) => !holders.some((holder) => regionKey(holder.name) === regionKey(name) || regionKey(holder.code) === regionKey(name)));
         if (!holders.length) {
           if (strict) return `${operationPath}.visibleTo must name polities on this map; "${operation.visibleTo.join('", "')}" ${operation.visibleTo.length === 1 ? "is not one" : "are not"}.`;
-          drop(path, `the report "${operation.title || operation.reportId}" was dropped — none of the governments it names (${operation.visibleTo.join(", ")}) is a polity on this map.`);
+          drop(path, `the report "${operation.title || operation.reportId}" was dropped — none of the governments it names (${operation.visibleTo.join(", ")}) is a polity on this map.`, "reportNoHolders", { title: operation.title || operation.reportId });
           continue;
         }
         if (unknown.length && !strict) {
-          noteReceipt(receipt, "adjusted", `The report "${operation.title || operation.reportId}" is held by ${holders.map((holder) => holder.name).join(", ")}: ${unknown.join(", ")} ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map.`);
+          noteReceipt(receipt, "adjusted", `The report "${operation.title || operation.reportId}" is held by ${holders.map((holder) => holder.name).join(", ")}: ${unknown.join(", ")} ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map.`,
+          receiptPlayerNote("reportFewerHolders", { title: operation.title || operation.reportId, holders: holders.map((holder) => holder.name).join(", ") }, titleAt(path)));
         }
         if (unknown.length && strict) return `${operationPath}.visibleTo names "${unknown.join('", "')}", which ${unknown.length === 1 ? "is not a polity" : "are not polities"} on this map. Use the full names exactly as the map spells them.`;
         operation.visibleTo = holders.map((holder) => holder.name);
@@ -6297,7 +6330,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         const project = operation.project ?? operation;
         if (!normalizeString(project?.name)) {
           if (strict) return `${operationPath} must name the project it is opening.`;
-          drop(path, "a project was not opened — the create operation gave it no name.");
+          drop(path, "a project was not opened — the create operation gave it no name.", "projectUnnamed");
           continue;
         }
         // A create is also how a project first appears, so remember it: a later
@@ -6312,12 +6345,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         || normalizeString(operation?.name || operation?.project).toLowerCase();
       if (!target) {
         if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
-        drop(path, `a project ${op || "update"} was dropped — it named no project.`);
+        drop(path, `a project ${op || "update"} was dropped — it named no project.`, "projectChangeNoProject");
         continue;
       }
       if (!knownProjects.has(target)) {
         if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
-        drop(path, `the project ${op || "update"} on "${normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project)}" was dropped — nothing on the board has that name, so the board did not move.`);
+        drop(path, `the project ${op || "update"} on "${normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project)}" was dropped — nothing on the board has that name, so the board did not move.`, "projectChangeUnknown", { name: normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project) });
         continue;
       }
       keptProjectOps.push(operation);
@@ -6337,7 +6370,9 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       );
       if (countries.length === 0) {
         if (strict) return `$.diplomaticOutreach[${index}].countries must contain at least one known polity.`;
-        noteReceipt(receipt, "dropped", `The outreach chat "${normalizeString(candidate.diplomaticOutreach[index]?.title) || "(untitled)"}" was not opened — none of its participants is a polity on this map.`);
+        const outreachTitle = normalizeString(candidate.diplomaticOutreach[index]?.title);
+        noteReceipt(receipt, "dropped", `The outreach chat "${outreachTitle || "(untitled)"}" was not opened — none of its participants is a polity on this map.`,
+          receiptPlayerNote(outreachTitle ? "chatNotOpened" : "untitledChatNotOpened", { title: outreachTitle }));
         continue;
       }
       if (strict) {
@@ -6702,7 +6737,7 @@ export const interveneAfterEvent = async (keptCount) => {
     const { bundle } = restored;
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
     const receipt = mergeReceipts(createApplicationReceipt(), journal.receipt ?? null);
-    noteReceipt(receipt, "withheld", describeIntervention({ kept, dropped, closingDate }));
+    noteReceipt(receipt, "withheld", describeIntervention({ kept, dropped, closingDate }), interventionNote({ kept, dropped, closingDate }));
     // A budget with nothing left: history consolidation, the tracked stats and
     // every other optional pass ask it first and stand down. Shaped like a
     // skip's (createJumpRequests): the passes read requests.budget, and a bare
@@ -6898,7 +6933,8 @@ const applySimulationResult = async ({
     const fresh = new Set(dedupedEvents);
     for (const event of generatedEvents) {
       if (fresh.has(event)) continue;
-      noteReceipt(receipt, "withheld", `"${normalizeString(event?.title)}" — word for word an event already on the record; restating history adds nothing.`);
+      noteReceipt(receipt, "withheld", `"${normalizeString(event?.title)}" — word for word an event already on the record; restating history adds nothing.`,
+        receiptPlayerNote("withheldWordForWord", {}, normalizeString(event?.title)));
     }
   }
 
@@ -6957,7 +6993,7 @@ const applySimulationResult = async ({
     signal: projects?.signal,
   });
   let curatedEvents = mainCuration.events;
-  for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
+  for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row), withheldEventNote(row));
   // Canonical events the curator (and the breadth repair's own screen and
   // curator) kept off the timeline. They still happened; the board pass reads
   // them alongside the segments' screened-out ones (result.hiddenEvents).
@@ -7093,6 +7129,7 @@ const applySimulationResult = async ({
       "short",
       `${carriedOrders} of the player's queued order${carriedOrders === 1 ? " was" : "s were"} left without an outcome and ${carriedOrders === 1 ? "is" : "are"} carried over as overdue. `
         + "Answer each of them this period, in an event that lists that order's id in actionIds — an event that tells the story without naming the id does not resolve it.",
+      countedNote(carriedOrders, "overdueOrdersOne", "overdueOrdersMany"),
     );
   }
   let nextChats = [...normalizeChats(baseChats)];
@@ -7207,6 +7244,7 @@ const applySimulationResult = async ({
         receipt,
         "dropped",
         `Event "${normalizeString(event.title)}": an institution lifecycle operation was refused — ${normalizeString(rejected.reason) || "native institution law rejected it"}.`,
+        receiptPlayerNote("institutionRefused", {}, normalizeString(event.title)),
       );
     }
     for (const created of batch.createdChats) {
@@ -13516,6 +13554,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                 + (eventCount < minEvents
                   ? "A period that long holds more than that: cover the wider world as well as the player's own front."
                   : "Fewer, weightier events serve a period better than a long list of small ones."),
+              eventCountNote({ count: eventCount, min: minEvents, max: maxEvents }),
             );
           }
           // The world's share, a scenario author's setting the engine counts
@@ -13533,14 +13572,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             // news from the wider world.
             playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
           });
-          if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
+          if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text, worldShareNote(shareShortfall));
           const focusShortfall = playerFocusShortfall(candidate?.events, {
             focus: focusContext.focus,
             isPlayerEvent: focusContext.isPlayerEvent,
             material: playerMaterial,
             playerName: focusContext.playerName,
           });
-          if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text);
+          if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text, focusShareNote({ ...focusShortfall, total: eventCount }));
           // Each segment is checked against ITS OWN span, so an event dated outside
           // the segment is caught while the model can still fix it rather than at the
           // end of the whole round.
@@ -13558,6 +13597,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               draft,
               "adjusted",
               `Some event dates fell outside ${state.segmentOrigin} to ${segmentTarget} and were moved inside it — ${firstComplaintLine(dateError)}`,
+              receiptPlayerNote("datesClamped"),
             );
           }
           // The map's tempo, an author's ceiling on how many regions change hands
@@ -13573,6 +13613,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                 "withheld",
                 `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
                   + "Carry the rest of that advance into the next period, or write the front as holding.",
+                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
               );
             }
           }
@@ -13588,7 +13629,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               candidate.events = scripted.events;
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
-                noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`);
+                noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`,
+                  receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
               }
             }
           }
@@ -13624,12 +13666,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (segmentGeneration?.source !== "fallback") {
         mergeReceipts(state.receipt, segmentDraft);
         for (const complaint of segmentComplaints.slice(0, 2)) {
-          noteReceipt(state.receipt, "redone", firstComplaintLine(complaint));
+          noteReceipt(state.receipt, "redone", firstComplaintLine(complaint), receiptPlayerNote("redone"));
         }
         // What the schema could not accept and the task runner cut out rather
         // than ask again (schemaSalvage.js): the model wrote it and it is gone.
         for (const removal of normalizeArray(removedFromSegment)) {
-          noteReceipt(state.receipt, "dropped", describeSchemaRemoval(removal));
+          noteReceipt(state.receipt, "dropped", describeSchemaRemoval(removal), schemaRemovalNote(removal));
         }
       }
 
