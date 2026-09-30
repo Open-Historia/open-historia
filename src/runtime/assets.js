@@ -946,7 +946,9 @@ export const writeJson = async (
     echo = true,
     // The caller normalized `data` before writing it (gameState.js
     // writeWorldState). Carried on oh:runtime-json-updated so the runtime store
-    // does not normalize the whole document a second time.
+    // does not normalize the whole document a second time, with the text the
+    // saved value was parsed from, so the store can tell a no-op write by
+    // comparing texts rather than deep-comparing the whole document.
     normalized = false,
   } = {},
 ) => {
@@ -1030,7 +1032,13 @@ export const writeJson = async (
   }
   if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
     window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-      detail: { key: runtimeAssetLabel(url), url, value: saved, normalized: Boolean(normalized) },
+      detail: {
+        key: runtimeAssetLabel(url),
+        url,
+        value: saved,
+        normalized: Boolean(normalized),
+        ...(normalized ? { text: savedPayload } : {}),
+      },
     }));
   }
 
