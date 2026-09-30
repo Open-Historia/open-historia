@@ -51,7 +51,12 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   const update = (id, patch) => setFeatures((list) => list.map((f) => (f.id === id ? { ...f, ...patch } : f)));
   // Deleting is one step on the Workshop's undo stack (OlMap pushStep), so
   // Ctrl+Z or Undo brings the rows back where they were (documentUndo.js).
-  const remove = (id) => api?.pushStep?.(removeRowStep(features, setFeatures, id));
+  // The rows go at once: a panel opened before the map handed over its API
+  // still deletes, only without the undo step.
+  const pushUndoStep = (step) => {
+    if (step) api?.pushStep?.(step);
+  };
+  const remove = (id) => pushUndoStep(removeRowStep(features, setFeatures, id));
 
   // Many at once: ticked rows and the map's box-select share one selection, and
   // the bar below tags or deletes everything in it together.
@@ -85,7 +90,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   const deleteSelected = () => {
     if (!selectedCount) return;
     if (!window.confirm(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`)) return;
-    api?.pushStep?.(removeRowsStep(features, setFeatures, (f) => selectedSet.has(String(f.id))));
+    pushUndoStep(removeRowsStep(features, setFeatures, (f) => selectedSet.has(String(f.id))));
     setSelection?.([]);
   };
   // Every city, base, port and landmark at once. It still asks first, but it is
@@ -98,7 +103,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
       ? "Delete the one city or map feature on this map? Undo brings it back."
       : `Delete all ${n} cities and map features on this map? Undo brings them back.`;
     if (!window.confirm(question)) return;
-    api?.pushStep?.(removeRowsStep(features, setFeatures, () => true));
+    pushUndoStep(removeRowsStep(features, setFeatures, () => true));
     setSelection?.([]);
   };
 
