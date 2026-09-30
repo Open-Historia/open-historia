@@ -119,7 +119,7 @@ test("the app wires both halves: the page calls OhBackground.idle, the activity 
   assert.match(plugin, /@CapacitorPlugin\(name = "OhBackground"\)/);
   assert.match(plugin, /public void idle\(PluginCall call\)/);
   const activity = read(`${javaDir}/MainActivity.java`);
-  assert.match(activity, /registerPlugin\(BackgroundPausePlugin\.class\);\s*super\.onCreate\(savedInstanceState\);/, "registered before super.onCreate");
+  assert.match(activity, /registerPlugin\(BackgroundPausePlugin\.class\);(\s*registerPlugin\(\w+\.class\);)*\s*super\.onCreate\(savedInstanceState\);/, "registered before super.onCreate");
   assert.match(activity, /view\.pauseTimers\(\)/);
   assert.match(activity, /view\.resumeTimers\(\)/);
 });
