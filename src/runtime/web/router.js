@@ -10,7 +10,7 @@ import { errorResponse, jsonResponse } from "./util.js";
 import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
 import { handleFlags } from "./flagStore.js";
-import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride } from "./libraryStore.js";
+import { handleLibrary, handleScenarios, handleGames, handleTrash, handleRuntimeJson, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
 import { getConnected } from "./nodeConnect.js";
 
@@ -117,6 +117,10 @@ const route = async (request, url) => {
   }
   if (domain === "games") {
     const response = await handleGames(ctx);
+    if (response) return response;
+  }
+  if (domain === "trash") {
+    const response = await handleTrash(ctx);
     if (response) return response;
   }
   if (domain === "runtime" && segments[0] === "institution-logo") {

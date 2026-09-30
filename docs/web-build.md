@@ -73,6 +73,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 | `library` | `handleLibrary` | `libraryStore.js` |
 | `scenarios/*` | `handleScenarios` | `libraryStore.js` |
 | `games/*` | `handleGames` | `libraryStore.js` |
+| `trash`, `trash/<entry>/restore` | `handleTrash` | `libraryStore.js` |
 | `ui-settings/*` | `handleUiSettings` | `settingsStore.js` |
 | `lang/*` | `handleLang` | `settingsStore.js` |
 | `hub/*` | inline proxy → Worker / node | (see below) |
@@ -93,7 +94,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 
 ## 4. IndexedDB layer (`idb.js`)
 
-A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
+A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 5`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
 
 | Store (`STORES`) | keyPath | Mirrors server on-disk store |
 |---|---|---|
@@ -107,8 +108,10 @@ A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4
 | `scenarioMeta` | `id` | lean projection of each scenario (meta, cover, asset status) that the library menu is built from — no geometry or tiles |
 | `gameMeta` | `id` | lean projection of each game (meta, cover, country, date, round, counts) — no snapshots or full JSON |
 | `mapeditorMeta` | `id` | the eight-field summary of each map-editor document the Documents menu lists (the desktop store's `.summary.json`) |
+| `trash` | `id` | a deleted scenario or game, whole: `{ id: entry, kind, itemId, record }` (the desktop's `.trash`) |
+| `trashMeta` | `id` | the lean row the Recently deleted shelves list: `{ id: entry, kind, itemId, name, deletedAt, scenarioId? }` |
 
-Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbPut`, `idbPutPair` / `idbDeletePair` (a record and its lean index row in one transaction), `idbDelete`, `reconcileMetaIndex` (build a listing from an index store, backfilling a missing row one record at a time and dropping orphans), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
+Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbPut`, `idbPutPair` / `idbDeletePair` (a record and its lean index row in one transaction), `idbMovePair` (a record and its index row out of one pair of stores and into another in one transaction: a delete into the trash, a restore out of it), `idbDelete`, `reconcileMetaIndex` (build a listing from an index store, backfilling a missing row one record at a time and dropping orphans), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
 
 ---
 
@@ -168,9 +171,13 @@ Rewrites a record whose owners are GADM codes into one keyed by country **names*
 - `importScenarioBundle` / `updateScenarioFromBundle` accept any schema in `ACCEPTED_BUNDLE_SCHEMAS` (v1 + v2), and lay down each asset through one `applyScenarioBundleAsset`, as the desktop store does: geometry that travelled as JSON is stored, one that travelled as base64 is decoded, and only an asset the bundle does not embed is cleared (the hub Update once had its own copy without the JSON branch and deleted a map's regions, cities and basemap). Note the **JSON-descriptor gotcha**: `colors`/`flags`/`tags` descriptors carry the **object itself** in `descriptor.data`, not base64 — passing them through `base64ToBytes` (as geojson/pmtiles do) made `atob` throw and broke import of every flag/tag-carrying preset (e.g. WWII).
 - Hub provenance (`hubOrigin`, `hubPublished`, `hubReviews`) follows the desktop store's rules through the same `server/hubProvenance.js`. `hubOrigin` is stamped **last** by an import. Any later edit keeps it and stamps `editedAt`, which stops hub updates from overwriting the player's work while keeping the original for **Suggest changes**. `hubOrigin: null` unlinks the scenario. A body carrying only provenance is bookkeeping (`writeScenarioMeta(record, updates, { touch: false })`: no `updatedAt`, no `editedAt`). See [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went).
 
+### Trash (Recently deleted)
+
+Deleting a scenario or game moves its record, whole, into the `trash` store (`moveToTrash`, one `idbMovePair` transaction; a game's move runs in the write queue so a turn commit cannot put it back). `handleTrash` serves the same routes as the desktop's (`GET /api/trash`, `POST /api/trash/:entry/restore`, `DELETE /api/trash[?kind=]`), so the library's Recently deleted shelves work here too. The limits are tighter than the desktop's 30 days, because every record can hold a whole map and a phone's storage quota is small: an entry is kept `TRASH_KEEP_DAYS` (7) days and only the last `TRASH_KEEP_COUNT` (5) are kept, the oldest going first (`purgeTrash`, run after each delete, on each listing and at boot). The listing is read from `trashMeta` and has no sizes, which would mean loading every record; `keepCount` in the reply is how the library tells the two stores apart.
+
 ### Seeding (`ensureSeeded`)
 
-If the `seeded` kv flag is unset and no `default` scenario exists, write `defaultScenarioSeedRecord()` (built from `generated/defaultScenario.js`: meta, colors, base64 cover) and add it to the manifest. Idempotent.
+If the `seeded` kv flag is unset and no `default` scenario exists, write `defaultScenarioSeedRecord()` (built from `generated/defaultScenario.js`: meta, colors, base64 cover) and add it to the manifest. Idempotent. It then purges the trash (`purgeTrash`).
 
 ---
 

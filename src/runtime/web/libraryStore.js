@@ -5,7 +5,7 @@
 // (src/runtime/library.js, assets.js) works exactly as against the real server.
 // Web build only.
 
-import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
+import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPutPair, idbDeletePair, idbMovePair, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
 import { serializeByKey, serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
 import { importedGameScenarioId } from "../../../server/hubProvenance.js";
@@ -1143,8 +1143,7 @@ const setSelectedScenario = async (scenarioId) => {
 const deleteScenario = async (id) => {
   const usage = await getScenarioUsageCounts();
   if ((usage.get(id) ?? 0) > 0) throw new Error("This scenario is still used by one or more games.");
-  await idbDelete(STORES.scenarios, id);
-  try { await idbDelete(STORES.scenarioMeta, id); } catch { /* reconcile drops it next build */ }
+  await moveToTrash("scenario", id);
   coarseRegions.forget(id);
   const manifest = await getScenarioManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listScenarioIds(), DEFAULT_SCENARIO_ID);
@@ -1302,13 +1301,116 @@ const setActiveGame = async (gameId) => {
 };
 
 const deleteGame = async (id) => {
-  await idbDelete(STORES.games, id);
-  try { await idbDelete(STORES.gameMeta, id); } catch { /* reconcile drops it next build */ }
+  // In the write queue: a turn commit that read the game before the move would
+  // otherwise put it back beside its trash entry.
+  await serializeWrite(() => moveToTrash("game", id));
   const manifest = await getGameManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listGameIds(), DEFAULT_GAME_ID);
   const activeGameId = manifest.activeGameId === id ? (remaining[0] ?? "") : manifest.activeGameId;
   await saveGameManifest({ activeGameId, order: remaining });
   return getLibraryCatalog();
+};
+
+// --- Trash (the library's Recently deleted shelf) -------------------------
+// The server twin moves a deleted scenario or game into <data dir>/.trash and
+// keeps it TRASH_KEEP_DAYS (30). Here it moves into the trash store, whole, and
+// the limits are tighter because the browser's storage quota is small on a
+// phone and every record here can hold a whole map: a week, and the last five
+// deleted, the oldest going first.
+const TRASH_KEEP_DAYS = 7;
+const TRASH_KEEP_COUNT = 5;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TRASH_KINDS = new Set(["scenario", "game"]);
+
+const trashRecordStore = (kind) => (kind === "game" ? STORES.games : STORES.scenarios);
+const trashIndexStore = (kind) => (kind === "game" ? STORES.gameMeta : STORES.scenarioMeta);
+
+// The record moves, it is never copied: one transaction takes it out of the
+// library and puts it in the trash (idbMovePair).
+const moveToTrash = async (kind, id, now = Date.now()) => {
+  const entry = `${kind}-${id}-${now.toString(36)}`;
+  const deletedAt = new Date(now).toISOString();
+  await idbMovePair(trashRecordStore(kind), trashIndexStore(kind), id, STORES.trash, STORES.trashMeta, (record) => {
+    const name = String(record.meta?.name ?? "").trim() || id;
+    const scenarioId = kind === "game" ? readGameMeta(id, record.meta ?? {}).scenarioId : null;
+    return [
+      { id: entry, kind, itemId: id, record },
+      { id: entry, kind, itemId: id, name, deletedAt, ...(scenarioId ? { scenarioId } : {}) },
+    ];
+  });
+  await purgeTrash(now);
+};
+
+// Past the week or past the fifth, oldest first.
+const purgeTrash = async (now = Date.now()) => {
+  const rows = (await idbGetAll(STORES.trashMeta))
+    .sort((left, right) => String(right.deletedAt ?? "").localeCompare(String(left.deletedAt ?? "")));
+  const cutoff = now - TRASH_KEEP_DAYS * DAY_MS;
+  const expired = rows.filter((row, index) => index >= TRASH_KEEP_COUNT || !(Date.parse(row.deletedAt) >= cutoff));
+  for (const row of expired) await idbDeletePair(STORES.trash, STORES.trashMeta, row.id);
+  return rows.filter((row) => !expired.includes(row));
+};
+
+const describeTrashRow = (row) => ({
+  deletedAt: row.deletedAt,
+  entry: row.id,
+  id: row.itemId,
+  kind: row.kind,
+  name: row.name,
+  ...(row.scenarioId ? { scenarioId: row.scenarioId } : {}),
+});
+
+// Most recently deleted first, like the server's listTrash; no sizes, which
+// would mean loading every record.
+const listTrash = async () => (await purgeTrash()).map(describeTrashRow);
+
+// Back under its old id, or the next free one if that id has been taken since,
+// at the top of the library (server twin: restoreFromTrash).
+const restoreFromTrash = async (entry) => {
+  const row = await idbGet(STORES.trashMeta, String(entry ?? ""));
+  if (!row || !TRASH_KINDS.has(row.kind)) throw new Error(`Not in the trash: ${entry}`);
+  const { kind } = row;
+  const id = await ensureUniqueId(row.itemId, kind);
+  const restore = () => idbMovePair(STORES.trash, STORES.trashMeta, row.id, trashRecordStore(kind), trashIndexStore(kind), (trashed) => {
+    const record = { ...trashed.record, id, meta: { ...(trashed.record?.meta ?? {}), id } };
+    return [record, kind === "game" ? projectGameMeta(record) : projectScenarioMeta(record)];
+  });
+  const moved = kind === "game" ? await serializeWrite(restore) : await restore();
+  if (!moved) throw new Error(`Not in the trash: ${entry}`);
+  migratedRecords.delete(`${kind}:${id}`);
+  if (kind === "game") {
+    const manifest = await getGameManifest();
+    await saveGameManifest({ ...manifest, order: [id, ...resolveOrderedIds(manifest.order, await listGameIds(), DEFAULT_GAME_ID).filter((other) => other !== id)] });
+  } else {
+    coarseRegions.forget(id);
+    const manifest = await getScenarioManifest();
+    await saveScenarioManifest({ ...manifest, order: [id, ...resolveOrderedIds(manifest.order, await listScenarioIds(), DEFAULT_SCENARIO_ID).filter((other) => other !== id)] });
+  }
+  return { id, kind, library: await getLibraryCatalog() };
+};
+
+// Deletes everything in the trash for good, or only the games or the scenarios.
+const emptyTrash = async ({ kind = "" } = {}) => {
+  const rows = (await idbGetAll(STORES.trashMeta)).filter((row) => !kind || row.kind === kind);
+  for (const row of rows) await idbDeletePair(STORES.trash, STORES.trashMeta, row.id);
+  return { removed: rows.length };
+};
+
+export const handleTrash = async ({ method, segments, query }) => {
+  try {
+    if (!segments[0]) {
+      if (method === "GET") return jsonResponse({ entries: await listTrash(), keepCount: TRASH_KEEP_COUNT, keepDays: TRASH_KEEP_DAYS });
+      if (method === "DELETE") {
+        const kind = query?.get("kind") ?? "";
+        return jsonResponse(await emptyTrash({ kind: TRASH_KINDS.has(kind) ? kind : "" }));
+      }
+      return null;
+    }
+    if (segments[1] === "restore" && method === "POST") return jsonResponse(await restoreFromTrash(decodeURIComponent(segments[0])));
+    return null;
+  } catch (error) {
+    return errorResponse(error.message, method === "GET" ? 500 : 400);
+  }
 };
 
 // --- Uploadable assets ----------------------------------------------------
@@ -1756,6 +1858,8 @@ export const ensureSeeded = async () => {
     await kvPut("seeded", true);
   }
   await syncBuiltInScenarioFromSeed();
+  // What was deleted more than a week ago, or before the last five, goes for good.
+  try { await purgeTrash(); } catch { /* tried again on the next listing */ }
 };
 
 // --- Router handlers ------------------------------------------------------

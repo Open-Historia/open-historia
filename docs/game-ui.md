@@ -140,8 +140,8 @@ Full-page overlay at z 10046. Header is a centered, width-bounded 3-column grid:
 
 | Tab | Content | Component |
 |---|---|---|
-| Games | `MenuRow`s: 🕐 Last Played, 🔥 Most Played | `GameCard` |
-| Scenarios | 🔥 Most Played, 🕐 Last Updated, ✦ Your Scenarios (with `CreateScenarioTile`) | `ScenarioCard` |
+| Games | `MenuRow`s: 🕐 Last Played, 🔥 Most Played, 🗄️ Archived, 🗑️ Recently deleted | `GameCard`, `DeletedCard` |
+| Scenarios | 🔥 Most Played, 🕐 Last Updated, ✦ Your Scenarios (with `CreateScenarioTile`), 🗑️ Recently deleted | `ScenarioCard`, `DeletedCard` |
 | Community | Lazy `CommunityPanel fullPage` | `communityHub.jsx` |
 
 Header utility actions use the shared inline `ButtonIcon` glyphs: **Settings**, **Refresh**, and the tab-specific **Import Game** / **Import Scenario** action. The labels remain visible on desktop and use the same icon vocabulary on phones.
@@ -149,6 +149,8 @@ Header utility actions use the shared inline `ButtonIcon` glyphs: **Settings**, 
 Each `MenuRow` carries a short description plus a subtle divider. Desktop rows use a responsive grid so a populated library scales across the available width; phones retain horizontally scrollable shelves. Sparse libraries are not stretched into oversized feature cards.
 
 The Games tab's empty state ("No games yet") offers **Start from a scenario** / **Browse community scenarios** shortcuts.
+
+**Recently deleted** (`RecentlyDeletedRow`) lists what delete moved to the trash (`GET /api/trash`, read each time the menu opens and after a delete): the games on the Games tab and the scenarios on the Scenarios tab, each card with **Restore**, and the row with **Empty** (a `window.confirm`, for that tab's kind only). Its description and the delete confirmation say how long an item can be restored: 30 days on the desktop, and on the web and Android a week while it is among the last five deleted (the reply's `keepDays` / `keepCount`). It is hidden while empty, and where the store refuses the trash (the desktop serves it only to its own machine); the delete confirmation then only asks.
 
 ### 4.3 Menu shelves (derived, memoized)
 

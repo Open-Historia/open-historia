@@ -88,11 +88,11 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 ### Trash (loopback only)
 | Method | Path | Purpose | Handler |
 | --- | --- | --- | --- |
-| GET | `/api/trash` | What delete moved to `.trash`: `{ entries: [{ entry, kind, id, name, scenarioId?, deletedAt, bytes }] }`, newest first (`listTrash`) | `server/server.js` |
+| GET | `/api/trash` | What delete moved to `.trash`: `{ entries: [{ entry, kind, id, name, scenarioId?, deletedAt, bytes }], keepDays: 30 }`, newest first (`listTrash`; an entry that cannot be read is left out) | `server/server.js` |
 | POST | `/api/trash/:entry/restore` | Put one entry back under its old id, or the next free one if that id was reused; → `{ id, kind, library }` (`restoreFromTrash`) | `server/server.js` |
-| DELETE | `/api/trash` | Delete every entry for good; → `{ removed, bytes }` (`emptyTrash`) | `server/server.js` |
+| DELETE | `/api/trash[?kind=game\|scenario]` | Delete every entry, or every entry of one kind, for good; → `{ removed, bytes }` (`emptyTrash`) | `server/server.js` |
 
-A 403 from anywhere but the machine running the server. Nothing in the app calls these yet: the library has no Recently deleted shelf, nothing purges old entries, and the web store still deletes records outright (`idbDelete`).
+A 403 from anywhere but the machine running the server. The library's **Recently deleted** shelves (one on the Games tab, one on the Scenarios tab, `RecentlyDeletedRow` in `libraryBar.jsx`) list these with **Restore** and **Empty**, and the delete confirmation says how long an item can be restored; a client the server refuses sees neither. At startup `server.js` runs `purgeOldTrash()`, which deletes for good every entry deleted more than `TRASH_KEEP_DAYS` (30) days ago. An entry from before deletes were dated has no `.deleted.json`, and its directory's mtime is when its files last changed, so it is dated on first sight instead and its 30 days start then. The web store keeps its own trash with tighter limits ([web-build.md](web-build.md#trash-recently-deleted)).
 
 ### Runtime (what the running game polls)
 | Method | Path | Purpose | Handler |

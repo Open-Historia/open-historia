@@ -14,6 +14,7 @@ import { enqueueContentStrings } from "./translator.js";
 const LIBRARY_API_ROOT = "/api/library";
 const SCENARIOS_API_ROOT = "/api/scenarios";
 const GAMES_API_ROOT = "/api/games";
+const TRASH_API_ROOT = "/api/trash";
 
 const INITIAL_LIBRARY_STATE = {
   activeGame: null,
@@ -531,4 +532,19 @@ export const removeGame = async (gameId) => {
   return applyLibraryCatalog(catalog);
 };
 
+// What delete moved to the trash, for the library's Recently deleted shelves:
+// { entries: [{ entry, kind, id, name, deletedAt, bytes? }], keepDays, keepCount? }.
+// The desktop serves it to the machine it runs on only; anywhere else this
+// throws and the shelves stay hidden.
+export const listTrash = async () => requestJson(TRASH_API_ROOT);
+
+export const restoreFromTrash = async (entry) => {
+  const result = await requestJson(`${TRASH_API_ROOT}/${encodeURIComponent(entry)}/restore`, { method: "POST" });
+  applyLibraryCatalog(result.library);
+  return result;
+};
+
+// kind "game" or "scenario" empties that shelf only.
+export const emptyTrash = async (kind) =>
+  requestJson(`${TRASH_API_ROOT}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`, { method: "DELETE" });
 syncLibraryRuntime();

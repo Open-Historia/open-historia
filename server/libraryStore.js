@@ -2611,11 +2611,22 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   // alongside delete-sharing handles, and rmSync's own retries ride out the
   // stragglers. The copy lands in .trash first, so the soft-delete contract
   // (recoverable by hand) holds on this path too.
+  let copied = false;
   try {
     fs.cpSync(sourceDir, dest, { recursive: true });
+    copied = true;
     fs.rmSync(sourceDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
     markTrashEntry(dest, kind, id);
   } catch (error) {
+    // A copy that did not finish is not a trash entry (the original is still
+    // whole), and left there it would list, and restore, as half a save.
+    if (!copied) {
+      try {
+        fs.rmSync(dest, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      } catch {
+        // Leave it; the original is intact either way.
+      }
+    }
     throw new Error(
       `Windows is blocking the delete of "${id}" — another program holds its files open ` +
         `(an indexing/sync tool, or a request in flight). Close it or restart the server, ` +
@@ -2629,12 +2640,17 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
 // time it was moved.
 const TRASH_MARKER_FILE = ".deleted.json";
 const TRASH_KINDS = new Set(["scenario", "game"]);
+// How long a deleted game or scenario can be restored before the server
+// deletes it for good at startup (purgeOldTrash). The delete confirmation and
+// the Recently deleted shelf say so.
+const TRASH_KEEP_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-const markTrashEntry = (dest, kind, id) => {
+const markTrashEntry = (dest, kind, id, at = new Date()) => {
   try {
     fs.writeFileSync(
       path.join(dest, TRASH_MARKER_FILE),
-      JSON.stringify({ deletedAt: new Date().toISOString(), id: String(id), kind }),
+      JSON.stringify({ deletedAt: at.toISOString(), id: String(id), kind }),
       "utf-8",
     );
   } catch {
@@ -2670,13 +2686,23 @@ const describeTrashEntry = (entry) => {
   };
 };
 
+// One entry that cannot be read is left out, not a failed list.
+const describeTrashEntrySafely = (entry) => {
+  try {
+    return describeTrashEntry(entry);
+  } catch (error) {
+    console.warn(`[trash] ${entry}: ${error.message}`);
+    return null;
+  }
+};
+
 // Everything in .trash, most recently deleted first.
 const listTrash = () => {
   if (!fs.existsSync(TRASH_DIR)) return [];
   return fs
     .readdirSync(TRASH_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => describeTrashEntry(entry.name))
+    .map((entry) => describeTrashEntrySafely(entry.name))
     .filter(Boolean)
     .sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
 };
@@ -2723,15 +2749,48 @@ const restoreFromTrash = (entry) => {
   return { id, kind, library: getLibraryCatalog() };
 };
 
-// Deletes everything in .trash for good.
-const emptyTrash = () => {
-  const entries = listTrash();
+// Deletes everything in .trash for good, or only the games or the scenarios
+// (each shelf empties its own kind).
+const emptyTrash = ({ kind = "" } = {}) => {
+  const entries = listTrash().filter((described) => !kind || described.kind === kind);
   let bytes = 0;
   for (const described of entries) {
     fs.rmSync(path.join(TRASH_DIR, described.entry), { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
     bytes += described.bytes;
   }
   return { bytes, removed: entries.length };
+};
+
+// Run at startup: deletes for good what was deleted more than TRASH_KEEP_DAYS
+// ago. An entry from before deletes were dated has no marker, and its
+// directory's mtime is when its files last changed, not when it was deleted,
+// so it is dated now instead: its days start today rather than it vanishing
+// on the first start of this version.
+const purgeOldTrash = ({ now = Date.now() } = {}) => {
+  if (!fs.existsSync(TRASH_DIR)) return { bytes: 0, removed: 0 };
+  const cutoff = now - TRASH_KEEP_DAYS * DAY_MS;
+  let bytes = 0;
+  let removed = 0;
+  for (const entry of fs.readdirSync(TRASH_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(TRASH_DIR, entry.name);
+    try {
+      const deletedAt = Date.parse(String(readJsonFile(path.join(dir, TRASH_MARKER_FILE), null)?.deletedAt ?? ""));
+      if (!Number.isFinite(deletedAt)) {
+        const described = describeTrashEntry(entry.name);
+        if (described) markTrashEntry(dir, described.kind, described.id, new Date(now));
+        continue;
+      }
+      if (deletedAt >= cutoff) continue;
+      const size = directoryBytes(dir);
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      bytes += size;
+      removed += 1;
+    } catch (error) {
+      console.warn(`[trash] could not purge ${entry.name}: ${error.message}`);
+    }
+  }
+  return { bytes, removed };
 };
 
 const deleteScenario = (scenarioId) => {
@@ -4257,7 +4316,9 @@ export {
   importGameBundle,
   importScenarioBundle,
   listTrash,
+  purgeOldTrash,
   restoreFromTrash,
+  TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,

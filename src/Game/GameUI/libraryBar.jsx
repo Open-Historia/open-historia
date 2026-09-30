@@ -20,16 +20,19 @@ import {
   createGame,
   createScenario,
   downloadScenarioJsonAsset,
+  emptyTrash,
   ensureLibraryCatalog,
   exportScenarioBundle,
   importGameBundle,
   importScenarioBundle,
   updateScenarioFromBundle,
+  listTrash,
   loadGameDetails,
   loadScenarioDetails,
   refreshLibraryCatalog,
   removeGame,
   removeScenario,
+  restoreFromTrash,
   saveGame,
   saveScenario,
   selectScenario,
@@ -1213,7 +1216,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
 // A responsive shelf on the main menu. Desktop fills the available width with a
 // clean grid; phones keep the original swipeable row. Rows that can be
 // legitimately empty pass emptyText.
-const MenuRow = ({ children, description, emptyText, icon, title }) => {
+const MenuRow = ({ action, children, description, emptyText, icon, title }) => {
   const isMobile = useIsMobile();
   const hasChildren = React.Children.count(children) > 0;
 
@@ -1228,6 +1231,7 @@ const MenuRow = ({ children, description, emptyText, icon, title }) => {
             </div>
           </div>
           <div style={{ background: "linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02))", flex: 1, height: 1 }} />
+          {action}
         </div>
         {description && (
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.88rem", marginLeft: icon ? "1.55rem" : 0, marginTop: "0.32rem" }}>
@@ -1247,6 +1251,115 @@ const MenuRow = ({ children, description, emptyText, icon, title }) => {
         </div>
       )}
     </section>
+  );
+};
+
+// When a trash entry was deleted, in calendar days on this device.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const deletedWhen = (deletedAt) => {
+  const startOfDay = (time) => new Date(time).setHours(0, 0, 0, 0);
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(Date.parse(deletedAt))) / DAY_MS);
+  if (!Number.isFinite(days) || days <= 0) return "Deleted today";
+  return days === 1 ? "Deleted yesterday" : `Deleted ${days} days ago`;
+};
+
+const DeletedCard = ({ busy, entry, onRestore, touch }) => (
+  <div
+    style={{
+      ...surfaceStyle,
+      borderRadius: "24px",
+      display: "flex",
+      flex: `0 0 ${SHELF_CARD_WIDTH}`,
+      flexDirection: "column",
+      gap: "0.8rem",
+      justifyContent: "space-between",
+      padding: "1.1rem 1.2rem",
+    }}
+  >
+    <div style={{ minWidth: 0 }}>
+      <div data-no-translate style={{ fontSize: "1.02rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.name}>
+        {entry.name}
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.64)", display: "flex", flexWrap: "wrap", fontSize: "0.82rem", gap: "0.6rem", marginTop: "0.3rem" }}>
+        <span>{deletedWhen(entry.deletedAt)}</span>
+        {Number.isFinite(entry.bytes) && entry.bytes > 0 && <span data-no-translate>{formatZipSize(entry.bytes)}</span>}
+      </div>
+    </div>
+    <button
+      className="oh-tap-row"
+      disabled={busy}
+      onClick={() => onRestore(entry)}
+      style={touchFit({ ...actionButtonStyle, alignSelf: "flex-start", cursor: busy ? "progress" : "pointer" }, touch)}
+      type="button"
+    >
+      <ButtonIcon kind="refresh" /> Restore
+    </button>
+  </div>
+);
+
+// The Recently deleted shelf of one tab: the games or the scenarios that delete
+// moved to the trash (GET /api/trash), each with Restore, and Empty for the
+// shelf. The desktop keeps an entry trash.keepDays (30) and deletes it for
+// good at startup after that; the web and Android store keeps a week and only
+// the last trash.keepCount (5), since a phone's storage is small. Hidden while
+// empty, and where the store will not serve the trash (the desktop serves it
+// only to the machine it runs on).
+const RecentlyDeletedRow = ({ kind, onChanged, trash }) => {
+  const touch = useTouchPrimary();
+  const [busy, setBusy] = useState(false);
+  const [rowError, setRowError] = useState(null);
+  const entries = (trash?.entries ?? []).filter((entry) => entry.kind === kind);
+  if (!entries.length) return null;
+
+  const run = async (work) => {
+    setBusy(true);
+    setRowError(null);
+    try {
+      await work();
+    } catch (nextError) {
+      setRowError(nextError.message);
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  };
+  const handleEmpty = () => {
+    const count = entries.length;
+    const question = kind === "game"
+      ? (count === 1 ? "Delete the game in Recently deleted for good? This cannot be undone." : `Delete the ${count} games in Recently deleted for good? This cannot be undone.`)
+      : (count === 1 ? "Delete the scenario in Recently deleted for good? This cannot be undone." : `Delete the ${count} scenarios in Recently deleted for good? This cannot be undone.`);
+    if (window.confirm(question)) run(() => emptyTrash(kind));
+  };
+  const description = trash.keepCount
+    ? (kind === "game"
+      ? `Deleted games can be restored for ${trash.keepDays} days, while they are among the last ${trash.keepCount} things you deleted.`
+      : `Deleted scenarios can be restored for ${trash.keepDays} days, while they are among the last ${trash.keepCount} things you deleted.`)
+    : (kind === "game"
+      ? `Deleted games can be restored for ${trash.keepDays} days, then they are deleted for good.`
+      : `Deleted scenarios can be restored for ${trash.keepDays} days, then they are deleted for good.`);
+
+  return (
+    <>
+      {rowError && (
+        <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "14px", color: "#fecaca", marginBottom: "0.9rem", padding: "0.8rem 0.9rem" }}>
+          {rowError}
+        </div>
+      )}
+      <MenuRow
+        action={(
+          <button className="oh-tap-row" disabled={busy} onClick={handleEmpty} style={touchFit({ ...actionButtonStyle, flexShrink: 0 }, touch)} type="button">
+            Empty
+          </button>
+        )}
+        description={description}
+        icon="🗑️"
+        title="Recently deleted"
+      >
+        {entries.map((entry) => (
+          <DeletedCard key={entry.entry} busy={busy} entry={entry} onRestore={(target) => run(() => restoreFromTrash(target.entry))} touch={touch} />
+        ))}
+      </MenuRow>
+    </>
   );
 };
 
@@ -1837,6 +1950,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The open scenario's Stats sheet failed to download: Save leaves it alone.
   const [editorStatsFailed, setEditorStatsFailed] = useState(false);
   const [editorError, setEditorError] = useState(null);
+  // What delete moved to the trash (GET /api/trash), for the Recently deleted
+  // shelves and the delete confirmation. null until it loads, and where the
+  // store will not serve it: the shelves then stay hidden.
+  const [trash, setTrash] = useState(null);
+  const refreshTrash = () => listTrash().then(setTrash, () => setTrash(null));
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
@@ -1852,6 +1970,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     }
   }, [loaded]);
 
+  // Read each time the menu opens: a delete, a restore and the startup purge
+  // all change it.
+  useEffect(() => {
+    if (menuOpen) refreshTrash();
+  }, [menuOpen]);
   const resetEditor = () => {
     setEditorKind(null);
     setEditorDetails(null);
@@ -2786,7 +2909,16 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       return;
     }
 
-    if (!window.confirm(`Delete ${editorKind} "${record.name}"?`)) {
+    // Where the trash can be listed, the question says how long the item can
+    // be restored from the Recently deleted shelf.
+    const question = editorKind === "scenario"
+      ? (!trash ? `Delete the scenario "${record.name}"?`
+        : trash.keepCount ? `Delete the scenario "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days, while it is among the last ${trash.keepCount} things you deleted.`
+          : `Delete the scenario "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days.`)
+      : (!trash ? `Delete the game "${record.name}"?`
+        : trash.keepCount ? `Delete the game "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days, while it is among the last ${trash.keepCount} things you deleted.`
+          : `Delete the game "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days.`);
+    if (!window.confirm(question)) {
       return;
     }
 
@@ -2800,6 +2932,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         await removeGame(record.id);
       }
       resetEditor();
+      refreshTrash();
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -3476,7 +3609,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The open tab's own actions: in the bar on a desktop, heading the page on a
   // phone. The Community tab brings its own.
   const tabActions = activeTab === "community" ? [] : [
-    { icon: "refresh", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
+    { icon: "refresh", label: "Refresh", run: () => { refreshTrash(); refreshLibraryCatalog({ force: true }).catch(() => {}); } },
     activeTab === "scenarios"
       ? { icon: "import", label: "Import Scenario", phoneLabel: "Import Scenario", run: () => importScenarioInputRef.current?.click() }
       : { icon: "import", label: "Import Game", phoneLabel: "Import Game", run: () => importGameInputRef.current?.click() },
@@ -4025,7 +4158,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 <CommunityPanel fullPage onPlay={handleScenarioPlay} />
               </Suspense>
             ) : activeTab === "games" ? (
-              loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
+              <>
+              {loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
                 <div style={{ alignItems: "center", display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "60vh", textAlign: "center" }}>
                   <img alt="" src="/logo.png" style={{ height: "5rem", marginBottom: "1.2rem", opacity: 0.9, width: "5rem" }} />
                   <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.02em" }}>No games yet</div>
@@ -4099,7 +4233,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     </MenuRow>
                   )}
                 </>
-              )
+              )}
+              <RecentlyDeletedRow kind="game" onChanged={refreshTrash} trash={trash} />
+              </>
             ) : (
               <>
                 <MenuRow description="Your most active scenarios." emptyText="No scenarios yet." icon="🔥" title="Most Played">
@@ -4148,6 +4284,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     />
                   ))}
                 </MenuRow>
+                <RecentlyDeletedRow kind="scenario" onChanged={refreshTrash} trash={trash} />
               </>
             )}
             </div>

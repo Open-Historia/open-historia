@@ -25,6 +25,7 @@ const IDB_STUB = `
 export const STORES = {
   scenarios: "scenarios", games: "games", mapeditorDocs: "mapeditorDocs", basemapMeta: "basemapMeta",
   basemapPayload: "basemapPayload", flags: "flags", kv: "kv", scenarioMeta: "scenarioMeta", gameMeta: "gameMeta",
+  trash: "trash", trashMeta: "trashMeta",
 };
 const db = globalThis.__ohWebStoreTestDb;
 const table = (name) => { if (!db.has(name)) db.set(name, new Map()); return db.get(name); };
@@ -36,6 +37,14 @@ export const idbPut = async (store, value) => { table(store).set(store === "kv" 
 export const idbPutPair = async (storeA, valueA, storeB, valueB) => { await idbPut(storeA, valueA); await idbPut(storeB, valueB); };
 export const idbDelete = async (store, key) => { table(store).delete(key); };
 export const idbDeletePair = async (storeA, storeB, key) => { table(storeA).delete(key); table(storeB).delete(key); };
+export const idbMovePair = async (fromRecords, fromIndex, key, toRecords, toIndex, build) => {
+  const record = copy(table(fromRecords).get(key));
+  if (record === undefined) return null;
+  const [nextRecord, nextIndex] = build(record);
+  table(fromRecords).delete(key); table(fromIndex).delete(key);
+  await idbPut(toRecords, nextRecord); await idbPut(toIndex, nextIndex);
+  return copy(nextIndex);
+};
 export const kvGet = async (key, fallback = null) => { const record = table("kv").get(key); return record ? copy(record.value) : fallback; };
 export const kvPut = (key, value) => idbPut("kv", { key, value });
 export const kvUpdate = async (key, updater, fallback = null) => {
@@ -577,4 +586,86 @@ test("making a game active from inside a runtime write does not wait on itself",
   assert.equal(after.games.length, 1);
   assert.equal(after.activeGame.playCount, 1);
   assert.deepEqual(ok(await runtime("GET", "flags")), { Testland: "made.png" });
+});
+
+// ---- Recently deleted -------------------------------------------------------
+// Deleting a game or scenario used to remove its records outright, while the
+// desktop keeps it in .trash. It now moves into the trash store for a week, the
+// last five at most.
+const trash = (method, path, query = "") => store.handleTrash({ method, segments: path.split("/").filter(Boolean), query: new URLSearchParams(query) })
+  .then(async (response) => ({ status: response.status, data: JSON.parse(await response.text()) }));
+
+test("a deleted game is listed, and restored under its id with its events", async () => {
+  await reset();
+  const id = await newGame("The Saga");
+  ok(await runtime("PUT", "events", [{ id: "e1" }, { id: "e2" }]));
+  ok(await games("DELETE", id));
+  assert.equal((await library()).games.some((game) => game.id === id), false);
+
+  const listed = ok(await trash("GET", ""));
+  assert.equal(listed.keepDays, 7);
+  assert.equal(listed.keepCount, 5);
+  assert.equal(listed.entries.length, 1);
+  const [entry] = listed.entries;
+  assert.equal(entry.kind, "game");
+  assert.equal(entry.id, id);
+  assert.equal(entry.name, "The Saga");
+  assert.equal(entry.scenarioId, "default");
+  assert.ok(!Number.isNaN(Date.parse(entry.deletedAt)));
+
+  const restored = ok(await trash("POST", `${encodeURIComponent(entry.entry)}/restore`));
+  assert.deepEqual({ id: restored.id, kind: restored.kind }, { id, kind: "game" });
+  const game = restored.library.games.find((row) => row.id === id);
+  assert.equal(game.name, "The Saga");
+  assert.equal(game.eventCount, 2);
+  assert.equal(ok(await trash("GET", "")).entries.length, 0);
+});
+
+test("a scenario restored after its id was reused comes back beside it, not over it", async () => {
+  await reset();
+  const first = ok(await scenarios("POST", "", { id: "vinland", name: "Vinland" })).scenario.id;
+  ok(await scenarios("DELETE", first));
+  ok(await scenarios("POST", "", { id: "vinland", name: "New Vinland" }));
+  const [entry] = ok(await trash("GET", "")).entries;
+  const restored = ok(await trash("POST", `${encodeURIComponent(entry.entry)}/restore`));
+  assert.equal(restored.id, "vinland-2");
+  const names = Object.fromEntries(restored.library.scenarios.map((scenario) => [scenario.id, scenario.name]));
+  assert.equal(names.vinland, "New Vinland");
+  assert.equal(names["vinland-2"], "Vinland");
+  assert.equal(ok(await scenarios("GET", "vinland-2")).scenario.name, "Vinland");
+});
+
+test("the trash keeps the last five, and nothing older than a week", async () => {
+  await reset();
+  const ids = [];
+  for (let n = 1; n <= 6; n += 1) {
+    ids.push(await newGame(`Game ${n}`));
+    ok(await games("DELETE", ids.at(-1)));
+    // One millisecond apart at least, so the order is the order of deletion.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  let entries = ok(await trash("GET", "")).entries;
+  assert.deepEqual(entries.map((entry) => entry.id), ids.slice(1).reverse(), "the first one deleted went first");
+  assert.equal(db.get("trash").size, 5, "its record went with it");
+
+  const oldest = db.get("trashMeta").get(entries.at(-1).entry);
+  oldest.deletedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  entries = ok(await trash("GET", "")).entries;
+  assert.equal(entries.length, 4);
+  assert.equal(db.get("trash").has(oldest.id), false);
+});
+
+test("emptying the games shelf leaves the deleted scenarios", async () => {
+  await reset();
+  ok(await games("DELETE", await newGame("Gone")));
+  ok(await scenarios("DELETE", ok(await scenarios("POST", "", { name: "Also Gone" })).scenario.id));
+  assert.deepEqual(ok(await trash("DELETE", "", "kind=game")), { removed: 1 });
+  const entries = ok(await trash("GET", "")).entries;
+  assert.deepEqual(entries.map((entry) => entry.kind), ["scenario"]);
+  assert.deepEqual(ok(await trash("DELETE", "")), { removed: 1 });
+  assert.equal(db.get("trash").size, 0);
+
+  const missing = await trash("POST", "game-nothing-1/restore");
+  assert.equal(missing.status, 400);
+  assert.match(missing.data.error, /Not in the trash/);
 });

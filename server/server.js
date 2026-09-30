@@ -26,7 +26,9 @@ import {
   importGameBundle,
   importScenarioBundle,
   listTrash,
+  purgeOldTrash,
   restoreFromTrash,
+  TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
@@ -258,6 +260,13 @@ ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
+// What was deleted more than TRASH_KEEP_DAYS ago goes for good.
+try {
+  const purged = purgeOldTrash();
+  if (purged.removed) console.log(`[trash] deleted ${purged.removed} item(s) older than ${TRASH_KEEP_DAYS} days for good`);
+} catch (error) {
+  console.warn(`[trash] purge failed: ${error.message}`);
+}
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -882,7 +891,7 @@ const refuseRemoteTrash = (req, res) => {
 app.get("/api/trash", (req, res) => {
   if (refuseRemoteTrash(req, res)) return;
   try {
-    res.json({ entries: listTrash() });
+    res.json({ entries: listTrash(), keepDays: TRASH_KEEP_DAYS });
   } catch (error) {
     sendError(res, 500, error);
   }
@@ -900,7 +909,7 @@ app.post("/api/trash/:entry/restore", (req, res) => {
 app.delete("/api/trash", (req, res) => {
   if (refuseRemoteTrash(req, res)) return;
   try {
-    res.json(emptyTrash());
+    res.json(emptyTrash({ kind: ["game", "scenario"].includes(req.query.kind) ? req.query.kind : "" }));
   } catch (error) {
     sendError(res, 500, error);
   }

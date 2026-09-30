@@ -107,3 +107,55 @@ test("emptying the trash deletes every entry for good, and an entry outside it i
   assert.match(result.refused, /Invalid trash entry/);
   assert.match(result.missing, /Not in the trash/);
 });
+
+test("at startup what was deleted over 30 days ago goes for good, and an undated entry starts its 30 days now", () => {
+  const result = run(`
+    store.createScenario({ id: "vinland", name: "Vinland" });
+    store.createGame({ id: "old", scenarioId: "vinland" });
+    store.createGame({ id: "recent", scenarioId: "vinland" });
+    store.deleteGame("old");
+    store.deleteGame("recent");
+    const trashDir = path.join(dataDir, ".trash");
+    const day = 24 * 60 * 60 * 1000;
+    const marker = (entry) => path.join(trashDir, entry, ".deleted.json");
+    const stamp = (entry, at) => fs.writeFileSync(marker(entry), JSON.stringify({ ...JSON.parse(fs.readFileSync(marker(entry), "utf-8")), deletedAt: new Date(at).toISOString() }));
+    stamp("game-old", Date.now() - 31 * day);
+    stamp("game-recent", Date.now() - 29 * day);
+    // Deleted before deletes were dated: no marker, and files last changed long ago.
+    fs.mkdirSync(path.join(trashDir, "scenario-legacy"));
+    fs.writeFileSync(path.join(trashDir, "scenario-legacy", "scenario.json"), JSON.stringify({ name: "Legacy" }));
+    fs.utimesSync(path.join(trashDir, "scenario-legacy"), new Date(0), new Date(0));
+    // Not an entry of ours: left alone.
+    fs.mkdirSync(path.join(trashDir, "stray"));
+    const purged = store.purgeOldTrash();
+    const legacy = JSON.parse(fs.readFileSync(marker("scenario-legacy"), "utf-8"));
+    const left = fs.readdirSync(trashDir).sort();
+    const later = store.purgeOldTrash({ now: Date.now() + 31 * day });
+    ${report(`{ purged, left, legacy, later, keepDays: store.TRASH_KEEP_DAYS, finally: fs.readdirSync(trashDir).sort() }`)}
+  `);
+  assert.equal(result.keepDays, 30);
+  assert.equal(result.purged.removed, 1);
+  assert.ok(result.purged.bytes > 0);
+  assert.deepEqual(result.left, ["game-recent", "scenario-legacy", "stray"]);
+  assert.equal(result.legacy.kind, "scenario");
+  assert.equal(result.legacy.id, "legacy");
+  assert.ok(Date.now() - Date.parse(result.legacy.deletedAt) < 60_000, "dated when first seen, not from its files' age");
+  assert.equal(result.later.removed, 2);
+  assert.deepEqual(result.finally, ["stray"]);
+});
+
+test("each shelf empties its own kind", () => {
+  const result = run(`
+    store.createScenario({ id: "vinland", name: "Vinland" });
+    store.createScenario({ id: "markland", name: "Markland" });
+    store.createGame({ id: "one", scenarioId: "vinland" });
+    store.deleteGame("one");
+    store.deleteScenario("markland");
+    const listed = store.listTrash().map((entry) => entry.entry).sort();
+    const emptied = store.emptyTrash({ kind: "game" });
+    ${report(`{ listed, emptied: emptied.removed, left: store.listTrash().map((entry) => entry.kind) }`)}
+  `);
+  assert.deepEqual(result.listed, ["game-one", "scenario-markland"]);
+  assert.equal(result.emptied, 1);
+  assert.deepEqual(result.left, ["scenario"]);
+});
