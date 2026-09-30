@@ -147,12 +147,13 @@ test("a restore point changed under the same id is written again", () => {
 });
 
 test("restore points without ids, or sharing one, each keep a file of their own", () => {
-  const legacy = [{ round: 2, state: { n: 2 } }, { round: 1, state: { n: 1 } }, { id: "x/../y", round: 0, state: { n: 0 } }, { id: "dup", state: { n: -1 } }, { id: "dup", state: { n: -2 } }];
+  const legacy = [{ round: 2, state: { n: 2 } }, { round: 1, state: { n: 1 } }, { id: "x/../y", round: 0, state: { n: 0 } }, { id: "NUL", state: { n: 9 } }, { id: "dup", state: { n: -1 } }, { id: "dup", state: { n: -2 } }];
   const root = buildDataDir({ legacy });
   const result = runStore(root, report(`{ list: store.readRuntimeJsonAsset("snapshots").data }`));
   assert.deepEqual(result.list, legacy);
-  assert.equal(filesOf(root).length, 5);
+  assert.equal(filesOf(root).length, 6);
   assert.ok(filesOf(root).every((name) => /^[A-Za-z0-9_-]+\.json$/.test(name)), "no id reaches a file name unchecked");
+  assert.equal(filesOf(root).includes("NUL.json"), false, "nor a name Windows keeps for a device");
 });
 
 test("a snapshots.json that does not parse reads as none and is kept aside, not deleted", () => {

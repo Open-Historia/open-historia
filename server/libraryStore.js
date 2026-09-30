@@ -3253,8 +3253,9 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
 // renamed out of the way rather than deleted.
 const RESTORE_POINT_INDEX_VERSION = 2;
 const restorePointDirectory = (gameId) => path.join(getGameDirectory(gameId), RESTORE_POINT_DIR);
+// Plain ids only, and none Windows keeps for devices (CON, NUL, COM1…).
 const restorePointFileFor = (id, attempt) => {
-  const base = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : "restore-point";
+  const base = /^[A-Za-z0-9_-]{1,80}$/.test(id) && !/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(id) ? id : "restore-point";
   return attempt ? `${base}-${attempt}.json` : `${base}.json`;
 };
 
