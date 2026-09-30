@@ -396,6 +396,19 @@ const mergeClaimRows = (...rowGroups) => {
   return merged;
 };
 
+// The structured rows that actually drive completeness for one event. Exported
+// for the bounded Political World repair pass so it uses the validator's exact
+// semantic scope instead of reparsing error prose or inventing a second effect
+// classifier. Legacy/CSE events intentionally return no rows here.
+export const politicalCompletenessRowsForEvent = (claimContext, event) => {
+  const structured = claimContext?.mode === "structured" && !claimContext?.legacyEvents?.has?.(event);
+  if (!structured) return [];
+  return mergeClaimRows(
+    declaredPoliticalClaimRows(claimContext, event),
+    operationDerivedClaimRows(event),
+  );
+};
+
 const structuredPoliticalImpactCompletenessIssue = (event, { world = null, claimRows = [] } = {}) => {
   for (const claim of list(claimRows)) {
     const polityKey = clean(claim?.polityKey);
@@ -958,16 +971,25 @@ const worldAfterPoliticalOps = (world, event) => {
   return next;
 };
 
-export const validatePoliticalImpactCompleteness = (candidate, { world = null, claimContext = null } = {}) => {
+export const politicalImpactCompletenessFailure = (candidate, { world = null, claimContext = null } = {}) => {
   const claims = claimContext || preparePoliticalClaimContext(candidate);
-  if (claims?.error) return claims.error;
+  if (claims?.error) {
+    return {
+      event: null,
+      eventIndex: -1,
+      claimRows: [],
+      issue: { kind: "claim-ledger", expected: [], message: claims.error },
+    };
+  }
   const structuredClaims = claims?.mode === "structured";
 
   let validationWorld = cloneWorld(world);
-  for (const event of list(candidate?.events)) {
+  const events = list(candidate?.events);
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const event = events[eventIndex];
     const eventUsesStructuredClaims = structuredClaims && !claims?.legacyEvents?.has?.(event);
     const claimRows = eventUsesStructuredClaims
-      ? mergeClaimRows(declaredPoliticalClaimRows(claims, event), operationDerivedClaimRows(event))
+      ? politicalCompletenessRowsForEvent(claims, event)
       : [];
     const claimsLeadershipChange = claimRows.some((row) => list(row?.effects).includes("leadership"));
     // The vacancy repair may read prose to identify WHICH known officeholder left,
@@ -982,8 +1004,12 @@ export const validatePoliticalImpactCompleteness = (candidate, { world = null, c
       structuredClaims: eventUsesStructuredClaims,
       claimRows,
     });
-    if (issue) return issue.message;
+    if (issue) return { event, eventIndex, claimRows, issue };
     validationWorld = worldAfterPoliticalOps(validationWorld, event);
   }
-  return "";
+  return null;
 };
+
+export const validatePoliticalImpactCompleteness = (candidate, options = {}) => (
+  politicalImpactCompletenessFailure(candidate, options)?.issue?.message || ""
+);
