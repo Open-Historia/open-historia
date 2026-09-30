@@ -2861,7 +2861,13 @@ const WorldMap = ({ isGlobe = false }) => {
     const begin = () => {
       if (cancelled) return;
       // No style (a lost WebGL context) or no regions source yet waits a frame.
-      if (!mapInstance.style || (customFlag && !mapInstance.getSource?.("custom-regions-source"))) {
+      // So do the stock tiles once they are to be mounted: nothing else reruns
+      // this when they arrive, and at close zoom they draw a re-ownership map.
+      if (
+        !mapInstance.style
+        || (customFlag && !mapInstance.getSource?.("custom-regions-source"))
+        || (shouldMountStockRegions && !mapInstance.getSource?.("regions-source"))
+      ) {
         frame = requestAnimationFrame(begin);
         return;
       }
@@ -2905,7 +2911,7 @@ const WorldMap = ({ isGlobe = false }) => {
       cancelled = true;
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [customFillSourceEpoch, customFlag, map, ownerByRegionId, regionTypeZoom, repairedRegionIdSet, tileFillSourceEpoch, typedRegionStyles]);
+  }, [customFillSourceEpoch, customFlag, map, ownerByRegionId, regionTypeZoom, repairedRegionIdSet, shouldMountStockRegions, tileFillSourceEpoch, typedRegionStyles]);
 
   const stockRegionsFillPaint = useMemo(
     () => customActive
