@@ -84,3 +84,68 @@ test("an Update whose new version has no basemap still clears the old one", () =
   update(root, newVersion(null));
   assert.equal(existsSync(path.join(dir, "background.json")), false);
 });
+
+// ---- the reference is kept, and the basemap put in place when it arrives -------
+const COMMUNITY_REF = { mode: "communityRef", via: "image", hash: "abc", url: "https://github.com/user-attachments/assets/basemap.png", fileName: "background.json" };
+
+const inStore = (root, body) => {
+  const script = `const store = await import(${JSON.stringify(STORE_URL)});\nconst out = await (async () => { ${body} })();\nprocess.stdout.write("\\n@@" + JSON.stringify(out));`;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf-8",
+    env: { ...process.env, OH_DATA_DIR: root },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return JSON.parse(out.slice(out.lastIndexOf("\n@@") + 3));
+};
+
+test("an import whose basemap could not be downloaded keeps the reference, exports it, and takes the basemap later without counting as an edit", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "oh-missing-bg-"));
+  roots.push(root);
+  const bundle = newVersion({ ...COMMUNITY_REF, missingReason: "Download failed (HTTP 502)." });
+  bundle.data.world.background = IMAGE_DESCRIPTOR;
+  const result = inStore(root, `
+    const imported = store.importScenarioBundle(${JSON.stringify(bundle)});
+    const id = imported.scenario.id;
+    const listed = store.getScenarioCatalog().scenarios.find((scenario) => scenario.id === id);
+    const exported = store.exportScenarioBundle(id).assets.backgroundData;
+    const restored = store.restoreScenarioBasemap(id, { dataUrl: ${JSON.stringify(BACKGROUND.dataUrl)} });
+    let again = "";
+    try { store.restoreScenarioBasemap(id, { dataUrl: ${JSON.stringify(BACKGROUND.dataUrl)} }); } catch (error) { again = error.message; }
+    return { id, hadFile: imported.assetStatus.backgroundData, missing: listed.missingBasemap, exported, restored: { file: restored.assetStatus.backgroundData, missing: restored.scenario.missingBasemap ?? null, editedAt: restored.scenario.hubOrigin?.editedAt ?? null, background: restored.data.world.background }, again };
+  `);
+  assert.equal(result.hadFile, false);
+  assert.deepEqual(result.missing, { reference: COMMUNITY_REF, background: IMAGE_DESCRIPTOR, reason: "Download failed (HTTP 502)." });
+  assert.deepEqual(result.exported, COMMUNITY_REF, "the next import tries the download too");
+  assert.equal(result.restored.file, true);
+  assert.equal(result.restored.missing, null);
+  assert.equal(result.restored.editedAt, null, "the copy still follows its post");
+  assert.deepEqual(result.restored.background, IMAGE_DESCRIPTOR);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "scenarios", result.id, "background.json"), "utf-8")), BACKGROUND);
+  assert.match(result.again, /not waiting for a basemap/);
+});
+
+test("an Update records the new version's missing basemap, and one that brings it clears the record", () => {
+  const { root } = buildDataDir();
+  const missing = inStore(root, `
+    store.updateScenarioFromBundle("hub-copy", ${JSON.stringify(newVersion({ ...COMMUNITY_REF, missingReason: "Not found on the hub." }))});
+    return store.getScenarioCatalog().scenarios.find((scenario) => scenario.id === "hub-copy").missingBasemap;
+  `);
+  assert.equal(missing.reference.url, COMMUNITY_REF.url);
+  assert.equal(missing.reason, "Not found on the hub.");
+  const cleared = inStore(root, `
+    store.updateScenarioFromBundle("hub-copy", ${JSON.stringify(newVersion({ mode: "embedded", data: BACKGROUND, contentType: "application/json", fileName: "background.json" }))});
+    return store.getScenarioCatalog().scenarios.find((scenario) => scenario.id === "hub-copy").missingBasemap ?? null;
+  `);
+  assert.equal(cleared, null);
+});
+
+test("a basemap the player sets themselves replaces the one still missing", () => {
+  const { root } = buildDataDir();
+  const missing = inStore(root, `
+    store.updateScenarioFromBundle("hub-copy", ${JSON.stringify(newVersion({ ...COMMUNITY_REF, missingReason: "Not found on the hub." }))});
+    const before = Boolean(store.getScenarioDetails("hub-copy").scenario.missingBasemap);
+    store.uploadScenarioAsset("hub-copy", "backgroundData", Buffer.from(JSON.stringify({ dataUrl: "data:image/png;base64,T0xE" })));
+    return { before, after: store.getScenarioDetails("hub-copy").scenario.missingBasemap ?? null };
+  `);
+  assert.deepEqual(missing, { before: true, after: null });
+});

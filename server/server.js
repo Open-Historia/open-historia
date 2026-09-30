@@ -28,6 +28,7 @@ import {
   listTrash,
   purgeOldTrash,
   restoreFromTrash,
+  restoreScenarioBasemap,
   TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
@@ -718,6 +719,16 @@ app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
 app.put("/api/scenarios/:scenarioId/import", largeJsonParser, (req, res) => {
   try {
     res.json(updateScenarioFromBundle(req.params.scenarioId, req.body ?? {}));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// The community basemap an import or Update could not download, downloaded
+// since: { payload: { dataUrl } | { geojson } }.
+app.put("/api/scenarios/:scenarioId/basemap", largeJsonParser, (req, res) => {
+  try {
+    res.json(restoreScenarioBasemap(req.params.scenarioId, req.body?.payload));
   } catch (error) {
     sendError(res, 400, error);
   }

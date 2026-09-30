@@ -64,6 +64,14 @@ test("an unedited copy of an older file can update; an edited one, another post'
   assert.equal(hubUpdateAvailable(copy("f", { postId: 12, bundleUrl: OLD }), null), false, "a post off the list offers nothing");
 });
 
+test("a current copy whose community basemap could not be downloaded offers Update until it has it", () => {
+  const missingBasemap = { reference: { mode: "communityRef", url: "https://github.com/user-attachments/assets/basemap.png" } };
+  const current = { ...copy("g", { postId: 12, bundleUrl: NEW }), missingBasemap };
+  assert.equal(hubUpdateAvailable(current, hubPost), true);
+  assert.deepEqual(hubCopyStatus([current], hubPost), { status: "update", copy: current });
+  assert.equal(hubUpdateAvailable({ ...current, hubOrigin: { ...current.hubOrigin, editedAt: "2026-09-02T00:00:00.000Z" } }, hubPost), false, "never over the player's edits");
+});
+
 test("the library's copies are grouped by post, and a card says what the library holds", () => {
   const mine = copy("mine", null);
   const edited = copy("edited", { postId: 12, bundleUrl: OLD, editedAt: "2026-09-03T00:00:00.000Z" }, "2026-09-05T00:00:00.000Z");

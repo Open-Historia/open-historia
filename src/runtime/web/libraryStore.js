@@ -8,7 +8,7 @@
 import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPutPair, idbDeletePair, idbMovePair, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
 import { serializeByKey, serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
-import { importedGameScenarioId } from "../../../server/hubProvenance.js";
+import { importedGameScenarioId, missingBasemapOfBundle } from "../../../server/hubProvenance.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
   parseJsonValue, serializeJsonValue,
@@ -26,7 +26,7 @@ import {
   normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
   fetchableHubOrigin, hubOriginAfterWrite, normalizeHubPublished, normalizeHubReviews,
   GAME_BUNDLE_SCHEMA, ACCEPTED_GAME_BUNDLE_SCHEMAS, GAME_BUNDLE_DATA_KEYS,
-  OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS,
+  OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS, missingBasemapField,
 } from "./models.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
 // Imported, not mirrored: server/ownerMigration.js is pure ESM with no node
@@ -158,6 +158,11 @@ const writeScenarioMeta = (record, updates = {}, { touch = true } = {}) => {
     id: record.id,
     updatedAt: touch ? nowIso() : current.updatedAt,
   };
+  // null clears it (the basemap arrived); anything else is normalised.
+  delete next.missingBasemap;
+  Object.assign(next, missingBasemapField(
+    Object.prototype.hasOwnProperty.call(updates, "missingBasemap") ? updates.missingBasemap : current.missingBasemap,
+  ));
   record.meta = next;
   return next;
 };
@@ -1420,6 +1425,10 @@ const validateImageContentType = (contentType) => {
   return normalized;
 };
 
+// A basemap the player sets or clears themselves replaces one the import could
+// not download, which landing later would overwrite (server twin).
+const BASEMAP_CHOSEN = { missingBasemap: null };
+
 const uploadScenarioAsset = async (id, key, bytes, contentType) => {
   const record = await getScenario(id);
   if (!record) throw new Error(`Scenario not found: ${id}`);
@@ -1438,7 +1447,7 @@ const uploadScenarioAsset = async (id, key, bytes, contentType) => {
     writeScenarioMeta(record, {});
   } else { // geojson
     record.geojson = { ...record.geojson, [key]: new TextDecoder().decode(bytes) };
-    writeScenarioMeta(record, {});
+    writeScenarioMeta(record, key === "backgroundData" ? BASEMAP_CHOSEN : {});
   }
   await putScenario(record);
   return getScenarioDetails(id);
@@ -1450,7 +1459,7 @@ const removeScenarioAsset = async (id, key) => {
   if (key === COVER_IMAGE_ASSET_KEY) { record.cover = undefined; writeScenarioMeta(record, { coverImageContentType: null }); }
   else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) { delete record[key]; writeScenarioMeta(record, {}); }
   else if (PMTILES_ASSET_KEYS.includes(key)) { if (record.pmtiles) delete record.pmtiles[key]; writeScenarioMeta(record, {}); }
-  else if (SCENARIO_GEOJSON_ASSET_KEYS.includes(key)) { if (record.geojson) delete record.geojson[key]; writeScenarioMeta(record, {}); }
+  else if (SCENARIO_GEOJSON_ASSET_KEYS.includes(key)) { if (record.geojson) delete record.geojson[key]; writeScenarioMeta(record, key === "backgroundData" ? BASEMAP_CHOSEN : {}); }
   await putScenario(record);
   return getScenarioDetails(id);
 };
@@ -1537,6 +1546,9 @@ const exportScenarioBundle = async (id) => {
       ? { contentType: "application/json", data: parseJsonValue(record.geojson[key], null), fileName, mode: "embedded" }
       : { fileName, mode: "default" };
   }
+  // A basemap still missing travels as the reference it arrived as, so the
+  // next import tries the download too (server twin).
+  if (record.geojson?.backgroundData === undefined && meta.missingBasemap) assets.backgroundData = { ...meta.missingBasemap.reference };
   for (const [key, fileName] of [["cities", "cities.pmtiles"], ["countries", "countries.pmtiles"], ["regions", "regions.pmtiles"]]) {
     assets[key] = record.pmtiles?.[key] !== undefined
       ? { contentType: "application/octet-stream", data: bytesToBase64(record.pmtiles[key]), encoding: "base64", fileName, mode: "embedded" }
@@ -1604,9 +1616,12 @@ const importScenarioBundle = async (bundle) => {
     if (!UPLOADABLE_SCENARIO_ASSET_KEYS.includes(key)) continue;
     await applyScenarioBundleAsset(newId, key, descriptor);
   }
-  if (hubOrigin) {
+  // A community basemap the game could not download is kept as its reference,
+  // so opening the scenario later can try again (server twin).
+  const missingBasemap = missingBasemapOfBundle(bundle);
+  if (hubOrigin || missingBasemap) {
     const record = await getScenario(newId);
-    writeScenarioMeta(record, { hubOrigin });
+    writeScenarioMeta(record, { ...(hubOrigin ? { hubOrigin } : {}), ...(missingBasemap ? { missingBasemap } : {}) });
     await putScenario(record);
   }
   await setSelectedScenario(newId);
@@ -1659,11 +1674,38 @@ const updateScenarioFromBundle = async (scenarioId, bundle) => {
     await applyScenarioBundleAsset(scenarioId, key, (bundle.assets ?? {})[key]);
   }
 
-  if (hubOrigin) {
-    const record = await getScenario(scenarioId);
-    writeScenarioMeta(record, { hubOrigin });
-    await putScenario(record);
-  }
+  // The new version's basemap reference while it is still missing, so the
+  // download is tried again and the copy keeps offering Update; cleared when
+  // this version brought its basemap (server twin).
+  const record = await getScenario(scenarioId);
+  writeScenarioMeta(record, { ...(hubOrigin ? { hubOrigin } : {}), missingBasemap: missingBasemapOfBundle(bundle) }, { touch: Boolean(hubOrigin) });
+  await putScenario(record);
+  return getScenarioDetails(scenarioId);
+};
+
+// A basemap payload as background.json holds it: { dataUrl } for an image,
+// { geojson } for a vector map (server twin: basemapPayloadOf).
+const basemapPayloadOf = (payload) => {
+  if (typeof payload?.dataUrl === "string" && /^data:image\//i.test(payload.dataUrl)) return { dataUrl: payload.dataUrl };
+  if (payload?.geojson && typeof payload.geojson === "object" && !Array.isArray(payload.geojson)) return { geojson: payload.geojson };
+  throw new Error("That basemap has no image or map in it.");
+};
+
+// The community basemap an import or Update could not download, downloaded
+// since (server twin: restoreScenarioBasemap). Not an edit: a downloaded copy
+// stays unedited and keeps following its post.
+const restoreScenarioBasemap = async (scenarioId, payload) => {
+  const record = await getScenario(scenarioId);
+  if (!record) throw new Error(`Scenario not found: ${scenarioId}`);
+  const { missingBasemap } = readScenarioMeta(scenarioId, record.meta ?? {});
+  if (!missingBasemap) throw new Error("This scenario is not waiting for a basemap.");
+  const data = basemapPayloadOf(payload);
+  record.geojson = { ...record.geojson, backgroundData: serializeJsonValue(data) };
+  const world = jsonAsset(record, "world");
+  const background = missingBasemap.background ?? world?.background ?? {};
+  record.json = { ...record.json, world: { ...world, background: { ...background, kind: data.geojson ? "vector" : "image" } } };
+  writeScenarioMeta(record, { missingBasemap: null }, { touch: false });
+  await putScenario(record);
   return getScenarioDetails(scenarioId);
 };
 
@@ -1889,6 +1931,7 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
       return null;
     }
     if (sub === "import" && method === "PUT") return jsonResponse(await updateScenarioFromBundle(id, body ?? {}));
+    if (sub === "basemap" && method === "PUT") return jsonResponse(await restoreScenarioBasemap(id, body?.payload));
     if (sub === "export" && method === "GET") return jsonResponse(await exportScenarioBundle(id));
     if (sub === "assets" && segments[2]) {
       const key = decodeURIComponent(segments[2]);

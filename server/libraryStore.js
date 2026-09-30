@@ -20,9 +20,11 @@ import {
   fetchableHubOrigin,
   hubOriginAfterWrite,
   importedGameScenarioId,
+  missingBasemapOfBundle,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeMissingBasemap,
 } from "./hubProvenance.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
@@ -820,6 +822,13 @@ const normalizePlayCount = (raw) => {
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 };
 
+// Only there while a basemap is missing (hubProvenance.js), so every other
+// scenario's record reads as it always has.
+const missingBasemapField = (raw) => {
+  const missingBasemap = normalizeMissingBasemap(raw);
+  return missingBasemap ? { missingBasemap } : {};
+};
+
 const readScenarioMeta = (scenarioId) => {
   const raw = readJsonFile(getScenarioMetaPath(scenarioId), {});
   const name = String(raw?.name ?? "").trim() || DEFAULT_SCENARIO_META.name;
@@ -843,6 +852,7 @@ const readScenarioMeta = (scenarioId) => {
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
     id: scenarioId,
+    ...missingBasemapField(raw?.missingBasemap),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -884,6 +894,11 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
     id: scenarioId,
     updatedAt: touch ? new Date().toISOString() : current.updatedAt,
   };
+  // null clears it (the basemap arrived); anything else is normalised.
+  delete next.missingBasemap;
+  Object.assign(next, missingBasemapField(
+    Object.prototype.hasOwnProperty.call(updates ?? {}, "missingBasemap") ? updates.missingBasemap : current.missingBasemap,
+  ));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   return next;
@@ -2861,6 +2876,11 @@ const deleteGame = (gameId) => {
   return getLibraryCatalog();
 };
 
+// A basemap the player sets or clears themselves (the Workshop, the editor)
+// replaces one the import could not download: that download is no longer
+// wanted, and landing later it would overwrite their choice.
+const BASEMAP_CHOSEN = { missingBasemap: null };
+
 const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "") => {
   ensureScenarioStore();
 
@@ -2880,7 +2900,7 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
     scenarioId,
     assetKey === COVER_IMAGE_ASSET_KEY
     ? { coverImageContentType: normalizeImageContentType(contentType) }
-    : {},
+    : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -2899,7 +2919,7 @@ const removeScenarioAsset = (scenarioId, assetKey) => {
   removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
   writeScenarioMeta(
     scenarioId,
-    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : {},
+    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -3832,7 +3852,11 @@ const exportScenarioBundle = (scenarioId) => {
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson"),
       // The custom map background travels with the scenario (always embedded, like
       // the geometry) so a shared/imported custom map isn't blank.
-      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData"),
+      // A basemap still missing travels as the reference it arrived as, so the
+      // next import tries the download too.
+      backgroundData: !fs.existsSync(getScenarioUploadPath(scenarioId, "backgroundData")) && summary.missingBasemap
+        ? { ...summary.missingBasemap.reference }
+        : buildScenarioBundleAsset(scenarioId, "backgroundData"),
     },
     data: {
       actions: cloneJson(details.data.actions),
@@ -3919,7 +3943,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     applyScenarioBundleAsset(scenarioId, assetKey, assetValue);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // A community basemap the game could not download is kept as its reference,
+  // so opening the scenario later can try again (src/runtime/missingBasemap.js).
+  const missingBasemap = missingBasemapOfBundle(bundle);
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), ...(missingBasemap ? { missingBasemap } : {}) });
 
   if (setSelected) {
     setSelectedScenario(scenarioId);
@@ -4034,8 +4061,43 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
     applyScenarioBundleAsset(scenarioId, assetKey, assets[assetKey]);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // The new version's basemap reference while it is still missing, so the
+  // download is tried again and the copy keeps offering Update; cleared when
+  // this version brought its basemap.
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), missingBasemap: missingBasemapOfBundle(bundle) });
 
+  return getScenarioDetails(scenarioId);
+};
+
+// A basemap payload as background.json holds it: { dataUrl } for an image,
+// { geojson } for a vector map. Mirrored by the web store.
+const basemapPayloadOf = (payload) => {
+  if (typeof payload?.dataUrl === "string" && /^data:image\//i.test(payload.dataUrl)) return { dataUrl: payload.dataUrl };
+  if (payload?.geojson && typeof payload.geojson === "object" && !Array.isArray(payload.geojson)) return { geojson: payload.geojson };
+  throw new Error("That basemap has no image or map in it.");
+};
+
+// The community basemap an import or Update could not download
+// (meta.missingBasemap), downloaded since: the game tries again when the
+// scenario is opened (src/runtime/missingBasemap.js). The world takes the
+// background description of the version that referenced it. Not an edit: a
+// downloaded copy stays unedited and keeps following its post.
+const restoreScenarioBasemap = (scenarioId, payload) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  const { missingBasemap } = readScenarioMeta(scenarioId);
+  if (!missingBasemap) throw new Error("This scenario is not waiting for a basemap.");
+  const data = basemapPayloadOf(payload);
+
+  const targetPath = getScenarioUploadPath(scenarioId, "backgroundData");
+  ensureDirectory(path.dirname(targetPath));
+  fs.writeFileSync(targetPath, JSON.stringify(data), "utf-8");
+  const worldPath = getScenarioJsonPath(scenarioId, "world");
+  const background = missingBasemap.background ?? readJsonFile(worldPath, {})?.background ?? {};
+  mergeJsonAsset(worldPath, { background: { ...background, kind: data.geojson ? "vector" : "image" } }, JSON_ASSET_DEFAULTS.world);
+  writeScenarioMeta(scenarioId, { missingBasemap: null }, { touch: false });
   return getScenarioDetails(scenarioId);
 };
 
@@ -4318,6 +4380,7 @@ export {
   listTrash,
   purgeOldTrash,
   restoreFromTrash,
+  restoreScenarioBasemap,
   TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,

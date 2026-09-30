@@ -60,6 +60,7 @@ import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runt
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runtime/communityBasemaps.js";
+import { noteMissingBasemapTried, retryMissingBasemap } from "../../runtime/missingBasemap.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
@@ -1894,6 +1895,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     games,
     loaded,
     loading,
+    runtimeScenario,
     scenarios,
     selectedScenarioId,
   } = useLibraryState();
@@ -1975,6 +1977,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   useEffect(() => {
     if (menuOpen) refreshTrash();
   }, [menuOpen]);
+
+  // A game played on a scenario whose community basemap could not be
+  // downloaded tries it again too (runtime/missingBasemap.js), once a session.
+  useEffect(() => {
+    if (runtimeScenario?.missingBasemap) retryMissingBasemap(runtimeScenario);
+  }, [runtimeScenario]);
+
   const resetEditor = () => {
     setEditorKind(null);
     setEditorDetails(null);
@@ -2018,6 +2027,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       setEditorKind("scenario");
       setEditorDetails(details);
       setEditorState(buildScenarioEditorState(details));
+      // Its community basemap, if the import could not download it: tried again
+      // once a session (runtime/missingBasemap.js). The details only when it
+      // lands, as for an uploaded asset: the form holds none.
+      retryMissingBasemap(details.scenario).then((retry) => {
+        if (!retry) return;
+        if (retry.restored) {
+          setEditorDetails((current) => (current?.scenario?.id === scenarioId ? retry.details : current));
+        } else {
+          setEditorError(`This scenario's community basemap could not be downloaded. ${retry.reason} The game tries again the next time you start it and open the scenario.`);
+        }
+      });
       adoptSavedStats(normalizeStatsEditorValue(statsAsset));
       setEditorStatsFailed(statsFailed);
       if (statsFailed) setEditorError("This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.");
@@ -2236,6 +2256,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPickerTab("country");
     setPickerGroups([]);
     setCountryPicker(scenario);
+    // A community basemap the import could not download is tried again (once a
+    // session), and shown in the picker when it lands.
+    retryMissingBasemap(scenario).then((retry) => {
+      if (retry?.restored && isCurrent()) loadPickerBackground(scenario.id, retry.details?.data?.world?.background, isCurrent);
+    });
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
@@ -2305,12 +2330,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const { downloadHubBundle } = await import("./communityHub.jsx");
       const bundle = await downloadHubBundle(post.bundleUrl);
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
-      await updateScenarioFromBundle(scenario.id, bundle);
+      const details = await updateScenarioFromBundle(scenario.id, bundle);
+      noteMissingBasemapTried(details?.scenario);
       // The stores keep the basemap the scenario had when the new one could not
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was updated, but its community basemap could not be downloaded (${missingBasemap}), so it keeps the basemap it had.`);
+        setEditorError(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
@@ -3046,13 +3072,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // here still fetches the community basemap it references.
       const bundle = await readScenarioBundleBytes(await file.arrayBuffer());
       const details = await importScenarioBundle(bundle);
+      // Not tried again straight away by the editor opening on it.
+      noteMissingBasemapTried(details.scenario);
       setActiveTab("scenarios");
       setMenuOpen(true);
       await openScenarioEditor(details.scenario.id);
       // Shown in the drawer that just opened on it.
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+        setEditorError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
       setEditorError(nextError.message);

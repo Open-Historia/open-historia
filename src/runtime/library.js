@@ -547,4 +547,17 @@ export const restoreFromTrash = async (entry) => {
 // kind "game" or "scenario" empties that shelf only.
 export const emptyTrash = async (kind) =>
   requestJson(`${TRASH_API_ROOT}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`, { method: "DELETE" });
+
+// A scenario's community basemap that could not be downloaded when it was
+// imported or updated, downloaded since (src/runtime/missingBasemap.js):
+// payload is { dataUrl } or { geojson }.
+export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
+    body: { payload },
+    method: "PUT",
+  });
+  await refreshLibraryCatalog({ force: true });
+  return details;
+};
+
 syncLibraryRuntime();

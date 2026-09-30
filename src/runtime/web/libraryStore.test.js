@@ -669,3 +669,67 @@ test("emptying the games shelf leaves the deleted scenarios", async () => {
   assert.equal(missing.status, 400);
   assert.match(missing.data.error, /Not in the trash/);
 });
+
+// ---- A community basemap that could not be downloaded -------------------------
+const COMMUNITY_REF = { mode: "communityRef", via: "image", hash: "abc", url: "https://github.com/user-attachments/assets/basemap.png", fileName: "background.json" };
+const HUB_ORIGIN = { postId: 7, bundleUrl: "https://github.com/user-attachments/files/1/hub-map.zip" };
+const bundleMissingBasemap = (name) => {
+  const bundle = scenarioBundle(name);
+  bundle.data.world.background = { kind: "image", extent: [-180, -85, 180, 85] };
+  bundle.assets.backgroundData = { ...COMMUNITY_REF, missingReason: "Download failed (HTTP 502)." };
+  bundle.hubOrigin = HUB_ORIGIN;
+  return bundle;
+};
+
+test("a basemap that could not be downloaded is kept as its reference, exported as one, and put in place later", async () => {
+  await reset();
+  const imported = ok(await scenarios("POST", "import", bundleMissingBasemap("Hub Map")));
+  const id = imported.scenario.id;
+  assert.equal(imported.assetStatus.backgroundData, false);
+  const listed = (await library()).scenarios.find((scenario) => scenario.id === id);
+  assert.deepEqual(listed.missingBasemap, {
+    reference: COMMUNITY_REF,
+    background: { kind: "image", extent: [-180, -85, 180, 85] },
+    reason: "Download failed (HTTP 502).",
+  });
+
+  const exported = ok(await scenarios("GET", `${id}/export`));
+  assert.deepEqual(exported.assets.backgroundData, COMMUNITY_REF, "the next import tries the download too");
+
+  const restored = ok(await scenarios("PUT", `${id}/basemap`, { payload: { dataUrl: "data:image/png;base64,T0xE" } }));
+  assert.equal(restored.assetStatus.backgroundData, true);
+  assert.equal(restored.scenario.missingBasemap, undefined);
+  assert.equal(restored.scenario.hubOrigin.editedAt, undefined, "not an edit: the copy still follows its post");
+  assert.deepEqual(restored.data.world.background, { kind: "image", extent: [-180, -85, 180, 85] });
+  assert.deepEqual(await scenarioAsset(id, "backgroundData"), { dataUrl: "data:image/png;base64,T0xE" });
+  assert.equal((await scenarios("PUT", `${id}/basemap`, { payload: { dataUrl: "data:image/png;base64,T0xE" } })).status, 400, "only while one is missing");
+});
+
+test("an Update records the new version's missing basemap, and one that brings it clears the record", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", { ...scenarioBundle("Hub Map"), hubOrigin: HUB_ORIGIN })).scenario.id;
+  const failed = ok(await scenarios("PUT", `${id}/import`, bundleMissingBasemap("Hub Map v2")));
+  assert.equal(failed.scenario.missingBasemap.reference.url, COMMUNITY_REF.url);
+  assert.deepEqual(await scenarioAsset(id, "backgroundData"), BACKGROUND, "the basemap it had is kept meanwhile");
+
+  const fixed = ok(await scenarios("PUT", `${id}/import`, { ...scenarioBundle("Hub Map v3"), hubOrigin: HUB_ORIGIN }));
+  assert.equal(fixed.scenario.missingBasemap, undefined);
+});
+
+test("a basemap the player sets themselves replaces the one still missing", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", bundleMissingBasemap("Hub Map"))).scenario.id;
+  const uploaded = ok(await store.handleScenarios({
+    method: "PUT", segments: [id, "assets", "backgroundData"], query: new URLSearchParams(),
+    rawBody: new TextEncoder().encode(JSON.stringify(BACKGROUND)), contentType: "application/json",
+  }).then((response) => response.json().then((data) => ({ status: response.status, data }))));
+  assert.equal(uploaded.scenario.missingBasemap, undefined, "the late download would overwrite their choice");
+});
+
+test("a malformed missing-basemap record is dropped, not kept", async () => {
+  await reset();
+  const bundle = bundleMissingBasemap("Hub Map");
+  bundle.assets.backgroundData = { mode: "communityRef", url: "javascript:alert(1)" };
+  const imported = ok(await scenarios("POST", "import", bundle));
+  assert.equal(imported.scenario.missingBasemap, undefined);
+});
