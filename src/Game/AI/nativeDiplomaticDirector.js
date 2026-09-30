@@ -1050,6 +1050,8 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes =
     else if (lower(a) === lower(b)) { why = "both sides are the same polity"; key = "relationSameCountry"; }
     else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
     else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
+    // A side the model left blank has no name to show the player.
+    if (key === "relationUnknownCountry" && (!clean(update.a) || !clean(update.b))) key = "relationUnnamed";
     if (why) {
       drop(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`, key, { a: update.a, b: update.b, name: !a ? update.a : update.b });
       continue;

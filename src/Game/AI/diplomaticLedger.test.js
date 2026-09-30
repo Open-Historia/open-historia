@@ -388,6 +388,16 @@ test("on the salvage pass a malformed ledger row is dropped and said, not fatal"
   assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "", "and what is left validates without a retry");
 });
 
+test("on the salvage pass a relation with a blank side is told to the player without a name", () => {
+  const candidate = { events: alliance(), relationUpdates: [{ a: "France", b: "", score: 10, status: "friendly" }], agreementUpdates: "" };
+  const playerNotes = [];
+  const notes = salvageDiplomaticLedgerPayload(candidate, { world, playerNotes });
+  assert.equal(notes.length, 1);
+  assert.deepEqual(playerNotes.map((note) => note.text), [
+    "A change in relations was not recorded: it did not name both of its sides.",
+  ]);
+});
+
 // Salvage runs BEFORE the validator on the final attempt (the only attempt
 // while requests are saved), and it used to drop exactly the rows the
 // validator's lifecycle repairs exist to fix: the pact the story ended stayed
