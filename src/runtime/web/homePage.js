@@ -218,6 +218,8 @@ const demoAcknowledged = () => {
                         el("a", { href: "https://github.com/Open-Historia/open-historia", target: "_blank", rel: "noopener", textContent: "GitHub" }),
                         el("a", { href: "https://discord.gg/QaqAK7fQAg", target: "_blank", rel: "noopener", textContent: "Discord" }),
                         el("a", { href: "https://github.com/Open-Historia/open-historia-node", target: "_blank", rel: "noopener", textContent: bootText("homeHostNode") }),
+                        // The site root's page: the game itself is under /play/.
+                        el("a", { href: "/privacy/", target: "_blank", rel: "noopener", textContent: bootText("homePrivacy") }),
         );
 
         const card = el("div", { className: "oh-card" },

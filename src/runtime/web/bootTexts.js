@@ -33,6 +33,7 @@ export const BOOT_TEXTS = Object.freeze({
   homeEnter: "Enter Open Historia",
   homeTrust: "Trust is in the checksum and the project signature — never in the node itself.",
   homeHostNode: "Host a node",
+  homePrivacy: "Privacy",
   // The website's demo notice.
   demoTitle: "This is a demo of the game",
   demoDesktop: "Open Historia is meant to be played in the desktop app, which runs the world map from your own machine.",

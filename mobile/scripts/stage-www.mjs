@@ -26,7 +26,7 @@ const target = path.join(mobileDir, "www");
 // some of them large (the screenshots alone are 8 MB).
 const SITE_ONLY = [
   "screenshots", "screenshot.png",
-  "guides", "get-started", "how-to-play", "self-hosting", "pax-historia-alternative",
+  "guides", "get-started", "how-to-play", "self-hosting", "pax-historia-alternative", "privacy",
   "sitemap.xml", "sitemap.txt", "robots.txt",
   "sw.js", "version.json",
   "content-manifest.json", "content-manifest.json.sig",

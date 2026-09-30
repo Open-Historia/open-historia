@@ -17,7 +17,7 @@ import url from "node:url";
 // root would otherwise only surface as a sitemap URL 404ing to a crawler.
 export const ROOT_PAGES = [
   "guides", "get-started", "how-to-play", "ai-setup", "self-hosting",
-  "pax-historia-alternative", "sitemap",
+  "pax-historia-alternative", "privacy", "sitemap",
   "guides.css", "robots.txt", "sitemap.xml",
 ];
 

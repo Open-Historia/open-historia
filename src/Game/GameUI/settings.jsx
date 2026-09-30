@@ -1976,6 +1976,9 @@ const diagnosticsButton = {
 // The guides are site pages. The Android app leaves them out of the APK
 // (mobile/scripts/stage-www.mjs), so there it opens the website's copy.
 const GUIDES_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/guides/" : "/guides/";
+// The privacy policy, from the same place as the guides: the desktop serves its
+// own copy, the website its root page, and the Android app links to the website.
+const PRIVACY_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/privacy/" : "/privacy/";
 
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
@@ -2760,6 +2763,7 @@ const SettingsMenu = ({
                 <div style={grid}>
                     <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href={GUIDES_HREF} />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
+                    <QuickAction title="Privacy" description="What the game keeps and sends" symbol="§" href={PRIVACY_HREF} />
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
                     <span style={{ color: "rgba(255,255,255,0.24)", fontSize: "0.6rem" }}>Community</span>

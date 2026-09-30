@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Privacy Policy — Open Historia</title>
+  <link rel="canonical" href="https://openhistoria.com/privacy/" />
+  <meta name="description" content="What Open Historia keeps on your device, what it sends and to whom, and what the project itself holds: the website, the desktop app and the Android app." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/privacy/" />
+  <meta property="og:title" content="Privacy Policy — Open Historia" />
+  <meta property="og:description" content="What Open Historia keeps on your device, what it sends and to whom, and what the project itself holds." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="stylesheet" href="/guides.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Open Historia", "item": "https://openhistoria.com/" },
+      { "@type": "ListItem", "position": 2, "name": "Privacy Policy", "item": "https://openhistoria.com/privacy/" }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> Privacy Policy
+    </nav>
+
+    <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
+
+    <h1>Privacy Policy</h1>
+    <p class="tagline">Last updated 29 September 2026</p>
+
+    <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them. It explains what the game keeps on your device, what it sends elsewhere and to whom, and what the project itself holds about you.</p>
+    <p>"We" means Nicholas Krol, who runs the Open Historia project and its servers. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>.</p>
+
+    <h2>The Short Version</h2>
+    <div class="card">
+      <ul>
+        <li><strong>There is no account.</strong> Your games, scenarios and settings stay on your device. We never see them.</li>
+        <li><strong>You bring your own AI.</strong> Your AI key and the game's prompts go from your device to the AI provider you chose, not to us.</li>
+        <li><strong>We use Google Analytics</strong> to count visits, on the website and in the game itself on every platform. It sets cookies.</li>
+        <li><strong>A few other services are contacted</strong> to draw the map, check for updates and run the community hub. Each is listed below with what it receives.</li>
+        <li><strong>We don't sell personal information</strong> or use it for advertising.</li>
+      </ul>
+    </div>
+
+    <h2>What Stays on Your Device</h2>
+    <p>Everything you make and play is stored on your device: in your browser's storage on the website, in the app's storage on Android, and in the app's data folder on the desktop. That includes:</p>
+    <ul>
+      <li>your games, scenarios, maps, flags, basemaps and settings, and any language packs the game builds for you;</li>
+      <li><strong>your AI keys and endpoints.</strong> They are stored as they are, without encryption, so anyone who can use your device or browser profile could read them. On Android, if device backup is turned on, Android may include the app's data in your backup;</li>
+      <li>a record of the last 200 AI calls (the prompts and the answers), which the AI debug console shows;</li>
+      <li>the diagnostics log: warnings, errors and milestones, and the text of advisor and diplomacy conversations only if you turn on detailed logging. It is <strong>never sent automatically</strong>. It leaves your device only when you copy or save it yourself, for example to attach to a bug report, and keys and tokens are removed from it first. Bug reports are GitHub issues, so anything you attach to one is public;</li>
+      <li>on the desktop, deleted games and scenarios (in a trash folder, until you empty it) and downloaded community scenarios (a cache of up to 1 GB that you can clear in Settings).</li>
+    </ul>
+    <p>You can delete any of it in the game, by clearing the site's data in your browser, or by uninstalling the app (on the desktop, also delete the app's data folder). If you turn on network play in the desktop app, other devices on your network can open your saves; it is off unless you turn it on. If you run the game's server yourself, you are the one holding everything it stores.</p>
+
+    <h2>Your AI Provider</h2>
+    <p>To play, you connect an AI provider: for example Google Gemini, OpenAI, Anthropic, Groq, OpenRouter or DeepSeek, or a model running on your own computer or network. The game sends that provider prompts built from your game: the state of the world, recent events, and what you type as orders, chat and diplomacy. It can also do this in the background while a game is open. If you play in a language other than English, the game also sends scenario text, and the titles and descriptions of community posts, to be translated. Your key is sent with every request.</p>
+    <p>What happens to that data is set by <strong>the provider's own privacy policy and terms</strong>. Some providers keep prompts, and some may use them to train models, depending on your plan. We never receive your key or your prompts. On the desktop app, a request that a provider won't accept straight from the page passes through the app's own local server on your computer on its way; it is not stored. On Android, a request to a model on your local network is sent by the app itself.</p>
+    <p>If you want nothing to leave your computer, use a local model through Ollama, LM Studio or llama.cpp. The <a href="/ai-setup/">AI setup guide</a> explains how.</p>
+
+    <h2>Analytics and Cookies</h2>
+    <p>The openhistoria.com pages, and the game itself on the website, the desktop app and the Android app when you are online, load <strong>Google Analytics</strong>. Google receives the address of the page, where you came from, your browser and device type, screen size and language, and your IP address (Google says it uses the IP address to estimate your location and does not store it). It sets <code>_ga</code> cookies to recognise a returning visitor. We use it only to count visits and to see which pages, platforms and versions are used. Google keeps the detailed data for at most 14 months; the totals in our reports are kept longer. Google's <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">privacy policy</a> applies.</p>
+    <p>On the website you can opt out with Google's <a href="https://tools.google.com/dlpage/gaoptout" target="_blank" rel="noopener">opt-out browser add-on</a>, a content blocker, or by blocking cookies from the site. In the desktop and Android apps, blocking <code>googletagmanager.com</code> and <code>google-analytics.com</code> in a firewall or DNS filter stops it.</p>
+    <p>Nothing else in Open Historia sets cookies. Cloudflare, which hosts the website, may set a cookie it needs for security.</p>
+
+    <h2>Services the Game Contacts</h2>
+    <p>Any service you connect to sees your IP address and basic browser information. These are the services the game contacts besides your AI provider:</p>
+    <div class="table-scroll">
+      <table class="comparison-table">
+        <thead>
+          <tr><th>Service (who runs it)</th><th>When</th><th>What it receives</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Website hosting (Cloudflare)</td><td>When you visit openhistoria.com</td><td>The pages and files you request</td></tr>
+          <tr><td>Map imagery (Esri ArcGIS Online) and terrain (Amazon Web Services' open terrain tiles)</td><td>Whenever the map is shown</td><td>Which parts of the map you look at</td></tr>
+          <tr><td>World map data on the website (our server on Cloudflare, and volunteer content nodes)</td><td>Website only, while you play</td><td>The map files you load. See Content Nodes below</td></tr>
+          <tr><td>Community hub (GitHub)</td><td>When you open the Community, Flags or Basemaps browsers, and in the background when you have scenarios from the hub</td><td>Nothing beyond the request. Post images and avatars load from GitHub</td></tr>
+          <tr><td>Import counter (our server on Cloudflare)</td><td>When you import a scenario from the hub</td><td>The scenario's id and title. See Import Counts below</td></tr>
+          <tr><td>Update checks and downloads (GitHub; the website checks openhistoria.com)</td><td>At launch and every few minutes while the game is open; the desktop app also downloads the map from GitHub on its first launch</td><td>Nothing beyond the request</td></tr>
+          <tr><td>Place search (Komoot's Photon)</td><td>When you type in the map's place search</td><td>The text you type</td></tr>
+          <tr><td>Setup video (YouTube's privacy-enhanced mode)</td><td>When the AI setup prompt shows its tutorial video</td><td>Nothing beyond the request; YouTube sets no cookies unless you play the video</td></tr>
+          <tr><td>Fonts (Google Fonts)</td><td>The website's front page and the game's entry screen on the website</td><td>Nothing beyond the request</td></tr>
+          <tr><td>Flags not built into the game (flagcdn.com)</td><td>When such a flag is shown. Every country's flag ships with the game and is not fetched</td><td>Which flag is shown</td></tr>
+          <tr><td>Institution emblems (Wikimedia Commons, asean.org, or an address a scenario's author chose)</td><td>When an institution's emblem is shown</td><td>Which emblem is shown</td></tr>
+          <tr><td>Download sizes (GitHub)</td><td>The website's front page</td><td>Nothing beyond the request</td></tr>
+          <tr><td>Spellchecker (Google)</td><td>The desktop app on Windows and Linux may download a dictionary the first time one is needed</td><td>Which language's dictionary to download</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Links to Discord, Reddit, GitHub and other sites open in your browser; those sites' own policies apply there.</p>
+
+    <h3>Discord (desktop app)</h3>
+    <p>When the Discord app is running on the same computer, the desktop app tells it what you are playing: the country you lead, the scenario and the in-game date. Discord shows this on your profile to people who can see your activity. This passes between the two apps on your computer; Discord's own privacy policy covers what it shows and keeps. To stop it, turn off activity sharing in Discord (User Settings → Activity Privacy).</p>
+
+    <h3>Content Nodes (website only)</h3>
+    <p>On the website, the world map comes from volunteer-run content nodes listed in a directory we sign. When the page opens, it measures its connection to each listed node, then stays connected to one, which it checks every 20 seconds. The nodes see your IP address and which map files you load (every file is checked against our published fingerprint, so a node can't alter the map). The node software keeps IP addresses only in memory, for a few minutes, to count players and limit abuse. The operators run it themselves, though, and could keep their own logs. The desktop and Android apps never contact nodes.</p>
+
+    <h3>Import Counts</h3>
+    <p>When you import a scenario from the community hub, the game tells our import counter its id and title, so the hub can show how many people imported it. The count is public. To count each install once, the counter keeps a one-way hash of your IP address, mixed with a secret, for 365 days. It doesn't keep your IP address.</p>
+
+    <h2>Publishing to the Community Hub</h2>
+    <p>The community hub is a public GitHub repository, and every post there is a GitHub issue. Publishing needs a GitHub account: the game prepares the file and opens GitHub's form, and you submit the post yourself. Everything in a post is public, including:</p>
+    <ul>
+      <li>your GitHub username and avatar, and the title, description and any credit you write;</li>
+      <li>the whole scenario, flag or basemap file, with its covers, flags and maps;</li>
+      <li>a random scenario key that links the post to your copy of the scenario, so it can receive updates and suggestions.</li>
+    </ul>
+    <p>Suggesting changes to someone's scenario posts a public comment with a file of your changes and the name and note you give. Likes are public GitHub reactions. You can edit or close your posts on GitHub, or ask us to remove them. We close or remove posts that are broken or abusive. GitHub's <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">privacy statement</a> covers GitHub itself.</p>
+
+    <h2>Old Website Accounts</h2>
+    <p>Earlier versions of the website offered an optional account, through an email link or Google sign-in, to sync games between devices. That feature has been removed. If you made one, we still hold your email address, the copies of what you synced, and a record of which content node you last used. The synced copies are encrypted, but the key can be recovered by us (that is how an account could be recovered), so we are technically able to read them. We don't. Email us and we will delete everything tied to your address.</p>
+
+    <h2>Running a Content Node</h2>
+    <p>If you run a content node, our registry records its id, address, public key, capabilities, region, software version, capacity, when it was first and last seen, and the optional operator name you give. The public directory lists the id, address and status; the operator name is shown only to us. We keep the record until the node is removed.</p>
+
+    <h2>Contributing Code</h2>
+    <p>Contributions to the code need a signed Contributor License Agreement, collected through cla-assistant.io with your GitHub account. It records your name, email address and, if you sign for one, your organisation.</p>
+
+    <h2>The Android App's Permissions</h2>
+    <ul>
+      <li><strong>Internet</strong>: to reach your AI provider, the community hub and updates.</li>
+      <li><strong>Install packages</strong>: to install its own updates. Android asks you to confirm each one.</li>
+      <li><strong>Storage</strong> (Android 10 and older only): to save exported games and scenarios to your Downloads folder.</li>
+    </ul>
+
+    <h2>What We Hold, and for How Long</h2>
+    <div class="table-scroll">
+      <table class="comparison-table">
+        <thead>
+          <tr><th>What</th><th>Where</th><th>How long</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Your games, saves, keys and settings</td><td>Only on your device</td><td>Until you delete them</td></tr>
+          <tr><td>Analytics</td><td>Google Analytics</td><td>At most 14 months for the detailed data</td></tr>
+          <tr><td>Hashed IP addresses for import counts</td><td>Our import counter on Cloudflare</td><td>365 days</td></tr>
+          <tr><td>Import counts and scenario titles</td><td>Our import counter on Cloudflare</td><td>While the hub shows them</td></tr>
+          <tr><td>Old account data, if you had an account</td><td>Our server on Cloudflare</td><td>Until you ask us to delete it</td></tr>
+          <tr><td>Content node records</td><td>Our server on Cloudflare</td><td>Until the node is removed</td></tr>
+          <tr><td>Your hub posts, comments and likes</td><td>GitHub (public)</td><td>Until you or we remove them</td></tr>
+          <tr><td>Emails you send us</td><td>Our inbox</td><td>As long as needed to answer them</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Why We Use It</h2>
+    <p>Where data-protection law such as the GDPR or the UK GDPR applies, we rely on these legal bases:</p>
+    <ul>
+      <li><strong>Doing what you ask</strong>: downloading and importing hub content, checking for and installing updates, and deleting old account data.</li>
+      <li><strong>Our legitimate interests</strong>: running the game and the services it depends on, keeping them secure, counting imports once per install, and understanding how the game is used so we can improve it.</li>
+      <li><strong>Consent</strong>, where the law requires it for cookies or similar technology.</li>
+    </ul>
+
+    <h2>Your Rights</h2>
+    <p>Depending on where you live, you have the right to ask what personal information we hold about you, and to have it corrected or deleted. You can also object to or restrict how we use it, receive a copy, withdraw consent you gave, and complain to your data-protection authority. California residents have the rights to know, delete and correct, and to opt out of the sale or sharing of personal information. We don't sell or share it for advertising.</p>
+    <p>Most of what the game handles never reaches us, so you control it on your device. For anything we hold, email <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a> and we will answer within 30 days. Data held by Google Analytics, GitHub, Discord or your AI provider is covered by their own policies, but we will help where we can.</p>
+
+    <h2>Where Data Is Processed</h2>
+    <p>We are based in the United States, and so are most of the services above: Cloudflare, Google, GitHub, Esri, Amazon, Discord and most AI providers. Your data may therefore be processed in the United States and other countries whose laws differ from yours. These providers use recognised safeguards, such as the EU's standard contractual clauses or the EU–US Data Privacy Framework, for data from the European Economic Area, the United Kingdom and Switzerland.</p>
+
+    <h2>Children</h2>
+    <p>Open Historia isn't directed at children under 13, or under 16 where the law sets that age. We don't knowingly collect personal information from children, and the game has no accounts. If you believe a child's personal information has reached us, email us and we will delete it.</p>
+
+    <h2>Keeping Your Keys Safe</h2>
+    <p>Because your AI keys are stored on your device without encryption, don't share your device or browser profile with people you don't trust with them. Set a spending limit with your AI provider, and revoke a key there if you think someone else has it.</p>
+
+    <h2>Changes to This Policy</h2>
+    <p>When the game starts handling data differently, we update this page and the date at the top. We announce significant changes in the release notes and on our Discord.</p>
+
+    <h2>Contact</h2>
+    <p>Questions or requests about privacy: <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. The source code of the game and of our servers is public on <a href="https://github.com/Open-Historia" target="_blank" rel="noopener">GitHub</a>, so you can check everything on this page for yourself.</p>
+
+    <a href="/" class="cta">Play Open Historia</a>
+
+    <footer>
+      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> · <a href="/privacy/">Privacy</a> · <a href="/sitemap.xml">Sitemap</a></p>
+    </footer>
+  </div>
+</body>
+</html>

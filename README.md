@@ -6,6 +6,10 @@ This project is licensed under the terms of the GNU Affero General Public Licens
 
 Contributions are accepted under the [Contributor Copyright Assignment Agreement](CLA.md), which assigns the copyright in contributions to the Open Historia Organisation. CLA Assistant asks you to sign it on your first pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Privacy
+
+What the game keeps on your device, what it sends and to whom, and what the project holds: see the [privacy policy](https://openhistoria.com/privacy/) (source: [public/privacy/index.html](public/privacy/index.html)).
+
 <!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). -->
 <h1 align="center">Open Historia</h1>
 
