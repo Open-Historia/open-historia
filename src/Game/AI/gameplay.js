@@ -1368,7 +1368,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
     .map((country) => normalizeString(country?.name || country?.code))
     .filter(Boolean);
   if (wants("canonicalWarContext")) {
-    variables.canonicalWarContext = buildCanonicalWarContext(bundle.world);
+    variables.canonicalWarContext = buildCanonicalWarContext(bundle.world, { round: bundle?.game?.round });
   }
   if (wants("canonicalDiplomaticContext")) {
     variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
@@ -9028,7 +9028,7 @@ const runWorldBreadthRepair = async ({
   );
 
   const playerPolity = normalizeString(bundle?.game?.country) || "the player polity";
-  const canonicalWarContext = buildCanonicalWarContext(bundle?.world);
+  const canonicalWarContext = buildCanonicalWarContext(bundle?.world, { round: bundle?.game?.round });
   const diplomaticContext = buildBoundedDiplomaticContext(bundle?.world || {}, {
     playerPolity,
     focusActors: actorNames,
@@ -13439,7 +13439,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
-          canonicalWarContext: buildCanonicalWarContext(ledgerWorld),
+          canonicalWarContext: buildCanonicalWarContext(ledgerWorld, { round: bundle.game.round }),
           canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld, {
             playerPolity: normalizeString(bundle.game.country),
             maxActors: 8,
