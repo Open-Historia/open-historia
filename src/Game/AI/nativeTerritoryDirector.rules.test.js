@@ -12,7 +12,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
+import {
+  buildTerritoryDirectorInput,
+  directGeneratedTerritoryOps,
+  hasTerritorialContent,
+  sanitizeDirectorOrders,
+} from "./nativeTerritoryDirector.js";
 
 const event = (title, description = "", impacts = {}) => ({
   date: "1914-09-01",
@@ -187,4 +192,46 @@ test("the player's Cancel during the analysis reaches the skip instead of being 
     directGeneratedTerritoryOps({ events: [battle], world, analyzeBatch, signal: controller.signal }),
     (error) => error?.name === "AbortError",
   );
+});
+
+// --- Once the director's in-bundle self-test ---
+
+const easterRising = event(
+  "The Easter Rising Erupts in Dublin",
+  "Armed nationalist and republican volunteers stage a coordinated insurrection in Dublin, seizing the General Post Office and proclaiming the establishment of an independent Irish Republic. British garrison troops and artillery are swiftly deployed to seal off the city center and engage insurgent strongholds, triggering heavy urban skirmishing across the capital over the subsequent week.",
+);
+
+test("the Easter Rising's wording supports a contest of Dublin", () => {
+  const result = sanitizeDirectorOrders({
+    events: [easterRising],
+    orders: [{
+      eventIndex: 0,
+      regionControlOps: [{
+        actorCode: "Ireland",
+        op: "contest",
+        regionName: "Dublin",
+        fromCode: "British Empire",
+        regionId: "Dublin",
+        note: "Easter Rising in Dublin",
+      }],
+    }],
+  });
+  assert.equal(hasTerritorialContent(easterRising), true);
+  assert.deepEqual((result.acceptedByEvent.get(0) || []).map((op) => op.op), ["contest"]);
+});
+
+test("a polity cannot contest a region from itself", () => {
+  const result = sanitizeDirectorOrders({
+    events: [easterRising],
+    orders: [{
+      eventIndex: 0,
+      regionControlOps: [{ actorCode: "British Empire", op: "contest", fromCode: "British Empire", regionId: "Dublin" }],
+    }],
+  });
+  assert.deepEqual(result.acceptedByEvent.get(0) || [], []);
+  assert.ok(result.diagnostics.some((row) => String(row.reason || "").includes("different nonblank")));
+});
+
+test("an administrative meeting is not territorial", () => {
+  assert.equal(hasTerritorialContent(event("Railway Officials Convene", "Officials review freight timetables and administrative procedures.")), false);
 });
