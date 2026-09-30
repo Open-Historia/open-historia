@@ -320,7 +320,7 @@ A scenario keeps four records about the community hub in `scenario.json`. They a
 | `hubOrigin` | `{ postId, bundleUrl, syncedAt, title?, author?, editedAt? }` — the post this copy was downloaded from | the import and **Update** (stamped last); `null` from **Unlink** |
 | `hubPublished` | `{ key, publishedAt, postIds[], author?, title?, suggestions[], blocked?[], checkedAt?, commentCounts? }` — the player's own posts of this scenario and the suggestions left on them | **Publish** (the key), **Link my post**, the suggestion checks, **Reject all from @…** / **Unblock** |
 | `hubReviews` | `{ [suggestionId]: { status: reviewing|done|dismissed, accepted[], rejected[], updatedAt } }` | the review dialog; the map editor on save |
-| `missingBasemap` | `{ reference: { mode: "communityRef", url, via?, hash?, kind?, fileName? }, background?, reason? }`: a community basemap the scenario uses by reference that could not be downloaded; absent otherwise | the import and **Update** when the download failed (`missingBasemapOfBundle`); cleared by an Update that brings the basemap and by `PUT /api/scenarios/:id/basemap` |
+| `missingBasemap` | `{ reference: { mode: "communityRef", url, via?, hash?, kind?, fileName? }, background?, reason? }`: a community basemap the scenario uses by reference that could not be downloaded; absent otherwise | the import and **Update** when the download failed (`missingBasemapOfBundle`); cleared by an Update that brings the basemap, by `PUT /api/scenarios/:id/basemap`, and by the player uploading or removing the `backgroundData` asset themselves |
 
 The rules:
 

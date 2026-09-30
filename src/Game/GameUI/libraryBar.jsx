@@ -73,7 +73,7 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, hubUpdateAvailable, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
-import { isBlockedContributor, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { isBlockedContributor, missingBasemapOfBundle, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
   ScenarioCommunityCard,
@@ -2330,8 +2330,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const { downloadHubBundle } = await import("./communityHub.jsx");
       const bundle = await downloadHubBundle(post.bundleUrl);
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
-      const details = await updateScenarioFromBundle(scenario.id, bundle);
-      noteMissingBasemapTried(details?.scenario);
+      // Noted before the Update: it refreshes the library, and when a game on
+      // this scenario is running its effect would otherwise download the
+      // basemap that just failed again at once.
+      noteMissingBasemapTried({ id: scenario.id, missingBasemap: missingBasemapOfBundle(bundle) });
+      await updateScenarioFromBundle(scenario.id, bundle);
       // The stores keep the basemap the scenario had when the new one could not
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
