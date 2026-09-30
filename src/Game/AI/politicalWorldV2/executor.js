@@ -12,7 +12,6 @@ import {
   generateGeopoliticalInstitutionGovernanceJob,
   generateGeopoliticalInstitutionMembersBatchJob,
   generateGeopoliticalInstitutionMembersJob,
-  generateGeopoliticalMembershipJob,
   generateGeopoliticalPowerEvidenceJob,
 } from "../geopoliticalWorldGenerator.js";
 import {
@@ -25,11 +24,9 @@ import {
 } from "../politicalWorldGeneratorCore.js";
 import { POLITICAL_GENERATION_NEEDS } from "../../../runtime/politicalWorldGeneration.js";
 import { applyReviewedPoliticalGeneration } from "../../../runtime/politicalWorldGenerationReview.js";
-import { normalizeInstitutions, validateInstitutionTemporalBaseline } from "../../../runtime/institutions.js";
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
-import { acceptedPoliticalWorldV2Targets, createPoliticalWorldV2Job } from "./jobGraph.js";
 import { applyValidatedHistoricalCorrectionToStagedActor } from "./historicalCorrectionStaging.js";
-import { historicalChallengeReviewContext, historicalChallengeStillAppliesToEntry, rebasePoliticalWorldVerificationEntry } from "./verificationEntry.js";
+import { historicalChallengeStillAppliesToEntry, rebasePoliticalWorldVerificationEntry } from "./verificationEntry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -39,12 +36,6 @@ const clone = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 const unique = (values) => [...new Set(array(values).map(clean).filter(Boolean))];
-const chunk = (values, size) => {
-  const out = [];
-  const width = Math.max(1, Math.trunc(Number(size) || 1));
-  for (let index = 0; index < values.length; index += width) out.push(values.slice(index, index + width));
-  return out;
-};
 
 const sourcePayload = (response, toolName) => toolResponsePayload(response, toolName);
 
@@ -148,8 +139,8 @@ const generationEntriesForTargets = (checkpoint, targets) => {
     const stagedActor = checkpoint?.stagedWorld?.politicalActors?.byPolity?.[key];
     byKey.set(key, rebasePoliticalWorldVerificationEntry(entry, stagedActor));
   }
-  // Legacy fallback retained only for isolated executor tests/helpers. v3 normal
-  // execution never depends on persisted jobs.
+  // Checkpoints saved by the old job runner kept their proposals on jobs.
+  // Current runs never write jobs; this only reads those older saves.
   for (const job of Object.values(checkpoint?.jobs || {})) {
     const proposals = array(job?.result?.generation?.proposals);
     for (const entry of proposals) {
@@ -158,35 +149,6 @@ const generationEntriesForTargets = (checkpoint, targets) => {
     }
   }
   return [...byKey.values()];
-};
-
-const repairKey = (type, depth, targets) => {
-  let hash = 2166136261;
-  const text = `${clean(type)}|${depth}|${unique(targets).sort().join("|")}`;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
-};
-
-const repairJobsFor = ({ checkpoint, parent, type, targets, depth = 0, maxDepth = 2, chunkSize = 4, payload = {} }) => {
-  if (!targets.length || depth >= maxDepth) return [];
-  const accepted = acceptedPoliticalWorldV2Targets(checkpoint, type);
-  const openTargets = new Set(Object.values(checkpoint?.jobs || {})
-    .filter((job) => clean(job?.type) === clean(type) && ["pending", "running"].includes(job?.status))
-    .flatMap((job) => array(job?.targets).map(clean).filter(Boolean)));
-  const unresolved = unique(targets).filter((target) => !accepted.has(target) && !openTargets.has(target));
-  if (!unresolved.length) return [];
-  return chunk(unresolved, chunkSize).map((repairTargets) => createPoliticalWorldV2Job({
-    id: `repair:${type}:${depth + 1}:${repairKey(type, depth + 1, repairTargets)}`,
-    type,
-    stage: parent.stage,
-    targets: repairTargets,
-    dependencies: [parent.id],
-    payload: { ...clone(parent.payload || {}), ...clone(payload), repairDepth: depth + 1 },
-    maxAttempts: 1,
-  }));
 };
 
 export const createPoliticalWorldV2Executor = ({
@@ -210,7 +172,6 @@ export const createPoliticalWorldV2Executor = ({
   const executeJob = async (job, checkpoint, { consumeModelCall } = {}) => {
     const trackedCallModel = boundedCallModel(callModel, consumeModelCall, taskProviderCallCeiling(job.type));
     const stagedWorld = checkpoint?.stagedWorld || inputs?.world || {};
-    const depth = Math.max(0, Math.trunc(Number(job?.payload?.repairDepth) || 0));
 
     if (job.type === "institution-discovery") {
       const result = await generateGeopoliticalInstitutionCatalogJob({
@@ -235,41 +196,6 @@ export const createPoliticalWorldV2Executor = ({
         signal,
       });
       return { kind: job.type, ...result, acceptedPolities: [], unresolvedPolities: [] };
-    }
-
-    if (job.type === "membership-resolution") {
-      const result = await generateGeopoliticalMembershipJob({
-        scenarioDate,
-          historyAuthority: inputs?.historyAuthority || null,
-        targets: job.targets,
-        polities: allPolities,
-        world: stagedWorld,
-        scenarioContext: inputs?.scenarioContext,
-        baseCountryTags: inputs?.baseCountryTags || null,
-        recovery: depth > 0,
-        excludeInstitutionIds: array(job?.payload?.excludeInstitutionIds),
-        callModel: trackedCallModel,
-        signal,
-      });
-      return { kind: job.type, ...result };
-    }
-
-    if (job.type === "membership-surface") {
-      const activeInstitutionIds = Object.values(normalizeInstitutions(stagedWorld?.institutions, stagedWorld).byId)
-        .filter((institution) => validateInstitutionTemporalBaseline({ institution, scenarioDate }).valid)
-        .map((institution) => clean(institution?.id))
-        .filter(Boolean);
-      const covered = new Set(array(job?.payload?.referenceCoveredInstitutionIds).map(clean).filter(Boolean));
-      const alreadyResolved = acceptedPoliticalWorldV2Targets(checkpoint, "institution-membership-resolution");
-      const uncoveredInstitutionIds = activeInstitutionIds.filter((id) => !covered.has(id) && !alreadyResolved.has(id));
-      return {
-        kind: job.type,
-        activeInstitutionIds,
-        referenceCoveredInstitutionIds: activeInstitutionIds.filter((id) => covered.has(id)),
-        uncoveredInstitutionIds,
-        acceptedPolities: [],
-        unresolvedPolities: [],
-      };
     }
 
     if (job.type === "institution-membership-resolution" && array(job?.targets).length > 1) {
@@ -544,8 +470,6 @@ export const createPoliticalWorldV2Executor = ({
 
   const applyJobResult = async ({ checkpoint, job, result }) => {
     let stagedWorld = clone(checkpoint?.stagedWorld || inputs?.world || {});
-    const newJobs = [];
-    const depth = Math.max(0, Math.trunc(Number(job?.payload?.repairDepth) || 0));
 
     if (job.type === "institution-discovery") {
       const applied = applyGeopoliticalWorldBaseline({
@@ -556,27 +480,6 @@ export const createPoliticalWorldV2Executor = ({
       stagedWorld = applied.world;
     }
 
-    if (job.type === "membership-surface") {
-      for (const institutionId of array(result.uncoveredInstitutionIds)) {
-        const safeId = clean(institutionId).replace(/[^a-zA-Z0-9._:-]+/g, "-");
-        if (!safeId) continue;
-        const existing = Object.values(checkpoint?.jobs || {}).find((candidate) =>
-          candidate?.type === "institution-membership-resolution"
-          && clean(candidate?.payload?.institutionId || candidate?.targets?.[0]) === clean(institutionId)
-          && ["pending", "running", "completed"].includes(candidate?.status));
-        if (existing) continue;
-        newJobs.push(createPoliticalWorldV2Job({
-          id: `institution-membership:${safeId}`,
-          type: "institution-membership-resolution",
-          stage: "institutions",
-          targets: [clean(institutionId)],
-          dependencies: [],
-          payload: { institutionId: clean(institutionId) },
-          maxAttempts: 2,
-        }));
-      }
-    }
-
     if (job.type === "institution-membership-resolution") {
       const applied = applyGeopoliticalWorldBaseline({
         world: stagedWorld,
@@ -584,16 +487,6 @@ export const createPoliticalWorldV2Executor = ({
         date: scenarioDate,
       });
       stagedWorld = applied.world;
-    }
-
-    if (job.type === "membership-resolution") {
-      const applied = applyGeopoliticalWorldBaseline({
-        world: stagedWorld,
-        result: { institutionCatalog: [], records: array(result.records), powerCalibration: [], agreements: [], warnings: result.warnings, blockingErrors: [] },
-        date: scenarioDate,
-      });
-      stagedWorld = applied.world;
-      newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "membership-resolution", targets: array(result.unresolvedPolities), depth, maxDepth: 3, chunkSize: depth === 0 ? 8 : depth === 1 ? 4 : 2 }));
     }
 
     if (job.type === "political-actor") {
@@ -609,7 +502,6 @@ export const createPoliticalWorldV2Executor = ({
           .map((entry) => [clean(entry?.polityKey), array(entry?.errors).map(clean).filter(Boolean).slice(0, 8)])
           .filter(([polityKey]) => Boolean(polityKey)));
       }
-      newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "political-actor", targets: unique([...array(result.unresolvedPolities), ...stagingRejectedPolities]), depth, maxDepth: 3, chunkSize: depth === 0 ? 4 : depth === 1 ? 2 : 1 }));
     }
 
     if (job.type === "governing-alignment") {
@@ -622,7 +514,6 @@ export const createPoliticalWorldV2Executor = ({
           .map((entry) => [clean(entry?.polityKey), array(entry?.errors).map(clean).filter(Boolean).slice(0, 8)])
           .filter(([polityKey]) => Boolean(polityKey)));
       }
-      newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "governing-alignment", targets: unique([...array(result.unresolvedPolities), ...stagingRejectedPolities]), depth, maxDepth: 3, chunkSize: depth === 0 ? 8 : depth === 1 ? 4 : 2 }));
     }
 
     if (job.type === "power-evidence") {
@@ -632,7 +523,6 @@ export const createPoliticalWorldV2Executor = ({
         date: scenarioDate,
       });
       stagedWorld = applied.world;
-      newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "power-evidence", targets: array(result.unresolvedPolities), depth, maxDepth: 3, chunkSize: depth === 0 ? 12 : depth === 1 ? 6 : 3 }));
     }
 
     if (job.type === "institution-governance") {
@@ -652,29 +542,6 @@ export const createPoliticalWorldV2Executor = ({
         date: scenarioDate,
       });
       stagedWorld = applied.world;
-    }
-
-    if (job.type === "temporal-sentinel") {
-      newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "temporal-sentinel", targets: array(result.missingActorTargets), depth, maxDepth: 3, chunkSize: 8 }));
-      const alreadyVerified = acceptedPoliticalWorldV2Targets(checkpoint, "historical-verification");
-      const openVerificationTargets = new Set(Object.values(checkpoint?.jobs || {})
-        .filter((candidate) => candidate?.type === "historical-verification" && ["pending", "running"].includes(candidate?.status))
-        .flatMap((candidate) => array(candidate?.targets).map(clean).filter(Boolean)));
-      const challenges = Object.entries(result?.challenges || {}).filter(([polity]) => !alreadyVerified.has(clean(polity)) && !openVerificationTargets.has(clean(polity)));
-      for (const [index, group] of chunk(challenges, 4).entries()) {
-        const targets = group.map(([polity]) => polity);
-        const reviewContextByPolity = Object.fromEntries(group.map(([polity, diagnostic]) => [polity, historicalChallengeReviewContext(diagnostic)]));
-        const correctionRequiredPolities = group.filter(([, diagnostic]) => diagnostic?.temporalCorrectionEstablished === true).map(([polity]) => polity);
-        newJobs.push(createPoliticalWorldV2Job({
-          id: `verify:${job.id}:${String(index + 1).padStart(2, "0")}`,
-          type: "historical-verification",
-          stage: "verification",
-          targets,
-          dependencies: [job.id],
-          payload: { reviewContextByPolity, correctionRequiredPolities, repairDepth: 0 },
-          maxAttempts: 1,
-        }));
-      }
     }
 
     if (job.type === "historical-verification") {
@@ -700,36 +567,9 @@ export const createPoliticalWorldV2Executor = ({
           stagedWorld.politicalActors.byPolity[polityKey] = clone(correctedActor);
         }
       }
-      const unresolved = array(result.unresolvedPolities);
-      newJobs.push(...repairJobsFor({
-        checkpoint,
-        parent: job,
-        type: "historical-verification",
-        targets: unresolved,
-        depth,
-        maxDepth: 2,
-        chunkSize: 2,
-        payload: {
-          reviewContextByPolity: job?.payload?.reviewContextByPolity || {},
-          correctionRequiredPolities: job?.payload?.correctionRequiredPolities || [],
-        },
-      }));
-      if (array(result.correctedPolities).length) {
-        for (const [index, targets] of chunk(array(result.correctedPolities), 8).entries()) {
-          newJobs.push(createPoliticalWorldV2Job({
-            id: `realign:${job.id}:${String(index + 1).padStart(2, "0")}`,
-            type: "governing-alignment",
-            stage: "politics",
-            targets,
-            dependencies: [job.id],
-            payload: { repairDepth: 1, verificationRepair: true },
-            maxAttempts: 1,
-          }));
-        }
-      }
     }
 
-    return { stagedWorld, newJobs };
+    return { stagedWorld };
   };
 
   return { executeJob, applyJobResult };

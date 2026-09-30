@@ -2660,7 +2660,7 @@ const SettingsMenu = ({
     };
 
     // Telemetry switches (telemetry.js): their own keys; recording is on by
-    // default, rating off.
+    // default (off in the Android app), rating off.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
     // Logged here rather than in telemetry.js, which imports nothing on purpose.

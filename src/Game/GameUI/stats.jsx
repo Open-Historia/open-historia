@@ -8,6 +8,7 @@ import { JSON_URLS, getNationFlags, getNationTags, getPrimedScenarioRegionCatalo
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { groupsOnTerritory } from "../../runtime/groups.js";
 import { extendBounds } from "./eventFocus.js";
+import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } from "./turnReveal.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -621,7 +622,17 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                 const allies = (onA ? sideA : sideB)
                     .filter((party) => lowerText(party) !== targetKey)
                     .map((party) => displayName(party));
-                return { ...war, opponents, allies, causeText: warCauseForDisplay(war?.cause) };
+                // Its first event the Events panel still keeps (turnReveal.js).
+                const timelineEventId = warTimelineEventId(war, world.simulationHistory);
+                return {
+                    ...war,
+                    opponents,
+                    allies,
+                    causeText: warCauseForDisplay(war?.cause),
+                    startedLabel: formatGameDateReadable(war?.startedDate, "D MMM YYYY") || cleanText(war?.startedDate),
+                    timelineEventId,
+                    timelineIsFirst: warTimelineEventOpensWar(war, world.simulationHistory, timelineEventId),
+                };
             })
             .filter(Boolean)
             .sort((left, right) => compareGameDates(right.lastUpdatedDate || right.startedDate || "", left.lastUpdatedDate || left.startedDate || ""));
@@ -782,6 +793,9 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
         </div>
         {diplomacy.currentWars.length ? diplomacy.currentWars.map((war, index) => {
             const tone = warStatusTone(war.status);
+            // The date as a date, under the name the line has always used, so
+            // it stays the catalogued sentence.
+            const startedDate = war.startedLabel;
             return (
                 <div key={war.id || `${war.title}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
                 <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
@@ -790,7 +804,7 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                 vs {war.opponents.length ? war.opponents.join(" · ") : "Unknown opponent"}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
-                {war.title || "Canonical conflict"}{war.startedDate ? ` · since ${war.startedDate}` : ""}
+                {war.title || "Canonical conflict"}{startedDate ? ` · since ${startedDate}` : ""}
                 </div>
                 {war.allies.length ? (
                     <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
@@ -801,6 +815,18 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                     <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.35, marginTop: "0.14rem" }}>
                     {`Why it began: ${war.causeText}`}
                     </div>
+                ) : null}
+                {war.timelineEventId ? (
+                    // Opens the Events panel on the war's first event it still
+                    // keeps, on whichever kept turn holds it (time.jsx).
+                    <button
+                    type="button"
+                    className="oh-tap-row"
+                    onClick={() => showEventOnTimeline(war.timelineEventId)}
+                    style={{ background: "none", border: "none", color: "#2bc1f3", cursor: "pointer", display: "block", font: "inherit", fontSize: "0.61rem", fontWeight: 700, marginTop: "0.22rem", padding: 0, textAlign: "left" }}
+                    >
+                    {war.timelineIsFirst ? "See how it began on the timeline" : "See it on the timeline"}
+                    </button>
                 ) : null}
                 </div>
                 <span style={statusBadgeStyle(tone)}>{prettyToken(war.status || "active")}</span>

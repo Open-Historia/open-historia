@@ -4,7 +4,8 @@
 //   public/lang/catalog-en.json          every fixed interface string, read out
 //                                        of the source (extractStrings.mjs),
 //                                        plus every stock country name, the
-//                                        names of the cities the map labels and
+//                                        names of the cities the map labels, the
+//                                        built-in scenarios' region names and
 //                                        the preset scenarios' card text;
 //   public/lang/prompts/catalog-en.json  every guidance passage of the default
 //                                        prompts (promptGuidance.js), which the
@@ -117,6 +118,30 @@ const cityNames = (root) => {
   return out;
 };
 
+// The names of the built-in scenarios' regions (server/seed/<id>/regions.geojson:
+// 4,848 on the built-in map). The translator looks each one up in the pack
+// before it would ask the AI, so a shipped name costs no request. As with
+// cities, a translation is the region's usual name in that language, and a
+// region without one keeps the name it has.
+const regionNames = (root) => {
+  const out = [];
+  const seedDir = path.join(root, "server", "seed");
+  if (!fs.existsSync(seedDir)) return out;
+  for (const seed of fs.readdirSync(seedDir)) {
+    const file = path.join(seedDir, seed, "regions.geojson");
+    if (!fs.existsSync(file)) continue;
+    try {
+      for (const feature of JSON.parse(fs.readFileSync(file, "utf8"))?.features ?? []) {
+        const name = feature?.properties?.name;
+        if (typeof name === "string" && name.trim()) out.push(name.trim());
+      }
+    } catch {
+      // An unreadable seed adds no names.
+    }
+  }
+  return out;
+};
+
 // Every stock country's name, from the shipped countries archive.
 const countryNames = async () => {
   try {
@@ -156,6 +181,7 @@ const main = async () => {
     specStrings(root).forEach((text) => strings.add(text));
     seedPolityNames(root).forEach((text) => strings.add(text));
     cityNames(root).forEach((text) => strings.add(text));
+    regionNames(root).forEach((text) => strings.add(text));
     console.log(`  ${path.relative(ROOT, root) || "."}: ${exact.size} strings, ${patterns.size} patterns`);
   }
 

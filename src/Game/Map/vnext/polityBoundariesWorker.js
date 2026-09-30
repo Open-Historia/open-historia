@@ -252,6 +252,9 @@ const buildMetadata = (regions) => {
       territoryWeight: territoryWeight > 1e-12 ? territoryWeight : 1,
       tags: toStringArray(props.tags),
       type: props.type ? String(props.type) : "",
+      // The Workshop region type (runtime/regionTypes.js), which the map and
+      // the AI's placement rules look up in world.regionTypes.
+      ...(props.typeId ? { typeId: String(props.typeId) } : {}),
       adjacencies: toStringArray(props.adjacencies),
     });
   }

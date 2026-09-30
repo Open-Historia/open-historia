@@ -13,7 +13,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { receiptPlayerNote } from "./receiptPlayerNotes.js";
 import {
+  RECEIPT_EVENT_MAX_CHARS,
   RECEIPT_KIND_PLAYER_TITLES,
   RECEIPT_MAX_NOTES,
   RECEIPT_NOTE_KINDS,
@@ -242,11 +244,15 @@ test("an impact entry that normalization threw away is reported by count", () =>
   assert.deepEqual(receipt.notes, [{
     kind: "dropped",
     text: 'Event "Fall of Kassala": 2 of 3 region transfers were malformed and ignored — a required field was missing or blank.',
+    player: "2 changes this event carried were malformed and were ignored.",
+    event: "Fall of Kassala",
   }]);
 
   // An event normalization could not keep at all.
   noteMalformedImpacts(receipt, { impacts: {} }, null);
   assert.equal(receipt.notes[1].kind, "withheld");
+  assert.equal(receipt.notes[1].player, "An event with neither a title nor a description was discarded.");
+  assert.equal(receipt.notes[1].event, undefined, "an untitled event has no name to show");
   // Nothing lost, nothing said.
   const clean = createApplicationReceipt();
   noteMalformedImpacts(clean, { title: "A", impacts: { unitOps: [{}] } }, { title: "A", impacts: { unitOps: [{}] } });
@@ -323,4 +329,64 @@ test("a receipt with nothing to explain shows nothing", () => {
   assert.equal(describeReceiptForPlayer(receipt), null);
   assert.equal(describeReceiptForPlayer(null), null);
   assert.equal(describeReceiptForPlayer({ notes: [{ kind: "gossip", text: "x" }] }), null);
+});
+
+// I278: the notes are written to the model, second person and in English. The
+// player reads a sentence of their own, stored beside it, which the language
+// packs translate; the model's text never changes.
+test("each note carries the player's sentence and its event beside the model's", () => {
+  const receipt = createApplicationReceipt();
+  receipt.applied.events = 2;
+  const model = "Event \"Fall of Kharkiv\": the transfer of \"Kharkiv\" was dropped — no map region matches that name.";
+  noteReceipt(receipt, "dropped", model, receiptPlayerNote("transferNoRegion", { region: "Kharkiv" }, "Fall of Kharkiv"));
+  assert.deepEqual(receipt.notes, [{
+    kind: "dropped",
+    text: model,
+    player: "The transfer of Kharkiv was not applied: no region on the map matches that name.",
+    event: "Fall of Kharkiv",
+  }]);
+
+  const rendered = renderApplicationReceipt(receipt);
+  assert.match(rendered, /no map region matches that name/, "the model keeps its own words");
+  assert.doesNotMatch(rendered, /was not applied/, "and never reads the player's");
+
+  const view = describeReceiptForPlayer(receipt);
+  assert.deepEqual(view.groups[0].notes, [{
+    text: "The transfer of Kharkiv was not applied: no region on the map matches that name.",
+    event: "Fall of Kharkiv",
+    engine: false,
+  }]);
+});
+
+test("the player's sentence survives the save, the merge and an old save without one", () => {
+  const draft = createApplicationReceipt();
+  noteReceipt(draft, "adjusted", "Some event dates fell outside 1936-03-01 to 1936-06-01 and were moved inside it.", receiptPlayerNote("datesClamped"));
+  const merged = mergeReceipts(createApplicationReceipt(), draft);
+  assert.equal(merged.notes[0].player, "Some event dates fell outside this period and were moved inside it.");
+  assert.equal(merged.notes[0].event, undefined, "no event, no field");
+
+  const stored = normalizeApplicationReceipt(JSON.parse(JSON.stringify(merged)));
+  assert.deepEqual(stored.notes, merged.notes, "round-trips through JSON and the normalizer");
+  assert.deepEqual(normalizeApplicationReceipt(stored, { keepNotes: false }).notes, [], "older turns keep counts only, as before");
+
+  // A receipt saved before player sentences existed: the model's text is all
+  // there is, and the panel shows it as the engine's own words.
+  const old = normalizeApplicationReceipt({ applied: { events: 1 }, notes: [{ kind: "withheld", text: "\"A quiet week\" — too routine to show." }] });
+  assert.deepEqual(old.notes, [{ kind: "withheld", text: "\"A quiet week\" — too routine to show." }]);
+  assert.deepEqual(describeReceiptForPlayer(old).groups[0].notes, [{ text: "\"A quiet week\" — too routine to show.", event: "", engine: true }]);
+
+  // Bounded like the model's text.
+  const long = normalizeApplicationReceipt({ notes: [{ kind: "dropped", text: "x", player: "y".repeat(600), event: "z".repeat(600) }] });
+  assert.equal(long.notes[0].player.length, RECEIPT_NOTE_MAX_CHARS);
+  assert.equal(long.notes[0].event.length, RECEIPT_EVENT_MAX_CHARS);
+});
+
+test("two facts that read the same to the player are shown once", () => {
+  const receipt = createApplicationReceipt();
+  noteReceipt(receipt, "redone", "The date 1936-13-01 is not a date.", receiptPlayerNote("redone"));
+  noteReceipt(receipt, "redone", "Event 4 names no region.", receiptPlayerNote("redone"));
+  assert.equal(receipt.notes.length, 2, "the model is told both");
+  const view = describeReceiptForPlayer(receipt);
+  assert.equal(view.count, 1);
+  assert.equal(view.groups[0].notes[0].text, "The first answer broke one of the engine's rules and was written again.");
 });

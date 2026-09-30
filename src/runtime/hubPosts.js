@@ -169,14 +169,15 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
 // Whether a copy downloaded from a post can take the post's newer file: it came
 // from that post, the player has not edited it (an edited copy is never
 // overwritten — its player suggests their changes instead), and the post's
-// file is not the one it was imported from. The Scenarios tab's Update button
-// and the Community tab's "Update available" both ask this.
+// file is not the one it was imported from, or its community basemap could not
+// be downloaded (missingBasemap), which Update tries again. The Scenarios tab's
+// Update button and the Community tab's "Update available" both ask this.
 export const hubUpdateAvailable = (scenario, post) => Boolean(
   scenario?.hubOrigin &&
   !scenario.hubOrigin.editedAt &&
   post?.bundleUrl &&
   Number(post.id) === Number(scenario.hubOrigin.postId) &&
-  post.bundleUrl !== scenario.hubOrigin.bundleUrl,
+  (post.bundleUrl !== scenario.hubOrigin.bundleUrl || scenario.missingBasemap),
 );
 
 // The library's scenarios that came from each hub post, by post id.

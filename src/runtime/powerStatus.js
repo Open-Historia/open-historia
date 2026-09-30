@@ -378,32 +378,6 @@ export const seedPowerBaselineScore = (worldLike, polityInput, scoreInput, { bas
   return { ...world, powerStatus };
 };
 
-export const seedPowerTier = (worldLike, polityInput, tierInput, { basis = "generated-estimate", date = "", round = 0 } = {}) => {
-  const world = clone(worldLike || {});
-  const polity = canonicalPolity(polityInput, world);
-  const tier = normalizePowerTier(tierInput);
-  if (!polity || !tier) return world;
-  const powerStatus = normalizePowerStatus(world.powerStatus, world);
-  const native = estimateNativePowerScore({ ...world, powerStatus }, polity);
-  powerStatus.byPolity[polity] = {
-    polityKey: polity,
-    tier,
-    score: native.score,
-    strategicWeight: native.strategicWeight,
-    sovereignCapabilityScore: native.sovereignCapabilityScore,
-    institutionalLeverageScore: native.institutionalLeverageScore,
-    strategicActivityScore: native.strategicActivityScore,
-    baselineScore: null,
-    basis: clean(basis) || "generated-estimate",
-    lastUpdatedDate: clean(date),
-    lastUpdatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
-    candidateTier: "",
-    candidateRounds: 0,
-    reasons: native.reasons,
-  };
-  return { ...world, powerStatus };
-};
-
 export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate = false } = {}) => {
   const world = clone(worldLike || {});
   const powerStatus = normalizePowerStatus(world.powerStatus, world);

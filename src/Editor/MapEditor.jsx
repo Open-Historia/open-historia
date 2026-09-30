@@ -57,6 +57,7 @@ import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
@@ -749,6 +750,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.groups = normalizeGroups(initialMap.groups);
     // The scenario's puppet states, as its world has them (scenarioPuppets.js).
     base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
+    // Its region types, so a round trip keeps them (the default Land and
+    // Coastal for a scenario saved before they were).
+    const regionTypes = normalizeRegionTypes(initialMap.regionTypes);
+    if (regionTypes.length) base.types = regionTypes;
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);

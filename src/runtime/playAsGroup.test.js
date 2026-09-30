@@ -102,3 +102,9 @@ test("the advisor reads that the player owns nothing and leads a group", async (
   assert.match(text, /^None — Cartel del Norte is a group, not a country\./);
   assert.match(text, /Sonora \(r1\)/);
 });
+
+test("with groups switched off for the game, the player's polity reads as landless, not as a group", async () => {
+  const text = await buildPlayerPolityRegionsText({ game: { country: PLAYER }, world: world() }, [{ id: "r1", name: "Sonora" }], { groups: false });
+  assert.doesNotMatch(text, /group/i);
+  assert.doesNotMatch(text, /Sonora/);
+});

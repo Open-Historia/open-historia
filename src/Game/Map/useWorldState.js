@@ -3,6 +3,7 @@ import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.j
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -13,6 +14,7 @@ import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_MARKERS = Object.freeze([]);
+const EMPTY_REGION_TYPES = Object.freeze([]);
 
 let sharedState = null;
 let publishedState = null;
@@ -162,6 +164,11 @@ const deriveMapState = (state) => ({
     return { groups, groupAreas: normalizeGroupAreas(state.groupAreas, groups) };
   })(),
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+  // The scenario's region types (runtime/regionTypes.js), whose look the map
+  // draws; a scenario saved before they were exported has none.
+  regionTypes: Array.isArray(state?.regionTypes) && state.regionTypes.length
+    ? normalizeRegionTypes(state.regionTypes)
+    : EMPTY_REGION_TYPES,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
   cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
   labelFont: state?.labelFont ?? "",
@@ -183,6 +190,7 @@ const sameMapState = (prev, next) =>
   prev.regionOwnershipOverrides === next.regionOwnershipOverrides &&
   prev.regionClaimants === next.regionClaimants &&
   prev.markers === next.markers &&
+  prev.regionTypes === next.regionTypes &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
   prev.groups === next.groups &&
@@ -211,6 +219,9 @@ const stabilizeMapStateReferences = (prev, next) => {
     markers: areEqualStructured(prev.markers, next.markers)
       ? prev.markers
       : next.markers,
+    regionTypes: areEqualStructured(prev.regionTypes, next.regionTypes)
+      ? prev.regionTypes
+      : next.regionTypes,
     cityRenames: areEqualStructured(prev.cityRenames, next.cityRenames)
       ? prev.cityRenames
       : next.cityRenames,

@@ -30,6 +30,7 @@ import {
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { zipBundle } from "../../runtime/bundleZip.js";
 import { sha256Hex } from "../../runtime/basemapLibrary.js";
+import { noteMissingBasemapTried } from "../../runtime/missingBasemap.js";
 import { listFlags } from "../../runtime/flagLibrary.js";
 import {
   HUB_NEW_POST_URL,
@@ -177,7 +178,7 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
 // What the library already holds of a post (hubCopyStatus), as a small pill.
 const LIBRARY_BADGES = {
   current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
-  update: { label: "Update available", title: "Your copy is older than this post. Update it from the Scenarios tab." },
+  update: { label: "Update available", title: "Your copy is older than this post, or its basemap could not be downloaded. Update it from the Scenarios tab." },
   edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
 };
 
@@ -602,6 +603,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // their changes back to the post (server/hubProvenance.js).
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       const details = await importScenarioBundle(bundle);
+      // A basemap that just failed to download is not tried again this session
+      // (runtime/missingBasemap.js); Import & Play opens the picker next.
+      noteMissingBasemapTried(details?.scenario);
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
       // or fails the import — fire and forget.
@@ -621,7 +625,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
         );
         const missingBasemap = unresolvedBundleBackground(bundle);
         if (missingBasemap) {
-          setError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+          setError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
         }
       }
       // "Import & Play" goes on to the country picker, which opens over the
