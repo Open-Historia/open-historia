@@ -122,6 +122,20 @@ export const revealNeedsStaging = (record, visibleCount) =>
     (record?.events?.length ?? 0) > 0 && visibleCount < record.events.length;
 
 // ---------------------------------------------------------------------------
+// Rereading the kept turns
+// ---------------------------------------------------------------------------
+
+// Which kept turn the panel shows, as an index into world.simulationHistory
+// (newest first). The choice is keyed on the newest turn's record id, so a new
+// turn landing puts the panel back on it; and it is clamped, since an undo or a
+// Game Master record can shorten the list under it.
+export const shownTurnIndex = (choice, latestRecordId, historyLength) => {
+  if (!choice || choice.latestId !== latestRecordId) return 0;
+  const index = Math.trunc(Number(choice.index) || 0);
+  return Math.max(0, Math.min(index, Math.max(0, (Number(historyLength) || 0) - 1)));
+};
+
+// ---------------------------------------------------------------------------
 // Carrying the reveal from the streamed cards to the written turn
 // ---------------------------------------------------------------------------
 

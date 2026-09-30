@@ -64,6 +64,7 @@ import {
     resolveRegionName,
     resolveRevealCarry,
     revealNeedsStaging,
+    shownTurnIndex,
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
@@ -452,7 +453,8 @@ const focusMapOnBounds = (mapRef, bounds) => {
 const filterPlannedActions = (actions) =>
 normalizeActions(actions).filter((action) => action.status === "planned");
 
-// Built for the newest turn only: that is the one the Events panel shows.
+// Built only for a turn the Events panel shows: the newest, or an older one
+// the player turned back to with the header's ‹ ›.
 const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
     if (!entry) {
         return null;
@@ -1580,6 +1582,58 @@ const TimelineSkipPanel = ({
     );
 };
 
+// The Events panel's header line with the ‹ › between the kept turns: the
+// round, then the dates it spans, each its own string. The newest turn is on
+// the right, as on a timeline.
+const turnPickerButtonStyle = (enabled) => ({
+    alignItems: "center",
+    background: "none",
+    border: "none",
+    borderRadius: "6px",
+    color: enabled ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.2)",
+    cursor: enabled ? "pointer" : "default",
+    display: "inline-flex",
+    font: "inherit",
+    fontSize: "0.95rem",
+    justifyContent: "center",
+    lineHeight: 1,
+    padding: "0.1rem 0.35rem",
+});
+
+const TurnPicker = ({ index, count, onOlder, onNewer, round, rangeLabel }) => {
+    const canOlder = index < count - 1;
+    const canNewer = index > 0;
+    return (
+        <span style={{ alignItems: "center", display: "inline-flex", flexWrap: "wrap", gap: "0.2rem", maxWidth: "100%" }}>
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canOlder ? onOlder : undefined}
+        disabled={!canOlder}
+        aria-label="Show the previous turn"
+        title="Show the previous turn"
+        style={turnPickerButtonStyle(canOlder)}
+        >
+        {"‹"}
+        </button>
+        {round > 0 && <span>{`Round ${round}`}</span>}
+        {round > 0 && rangeLabel && <span aria-hidden="true">{"·"}</span>}
+        {rangeLabel && <span>{rangeLabel}</span>}
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canNewer ? onNewer : undefined}
+        disabled={!canNewer}
+        aria-label="Show the next turn"
+        title="Show the next turn"
+        style={turnPickerButtonStyle(canNewer)}
+        >
+        {"›"}
+        </button>
+        </span>
+    );
+};
+
 const TimelineHistoryPanel = ({
     isOpen,
     onRevealNextEvent,
@@ -1606,8 +1660,13 @@ const TimelineHistoryPanel = ({
     // validated self (eventDisclosureKey).
     openMapChanges = null,
     onToggleMapChanges = null,
+    // { index, count, onOlder, onNewer }: the header's ‹ › between the kept
+    // turns, index 0 the newest; null hides it.
+    turnPicker = null,
     warning,
 }) => {
+    // An older turn, reread whole: it opens at its first event, not its last.
+    const pastTurn = Boolean(turnPicker && turnPicker.index > 0);
     // Category filter chips (ported from the abdulrahman-2005 fork): only the
     // categories present on this turn's events appear; null = no filter. Older
     // events without tags are always shown. The choice is keyed by the record,
@@ -1633,7 +1692,8 @@ const TimelineHistoryPanel = ({
     ? filteredEvents.slice(0, Math.min(visibleEventCount, totalEvents))
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
-    const lastVisibleEventRef = React.useRef(null);
+    const scrollAnchorRef = React.useRef(null);
+    const scrollAnchorIndex = pastTurn ? 0 : visibleEvents.length - 1;
     // The reveal buttons pin a compact minHeight inline, which the finger-sized
     // .oh-tap-row cannot beat; on a touch screen it is left to the class.
     const isTouch = useTouchPrimary();
@@ -1675,11 +1735,11 @@ const TimelineHistoryPanel = ({
     };
 
     useEffect(() => {
-        if (!isOpen || !lastVisibleEventRef.current) {
+        if (!isOpen || !scrollAnchorRef.current) {
             return;
         }
 
-        lastVisibleEventRef.current.scrollIntoView({
+        scrollAnchorRef.current.scrollIntoView({
             behavior: "smooth",
             block: "start",
         });
@@ -1690,12 +1750,26 @@ const TimelineHistoryPanel = ({
         eyebrow=""
         isOpen={isOpen}
         onClose={onClose}
-        subtitle={record?.rangeLabel || ""}
+        subtitle={turnPicker && record ? (
+            <TurnPicker
+            index={turnPicker.index}
+            count={turnPicker.count}
+            onOlder={turnPicker.onOlder}
+            onNewer={turnPicker.onNewer}
+            round={record.round}
+            rangeLabel={record.rangeLabel || ""}
+            />
+        ) : (record?.rangeLabel || "")}
         title="Events"
         topOffset={topOffset}
         >
         {/* The shared markdown sheet: tables in an event body or a document. */}
         <MarkdownStyleInjector />
+        {pastTurn && (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.75rem" }}>
+            This is an earlier turn, shown in full. The map shows the world as it is now.
+            </div>
+        )}
         {warning && (
             <div
             style={{
@@ -1808,12 +1882,12 @@ const TimelineHistoryPanel = ({
                 </div>
             )}
             {visibleEvents.map((event, index) => {
-                const isLastVisible = index === visibleEvents.length - 1;
+                const isScrollAnchor = index === scrollAnchorIndex;
 
                 const openKey = eventDisclosureKey(event);
 
                 return (
-                    <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
+                    <div key={event.id} ref={isScrollAnchor ? scrollAnchorRef : null}>
                     {/* No "Show on map" footer: the camera already flies to
                         every event as it is revealed. The offered interactive
                         event carries its offer instead. */}
@@ -2690,8 +2764,8 @@ const DateWidget = ({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
-    // The newest turn alone: it is all the panel shows, and this runs on every
-    // world write, so the other eleven were built and thrown away each time.
+    // The newest turn alone: this runs on every world write, and an older turn
+    // is built only while the player has turned back to it (below).
     const latestTurnRecord = useMemo(() => {
         const rawHistory = worldState?.simulationHistory ?? [];
         return buildTurnRecord({
@@ -2702,8 +2776,31 @@ const DateWidget = ({
             game: gameData,
         });
     }, [eventLookup, gameData, worldState]);
-    const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
-    ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
+    // The turn picker in the panel's header: which of the kept turns is shown,
+    // 0 for the newest (turnReveal.js shownTurnIndex). An older turn is shown
+    // whole and read only: no reveal, no staging, no camera, no undo.
+    const [turnChoice, setTurnChoice] = useState({ latestId: null, index: 0 });
+    const keptTurnCount = worldState?.simulationHistory?.length ?? 0;
+    const turnIndex = skipInFlight ? 0 : shownTurnIndex(turnChoice, latestTurnRecord?.id ?? null, keptTurnCount);
+    const olderTurnRecord = useMemo(() => {
+        if (turnIndex <= 0) return null;
+        const rawHistory = worldState?.simulationHistory ?? [];
+        return buildTurnRecord({
+            entry: rawHistory[turnIndex],
+            index: turnIndex,
+            history: rawHistory,
+            eventLookup,
+            game: gameData,
+        });
+    }, [eventLookup, gameData, turnIndex, worldState]);
+    const showTurn = (index) => setTurnChoice({ latestId: latestTurnRecord?.id ?? null, index });
+    // Closing the panel puts it back on the newest turn for next time.
+    useEffect(() => {
+        if (openPanel !== "history") setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
+    }, [openPanel]);
+    const shownWrittenRecord = olderTurnRecord ?? latestTurnRecord;
+    const persistedFallbackWarning = shownWrittenRecord?.source === "fallback"
+    ? `Turn generated by fallback: ${shownWrittenRecord.fallbackReason || "structured AI output was unavailable"}`
     : "";
     // Built even with no events yet, so a skip that has not produced its first
     // does not leave the previous turn on screen as if it were this one.
@@ -2716,12 +2813,13 @@ const DateWidget = ({
             rangeLabel: formatRange(liveRange.from, liveRange.to),
         })
         : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round]);
-    const displayRecord = liveTurnRecord ?? latestTurnRecord;
+    const displayRecord = liveTurnRecord ?? shownWrittenRecord;
     const totalVisibleEvents = displayRecord?.events?.length || 0;
     // The newest revealed event, written turn or not: the camera follows the
-    // live reveal for the same reason the map stages along with it.
+    // live reveal for the same reason the map stages along with it. Not on an
+    // older turn being reread: the map shows the world as it is now.
     const activeVisibleEvent =
-    openPanel === "history" && totalVisibleEvents > 0
+    openPanel === "history" && totalVisibleEvents > 0 && !olderTurnRecord
     ? displayRecord.events[Math.min(Math.max(visibleEventCount, 1), totalVisibleEvents) - 1]
     : null;
 
@@ -3023,7 +3121,8 @@ const DateWidget = ({
     useEffect(() => {
         const record = latestTurnRecord;
         // Not mid-skip: the snapshot that would load belongs to the turn before.
-        if (skipInFlight || openPanel !== "history" || !record || !needsStaging) {
+        // Nor while an older turn is reread: it is not staged.
+        if (skipInFlight || openPanel !== "history" || !record || !needsStaging || turnIndex > 0) {
             return undefined;
         }
         if (stagedBase.recordId === record.id && stagedBase.world) {
@@ -3051,7 +3150,7 @@ const DateWidget = ({
         return () => {
             cancelled = true;
         };
-    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId]);
+    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId, turnIndex]);
 
     useEffect(() => {
         // No snapshot needed while the skip writes: the world has not moved, so
@@ -3086,6 +3185,7 @@ const DateWidget = ({
         const stagingActive =
             !skipInFlight &&
             openPanel === "history" &&
+            !olderTurnRecord &&
             record &&
             stagedBase.recordId === record.id &&
             stagedBase.world &&
@@ -3117,7 +3217,7 @@ const DateWidget = ({
         });
         setWorldStateOverride(stagedWorld);
         setUnitsOverride(stagedWorld.units ?? [], stagedWorld.pendingUnitOrders ?? []);
-    }, [latestTurnRecord, liveStageBase, liveTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
+    }, [latestTurnRecord, liveStageBase, liveTurnRecord, olderTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
 
     // Never leave a stale override behind when this widget unmounts.
     useEffect(
@@ -3166,26 +3266,35 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={cardLookups}
         onClose={() => setPanel(null)}
-        buildDebugIncident={buildFallbackIncident}
+        // Everything that acts on a turn acts on the newest one, so none of it
+        // is offered over an older turn being reread.
+        buildDebugIncident={olderTurnRecord ? null : buildFallbackIncident}
         // A fallback turn is usually a turn the player wants gone; the undo it
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.
         // Nothing is written mid-skip, so there is no turn to roll back and no round to stop.
-        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight}
+        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight}
+        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
-        offeredInteractiveId={!skipInFlight && shownOffer ? shownOffer.id : ""}
+        offeredInteractiveId={!skipInFlight && !olderTurnRecord && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
         progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
         record={displayRecord}
         topOffset={topOffset}
-        visibleEventCount={visibleEventCount}
+        visibleEventCount={olderTurnRecord ? totalVisibleEvents : visibleEventCount}
+        // Not while a skip is written, and only once there is a turn to go back to.
+        turnPicker={!liveTurnRecord && keptTurnCount > 1 ? {
+            index: turnIndex,
+            count: keptTurnCount,
+            onOlder: () => showTurn(Math.min(keptTurnCount - 1, turnIndex + 1)),
+            onNewer: () => showTurn(Math.max(0, turnIndex - 1)),
+        } : null}
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
-        warning={fallbackWarning || persistedFallbackWarning}
+        warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}
         />
 
         <div

@@ -19,6 +19,7 @@ import {
   liveEventCard,
   resolveRevealCarry,
   revealNeedsStaging,
+  shownTurnIndex,
   turnRecordId,
 } from "./turnReveal.js";
 
@@ -111,6 +112,23 @@ test("a turn seen whole needs no restore point read", () => {
   assert.equal(revealNeedsStaging(record, 3), false, "fully revealed: the world as it is");
   assert.equal(revealNeedsStaging({ events: [] }, 1), false);
   assert.equal(revealNeedsStaging(null, 1), false);
+});
+
+// ---- rereading the kept turns --------------------------------------------------
+
+test("the turn picker shows the chosen kept turn while the newest turn is the same one", () => {
+  const choice = { latestId: "t9", index: 3 };
+  assert.equal(shownTurnIndex(choice, "t9", 12), 3);
+  assert.equal(shownTurnIndex(choice, "t10", 13), 0, "a new turn landing puts the panel back on it");
+  assert.equal(shownTurnIndex(null, "t9", 12), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 0 }, "t9", 12), 0);
+});
+
+test("the chosen turn is clamped to the turns still kept", () => {
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 11 }, "t9", 4), 3, "the list got shorter under it");
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 5 }, "t9", 0), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: -2 }, "t9", 12), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: "x" }, "t9", 12), 0);
 });
 
 // ---- carrying the reveal -------------------------------------------------------
