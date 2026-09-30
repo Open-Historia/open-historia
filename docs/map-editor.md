@@ -234,18 +234,23 @@ A "type" carries render + gameplay settings and is referenced by each region's `
 | Field | Used by | Meaning |
 |---|---|---|
 | `id`, `name` | — | Identity. |
-| `opacity` | `olStyle.js` | Fill alpha for **owned** regions. |
-| `unownedOpacity` | `olStyle.js` | Fill alpha for unowned. |
-| `zIndex` | `olStyle.js` | Draw order. |
-| `strokeWidth`, `strokeColor`, `strokeOpacity` | `olStyle.js` | Border. |
-| `overrideColor` | `olStyle.js` | Force a fixed fill instead of the owner colour (`null` = off). |
-| `pathfindingSpeed`, `interactable`, `passable`, `showToDefaultPrompt` | nothing yet | Gameplay flags, saved with the map but read by no code: the game has no pathfinding or passability system for them to feed. The panel says so above them. |
-| `includedInLabels` | `OlMap` label layer | `false` suppresses the region label. |
-| `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js`) | Hides the type outside the zoom band. |
+| `opacity` | `olStyle.js`; game map | Fill alpha for **owned** regions. |
+| `unownedOpacity` | `olStyle.js`; game map | Fill alpha for unowned. |
+| `zIndex` | `olStyle.js` | Draw order. Workshop only: the game's regions never overlap. |
+| `strokeWidth`, `strokeColor`, `strokeOpacity` | `olStyle.js`; game map | Border. |
+| `overrideColor` | `olStyle.js`; game map | Force a fixed fill instead of the owner colour (`null` = off). |
+| `pathfindingSpeed`, `passable`, `interactable` | the game's unit and structure directors | Rules for moving and placing, told to the AI (below). Tooltips on the rows say what each does. |
+| `showToDefaultPrompt` | nothing | The official editor's flag. The game has no reader for it, so the panel does not offer it; a type keeps the value it has. |
+| `includedInLabels` | `OlMap` label layer | `false` suppresses the region label. Workshop only: the game labels countries, not regions. |
+| `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js`); game map | Hides the type outside the zoom band. |
 
 At least one type must always exist (delete is disabled at length 1).
 
-**Types are Workshop-only.** Every "Used by" above is the Workshop's own map. The game export keeps a region's `typeId` (and the suggestion diff compares it), but nothing in the game looks the type up: the game map draws every region in its owner's colour and labels it regardless of the type. The panel says this under its Add row.
+**Types in the game** (`src/runtime/regionTypes.js`). The scenario save writes the document's types into the world as `world.regionTypes` (`buildGameSeed`, `normalizeRegionTypes`), each region keeps its `typeId` in the regions file, and opening the scenario's map in the Workshop again restores them (a scenario saved before this opens with Land and Coastal, as before). Only what differs from the default Land type counts, so a map whose types are left as they come looks and plays exactly as before:
+- **The map** (`Nations.jsx`) draws a type's override colour over the owner's, its opacity and unowned opacity as a factor on the game's own fill strength (twice Land's 0.55 fills twice as strongly as a Land region, never above full), its border colour and width over the game's close-zoom province hairline, and hides the fill and border outside its zoom band, counted in Workshop zoom levels (the game's MapLibre zoom plus one). They reach the paint as feature-state beside the owner's colour (`typeFill`, `typeOpacity`, `typeStroke`, `typeStrokeScale`; `regionTypePaint.js`), written only for regions of a type that draws differently, and rewritten when a region changes hands (its opacity follows whether it is owned) or the zoom crosses a band. The province hairline shows only from zoom 4.15, so a type's border does too. During a conquest's colour flood the region shows its owners' colours and returns to its type's once the flood ends.
+- **The AI.** A type that is impassable (`passable` off, or speed 0), slower or faster to cross (`pathfindingSpeed`), or out of play (`interactable` off) becomes one line in the unit and structure directors' prompts, `[Region types]`, naming up to 12 of its regions from the compact region catalog (`regionTypeRules`). It rides in the requests they make anyway, and a map without such types adds nothing. The engine does not enforce the rules itself: they are the AI's to follow.
+
+The panel says under its Add row which settings the game draws, and above the three flags that the AI is told them.
 
 ---
 
@@ -431,6 +436,7 @@ Save robustness:
 | `world.groups` / `world.groupAreas` | The groups (§24b) and which region each controls — the registry, plus any group a region names that the registry lacks (default colour). Regions carry no `group` in the regions file: the world is the whole truth. |
 | `world.markers` | The map features that are not cities (§9d), `buildMarkersForGame`. |
 | `world.puppets` | The puppet states (§24c), `buildPuppetsForGame`. |
+| `world.regionTypes` | The document's region types (§8), `normalizeRegionTypes`. The game draws them and tells the AI their rules. |
 | `world.regionClaimants` | `{regionId: [claimant]}` — the map's disputes. |
 | `world.settledRegionClaims` | `[]` — a scenario starts with no dispute already over. |
 | `world.units` | Starting units (`buildUnitsForGame`, §9b), `[]` when none. |
@@ -478,7 +484,7 @@ When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx`) fetc
 
 ## 20b. Groups, puppet states and structures round-trip
 
-`libraryBar.jsx` hands the Workshop the scenario world's `groups`, `groupAreas` (stamped onto the regions with the disputes, `claimStamper`), `markers` and `puppets`, and `applyMapToScenario` writes back the Workshop's: it opened with the whole of each, so what it saves is the whole of each. The document keeps them as `doc.groups`, the regions' `group`, map features in `doc.features`, and `doc.puppets`; `buildDocumentFields` lists `units`, `groups` and `puppets` (units were missing there, so a document's units vanished on reopening it), and both stores' creates keep every one of them, built from the one field list in `server/mapEditorFields.js` (`DOCUMENT_FIELDS`) — each store kept its own list, and neither named `puppets`, so puppet states set before a new map's first save were gone on reopening it. A field added to `buildDocumentFields` goes in that list too.
+`libraryBar.jsx` hands the Workshop the scenario world's `groups`, `groupAreas` (stamped onto the regions with the disputes, `claimStamper`), `markers`, `puppets` and `regionTypes`, and `applyMapToScenario` writes back the Workshop's: it opened with the whole of each, so what it saves is the whole of each. The document keeps them as `doc.groups`, the regions' `group`, map features in `doc.features`, and `doc.puppets`; `buildDocumentFields` lists `units`, `groups` and `puppets` (units were missing there, so a document's units vanished on reopening it), and both stores' creates keep every one of them, built from the one field list in `server/mapEditorFields.js` (`DOCUMENT_FIELDS`) — each store kept its own list, and neither named `puppets`, so puppet states set before a new map's first save were gone on reopening it. A field added to `buildDocumentFields` goes in that list too.
 
 ## 21. Document migration (`documentMigration.js`)
 

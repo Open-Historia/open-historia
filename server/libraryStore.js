@@ -523,6 +523,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "puppets",
   "groups",
   "groupAreas",
+  // The map's region types (runtime/regionTypes.js), which the game draws.
+  "regionTypes",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",

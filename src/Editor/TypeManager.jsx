@@ -6,11 +6,14 @@
 // Region Type Manager — mirrors the official editor. Each region "type" carries
 // render settings (opacity, unowned opacity, z-index, stroke, override color,
 // zoom band, included-in-labels) plus gameplay flags (pathfinding speed,
-// interactable, passable, show-to-default-prompt). Editing a type live-restyles
-// the map (OlMap restyles on the types prop changing). Only the Workshop map
-// reads any of it: the game gets a region's typeId but never looks the type
-// up, and has no pathfinding or passability for the four flags to feed, so
-// the panel says so rather than letting authors expect them to change play.
+// interactable, passable). Editing a type live-restyles the map (OlMap
+// restyles on the types prop changing). The types go to the game with the
+// scenario (world.regionTypes, runtime/regionTypes.js): the game map draws the
+// override colour, opacity, stroke and zoom band, and the unit and structure
+// directors are told the three flags as rules for moving and placing. Z-Index
+// and Included In Labels have no counterpart in the game, and the panel says
+// so. The official editor's Show To Default Prompt has no reader in the game,
+// so it is not offered here; a type keeps whatever value it had.
 
 import { useState } from "react";
 import Panel from "./Panel.jsx";
@@ -72,7 +75,7 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
         </button>
       </div>
       <div style={{ fontSize: 11, lineHeight: 1.45, color: "rgba(255,255,255,0.5)" }}>
-        Region types style this Workshop map only. The game draws every region in its owner's colour.
+        The game draws each type's override colour, opacity, stroke and zoom range as well. Z-Index and Included In Labels only style this Workshop map.
       </div>
 
       {types.map((t) => {
@@ -123,18 +126,15 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                   </span>
                 </Row>
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 3 }}>
-                  The game does not use the next four settings yet. They are saved with the map.
+                  When the AI moves units and places structures, it is told which regions are impassable, slower or faster to cross, or not in play.
                 </div>
-                <Row label="Pathfinding Speed">
+                <Row label="Pathfinding Speed" title="1 is the usual speed. Below 1 is slower, above 1 is faster, and 0 is impassable.">
                   <NumberField value={t.pathfindingSpeed} step={0.1} min={0} onChange={(v) => update(t.id, { pathfindingSpeed: v })} />
                 </Row>
-                <Row label="Interactable">
+                <Row label="Interactable" title="Off: the AI places no units and builds no structures in these regions.">
                   <Toggle value={t.interactable} onChange={(v) => update(t.id, { interactable: v })} />
                 </Row>
-                <Row label="Show To Default Prompt">
-                  <Toggle value={t.showToDefaultPrompt} onChange={(v) => update(t.id, { showToDefaultPrompt: v })} />
-                </Row>
-                <Row label="Passable">
+                <Row label="Passable" title="Off: the AI moves no units into or through these regions.">
                   <Toggle value={t.passable} onChange={(v) => update(t.id, { passable: v })} />
                 </Row>
                 <Row label="Included In Labels">

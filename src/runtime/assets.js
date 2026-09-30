@@ -1512,6 +1512,7 @@ const customRegionRawEntries = (geojson) => {
       lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
       tags: Array.isArray(props?.tags) ? props.tags : [],
       type: props?.type ?? "",
+      typeId: props?.typeId ?? "",
       adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
       bounds: geometryBounds(feature?.geometry),
       claimants: Array.isArray(props?.claimants) ? props.claimants : [],
@@ -1543,6 +1544,9 @@ const compactCustomRegionEntries = (rawEntries) => {
       lat: Number.isFinite(lat) ? lat : null,
       tags: Array.isArray(raw?.tags) ? raw.tags.map((value) => String(value)) : [],
       type: raw?.type ? String(raw.type) : "",
+      // Its Workshop region type (runtime/regionTypes.js): the AI's placement
+      // rules name the regions of a type the scenario gives rules to.
+      ...(raw?.typeId ? { typeId: String(raw.typeId) } : {}),
       adjacencies: Array.isArray(raw?.adjacencies)
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],

@@ -364,12 +364,14 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "structureDirectorProjects",
     "structureDirectorGameDate",
     "structureDirectorBudget",
+    "regionTypeRules",
   ]),
   unitDirector: Object.freeze([
     "unitDirectorUnits",
     "unitDirectorCandidates",
     "unitDirectorGameDate",
     "unitDirectorRound",
+    "regionTypeRules",
   ]),
 });
 

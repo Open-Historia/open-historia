@@ -43,6 +43,8 @@ import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
 import { cityPopulationOverridesByTileName, effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
+import { TYPE_FILL_STATE, withTypeFillOpacity } from "./regionTypePaint.js";
+import { regionTypeFeatureState, regionTypeRenderStyles, regionTypeZoomKey } from "../../runtime/regionTypes.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import {
   createOwnerRgbResolver,
@@ -295,8 +297,11 @@ const NEUTRAL_LAND_COLOR = "rgb(88, 98, 110)";
 // Constant GL expression: canonical live ownership arrives through feature-state.
 // Authored/disputed features may also carry an explicit ownerColor/_fillColor;
 // neutral land is the final fallback. No derived polity surface owns political fill.
+// A scenario region type's override colour (typeFill, regionTypePaint.js) comes
+// before all of them, as it does in the Workshop.
 const CUSTOM_FILL_COLOR = [
   "coalesce",
+  TYPE_FILL_STATE,
   ["feature-state", "fillColor"],
   ["get", "ownerColor"],
   ["get", "_fillColor"],
@@ -304,6 +309,7 @@ const CUSTOM_FILL_COLOR = [
 ];
 const DETAIL_FILL_COLOR = [
   "coalesce",
+  TYPE_FILL_STATE,
   ["feature-state", "fillColor"],
   "rgba(0, 0, 0, 0)",
 ];
@@ -333,11 +339,13 @@ const SCENARIO_REGION_ID_EXPRESSION = ["to-string", ["coalesce", ["get", "id"], 
 // MapLibre requires camera expressions to keep ["zoom"] as the direct input
 // of the top-level step/interpolate expression. Data-driven visibility therefore
 // belongs in each stop output, never around the zoom ramp with a top-level case.
+// So does a scenario region type's factor on it (withTypeFillOpacity), which is
+// 1 for every region whose type draws as Land does.
 const buildPoliticalFillOpacity = (hiddenExpression = null) => [
   "interpolate", ["linear"], ["zoom"],
   ...POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
     zoom,
-    hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
+    hiddenExpression ? ["case", hiddenExpression, 0, withTypeFillOpacity(opacity)] : withTypeFillOpacity(opacity),
   ]),
 ];
 
@@ -372,6 +380,7 @@ const WorldMap = ({ isGlobe = false }) => {
     polityOverrides,
     groups,
     groupAreas,
+    regionTypes,
     labelFont,
     labelHaloColor,
     labelTextColor,
@@ -443,6 +452,9 @@ const WorldMap = ({ isGlobe = false }) => {
   // epoch bump mid-sweep reuses it instead of recolouring every region again.
   const ownershipFillTargetRef = useRef({ overrides: null, colorCss: null, fills: null });
   const appliedTileFillStateRef = useRef(new Map());
+  // The region-type feature-state written so far (id -> what and where), and
+  // the source rebuilds it belongs to: a rebuilt source has none.
+  const appliedRegionTypeStateRef = useRef({ epoch: "", written: new Map() });
   const ownershipSweepRef = useRef({
     active: false,
     token: 0,
@@ -2805,6 +2817,95 @@ const WorldMap = ({ isGlobe = false }) => {
       if (workFrame) cancelAnimationFrame(workFrame);
     };
   }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentation.holds, ownershipPresentationHoldEpoch, shouldMountStockRegions, tileFillSourceEpoch]);
+
+  // Region types (runtime/regionTypes.js): the fill colour, opacity, border and
+  // zoom range a scenario gives a kind of region, written as feature-state
+  // beside the owner's fillColor on every source that draws the region (the
+  // paint reads them through regionTypePaint.js). Only regions of a type that
+  // draws differently from Land are written, so a map without such types
+  // writes nothing. A region's opacity follows whether it is owned, and a
+  // banded type is rewritten only when the zoom crosses one of its bands.
+  const regionTypeStyles = useMemo(() => regionTypeRenderStyles(regionTypes), [regionTypes]);
+  const typedRegionStyles = useMemo(() => {
+    const typed = new Map();
+    if (!regionTypeStyles.size) return typed;
+    for (const record of customRegionMeta.records ?? []) {
+      const id = String(record?.id ?? "");
+      const style = regionTypeStyles.get(String(record?.typeId ?? ""));
+      if (id && style) typed.set(id, style);
+    }
+    return typed;
+  }, [customRegionMeta.records, regionTypeStyles]);
+  const [regionTypeZoom, setRegionTypeZoom] = useState("");
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on || !regionTypeStyles.size) return undefined;
+    const update = () => setRegionTypeZoom(regionTypeZoomKey(regionTypeStyles, mapInstance.getZoom()));
+    update();
+    mapInstance.on("zoom", update);
+    return () => mapInstance.off("zoom", update);
+  }, [map, regionTypeStyles]);
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.setFeatureState) return undefined;
+    const ledger = appliedRegionTypeStateRef.current;
+    const epoch = `${customFillSourceEpoch}:${tileFillSourceEpoch}`;
+    if (ledger.epoch !== epoch) {
+      ledger.epoch = epoch;
+      ledger.written = new Map();
+    }
+    if (!typedRegionStyles.size && !ledger.written.size) return undefined;
+
+    let cancelled = false;
+    let frame = 0;
+    const begin = () => {
+      if (cancelled) return;
+      // No style (a lost WebGL context) or no regions source yet waits a frame.
+      if (!mapInstance.style || (customFlag && !mapInstance.getSource?.("custom-regions-source"))) {
+        frame = requestAnimationFrame(begin);
+        return;
+      }
+      const hasCustom = Boolean(mapInstance.getSource("custom-regions-source"));
+      const hasRepair = Boolean(mapInstance.getSource("custom-regions-repair-source"));
+      const hasTiles = Boolean(mapInstance.getSource("regions-source"));
+      const zoom = mapInstance.getZoom();
+      const operations = [];
+      const plan = (id, style) => {
+        const targets = [
+          ...(hasCustom ? [{ source: "custom-regions-source", id }] : []),
+          ...(hasRepair && repairedRegionIdSet.has(id) ? [{ source: "custom-regions-repair-source", id }] : []),
+          ...(hasTiles ? [{ source: "regions-source", sourceLayer: "regions", id }] : []),
+        ];
+        const state = regionTypeFeatureState(style, { owned: Boolean(ownerByRegionId.get(id)), zoom });
+        const signature = `${JSON.stringify(state)}|${targets.map((target) => target.source).join(",")}`;
+        if (ledger.written.get(id) === signature) return;
+        operations.push({ id, style, targets, state, signature });
+      };
+      for (const [id, style] of typedRegionStyles) plan(id, style);
+      // A region whose type no longer draws differently goes back to the game's own look.
+      for (const id of ledger.written.keys()) if (!typedRegionStyles.has(id)) plan(id, null);
+
+      // A sea of typed regions is written a slice a frame, like the fills above.
+      let cursor = 0;
+      const applySlice = () => {
+        if (cancelled || !mapInstance.style) return;
+        const until = cursor + 400;
+        while (cursor < operations.length && cursor < until) {
+          const op = operations[cursor++];
+          for (const target of op.targets) mapInstance.setFeatureState(target, op.state);
+          if (op.style) ledger.written.set(op.id, op.signature);
+          else ledger.written.delete(op.id);
+        }
+        if (cursor < operations.length) frame = requestAnimationFrame(applySlice);
+      };
+      applySlice();
+    };
+    begin();
+    return () => {
+      cancelled = true;
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [customFillSourceEpoch, customFlag, map, ownerByRegionId, regionTypeZoom, repairedRegionIdSet, tileFillSourceEpoch, typedRegionStyles]);
 
   const stockRegionsFillPaint = useMemo(
     () => customActive

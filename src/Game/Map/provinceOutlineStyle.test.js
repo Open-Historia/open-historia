@@ -2,14 +2,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPropertyExpression, latest, validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
-import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
+import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_COLOR, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 
 // Evaluate the real paint expressions with MapLibre, not a second implementation
 // of interpolation: invalid camera expressions should fail here, not at runtime.
-const evaluate = (paint, property, zoom) => {
+const evaluate = (paint, property, zoom, featureState = {}) => {
   const compiled = createPropertyExpression(paint[property], latest.paint_line[property]);
   assert.equal(compiled.result, "success", JSON.stringify(compiled.value));
-  return compiled.value.evaluate({ zoom });
+  return compiled.value.evaluate({ zoom }, { properties: {} }, featureState);
 };
 
 test("province paint is valid for both GeoJSON and stock vector layers", () => {
@@ -25,7 +25,16 @@ test("province paint is valid for both GeoJSON and stock vector layers", () => {
     ],
   });
   assert.deepEqual(errors, []);
-  assert.equal(buildProvinceOutlinePaint(true)["line-color"], "rgba(205, 218, 228, 0.64)");
+  assert.equal(evaluate(buildProvinceOutlinePaint(true), "line-color", 8).toString(), "rgba(205,218,228,0.64)");
+  assert.equal(PROVINCE_OUTLINE_COLOR, "rgba(205, 218, 228, 0.64)");
+});
+
+test("a scenario region type recolours and rescales its regions' strokes, and hides them outside its zoom range", () => {
+  const paint = buildProvinceOutlinePaint(true);
+  assert.equal(evaluate(paint, "line-color", 8, { typeStroke: "rgba(255, 0, 0, 1)" }).toString(), "rgba(255,0,0,1)");
+  assert.equal(evaluate(paint, "line-width", 16, { typeStrokeScale: 2 }), 1.44);
+  assert.equal(evaluate(paint, "line-width", 16, { typeStrokeScale: 0 }), 0);
+  assert.equal(evaluate(paint, "line-width", 16, { typeStrokeScale: null }), 0.72, "no factor is the game's own hairline");
 });
 
 test("overview has no province strokes, including the start of the fade", () => {

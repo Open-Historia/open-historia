@@ -5,6 +5,7 @@ import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
 import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
+import { regionTypeRules, regionTypesHaveRules } from "../../runtime/regionTypes.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import {
@@ -2442,6 +2443,12 @@ So use the wider picture to choose the sender and the moment — never to give t
   // frozen prompt pack (which predates the task) still gets the current contract.
   if (["unitDirector", "structureDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
+  }
+  // The scenario's region types with rules for moving and placing (impassable
+  // sea, slow mountains, land out of play; runtime/regionTypes.js), inside the
+  // directors' own requests. A map without such types adds nothing.
+  if (["unitDirector", "structureDirector"].includes(taskKey) && normalizeString(variables?.regionTypeRules)) {
+    systemPrompt = `${systemPrompt}\n\n[Region types]\nThe scenario's author gave these kinds of region rules for moving units and placing things. Keep every move, new unit and structure to them:\n${normalizeString(variables.regionTypeRules)}`;
   }
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
@@ -13841,12 +13848,13 @@ const STRUCTURE_DIRECTOR_INSTRUCTION =
   "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. Return JSON only.";
 const structureDirectorUnavailable = () => ({ eventOrders: [], summary: "Structure director unavailable; no structures added." });
 
-const structureDirectorVariables = (input, game) => ({
+const structureDirectorVariables = (input, game, typeRules = "") => ({
   structureDirectorCandidates: JSON.stringify(input.candidates, null, 2),
   structureDirectorStructures: input.structures.length ? JSON.stringify(input.structures, null, 2) : "None yet.",
   structureDirectorProjects: input.projects.length ? JSON.stringify(input.projects, null, 2) : "None.",
   structureDirectorGameDate: normalizeString(game?.gameDate),
   structureDirectorBudget: String(input.budget),
+  regionTypeRules: typeRules,
 });
 
 // Same as the unit director's: every `at` becomes coordinates before the
@@ -13893,7 +13901,17 @@ const curatorUnavailable = (candidates) => ({
   underrepresentedDomains: [],
 });
 
-const unitDirectorVariables = (input, game) => ({
+// The scenario's region-type rules for the unit and structure directors
+// (runtime/regionTypes.js), naming the regions of each type from the compact
+// catalog the map has already primed. "" for a map whose types have none, which
+// reads nothing.
+const regionTypeRulesFor = async (world) => {
+  if (!regionTypesHaveRules(world?.regionTypes)) return "";
+  const catalog = await loadScenarioRegionCatalog({ force: false }).catch(() => []);
+  return regionTypeRules(world.regionTypes, catalog);
+};
+
+const unitDirectorVariables = (input, game, typeRules = "") => ({
   unitDirectorCandidates: JSON.stringify(input.candidates, null, 2),
   // The list is capped with the events' own units first (nativeUnitDirector.js);
   // a cut is said, so an unlisted power's army is not read as absent.
@@ -13902,6 +13920,7 @@ const unitDirectorVariables = (input, game) => ({
     : ""),
   unitDirectorGameDate: normalizeString(game?.gameDate),
   unitDirectorRound: String(game?.round || 1),
+  regionTypeRules: typeRules,
 });
 
 const territoryDirectorVariables = async (input, world) => ({
@@ -13966,10 +13985,13 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
 
   // --- units ---
   const unitInput = wants("units") ? buildUnitDirectorInput({ events: merged.events, world: bundle.world }) : null;
+  // Read once for both directors, and only when one of them has a job.
+  let typeRules = null;
+  const typeRulesOnce = async () => (typeRules ??= await regionTypeRulesFor(bundle.world));
   if (unitInput) {
     reasons.push(`${unitInput.candidates.length} military event(s) may move units`);
     await addJob({ key: "units", taskKey: "unitDirector", title: "move the units", instruction: UNIT_DIRECTOR_INSTRUCTION },
-      unitDirectorVariables(unitInput, bundle.game));
+      unitDirectorVariables(unitInput, bundle.game, await typeRulesOnce()));
   }
 
   // --- territory ---
@@ -13989,7 +14011,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   if (structureInput) {
     reasons.push(`${structureInput.candidates.length} event(s) may have built something`);
     await addJob({ key: "structures", taskKey: "structureDirector", title: "new structures", instruction: STRUCTURE_DIRECTOR_INSTRUCTION },
-      structureDirectorVariables(structureInput, { ...bundle.game, gameDate: stopDate }));
+      structureDirectorVariables(structureInput, { ...bundle.game, gameDate: stopDate }, await typeRulesOnce()));
   }
 
   // --- timeline ---
@@ -14352,7 +14374,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
             fallback: unitDirectorUnavailable,
             signal,
             userMessage: UNIT_DIRECTOR_INSTRUCTION,
-            variables: unitDirectorVariables(input, bundle.game),
+            variables: unitDirectorVariables(input, bundle.game, await regionTypeRulesFor(bundle.world)),
             ...jumpTaskOptions(state.requests, "review"),
           });
           await placeDirectorOrders(answer?.payload, bundle.world, merged.events);
@@ -14426,7 +14448,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
               fallback: structureDirectorUnavailable,
               signal,
               userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
-              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }),
+              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }, await regionTypeRulesFor(bundle.world)),
               ...jumpTaskOptions(state.requests, "review"),
             });
             return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };

@@ -3020,6 +3020,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
+        // Its region types, for the Region Types panel; null for a scenario
+        // saved before they were, which opens with the default Land and Coastal.
+        regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
       });
     }).catch((error) => {
       if (!isCurrent()) return;
@@ -3165,6 +3168,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         ...(Array.isArray(seed.world?.markers) ? { markers: seed.world.markers } : {}),
         // The puppet states, likewise opened with the scenario's own rows.
         ...(Array.isArray(seed.world?.puppets) ? { puppets: seed.world.puppets } : {}),
+        // The region types, which the game draws and the AI's placement reads.
+        ...(Array.isArray(seed.world?.regionTypes) ? { regionTypes: seed.world.regionTypes } : {}),
       },
       game: {
         ...currentGame,
