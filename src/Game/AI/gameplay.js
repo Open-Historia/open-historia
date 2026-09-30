@@ -4,6 +4,8 @@ import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.j
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
 import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
+import { looksLikeChatRequest } from "./chatHints.js";
+import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
@@ -448,49 +450,6 @@ import {
   setPendingProjectsJump,
   takeParkedTurn,
 } from "./simulationStatus.js";
-
-const CHAT_HINT_PATTERNS = [
-  /\bchat\b/i,
-  /\bconference\b/i,
-  /\bcontact\b/i,
-  /\bdiplomac/i,
-  /\bmeet\b/i,
-  /\bmessage\b/i,
-  /\bnegotiat/i,
-  /\boutreach\b/i,
-  /\bparley\b/i,
-  /\bpeace talk/i,
-  /\breach out\b/i,
-  /\bspeak with\b/i,
-  /\bsummit\b/i,
-  /\btalk to\b/i,
-  /\btalks? with\b/i,
-  /\bпереговор/i,
-  /\bвстрет/i,
-  /\bдипломат/i,
-  /\bсвяз/i,
-  /\bчат/i,
-  /\bдоговор/i,
-];
-
-const DEFAULT_SUGGESTION_TOPICS = [
-  {
-    title: "Stabilize the domestic front",
-    description: "Keep the home front orderly and reduce the chance of internal drift while outside pressure builds.",
-  },
-  {
-    title: "Shape the diplomatic field",
-    description: "Use talks, signals, and leverage to narrow hostile options before the next crisis hardens.",
-  },
-  {
-    title: "Prepare military leverage",
-    description: "Create visible readiness and practical reserves so rivals must factor your capability into their plans.",
-  },
-  {
-    title: "Secure economic depth",
-    description: "Expand the industrial and fiscal base that decides whether later gambles are sustainable.",
-  },
-];
 
 const cloneValue = (value) => {
   if (value == null) return value;
@@ -4241,30 +4200,39 @@ const inferInviteeNames = async (text, world, playerCountry = "") => {
     .map((country) => country.name);
 };
 
+// The engine's own suggestions and orders, when the model gave none, are
+// written in the player's language (runtime/fallbackTurnText.js), as the
+// model's would have been.
 const fallbackActionSuggestions = async (bundle) => {
   const recentTitles = normalizeEvents(bundle.events).slice(-3).map((event) => event.title);
-  const topics = DEFAULT_SUGGESTION_TOPICS.map((topic, index) => {
+  const country = normalizeString(bundle.game.country);
+  const topics = FALLBACK_SUGGESTION_TOPICS.map((topic, index) => {
     const recentTitle = recentTitles[index];
+    const topicTitle = fallbackTurnText(topic.title);
     const actions = [
       normalizeActionEntry({
         kind: "action",
         source: "suggested",
-        text: `Issue a concrete order addressing ${recentTitle || topic.title.toLowerCase()} and assign a responsible ministry or command.`,
-        title: recentTitle ? `Respond to ${recentTitle}` : `Act on ${topic.title}`,
+        text: fallbackTurnText("suggestionOrderText", { subject: recentTitle || topicTitle }),
+        title: recentTitle
+          ? fallbackTurnText("suggestionRespondTitle", { event: recentTitle })
+          : fallbackTurnText("suggestionActTitle", { topic: topicTitle }),
       }),
       normalizeActionEntry({
         kind: "action",
         source: "suggested",
-        text: `Prepare a second-order measure that protects ${bundle.game.country || "the polity"} if this line of effort triggers resistance.`,
-        title: "Create a contingency layer",
+        text: country
+          ? fallbackTurnText("suggestionContingencyText", { country })
+          : fallbackTurnText("suggestionContingencyTextNoCountry"),
+        title: fallbackTurnText("suggestionContingencyTitle"),
       }),
     ].filter(Boolean);
 
     return {
       actions,
-      description: topic.description,
+      description: fallbackTurnText(topic.description),
       id: `fallback-topic-${index}`,
-      title: recentTitle || topic.title,
+      title: recentTitle || topicTitle,
     };
   });
 
@@ -4273,14 +4241,12 @@ const fallbackActionSuggestions = async (bundle) => {
 
 const fallbackDescriptionToAction = async (rawInput, bundle) => {
   const trimmed = normalizeString(rawInput);
-  const isChat = CHAT_HINT_PATTERNS.some((pattern) => pattern.test(trimmed));
+  const isChat = looksLikeChatRequest(trimmed);
   const inferredInvitees = isChat
     ? await inferInviteeNames(trimmed, bundle.world, bundle.game.country)
     : [];
   const title = sentenceCase(trimmed.split(/[.!?]/)[0] || trimmed);
-  const expandedText = isChat
-    ? `${trimmed}. Clarify the objective, the concession you can offer, and the outcome you want before the exchange hardens.`
-    : `${trimmed}. Define the instrument, timing, and expected political or military effect so the move can be executed cleanly.`;
+  const expandedText = fallbackTurnText(isChat ? "chatOrderExpanded" : "actionOrderExpanded", { order: trimmed });
 
   return {
     chatStarter: isChat ? trimmed : "",
@@ -6387,6 +6353,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   return "";
 };
 
+// Its events and summary go into the permanent timeline, so they are written in
+// the player's language (runtime/fallbackTurnText.js), as the model's are.
 const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
   const plannedActions = normalizeActions(bundle.actions).filter((action) => action.status === "planned");
   const firstThreeActions = plannedActions.slice(0, 3);
@@ -6405,10 +6373,10 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
 
       events.push({
         date: eventDate,
-        description:
-          action.kind === "chat"
-            ? `${bundle.game.country} opens a deliberate diplomatic channel tied to ${action.title.toLowerCase()}, forcing counterparts to weigh terms instead of guessing intent.`
-            : `${bundle.game.country} begins implementing ${action.title.toLowerCase()}, producing immediate administrative and political consequences that other powers start to notice.`,
+        description: fallbackTurnText(
+          action.kind === "chat" ? "chatEventDescription" : "orderEventDescription",
+          { country: bundle.game.country, order: action.title },
+        ),
         impacts: {
           // This event exists specifically because of this queued Action. The
           // exact id is what settleOrders consumes; without it a provider
@@ -6432,17 +6400,17 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         kind: action.kind === "chat" ? "diplomacy" : "player",
         notable: index === firstThreeActions.length - 1,
         playerRelated: true,
-        title:
-          action.kind === "chat"
-            ? `${bundle.game.country} opens a diplomatic channel`
-            : `${bundle.game.country} acts on ${action.title.toLowerCase()}`,
+        title: fallbackTurnText(
+          action.kind === "chat" ? "chatEventTitle" : "orderEventTitle",
+          { country: bundle.game.country, order: action.title },
+        ),
       });
     });
   } else {
     const midpoint = advanceGameDate(Math.max(1, Math.round(Math.max(days, 1) / 2)));
     events.push({
       date: midpoint,
-      description: `Foreign ministries and general staffs keep adjusting to the current balance of power while ${bundle.game.country} gathers its next move.`,
+      description: fallbackTurnText("quietEventDescription", { country: bundle.game.country }),
       impacts: {
         createdChats: [],
         polityChanges: [],
@@ -6452,7 +6420,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
       kind: "world",
       notable: mode === "auto",
       playerRelated: false,
-      title: "The international balance remains in motion",
+      title: fallbackTurnText("quietEventTitle"),
     });
   }
 
@@ -6462,10 +6430,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
     clearActions: true,
     events,
     stopDate: targetDate,
-    summary:
-      plannedActions.length > 0
-        ? `${bundle.game.country} moves from planning into execution, and the world begins adjusting to the turn's most concrete orders.`
-        : `Time advances without a direct order from ${bundle.game.country}, but the wider system keeps shifting and building pressure.`,
+    summary: fallbackTurnText(plannedActions.length > 0 ? "summaryWithOrders" : "summaryWithoutOrders", { country: bundle.game.country }),
   };
 };
 
