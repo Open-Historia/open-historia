@@ -6,10 +6,13 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.ViewGroup;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
@@ -17,6 +20,9 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
+
+import java.util.ArrayDeque;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "OpenHistoria";
@@ -29,11 +35,36 @@ public class MainActivity extends BridgeActivity {
     private boolean inBackground = false;
     private boolean restRequested = false;
 
+    // The page's renderer is a separate process, and Android stops it to free
+    // memory (or it crashes). The WebView then takes the whole app down unless
+    // somebody says they handled it: Capacitor asks its listeners and nobody
+    // answered, so a player's phone reported "Open Historia Beta runtime
+    // exception", the country picker frozen half-drawn before it. This answers
+    // and builds the page again. Every save is in IndexedDB, so the player loses
+    // the screen, not the game. Three restarts in a minute is a page that cannot
+    // live at all on this phone, and then the app closes as it used to. What
+    // happened is kept for the page's diagnostics log (RendererRestartPlugin,
+    // src/runtime/native/rendererRestart.js).
+    static final String RENDERER_PREFS = "oh-renderer-restart";
+    private static final long RENDERER_RESTART_WINDOW_MS = 60_000L;
+    private static final int RENDERER_RESTARTS_ALLOWED = 3;
+    // Static: the history has to outlive the activity each restart recreates.
+    private static final ArrayDeque<Long> rendererRestarts = new ArrayDeque<>();
+    // This activity's WebView lost its renderer: nothing may be asked of it now.
+    private boolean rendererGone = false;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Before super.onCreate, which is where Capacitor loads its plugins.
         registerPlugin(BackgroundPausePlugin.class);
+        registerPlugin(RendererRestartPlugin.class);
         super.onCreate(savedInstanceState);
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                return restartAfterRendererGone(view, detail);
+            }
+        });
         // The WebView itself cannot download files. Hand any download (the
         // self-update APK) to the system browser, which downloads it and lets
         // the user tap to install.
@@ -117,7 +148,7 @@ public class MainActivity extends BridgeActivity {
 
     private void releaseMemory() {
         WebView view = getBridge() != null ? getBridge().getWebView() : null;
-        if (view == null) return;
+        if (view == null || rendererGone) return;
         view.clearCache(false);
         view.evaluateJavascript("window.dispatchEvent(new Event('oh:memory-pressure'))", null);
     }
@@ -148,12 +179,68 @@ public class MainActivity extends BridgeActivity {
     // Called on the UI thread when the page reports it is hidden and idle.
     void restInBackground() {
         restRequested = true;
-        if (!inBackground) return;
+        if (!inBackground || rendererGone) return;
         WebView view = webView();
         if (view == null) return;
         view.onPause();
         view.pauseTimers();
         Log.i(TAG, "In the background with nothing to finish: the page's timers are paused.");
+    }
+
+    // Answers the WebView when its renderer is gone: true, and the page is built
+    // again in a new activity; false, the app closes.
+    private boolean restartAfterRendererGone(WebView view, RenderProcessGoneDetail detail) {
+        // One death, one restart. The WebView of an activity already being
+        // rebuilt (or already gone) shares the renderer and hears the same death:
+        // handled, and not counted again.
+        if (rendererGone || isFinishing() || isDestroyed() || view != webView()) {
+            Log.i(TAG, "An earlier WebView heard the same renderer death; nothing more to do.");
+            return true;
+        }
+        boolean crashed = detail != null && detail.didCrash();
+        int priority = detail != null ? detail.rendererPriorityAtExit() : -1;
+        long now = SystemClock.elapsedRealtime();
+        while (!rendererRestarts.isEmpty() && now - rendererRestarts.peekFirst() > RENDERER_RESTART_WINDOW_MS) {
+            rendererRestarts.pollFirst();
+        }
+        rendererGone = true;
+        boolean restart = rendererRestarts.size() < RENDERER_RESTARTS_ALLOWED;
+        getSharedPreferences(RENDERER_PREFS, MODE_PRIVATE).edit()
+                .putLong("at", System.currentTimeMillis())
+                .putBoolean("crashed", crashed)
+                .putInt("priority", priority)
+                .putInt("recent", rendererRestarts.size() + 1)
+                .putBoolean("restarted", restart)
+                .commit();
+        if (!restart) {
+            Log.e(TAG, "The page's renderer is gone for the " + (RENDERER_RESTARTS_ALLOWED + 1) + "th time in a minute; closing the app.");
+            return false;
+        }
+        rendererRestarts.addLast(now);
+        Log.w(TAG, crashed
+                ? "The page's renderer crashed; building the page again."
+                : "Android stopped the page's renderer (memory, priority " + priority + "); building the page again.");
+        Toast.makeText(getApplicationContext(), crashed
+                ? "Open Historia stopped unexpectedly and started again."
+                : "Open Historia ran short of memory and started again.", Toast.LENGTH_LONG).show();
+        // A new activity, a new WebView; Capacitor destroys the dead one as this
+        // activity's window goes (Bridge.onDetachedFromWindow).
+        recreate();
+        return true;
+    }
+
+    // The dead WebView goes with its activity. Capacitor destroys a WebView when
+    // the window detaches, but after a restart the old one was still there to
+    // hear the next death, so it is taken out and destroyed here as well (a second
+    // destroy is a no-op).
+    @Override
+    public void onDestroy() {
+        WebView view = rendererGone ? webView() : null;
+        super.onDestroy();
+        if (view != null) {
+            if (view.getParent() instanceof ViewGroup) ((ViewGroup) view.getParent()).removeView(view);
+            view.destroy();
+        }
     }
 
     private WebView webView() {
