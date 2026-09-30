@@ -55,10 +55,12 @@ import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../run
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import {
     MAP_CHANGE_KIND_LABELS,
+    SHOW_EVENT_ON_TIMELINE,
     buildLiveTurnRecord,
     captureRevealCarry,
     describeEventMapChanges,
     eventDisclosureKey,
+    findTurnIndexOfEvent,
     findTurnSnapshot,
     resolvePolityName,
     resolveRegionName,
@@ -1663,6 +1665,8 @@ const TimelineHistoryPanel = ({
     // { index, count, onOlder, onNewer }: the header's ‹ › between the kept
     // turns, index 0 the newest; null hides it.
     turnPicker = null,
+    // { eventId, seq }: a card another panel asked to be shown.
+    focusRequest = null,
     warning,
 }) => {
     // An older turn, reread whole: it opens at its first event, not its last.
@@ -1744,6 +1748,34 @@ const TimelineHistoryPanel = ({
             block: "start",
         });
     }, [isOpen, record?.id, visibleEvents.length]);
+
+    // A card another panel asked for (focusRequest): scrolled to and marked
+    // for a moment once it is on screen, once per request. Declared after the
+    // scroll above so its scroll is the one that lands.
+    const listRef = React.useRef(null);
+    const handledFocusRef = React.useRef(0);
+    const [markedEventId, setMarkedEventId] = useState("");
+    const focusId = focusRequest?.eventId || "";
+    const focusInRecord = Boolean(focusId) && (record?.events ?? []).some((event) => event?.id === focusId);
+    const focusOnScreen = focusInRecord && visibleEvents.some((event) => event.id === focusId);
+    useEffect(() => {
+        if (!isOpen || !focusInRecord || handledFocusRef.current === focusRequest.seq) return;
+        if (!focusOnScreen) {
+            // Hidden by a category filter: lift it, and come back once it shows.
+            if (categoryFilter) setCategoryChoice({ recordId: record.id, tag: null });
+            return;
+        }
+        handledFocusRef.current = focusRequest.seq;
+        const card = Array.from(listRef.current?.querySelectorAll("[data-event-id]") ?? [])
+            .find((node) => node.dataset.eventId === focusId);
+        card?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setMarkedEventId(focusId);
+    }, [categoryFilter, focusId, focusInRecord, focusOnScreen, focusRequest?.seq, isOpen, record?.id]);
+    useEffect(() => {
+        if (!markedEventId) return undefined;
+        const timer = setTimeout(() => setMarkedEventId(""), 2600);
+        return () => clearTimeout(timer);
+    }, [markedEventId]);
 
     return (
         <PanelChrome
@@ -1853,7 +1885,7 @@ const TimelineHistoryPanel = ({
             // Mid-skip an empty list just means the first event has not arrived.
             live ? null : <EmptyPanelState text="No world events were recorded for this time skip." />
         ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {categoryChips.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
                 {categoryChips.map((tag) => {
@@ -1887,7 +1919,16 @@ const TimelineHistoryPanel = ({
                 const openKey = eventDisclosureKey(event);
 
                 return (
-                    <div key={event.id} ref={isScrollAnchor ? scrollAnchorRef : null}>
+                    <div
+                    key={event.id}
+                    ref={isScrollAnchor ? scrollAnchorRef : null}
+                    data-event-id={event.id}
+                    style={{
+                        borderRadius: "16px",
+                        boxShadow: markedEventId === event.id ? "0 0 0 2px rgba(43,193,243,0.75)" : "0 0 0 2px rgba(43,193,243,0)",
+                        transition: "box-shadow 0.4s ease",
+                    }}
+                    >
                     {/* No "Show on map" footer: the camera already flies to
                         every event as it is revealed. The offered interactive
                         event carries its offer instead. */}
@@ -2798,6 +2839,38 @@ const DateWidget = ({
     useEffect(() => {
         if (openPanel !== "history") setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
     }, [openPanel]);
+    // Another panel asking for one event (SHOW_EVENT_ON_TIMELINE, turnReveal.js;
+    // the Stats panel's war cards): open on the kept turn that holds it, with
+    // the newest turn's reveal carried through it, and let the panel scroll to
+    // it and mark it. `seq` makes a second ask for the same event a new one.
+    const [focusRequest, setFocusRequest] = useState({ eventId: "", seq: 0 });
+    const showEventRef = React.useRef(null);
+    useEffect(() => {
+        showEventRef.current = (eventId) => {
+            // As « does: while something runs, only a skip being watched opens it.
+            if (isLoading && !skipInFlight) return;
+            const index = findTurnIndexOfEvent(worldState?.simulationHistory, eventId);
+            if (index < 0) return;
+            setPanel("history");
+            // Mid-skip the panel is the turn being written; it only opens.
+            if (skipInFlight) return;
+            showTurn(index);
+            if (index === 0) {
+                const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+                const through = ids.indexOf(eventId) + 1;
+                if (through > visibleEventCount) {
+                    setVisibleEventCount(through);
+                    unseenEvents.markSeenThrough(ids, through);
+                }
+            }
+            setFocusRequest((previous) => ({ eventId, seq: previous.seq + 1 }));
+        };
+    });
+    useEffect(() => {
+        const onShowEvent = (event) => showEventRef.current?.(String(event?.detail?.eventId ?? "").trim());
+        window.addEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+        return () => window.removeEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+    }, []);
     const shownWrittenRecord = olderTurnRecord ?? latestTurnRecord;
     const persistedFallbackWarning = shownWrittenRecord?.source === "fallback"
     ? `Turn generated by fallback: ${shownWrittenRecord.fallbackReason || "structured AI output was unavailable"}`
@@ -3292,6 +3365,7 @@ const DateWidget = ({
             onOlder: () => showTurn(Math.min(keptTurnCount - 1, turnIndex + 1)),
             onNewer: () => showTurn(Math.max(0, turnIndex - 1)),
         } : null}
+        focusRequest={liveTurnRecord ? null : focusRequest}
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
         warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}

@@ -15,12 +15,14 @@ import {
   captureRevealCarry,
   describeEventMapChanges,
   eventDisclosureKey,
+  findTurnIndexOfEvent,
   findTurnSnapshot,
   liveEventCard,
   resolveRevealCarry,
   revealNeedsStaging,
   shownTurnIndex,
   turnRecordId,
+  warTimelineEventId,
 } from "./turnReveal.js";
 
 // ---- streamed cards ----------------------------------------------------------
@@ -129,6 +131,31 @@ test("the chosen turn is clamped to the turns still kept", () => {
   assert.equal(shownTurnIndex({ latestId: "t9", index: 5 }, "t9", 0), 0);
   assert.equal(shownTurnIndex({ latestId: "t9", index: -2 }, "t9", 12), 0);
   assert.equal(shownTurnIndex({ latestId: "t9", index: "x" }, "t9", 12), 0);
+});
+
+const keptTurns = [
+  { eventIds: ["e5", "e6"] },
+  { eventIds: ["e3", "e4"] },
+  { eventIds: [] },
+  { eventIds: ["e1"] },
+];
+
+test("an event is found on the kept turn that holds it", () => {
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e6"), 0);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e3"), 1);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e1"), 3);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e0"), -1, "aged out of the kept turns");
+  assert.equal(findTurnIndexOfEvent(keptTurns, ""), -1);
+  assert.equal(findTurnIndexOfEvent(null, "e1"), -1);
+  assert.equal(findTurnIndexOfEvent([null, { eventIds: "e1" }], "e1"), -1);
+});
+
+test("a war links to its first event the Events panel still keeps", () => {
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e1", "e4", "e6"] }, keptTurns), "e1", "its opening event");
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e0", "e4", "e6"] }, keptTurns), "e4", "the opening turn aged out");
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e0"] }, keptTurns), "", "nothing left to show");
+  assert.equal(warTimelineEventId({}, keptTurns), "");
+  assert.equal(warTimelineEventId(null, keptTurns), "");
 });
 
 // ---- carrying the reveal -------------------------------------------------------

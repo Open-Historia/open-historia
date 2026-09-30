@@ -135,6 +135,37 @@ export const shownTurnIndex = (choice, latestRecordId, historyLength) => {
   return Math.max(0, Math.min(index, Math.max(0, (Number(historyLength) || 0) - 1)));
 };
 
+// Which kept turn holds an event; -1 when none does (its turn has aged out of
+// the kept twelve, or the event was never on the timeline).
+export const findTurnIndexOfEvent = (history, eventId) => {
+  const id = String(eventId ?? "").trim();
+  if (!id) return -1;
+  return (Array.isArray(history) ? history : []).findIndex(
+    (entry) => Array.isArray(entry?.eventIds) && entry.eventIds.includes(id),
+  );
+};
+
+// The event a war links to on the timeline: its first event the Events panel
+// can still show. A long war's opening turn ages out of the kept turns, and
+// then its earliest event still kept is where its story can be picked up.
+// "" when none is left.
+export const warTimelineEventId = (war, history) => {
+  for (const raw of Array.isArray(war?.sourceEventIds) ? war.sourceEventIds : []) {
+    const id = String(raw ?? "").trim();
+    if (findTurnIndexOfEvent(history, id) >= 0) return id;
+  }
+  return "";
+};
+
+// Another panel asking the Events panel to open on one event: the turn that
+// holds it, revealed through it, scrolled to and marked (time.jsx).
+export const SHOW_EVENT_ON_TIMELINE = "oh:show-event-on-timeline";
+
+export const showEventOnTimeline = (eventId) => {
+  if (typeof window === "undefined" || !eventId) return;
+  window.dispatchEvent(new CustomEvent(SHOW_EVENT_ON_TIMELINE, { detail: { eventId } }));
+};
+
 // ---------------------------------------------------------------------------
 // Carrying the reveal from the streamed cards to the written turn
 // ---------------------------------------------------------------------------
