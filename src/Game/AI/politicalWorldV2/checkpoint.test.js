@@ -148,3 +148,15 @@ test("allowing more calls past the lifetime ceiling raises it one recorded step 
   assert.equal(again.totalModelCallCeiling, 150);
   assert.equal(again.ceilingGrants.length, 2, "grants survive normalization");
 });
+
+test("a checkpoint saved before partial Apply existed reads with an empty log, and a logged one keeps its entries", () => {
+  const older = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  delete older.partialApplications;
+  assert.deepEqual(normalizePoliticalWorldV2Checkpoint(older).partialApplications, []);
+
+  const logged = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  logged.partialApplications = [{ at: "2026-09-29T00:00:00.000Z", polities: ["Avalon", "Avalon", ""], institutions: true }, "junk"];
+  assert.deepEqual(normalizePoliticalWorldV2Checkpoint(logged).partialApplications, [
+    { at: "2026-09-29T00:00:00.000Z", polities: ["Avalon"], institutions: true },
+  ]);
+});

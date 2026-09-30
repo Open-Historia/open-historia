@@ -527,6 +527,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     ? (Number(v2Checkpoint.worklistSummary.pending) || 0) + (Number(v2Checkpoint.worklistSummary.running) || 0)
     : v2Jobs.filter((job) => job?.status === "pending" || job?.status === "running").length;
   const v2Unresolved = Array.isArray(v2Checkpoint?.quality?.unresolved) ? v2Checkpoint.quality.unresolved : [];
+  const v2PartiallyApplied = new Set((v2Checkpoint?.partialApplications ?? []).flatMap((entry) => entry?.polities ?? [])).size;
   const progressTotal = Number(progressInfo?.totalPolities) || 0;
   const progressResolved = Math.max(0, Math.min(progressTotal, Number(progressInfo?.resolvedPolities) || 0));
   const progressPercent = progressTotal ? Math.round((progressResolved / progressTotal) * 100) : 0;
@@ -889,6 +890,59 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       setProgress("Political World checkpoint discarded. Generate Political World starts a fresh run.");
     } catch (nextError) {
       setError(nextError?.message || String(nextError));
+    }
+  };
+
+  // The third way on: write the finished polities (and the institution layer,
+  // once all of it is done) into the scenario now, and keep the checkpoint for
+  // the rest.
+  const applyCompleteV2Work = async () => {
+    if (!details?.scenario?.id || !v2Checkpoint || busy || applying) return;
+    setApplying(true);
+    setError("");
+    try {
+      const freshDetails = await loadScenarioDetails(details.scenario.id);
+      const freshDate = savedScenarioDate(freshDetails);
+      if (freshDate !== v2Checkpoint.scenarioDate) {
+        throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Resume from a fresh v2 checkpoint.`);
+      }
+      const { applyCompletePoliticalWorldV2Work, keepPoliticalWorldV2CheckpointAfterPartialApply } = await import("../AI/politicalWorldV2/pipeline.js");
+      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+      const application = applyCompletePoliticalWorldV2Work({
+        checkpoint: v2Checkpoint,
+        freshWorld: freshDetails?.data?.world ?? {},
+        freshRoundZeroContext: freshInputs.roundZeroContext || null,
+        scenarioId: details.scenario.id,
+        scenarioDate: freshDate,
+        polities: freshInputs.polities,
+      });
+      const saved = await saveScenario(details.scenario.id, { world: application.world });
+      // The checkpoint is re-keyed to the scenario exactly as saved, before the
+      // panel reloads it, so it stays the one Resume continues.
+      const savedDetails = saved?.data?.world ? saved : await loadScenarioDetails(details.scenario.id);
+      const savedInputs = buildScenarioPoliticalGenerationInputs(savedDetails, { mode, maxBatchSize: 8 });
+      const kept = await keepPoliticalWorldV2CheckpointAfterPartialApply({
+        checkpoint: v2Checkpoint,
+        world: savedInputs.world,
+        roundZeroContext: savedInputs.roundZeroContext || null,
+        applied: application,
+      });
+      setV2Checkpoint(kept);
+      onDetailsChange?.(saved);
+      const count = application.polities.length;
+      setProgress(application.institutions
+        ? (count === 0
+          ? "Applied the institutions and standing agreements to the scenario. No polity has passed every check yet, so every polity stays in this checkpoint for a later run."
+          : count === 1
+            ? "Applied 1 finished polity and the institutions and standing agreements to the scenario. The rest stay in this checkpoint for a later run."
+            : `Applied ${count} finished polities and the institutions and standing agreements to the scenario. The rest stay in this checkpoint for a later run.`)
+        : (count === 1
+          ? "Applied 1 finished polity to the scenario. The other polities, the institutions and the standing agreements stay in this checkpoint for a later run."
+          : `Applied ${count} finished polities to the scenario. The other polities, the institutions and the standing agreements stay in this checkpoint for a later run.`));
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -1496,6 +1550,13 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
             <CheckpointCounts checkpoint={v2Checkpoint} pending={v2PendingJobs} deferred={v2FailedJobs} polityCount={polityCount} />
           </div>
+          {v2PartiallyApplied > 0 && (
+            <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", marginTop: "0.3rem" }}>
+              {v2PartiallyApplied === 1
+                ? "1 finished polity from this checkpoint is already in the scenario."
+                : `${v2PartiallyApplied} finished polities from this checkpoint are already in the scenario.`}
+            </div>
+          )}
           {v2Ready ? (
             <div style={{ color: "#bbf7d0", fontSize: "0.7rem", marginTop: "0.45rem" }}>Quality checks passed. The Political World is ready to apply to the scenario.</div>
           ) : (
@@ -1511,10 +1572,14 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                     : `${v2Unresolved.length} item(s) remain unresolved.`}
               {v2Unresolved.length > 0 && <div style={{ marginTop: "0.25rem" }}>Sample: {v2Unresolved.slice(0, 8).map((entry) => `${entry.polityKey} (${entry.kind})`).join(" · ")}{v2Unresolved.length > 8 ? "…" : ""}</div>}
               {v2Checkpoint.pauseReason === "total-model-call-budget" && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
-                  <button disabled={applying} onClick={allowMoreV2Calls} style={{ ...buttonStyle, opacity: applying ? 0.55 : 1 }} type="button">Allow more AI calls</button>
-                  <button disabled={applying} onClick={discardV2Checkpoint} style={{ ...buttonStyle, background: discardArmed ? "rgba(127,29,29,0.3)" : buttonStyle.background, opacity: applying ? 0.55 : 1 }} type="button">{discardArmed ? "Discard for good" : "Discard checkpoint"}</button>
-                </div>
+                <>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
+                    <button disabled={applying} onClick={allowMoreV2Calls} style={{ ...buttonStyle, opacity: applying ? 0.55 : 1 }} type="button">Allow more AI calls</button>
+                    <button disabled={applying || dateMismatch} onClick={applyCompleteV2Work} style={{ ...buttonStyle, opacity: applying || dateMismatch ? 0.55 : 1 }} type="button">{applying ? "Applying to Scenario…" : "Apply what is complete"}</button>
+                    <button disabled={applying} onClick={discardV2Checkpoint} style={{ ...buttonStyle, background: discardArmed ? "rgba(127,29,29,0.3)" : buttonStyle.background, opacity: applying ? 0.55 : 1 }} type="button">{discardArmed ? "Discard for good" : "Discard checkpoint"}</button>
+                  </div>
+                  <div style={{ marginTop: "0.4rem" }}>Apply what is complete writes only the polities that passed every check into the scenario, with the institutions and standing agreements once all of them are done. Everything else stays in this checkpoint for a later run.</div>
+                </>
               )}
             </div>
           )}

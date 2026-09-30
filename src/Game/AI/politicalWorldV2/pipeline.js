@@ -3,7 +3,8 @@
 import { materializeScenarioCanon } from "../../../runtime/scenarioCanon.js";
 import { compareGameDates, isCanonicalGameDate } from "../../../runtime/gameDates.js";
 import { resolveScenarioHistoryAuthority } from "../../../runtime/scenarioHistoryAuthority.js";
-import { isFinitePowerScore, refreshPowerStatus } from "../../../runtime/powerStatus.js";
+import { isFinitePowerScore, normalizePowerStatus, refreshPowerStatus } from "../../../runtime/powerStatus.js";
+import { normalizePoliticalActors } from "../../../runtime/politicalActors.js";
 import { initializePoliticalDispositionsForWorld } from "../../../runtime/politicalDisposition.js";
 import { reconcilePoliticalWorldV2ReferenceState } from "./referenceBootstrap.js";
 import { rebasePoliticalWorldV2ReferenceCanon } from "./checkpointRebase.js";
@@ -12,10 +13,11 @@ import {
   checkpointMatchesInput,
   createPoliticalWorldV2Checkpoint,
   grantPoliticalWorldV2ModelCalls,
+  normalizePoliticalWorldV2Checkpoint,
   setCheckpointQuality,
 } from "./checkpoint.js";
 import { runSimplePoliticalWorldV2 } from "./simpleRunner.js";
-import { summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
+import { derivePoliticalWorldV2MembershipSurface, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
 import {
   clearPoliticalWorldV2Checkpoint,
   loadPoliticalWorldV2Checkpoint,
@@ -307,19 +309,10 @@ const runPoliticalWorldV2 = async ({
   return checkpoint;
 };
 
-export const applyPoliticalWorldV2Checkpoint = ({
-  checkpoint,
-  freshWorld = {},
-  freshRoundZeroContext = null,
-  scenarioId = "",
-  scenarioDate = "",
-} = {}) => {
-  if (!checkpoint || checkpoint.kind !== "political-world-checkpoint-v2") throw new Error("Political World v2 checkpoint is required.");
-  if (clean(checkpoint.scenarioId) !== clean(scenarioId)) throw new Error("Political World v2 checkpoint belongs to a different scenario.");
-  if (clean(checkpoint.scenarioDate) !== clean(scenarioDate)) throw new Error("Political World v2 scenario date changed; regenerate or resume against the new canon.");
-  if (checkpoint.quality?.canonicalReady !== true || array(checkpoint.quality?.blockingErrors).length || array(checkpoint.quality?.unresolved).length) {
-    throw new Error("Political World v2 has not reached Canonical quality and cannot be applied yet.");
-  }
+// Both Apply paths write into the saved scenario only when the checkpoint was
+// built from exactly that scenario, so an author's later edits are never
+// overwritten.
+const assertCheckpointMatchesScenario = ({ checkpoint, freshWorld, freshRoundZeroContext, scenarioId, scenarioDate }) => {
   const fingerprint = buildPoliticalWorldInputFingerprint({
     scenarioId,
     scenarioDate,
@@ -329,6 +322,26 @@ export const applyPoliticalWorldV2Checkpoint = ({
   if (!checkpointMatchesInput(checkpoint, fingerprint)) {
     throw new Error("Political World v2 source canon changed after generation began. Start a fresh v2 checkpoint so authored changes are not overwritten.");
   }
+};
+
+const assertCheckpointForScenario = (checkpoint, scenarioId, scenarioDate) => {
+  if (!checkpoint || checkpoint.kind !== "political-world-checkpoint-v2") throw new Error("Political World v2 checkpoint is required.");
+  if (clean(checkpoint.scenarioId) !== clean(scenarioId)) throw new Error("Political World v2 checkpoint belongs to a different scenario.");
+  if (clean(checkpoint.scenarioDate) !== clean(scenarioDate)) throw new Error("Political World v2 scenario date changed; regenerate or resume against the new canon.");
+};
+
+export const applyPoliticalWorldV2Checkpoint = ({
+  checkpoint,
+  freshWorld = {},
+  freshRoundZeroContext = null,
+  scenarioId = "",
+  scenarioDate = "",
+} = {}) => {
+  assertCheckpointForScenario(checkpoint, scenarioId, scenarioDate);
+  if (checkpoint.quality?.canonicalReady !== true || array(checkpoint.quality?.blockingErrors).length || array(checkpoint.quality?.unresolved).length) {
+    throw new Error("Political World v2 has not reached Canonical quality and cannot be applied yet.");
+  }
+  assertCheckpointMatchesScenario({ checkpoint, freshWorld, freshRoundZeroContext, scenarioId, scenarioDate });
   const staged = checkpoint.stagedWorld || {};
   const materialized = materializeScenarioCanon(freshWorld, {
     canonContext: freshWorld?.canonContext ?? staged?.canonContext,
@@ -346,6 +359,107 @@ export const discardPoliticalWorldV2Checkpoint = (scenarioId) => clearPoliticalW
 // recorded step and save, so Resume continues the paid work.
 export const grantPoliticalWorldV2Calls = (checkpoint) => savePoliticalWorldV2Checkpoint(grantPoliticalWorldV2ModelCalls(checkpoint));
 
+// The other way out of that ceiling: hand over what is already finished.
+// A polity is finished when its Political Actor, governing alignment and power
+// record are all accepted, and its exact-date check too where the scenario
+// needs one. The institutions, their members and the standing agreements are
+// one piece of world-wide work, so they count only once all of it is done.
+export const completePoliticalWorldV2Work = ({ checkpoint, polities = [] } = {}) => {
+  const covered = (kind) => new Set(array(checkpoint?.coverage?.[kind]).map(clean).filter(Boolean));
+  const actors = covered("political-actor");
+  const alignment = covered("governing-alignment");
+  const verified = covered("historical-verification");
+  const verificationRequired = checkpoint?.historicalVerificationRequired === true;
+  // Memberships are part of the institution layer below, not of one polity.
+  const open = new Set(array(checkpoint?.quality?.unresolved)
+    .filter((item) => clean(item?.kind) !== "membership")
+    .map((item) => clean(item?.polityKey)));
+  const staged = checkpoint?.stagedWorld || {};
+  const finished = activePolityKeys(polities).filter((polity) => (
+    !open.has(polity)
+    && actors.has(polity)
+    && alignment.has(polity)
+    && (!verificationRequired || verified.has(polity))
+    && Boolean(staged?.politicalActors?.byPolity?.[polity])
+    && isFinitePowerScore(staged?.powerStatus?.byPolity?.[polity]?.score)
+  ));
+  const institutions = !array(checkpoint?.quality?.blockingErrors).length
+    && checkpoint?.stages?.institutionDiscovery === "complete"
+    && checkpoint?.stages?.institutionGovernance === "complete"
+    && checkpoint?.stages?.agreements === "complete"
+    && derivePoliticalWorldV2MembershipSurface(checkpoint).complete;
+  return { polities: finished, institutions };
+};
+
+// Writes only the finished work into the saved scenario. Nothing else in it
+// changes: every other polity keeps what the author has, and the institutions
+// and agreements stay as they are until that layer is done.
+export const applyCompletePoliticalWorldV2Work = ({
+  checkpoint,
+  freshWorld = {},
+  freshRoundZeroContext = null,
+  scenarioId = "",
+  scenarioDate = "",
+  polities = [],
+} = {}) => {
+  assertCheckpointForScenario(checkpoint, scenarioId, scenarioDate);
+  assertCheckpointMatchesScenario({ checkpoint, freshWorld, freshRoundZeroContext, scenarioId, scenarioDate });
+  const complete = completePoliticalWorldV2Work({ checkpoint, polities });
+  if (!complete.polities.length && !complete.institutions) {
+    throw new Error("No polity has passed every check yet, so there is nothing finished to apply.");
+  }
+  const staged = checkpoint.stagedWorld || {};
+  const politicalActors = freshWorld?.politicalActors?.byPolity && typeof freshWorld.politicalActors.byPolity === "object"
+    ? clone(freshWorld.politicalActors)
+    : normalizePoliticalActors(freshWorld?.politicalActors);
+  const powerStatus = normalizePowerStatus(freshWorld?.powerStatus, freshWorld);
+  for (const polity of complete.polities) {
+    politicalActors.byPolity[polity] = clone(staged.politicalActors.byPolity[polity]);
+    powerStatus.byPolity[polity] = clone(staged.powerStatus.byPolity[polity]);
+  }
+  const materialized = materializeScenarioCanon(freshWorld, {
+    canonContext: freshWorld?.canonContext ?? staged?.canonContext,
+    politicalActors,
+    powerStatus,
+    ...(complete.institutions ? { institutions: staged.institutions, agreements: staged.agreements } : {}),
+  });
+  return {
+    world: initializePoliticalDispositionsForWorld(materialized, { updatedAt: scenarioDate }).world,
+    polities: complete.polities,
+    institutions: complete.institutions,
+  };
+};
+
+// After a partial Apply the saved scenario holds part of the checkpoint's
+// work, so the checkpoint is re-keyed to that scenario as saved. Resume and
+// the final Apply then carry on from it; any later edit by the author still
+// changes the key and stops them.
+export const recordPoliticalWorldV2PartialApply = ({
+  checkpoint,
+  world = {},
+  roundZeroContext = null,
+  applied = {},
+  now = new Date().toISOString(),
+} = {}) => {
+  const next = normalizePoliticalWorldV2Checkpoint(checkpoint);
+  if (!next) throw new Error("Invalid Political World v2 checkpoint");
+  next.inputFingerprint = buildPoliticalWorldInputFingerprint({
+    scenarioId: next.scenarioId,
+    scenarioDate: next.scenarioDate,
+    world,
+    roundZeroContext,
+  });
+  next.partialApplications = [...next.partialApplications, {
+    at: now,
+    polities: array(applied?.polities).map(clean).filter(Boolean),
+    institutions: applied?.institutions === true,
+  }];
+  next.updatedAt = now;
+  return next;
+};
+
+export const keepPoliticalWorldV2CheckpointAfterPartialApply = (options) => savePoliticalWorldV2Checkpoint(recordPoliticalWorldV2PartialApply(options));
+
 export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = {}) => ({
   schemaVersion: 2,
   kind: "political-world-v2-diagnostic",
@@ -360,6 +474,7 @@ export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = 
     modelCalls: Number(checkpoint?.modelCalls) || 0,
     totalModelCallCeiling: Number(checkpoint?.totalModelCallCeiling) || 0,
     ceilingGrants: clone(checkpoint?.ceilingGrants || []),
+    partialApplications: clone(checkpoint?.partialApplications || []),
     modelCallsByType: clone(checkpoint?.modelCallsByType || {}),
     modelCallsByStage: clone(checkpoint?.modelCallsByStage || {}),
     qualityMode: clean(checkpoint?.qualityMode),

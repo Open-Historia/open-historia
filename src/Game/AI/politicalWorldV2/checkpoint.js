@@ -116,6 +116,9 @@ export const createPoliticalWorldV2Checkpoint = ({
   totalModelCallCeilingVersion: POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION,
   // Each time the author allowed more calls past the ceiling.
   ceilingGrants: [],
+  // Each time finished work was applied to the scenario before the whole run
+  // was done (applyCompletePoliticalWorldV2Work).
+  partialApplications: [],
   stages: { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending" },
   coverage: {
     "political-actor": [],
@@ -198,6 +201,9 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
   }
   next.totalModelCallCeilingVersion = POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION;
   next.ceilingGrants = array(next.ceilingGrants).filter((grant) => grant && typeof grant === "object" && !Array.isArray(grant)).map(clone);
+  next.partialApplications = array(next.partialApplications)
+    .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({ at: clean(entry.at), polities: [...new Set(array(entry.polities).map(clean).filter(Boolean))], institutions: entry.institutions === true }));
   next.stages = { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending", ...object(next.stages) };
   next.coverage = Object.fromEntries(Object.entries(object(next.coverage)).map(([type, targets]) => [clean(type), [...new Set(array(targets).map(clean).filter(Boolean))]]).filter(([type]) => type));
   next.membership = { resolvedInstitutionIds: [...new Set(array(next?.membership?.resolvedInstitutionIds).map(clean).filter(Boolean))] };
