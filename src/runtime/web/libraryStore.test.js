@@ -637,6 +637,10 @@ test("a scenario's cover is copied with the scenario, exported, and deleted with
   ok(await scenarios("DELETE", copy));
   assert.equal(db.get("covers").has(`scenario:${copy}`), false);
   assert.ok(db.get("covers").has(`scenario:${id}`), "the original keeps its own");
+  ok(await scenarios("DELETE", `${id}/assets/cover`));
+  assert.equal(db.get("covers").has(`scenario:${id}`), false);
+  // A 404, as on the desktop: the client reads a 404 asset as none, a 500 as a failure.
+  assert.equal((await scenarios("GET", `${id}/assets/cover`)).status, 404);
 });
 
 test("restore points are rows of their own: a turn writes the one it adds", async () => {

@@ -1961,7 +1961,7 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
     if (sub === "export" && method === "GET") return jsonResponse(await exportScenarioBundle(id));
     if (sub === "assets" && segments[2]) {
       const key = decodeURIComponent(segments[2]);
-      if (method === "GET") { const record = await getScenario(id); if (!record) throw new Error(`Scenario not found: ${id}`); return scenarioAssetResponse(record, key, rangeHeader, { coarse: query?.get("coarse") === "1" }); }
+      if (method === "GET") { const record = await getScenario(id); if (!record) throw new Error(`Scenario not found: ${id}`); return await scenarioAssetResponse(record, key, rangeHeader, { coarse: query?.get("coarse") === "1" }); }
       if (method === "PUT") return jsonResponse(await uploadScenarioAsset(id, key, rawBody, contentType));
       if (method === "DELETE") return jsonResponse(await removeScenarioAsset(id, key));
     }
