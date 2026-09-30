@@ -34,6 +34,8 @@ export const simulateAutoJump = async (...args) => (await gameplay()).simulateAu
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
 export const applyParkedTurn = async (...args) => (await gameplay()).applyParkedTurn(...args);
+export const loadParkedTurn = async (...args) => (await gameplay()).loadParkedTurn(...args);
+export const discardKeptTurn = async (...args) => (await gameplay()).discardKeptTurn(...args);
 export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 

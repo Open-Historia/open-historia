@@ -1304,6 +1304,9 @@ const setActiveGame = async (gameId) => {
 const deleteGame = async (id) => {
   await idbDelete(STORES.games, id);
   try { await idbDelete(STORES.gameMeta, id); } catch { /* reconcile drops it next build */ }
+  // A kept turn never outlives its game, so a later game given the same id
+  // cannot be offered it.
+  try { await idbDelete(STORES.kv, parkedTurnKey(id)); } catch { /* checked against its game when read */ }
   const manifest = await getGameManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listGameIds(), DEFAULT_GAME_ID);
   const activeGameId = manifest.activeGameId === id ? (remaining[0] ?? "") : manifest.activeGameId;
@@ -1993,6 +1996,41 @@ const writeGameSnapshots = async (id, snapshots) => {
   return { ok: true };
 };
 
+// A time skip that finished while another game was open, kept for this one
+// (src/Game/AI/parkedTurn.js); server twin: readGameParkedTurn and the rest.
+// Its own kv row rather than a field on the record: every runtime read clones
+// the whole record, and a kept turn is a whole campaign state of its own. Not
+// carried by a copy or an export, and gone with its game (deleteGame).
+const parkedTurnKey = (id) => `parked-turn:${id}`;
+
+const assertGameExists = async (id) => {
+  if (!(await listGameIds()).has(String(id))) throw new Error(`Game not found: ${id}`);
+};
+
+const readGameParkedTurn = async (id) => {
+  await assertGameExists(id);
+  const value = await kvGet(parkedTurnKey(id), null);
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+};
+
+const writeGameParkedTurn = async (id, parkedTurn) => {
+  await assertGameExists(id);
+  if (!parkedTurn || typeof parkedTurn !== "object" || Array.isArray(parkedTurn)) {
+    throw new Error("A kept turn must be an object.");
+  }
+  if (String(parkedTurn.campaignId ?? "") !== id) {
+    throw new Error(`This kept turn belongs to another game: ${parkedTurn.campaignId}`);
+  }
+  await kvPut(parkedTurnKey(id), parkedTurn);
+  return { ok: true };
+};
+
+const removeGameParkedTurn = async (id) => {
+  await assertGameExists(id);
+  await idbDelete(STORES.kv, parkedTurnKey(id));
+  return { ok: true };
+};
+
 const INSTITUTION_LOGO_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/i;
 const MAX_INSTITUTION_LOGO_BYTES = 512 * 1024;
 
@@ -2056,6 +2094,11 @@ export const handleGames = async ({ method, segments, body, rawBody, contentType
     if (sub === "snapshots") {
       if (method === "GET") return jsonResponse(await readGameSnapshots(id));
       if (method === "PUT") return jsonResponse(await writeGameSnapshots(id, body));
+    }
+    if (sub === "parked-turn") {
+      if (method === "GET") return jsonResponse(await readGameParkedTurn(id));
+      if (method === "PUT") return jsonResponse(await writeGameParkedTurn(id, body));
+      if (method === "DELETE") return jsonResponse(await removeGameParkedTurn(id));
     }
     if (sub === "assets" && segments[2]) {
       const key = decodeURIComponent(segments[2]);

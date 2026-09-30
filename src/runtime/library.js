@@ -479,6 +479,18 @@ export const writeGameSnapshotsText = async (gameId, snapshotsText) => {
   if (!response.ok) throw new Error(`Could not restore this game's restore points (HTTP ${response.status}).`);
 };
 
+// A time skip that finished while another game was open, kept for its own game
+// until the player applies or discards it there (src/Game/AI/parkedTurn.js).
+// By id: it is written while another game is the active one. null when none.
+export const readGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`);
+
+export const writeGameParkedTurn = async (gameId, parkedTurn) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { body: parkedTurn, method: "PUT" });
+
+export const removeGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { method: "DELETE" });
+
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 

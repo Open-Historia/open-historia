@@ -270,9 +270,15 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 // the player chose that, so the cap moves with it rather than breaking the skip.
 export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
-export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false } = {}) => {
-    const spends = [];
-    const reservations = new Map();
+// `state` is what `state` below gave out: a skip kept for its campaign
+// (parkedTurn.js) goes on spending from the budget it had, after a restart too.
+export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, state = null } = {}) => {
+    const spends = (Array.isArray(state?.spends) ? state.spends : [])
+        .filter((entry) => entry && typeof entry === "object")
+        .map((entry) => ({ spender: String(entry.spender || "other"), granted: entry.granted === true }));
+    const reservations = new Map(Object.entries(state?.reservations && typeof state.reservations === "object" ? state.reservations : {})
+        .map(([key, value]) => [key, Math.max(0, Math.round(Number(value) || 0))])
+        .filter(([, value]) => value > 0));
     const limit = Math.max(1, Math.round(Number(cap) || JUMP_REQUEST_CAP));
     const spent = () => spends.filter((entry) => entry.granted).length;
     const reserved = () => [...reservations.values()].reduce((sum, value) => sum + value, 0);
@@ -314,6 +320,10 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false } =
         get reserved() { return unlimited ? 0 : reserved(); },
         get skipped() { return spends.filter((entry) => !entry.granted).map((entry) => entry.spender); },
         get log() { return spends.map((entry) => ({ ...entry })); },
+        // Plain data, for createJumpBudget's `state`.
+        get state() {
+            return { spends: spends.map((entry) => ({ ...entry })), reservations: Object.fromEntries(reservations) };
+        },
     };
 };
 

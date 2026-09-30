@@ -103,7 +103,7 @@ A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4
 | `basemapMeta` | `id` | basemap metadata |
 | `basemapPayload` | `id` | basemap binary payloads |
 | `flags` | `id` | flag records |
-| `kv` | `key` | small singletons (manifests, ui-settings, `seeded`) |
+| `kv` | `key` | small singletons (manifests, ui-settings, `seeded`), and `parked-turn:<gameId>`: a time skip kept for a game that was not open when it finished (`/api/games/:id/parked-turn`, `src/Game/AI/parkedTurn.js`), outside the game record so runtime reads never clone it, and deleted with its game |
 | `scenarioMeta` | `id` | lean projection of each scenario (meta, cover, asset status) that the library menu is built from — no geometry or tiles |
 | `gameMeta` | `id` | lean projection of each game (meta, cover, country, date, round, counts) — no snapshots or full JSON |
 | `mapeditorMeta` | `id` | the eight-field summary of each map-editor document the Documents menu lists (the desktop store's `.summary.json`) |

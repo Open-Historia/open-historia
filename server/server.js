@@ -29,9 +29,11 @@ import {
   restoreFromTrash,
   updateScenarioFromBundle,
   readGameSnapshots,
+  readGameParkedTurn,
   readRuntimeJsonAsset,
   resolveRuntimeGeojsonAsset,
   removeGameAsset,
+  removeGameParkedTurn,
   removeScenarioAsset,
   resolveGameUploadAsset,
   resolveScenarioCoarseRegionsAsset,
@@ -44,6 +46,7 @@ import {
   uploadGameAsset,
   uploadScenarioAsset,
   writeGameSnapshots,
+  writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
 } from "./libraryStore.js";
@@ -806,6 +809,33 @@ app.get("/api/games/:gameId/snapshots", (req, res) => {
 app.put("/api/games/:gameId/snapshots", largeJsonParser, (req, res) => {
   try {
     res.json(writeGameSnapshots(req.params.gameId, req.body));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// A time skip that finished while another game was open, kept for this one
+// (src/Game/AI/parkedTurn.js). By game id: it is written while another game is
+// the active one. null when there is none.
+app.get("/api/games/:gameId/parked-turn", (req, res) => {
+  try {
+    res.json(readGameParkedTurn(req.params.gameId));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
+  try {
+    res.json(writeGameParkedTurn(req.params.gameId, req.body));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/games/:gameId/parked-turn", (req, res) => {
+  try {
+    res.json(removeGameParkedTurn(req.params.gameId));
   } catch (error) {
     sendError(res, 400, error);
   }

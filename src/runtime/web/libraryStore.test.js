@@ -578,3 +578,39 @@ test("making a game active from inside a runtime write does not wait on itself",
   assert.equal(after.activeGame.playCount, 1);
   assert.deepEqual(ok(await runtime("GET", "flags")), { Testland: "made.png" });
 });
+
+// A time skip that finished while another game was open is kept with its own
+// game (src/Game/AI/parkedTurn.js), written while that game is NOT the active one.
+test("a kept turn is stored with its own game while another is open, and goes when removed", async () => {
+  await reset();
+  const kept = await newGame("Where the skip ran");
+  const other = await newGame("Opened meanwhile");
+  assert.equal((await library()).activeGameId, other);
+
+  assert.equal(ok(await games("GET", `${kept}/parked-turn`)), null, "none until one is kept");
+  const record = { version: 1, campaignId: kept, round: 3, turn: { baseGame: { round: 3 } } };
+  ok(await games("PUT", `${kept}/parked-turn`, record));
+  assert.deepEqual(ok(await games("GET", `${kept}/parked-turn`)), record);
+  assert.equal(ok(await games("GET", `${other}/parked-turn`)), null, "the open game is not given it");
+  assert.equal("parkedTurn" in db.get("games").get(kept), false, "not in the record every runtime read clones");
+
+  const exported = ok(await games("GET", `${kept}/export`));
+  assert.equal(JSON.stringify(exported).includes("parked"), false, "an export does not carry it");
+
+  ok(await games("DELETE", `${kept}/parked-turn`));
+  assert.equal(ok(await games("GET", `${kept}/parked-turn`)), null);
+});
+
+test("a kept turn is refused for another game or a game that is not there, and goes with its game", async () => {
+  await reset();
+  const kept = await newGame("Kept here");
+  const other = await newGame("Elsewhere");
+  const refused = await games("PUT", `${other}/parked-turn`, { version: 1, campaignId: kept });
+  assert.equal(refused.status, 400);
+  assert.equal((await games("PUT", "no-such-game/parked-turn", { version: 1, campaignId: "no-such-game" })).status, 400);
+  assert.equal((await games("GET", "no-such-game/parked-turn")).status, 404);
+
+  ok(await games("PUT", `${kept}/parked-turn`, { version: 1, campaignId: kept }));
+  ok(await games("DELETE", kept));
+  assert.equal(db.get("kv").has(`parked-turn:${kept}`), false, "deleting the game deletes its kept turn");
+});

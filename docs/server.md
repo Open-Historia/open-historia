@@ -80,6 +80,9 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/games/import` | Import a game bundle as a new game → 201; never switches the active game | `importGameBundle` |
 | GET | `/api/games/:gameId/snapshots` | A game's restore points, by id (`/api/runtime/json/snapshots` only reaches the active game); kept out of the bundle because they are far larger | `readGameSnapshots` |
 | PUT | `/api/games/:gameId/snapshots` | Write a game's restore points (an import carrying them) | `writeGameSnapshots` |
+| GET | `/api/games/:gameId/parked-turn` | A game's kept time skip (one that finished while another game was open, `src/Game/AI/parkedTurn.js`), or `null` | `readGameParkedTurn` |
+| PUT | `/api/games/:gameId/parked-turn` | Keep a finished skip for its game, by id because another game is the active one; refused unless its `campaignId` is this game | `writeGameParkedTurn` |
+| DELETE | `/api/games/:gameId/parked-turn` | Drop it (applied, discarded, or its round has passed) | `removeGameParkedTurn` |
 | GET | `/api/games/:gameId/assets/:assetKey` | Stream a game upload asset (only `cover`) | `resolveGameUploadAsset` → `streamBinaryFile` |
 | PUT | `/api/games/:gameId/assets/:assetKey` | Upload a game asset (raw body) | `uploadGameAsset` |
 | DELETE | `/api/games/:gameId` | Soft-delete a game to `.trash` | `deleteGame` |
@@ -190,6 +193,7 @@ server/data/
       storage/
         actions.json advisor.json chat.json events.json snapshots.json
         turn-commit-journal.json # only while a turn commit is being written (see the turn commit)
+        parked-turn.json         # only while a time skip kept for this game waits to be applied (/api/games/:gameId/parked-turn); never copied or exported
   basemaps/  basemaps-manifest.json
   mapeditor-documents/  mapeditor-manifest.json
   flags-library.json

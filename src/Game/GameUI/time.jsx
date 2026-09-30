@@ -13,8 +13,8 @@ import {
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, interveneAfterEvent, loadParkedTurn, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { PARKED_TURN_STALE_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -1083,6 +1083,10 @@ const TimelineSkipPanel = ({
     onDeclineModeSuggestion,
     onDiscardProjects,
     onDiscardSegment,
+    isApplyingParked = false,
+    onApplyParked,
+    onDiscardParked,
+    parkedHeld = false,
     onJump,
     onRetryProjects,
     onRetrySegment,
@@ -1339,7 +1343,7 @@ const TimelineSkipPanel = ({
             is its only Cancel when the skip is not watched live. */}
         {isLoading && (
             <SkipProgressRow
-            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : "")}
+            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : isApplyingParked ? "Applying the time skip…" : "")}
             onCancel={onCancel}
             />
         )}
@@ -1357,6 +1361,71 @@ const TimelineSkipPanel = ({
             }}
             >
             {error}
+            </div>
+        )}
+
+        {/* A KEPT skip: it finished while another campaign was open, so it was
+            not written there, and it was kept for this one with everything it
+            cost. Amber like the held turns below, because nothing is lost and
+            nothing is written yet; Apply writes it without asking the model
+            again, Discard throws it away. */}
+        {parkedHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>A time skip finished while another campaign was open, so nothing from it has been saved yet.</div>
+            <div>Apply it to write it into this campaign without asking the model again, or discard it.</div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onApplyParked}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isApplyingParked ? "Applying the time skip…" : "Apply the time skip"}
+                </button>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onDiscardParked}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the time skip
+                </button>
+            </div>
             </div>
         )}
 
@@ -2031,6 +2100,11 @@ const DateWidget = ({
     // How many times the failed segment has been retried for the jump currently
     // held — same reason as projectsRetries.
     const [segmentRetries, setSegmentRetries] = useState(0);
+    // A time skip that finished while another campaign was open, kept for this
+    // one (AI/gameplay.js loadParkedTurn): set means it waits for the player to
+    // apply or discard it. Nothing of it has been written.
+    const [parkedHeld, setParkedHeld] = useState(() => Boolean(getParkedTurn()));
+    const [isApplyingParked, setIsApplyingParked] = useState(false);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
@@ -2043,7 +2117,7 @@ const DateWidget = ({
     // offer comes at once when no turn is running, else when the running one
     // ends — never in the middle of one.
     const [modeEvidence, setModeEvidence] = useState(0);
-    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment;
+    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment || isApplyingParked;
     useEffect(() => {
         const noted = () => setModeEvidence((count) => count + 1);
         window.addEventListener("ai:structured-mode-suggestion", noted);
@@ -2247,6 +2321,7 @@ const DateWidget = ({
         setSegmentRetries(0);
         setProjectsHeld("");
         setProjectsRetries(0);
+        setParkedHeld(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2380,40 +2455,92 @@ const DateWidget = ({
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
     };
 
-    // A skip that finished while another campaign was open was kept for this one
-    // (AI/gameplay.js applyParkedTurn) and is written as soon as this campaign is
-    // open again, then shown like any turn that has just landed.
+    // A skip that finished while another campaign was open was kept for this one,
+    // in memory and in the campaign's store (AI/gameplay.js loadParkedTurn), and
+    // is offered here when this campaign's widget comes up, after a restart too:
+    // the player applies or discards it. One this campaign has moved on from is
+    // dropped, and said so.
     useEffect(() => {
-        if (!getParkedTurn()) return;
-        const finishParkedTurn = async () => {
-            setIsLoading(true);
-            try {
-                const result = await applyParkedTurn();
-                if (!result) return;
-                setFallbackWarning("This skip finished while another campaign was open, and was saved when you came back to this one.");
-                warnIfNoRestorePoint(result);
-                setGameData(result.game);
-                setEvents(result.events);
-                setWorldState(result.world);
-                setVisibleEventCount(1);
-                setPanel("history");
-            } catch (parkedError) {
+        let current = true;
+        void loadParkedTurn().then((kept) => {
+            if (!current) return;
+            if (kept?.discarded) {
+                setParkedHeld(false);
+                setError(PARKED_TURN_STALE_NOTE);
                 setPanel("skip");
-                if (parkedError?.projectsHeld) {
-                    setProjectsHeld(parkedError.message);
-                    setProjectsRetries(0);
-                } else {
-                    setError(parkedError.message || "Failed to save the skip that finished while another campaign was open.");
-                }
-            } finally {
-                setIsLoading(false);
+            } else if (kept) {
+                setParkedHeld(true);
+                setPanel("skip");
+            } else {
+                setParkedHeld(false);
             }
+        }).catch((loadError) => {
+            console.warn("[timeline] the kept skip could not be loaded.", loadError);
+        });
+        return () => {
+            current = false;
         };
-        void finishParkedTurn();
-    // Once, when this campaign's widget comes up: the parked turn is taken off
-    // the shelf by the first attempt.
+    // Once, when this campaign's widget comes up: it is mounted afresh for each.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Write the kept skip. Nothing is generated or asked again (AI/gameplay.js
+    // applyParkedTurn), and it lands like any skip. Busy like a skip, for the
+    // same reasons as the board retry below.
+    const applyHeldParked = async () => {
+        if (isApplyingParked || isLoading || jumpAbortRef.current) return;
+        setIsApplyingParked(true);
+        setIsLoading(true);
+        setError("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await applyParkedTurn({ signal: controller.signal });
+            setParkedHeld(false);
+            if (!result) return;
+            warnIfNoRestorePoint(result);
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            logDebugEvent("turn", `Kept skip applied in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (parkedError) {
+            if (controller.signal.aborted || parkedError?.name === "AbortError") {
+                // Cancelled. Still kept when nothing was written (applyParkedTurn
+                // puts it back), so the notice stays while it is.
+                setParkedHeld(Boolean(getParkedTurn()));
+                logDebugEvent("turn", "Applying the kept skip was cancelled.");
+            } else if (parkedError?.projectsHeld) {
+                // Held at the board now, like any skip: one notice at a time.
+                setParkedHeld(false);
+                setProjectsHeld(parkedError.message);
+                setProjectsRetries(0);
+            } else {
+                setParkedHeld(Boolean(getParkedTurn()));
+                setError(parkedError.message || "Failed to apply the time skip that finished while another campaign was open.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsApplyingParked(false);
+            setIsLoading(false);
+            setModeSuggestion(getStructuredModeSuggestion());
+        }
+    };
+
+    // Throw the kept skip away. Nothing of it was ever written.
+    const discardHeldParked = async () => {
+        setParkedHeld(false);
+        try {
+            await discardKeptTurn();
+        } catch (discardError) {
+            console.warn("[timeline] the kept skip could not be discarded.", discardError);
+        }
+    };
 
     // Finish a held turn by re-running ONLY the board call. The events are not
     // regenerated: they are already valid, and on a slow model regenerating them
@@ -3146,6 +3273,10 @@ const DateWidget = ({
         onDeclineModeSuggestion={declineModeSuggestion}
         onDiscardProjects={discardHeldProjects}
         onDiscardSegment={discardHeldSegment}
+        isApplyingParked={isApplyingParked}
+        onApplyParked={applyHeldParked}
+        onDiscardParked={discardHeldParked}
+        parkedHeld={parkedHeld}
         onJump={(days) => runJump(days, "jump")}
         onRetryProjects={retryHeldProjects}
         onRetrySegment={retryHeldSegment}

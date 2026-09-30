@@ -115,6 +115,7 @@ import {
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
+import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
 import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
 import { formalAgendaProposals } from "./formalAgenda.js";
@@ -339,7 +340,7 @@ import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { getLibraryState, readGameParkedTurn, removeGameParkedTurn, writeGameParkedTurn } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
@@ -423,6 +424,7 @@ import {
   discardPendingProjectsJump,
   discardParkedTurn,
   endSimulation,
+  PARKED_TURN_STALE_NOTE,
   getParkedTurn,
   getPendingJumpSegment,
   getPendingProjectsJump,
@@ -3621,7 +3623,9 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     // are seeded on the round. The requests before the board (the curator, the
     // breadth repair) are answered from applyArgs.replay, so the board call is
     // the only one sent again (heldTurnReplay.js).
-    return await applySimulationResult(applyArgs);
+    const applied = await applySimulationResult(applyArgs);
+    // The steps after the commit, which a written held turn used to miss.
+    return await afterJumpWritten(applied, { applyArgs, signal });
   } catch (error) {
     if (error?.projectsHeld) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
@@ -3633,13 +3637,132 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
   }
 };
 
-// Write the skip that finished while another campaign was open, now that its
-// campaign is open again (time.jsx calls this when the campaign's HUD comes up).
-// The same apply the first attempt ran, on the same arguments: it is pure until
-// it writes, so nothing is generated again, and the chat list and the queued
-// orders are read again at the write. Null when there is none for this
-// campaign. One whose campaign has moved on since its read is dropped, as a
-// held turn would be (heldTurnIsStale).
+// What a time skip does once its turn is written, however it got there: the
+// skip itself, a held turn's board retry, or a kept turn applied later. The
+// steps after the commit, which none of those may miss.
+const afterJumpWritten = async (applied, { applyArgs, signal, phases = null, date = "" }) => {
+  const requests = applyArgs.projects?.requests ?? null;
+  // Formal institution ballots are part of the living world, not a UI-only
+  // Council interaction. Let unresolved NPC members vote once the new turn is
+  // canonical, even when the player never reopened the institution workspace.
+  try {
+    await runPostTurnInstitutionBallots({
+      playerCountry: applied?.game?.country || applyArgs.baseGame?.country || "",
+      date: applied?.game?.gameDate || date || normalizeString(applyArgs.result?.stopDate),
+      signal,
+      expectedGameId: applyArgs.campaignId,
+      requests,
+    });
+  } catch (error) {
+    console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
+  }
+  reportJumpRequests(requests);
+  // Where the skip's time and requests went, in one line (skipPhases.js),
+  // and on the result for the panel's own log entry.
+  const phaseSummary = phases?.finish();
+  if (phaseSummary?.phases?.length) {
+    logDebugEvent("turn", `Time skip phases: ${formatSkipPhases(phaseSummary)}.`, phaseSummary);
+  }
+  return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
+};
+
+// ---- A skip kept for its campaign --------------------------------------------
+//
+// A time skip whose campaign was no longer open when it was ready to be written
+// (finishTimelineJump) is kept for that campaign: in memory (simulationStatus.js
+// parkFinishedTurn), which keeps that campaign busy while it waits, and in the
+// campaign's own store (parkedTurn.js), so closing the app does not lose it.
+// When the campaign is opened again its Timeline offers it (loadParkedTurn):
+// Apply writes it (applyParkedTurn), Discard throws it away (discardKeptTurn).
+
+// The store write of a kept turn still under way, per campaign: taking the
+// stored copy away must wait for it, or the write would land after the removal
+// and offer a turn already written.
+const keptTurnWrites = new globalThis.Map();
+
+const storeKeptTurn = (campaignId, applyArgs) => {
+  const write = (async () => {
+    try {
+      await writeGameParkedTurn(campaignId, parkedTurnRecord({ campaignId, applyArgs }));
+    } catch (error) {
+      logDebugEvent("turn", "The kept skip could not be saved with its campaign, so it is kept only until the app is closed.", error, { problem: true });
+    }
+  })();
+  keptTurnWrites.set(campaignId, write);
+  return write.finally(() => {
+    if (keptTurnWrites.get(campaignId) === write) keptTurnWrites.delete(campaignId);
+  });
+};
+
+const forgetStoredParkedTurn = async (campaignId) => {
+  const campaign = normalizeString(campaignId);
+  if (!campaign) return;
+  await keptTurnWrites.get(campaign);
+  try {
+    await removeGameParkedTurn(campaign);
+  } catch (error) {
+    logDebugEvent("turn", "The kept skip's stored copy could not be removed; the round check drops it when the campaign is next opened.", error, { problem: true });
+  }
+};
+
+// The open campaign's kept skip, for its Timeline (time.jsx): { toDate } when
+// there is one to offer; { discarded: true } when there was one this campaign
+// has moved on from, which is dropped here (PARKED_TURN_STALE_NOTE); null when
+// there is none. A stored one is taken into memory first, where it keeps the
+// campaign busy until the player applies or discards it.
+export const loadParkedTurn = async () => {
+  const campaignId = activeCampaignId();
+  if (!campaignId) return null;
+  if (!getParkedTurn()) {
+    let record = null;
+    try {
+      record = await readGameParkedTurn(campaignId);
+    } catch (error) {
+      logDebugEvent("turn", "This campaign's kept skip could not be read.", error, { problem: true });
+      return null;
+    }
+    if (!record) return null;
+    const restored = restoreParkedTurn(record, { campaignId });
+    if (!restored) {
+      // Another version's, or damaged: nothing here can write it.
+      logDebugEvent("turn", "This campaign's stored kept skip could not be used, so it was removed.", { version: record?.version }, { problem: true });
+      await forgetStoredParkedTurn(campaignId);
+      return null;
+    }
+    if (!stillCampaign(campaignId)) return null;
+    if (!getParkedTurn()) parkFinishedTurn(restored);
+  }
+  const parked = getParkedTurn();
+  if (!parked) return null;
+  const stale = await heldTurnIsStale(parked.applyArgs.baseGame);
+  // The answer is about this campaign only while it is the one open.
+  if (!stillCampaign(campaignId)) return null;
+  if (stale) {
+    if (getParkedTurn() === parked) discardParkedTurn();
+    await forgetStoredParkedTurn(campaignId);
+    logDebugEvent("turn", "The kept skip was discarded: its campaign moved on after the skip began.");
+    return { discarded: true };
+  }
+  return { toDate: normalizeString(parked.applyArgs.result?.stopDate) };
+};
+
+// Throw the open campaign's kept skip away, from memory and from its store.
+// Nothing of it was ever written.
+export const discardKeptTurn = async () => {
+  const campaignId = activeCampaignId();
+  const had = discardParkedTurn();
+  await forgetStoredParkedTurn(campaignId);
+  return had;
+};
+
+// Write the open campaign's kept skip, when the player applies it from the
+// Timeline. The same apply the first attempt ran, on the same arguments: it is
+// pure until it writes, and its replay answers every question the first run
+// asked before the write (the curator, the breadth repair, the board, the
+// history fold, the Stats refresh), so no request is repeated. The chat list
+// and the queued orders are read again at the write, and the steps after the
+// commit run as after any skip (afterJumpWritten). Null when there is none for
+// this campaign. One whose campaign has moved on since its read is dropped.
 export const applyParkedTurn = async ({ signal } = {}) => {
   // Left on the shelf while the round is checked: a parked turn keeps its
   // campaign busy, so nothing else writes into it during that read.
@@ -3647,22 +3770,38 @@ export const applyParkedTurn = async ({ signal } = {}) => {
   if (!parked) return null;
   const { applyArgs } = parked;
   if (await heldTurnIsStale(applyArgs.baseGame)) {
-    discardParkedTurn();
-    logDebugEvent("turn", "The kept skip was discarded: its campaign moved on while another was open.");
-    throw new Error(HELD_TURN_STALE_NOTE);
+    if (getParkedTurn() === parked) discardParkedTurn();
+    await forgetStoredParkedTurn(applyArgs.campaignId);
+    logDebugEvent("turn", "The kept skip was discarded: its campaign moved on after the skip began.");
+    throw new Error(PARKED_TURN_STALE_NOTE);
   }
   // Taken and marked busy in one step. Another call got there first when it is
   // no longer on the shelf, and the turn is applied once.
   if (takeParkedTurn() !== parked) return null;
   beginSimulation();
   try {
-    applyArgs.projects = { ...applyArgs.projects, signal };
+    if (applyArgs.projects) applyArgs.projects = { ...applyArgs.projects, signal };
     const applied = await applySimulationResult(applyArgs);
+    await forgetStoredParkedTurn(applyArgs.campaignId);
     logDebugEvent("turn", `The kept skip was written — now ${applied?.game?.gameDate || "unknown"}.`, { round: applied?.game?.round ?? 0 });
-    return applied;
+    return await afterJumpWritten(applied, { applyArgs, signal });
   } catch (error) {
-    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs, message: error.message });
-    else if (error?.campaignSwitched) parkFinishedTurn(parked);
+    if (error?.projectsHeld) {
+      // Held at the board like any skip, and kept in memory like any held turn.
+      setPendingProjectsJump({ applyArgs, message: error.message });
+      await forgetStoredParkedTurn(applyArgs.campaignId);
+    } else if (error?.campaignSwitched) {
+      parkFinishedTurn(parked);
+    } else if (error?.name === "AbortError" || signal?.aborted) {
+      // Cancelled before the write, it is still to be applied; after it (a step
+      // past the commit that stopped on the Cancel), the turn is written.
+      if (await heldTurnIsStale(applyArgs.baseGame)) await forgetStoredParkedTurn(applyArgs.campaignId);
+      else parkFinishedTurn(parked);
+    } else {
+      // The write itself failed: an ordinary turn failure from here, as for a
+      // held turn's retry.
+      await forgetStoredParkedTurn(applyArgs.campaignId);
+    }
     throw error;
   } finally {
     endSimulation();
@@ -3830,7 +3969,7 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId() } = {}) => {
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
@@ -3838,26 +3977,6 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
   const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = planHistoryConsolidation(bundle, { force });
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
-  // A consolidation already sent as a batch covers these events: sending them
-  // again would pay twice and, when both land, remember those weeks twice.
-  if (hasPendingBatch("eventConsolidator", campaignId)) {
-    logDebugEvent("turn", "History consolidation waits for the batch already submitted for this campaign.", {
-      events: eventsToConsolidate.length,
-      chats: closedChats.length,
-    });
-    return world;
-  }
-  // The skip's budget is asked HERE, not inside the task: a refused task falls
-  // back to its deterministic digest, and folding history with a digest is
-  // permanent — those events are never shown to the simulator again. Refused,
-  // the fold simply waits; it is due again on the next skip.
-  if (requests && !requests.budget.take("history")) {
-    logDebugEvent("turn", `History consolidation put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
-      events: eventsToConsolidate.length,
-      chats: closedChats.length,
-    });
-    return world;
-  }
   // The pass's boundary as plain JSON: what the entry records, and what a
   // batch applier needs to be rebuilt after a reload (batchApplierFor).
   const resume = {
@@ -3872,23 +3991,50 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
     eventCount: eventsToConsolidate.length,
     chatCount: closedChats.length,
   };
-  const { generation, summary, document, baseRevision } = await consolidateHistoryBatch(
-    bundle,
-    eventsToConsolidate,
-    closedChats,
-    actionsToConsolidate,
-    {
-      onRequest: jumpTaskOptions(requests, "history").onRequest,
-      signal,
-      campaignId,
-      // The jump that asked for it carries on with the events unconsolidated
-      // while a batched summary is outstanding (deferredConsolidationApplier),
-      // which belongs to the campaign that asked.
-      onBatchResult: deferredConsolidationApplier(resume),
-      batchResume: resume,
-    },
-  );
-  if (!summary) return world;
+  // Whether to ask and the answer, together in a time skip's replay
+  // (heldTurnReplay.js): a skip kept for its campaign and written later neither
+  // asks nor spends again, and decides the same way even when a batch has been
+  // sent since.
+  const consolidated = await replayAnswer(replay, "historyConsolidation", async () => {
+    // A consolidation already sent as a batch covers these events: sending them
+    // again would pay twice and, when both land, remember those weeks twice.
+    if (hasPendingBatch("eventConsolidator", campaignId)) {
+      logDebugEvent("turn", "History consolidation waits for the batch already submitted for this campaign.", {
+        events: eventsToConsolidate.length,
+        chats: closedChats.length,
+      });
+      return null;
+    }
+    // The skip's budget is asked HERE, not inside the task: a refused task falls
+    // back to its deterministic digest, and folding history with a digest is
+    // permanent — those events are never shown to the simulator again. Refused,
+    // the fold simply waits; it is due again on the next skip.
+    if (requests && !requests.budget.take("history")) {
+      logDebugEvent("turn", `History consolidation put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
+        events: eventsToConsolidate.length,
+        chats: closedChats.length,
+      });
+      return null;
+    }
+    return consolidateHistoryBatch(
+      bundle,
+      eventsToConsolidate,
+      closedChats,
+      actionsToConsolidate,
+      {
+        onRequest: jumpTaskOptions(requests, "history").onRequest,
+        signal,
+        campaignId,
+        // The jump that asked for it carries on with the events unconsolidated
+        // while a batched summary is outstanding (deferredConsolidationApplier),
+        // which belongs to the campaign that asked.
+        onBatchResult: deferredConsolidationApplier(resume),
+        batchResume: resume,
+      },
+    );
+  });
+  if (!consolidated?.summary) return world;
+  const { generation, summary, document, baseRevision } = consolidated;
 
   const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
@@ -7552,14 +7698,17 @@ const applySimulationResult = async ({
         // board does not move this turn; it never holds the turn, because the
         // only way to un-hold it would be another request.
         ? reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap })
-        : await generateProjectOps(
+        // Kept in the replay once it answers, so a turn kept for its campaign
+        // is written later without asking the board again. A failure is not
+        // kept: it holds the turn, and the retry is exactly this call again.
+        : await replayAnswer(replay, "projectsBoard", () => generateProjectOps(
           // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
           // read before the turn ran, so its board carries none of this turn's
           // impacts and none of the covert-operation sync just above.
           { ...projects.bundle, game: nextGame, world: worldWithImpacts },
           freshEvents,
           { signal: projects.signal, hiddenEvents: boardHiddenEvents, requests },
-        );
+        ), { rememberFailure: false });
       // The board was looked at this round, whatever it found (projects.js
       // boardPassReasons counts the quiet rounds from here).
       if (!skipped) worldWithImpacts = { ...worldWithImpacts, boardReviewedRound: nextGame.round };
@@ -7735,7 +7884,7 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests, signal: projects?.signal, campaignId });
+      }, { requests, signal: projects?.signal, campaignId, replay });
     } catch (error) {
       if (projects?.signal?.aborted) throw error;
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
@@ -7758,6 +7907,7 @@ const applySimulationResult = async ({
       },
       signal: projects?.signal,
       requests,
+      replay,
     });
   } catch (error) {
     if (projects?.signal?.aborted) throw error;
@@ -10123,7 +10273,14 @@ const trackedStatsPutOff = (requests, due) => {
   return true;
 };
 
-const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null } = {}) => {
+// The refresh's one request, with the budget's say on it, asked of a time
+// skip's replay (heldTurnReplay.js): a skip kept for its campaign and written
+// later neither asks nor spends again. `{ putOff: true }` when the budget said no.
+const askTrackedStats = (replay, requests, due, ask) => replayAnswer(replay, "trackedStats", () => (
+  trackedStatsPutOff(requests, due) ? { putOff: true } : ask()
+));
+
+const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null, replay = null } = {}) => {
   const game = normalizeGameData(bundle?.game);
   let world = normalizeWorldState(bundle?.world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);
@@ -10171,7 +10328,6 @@ const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requ
     pendingBaselinePolities: pendingBaseline,
   }, { playerCountry: game?.country });
   if (!due.length) return world;
-  if (trackedStatsPutOff(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic scenario-defined National Stats auditor.
 
@@ -10201,7 +10357,7 @@ For each country include only values that genuinely changed.`;
   ].join("\n");
 
   try {
-    const response = await callAIWithTaskLimit(
+    const response = await askTrackedStats(replay, requests, due, () => callAIWithTaskLimit(
       systemPrompt,
       [{ role: "user", parts: [{ text: userMessage }] }],
       {
@@ -10210,7 +10366,8 @@ For each country include only values that genuinely changed.`;
         taskKey: "countryStatSheet",
         ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
       },
-    );
+    ));
+    if (response?.putOff === true) return world;
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     const parsed = response?.toolInput ?? extractJsonPayload(rawText);
     const updates = normalizeArray(parsed?.updates);
@@ -10262,6 +10419,9 @@ const refreshTrackedCountryStatsIfDue = async ({
   // The time skip this refresh rides on (createJumpRequests), so its one request
   // asks the skip's budget first. Refused, the refresh stays due.
   requests = null,
+  // And its replay (heldTurnReplay.js), so a skip written later asks again for
+  // nothing it was already answered.
+  replay = null,
 } = {}) => {
   const game = normalizeGameData(bundle?.game);
   let world = normalizeWorldState(bundle?.world);
@@ -10277,7 +10437,7 @@ const refreshTrackedCountryStatsIfDue = async ({
     return world;
   }
   if (statSheetDefinition.custom) {
-    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests });
+    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests, replay });
   }
   const statIndexDefinition = await loadStatIndexDefinition({ definition: statSheetDefinition });
   const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
@@ -10343,7 +10503,6 @@ const refreshTrackedCountryStatsIfDue = async ({
   }, { playerCountry: game?.country });
 
   if (!due.length) return world;
-  if (trackedStatsPutOff(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic national-statistics auditor.
 
@@ -10407,7 +10566,7 @@ You may omit a field when the existing value should remain exactly unchanged.`;
   ].join("\n");
 
   try {
-    const response = await callAIWithTaskLimit(
+    const response = await askTrackedStats(replay, requests, due, () => callAIWithTaskLimit(
       systemPrompt,
       [{ role: "user", parts: [{ text: userMessage }] }],
       {
@@ -10416,7 +10575,8 @@ You may omit a field when the existing value should remain exactly unchanged.`;
         taskKey: "countryStatSheet",
         ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
       },
-    );
+    ));
+    if (response?.putOff === true) return world;
     const rawText = typeof response === "string"
       ? response
       : normalizeString(response?.rawText);
@@ -14486,41 +14646,26 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   state.phases?.enter("applying");
   try {
     const applied = await applySimulationResult(applyArgs);
-    // Formal institution ballots are part of the living world, not a UI-only
-    // Council interaction. Let unresolved NPC members vote once the new turn is
-    // canonical, even when the player never reopened the institution workspace.
-    try {
-      await runPostTurnInstitutionBallots({
-        playerCountry: applied?.game?.country || bundle.game?.country || "",
-        date: applied?.game?.gameDate || targetDate,
-        signal,
-        expectedGameId: context.campaignId,
-        requests: state.requests,
-      });
-    } catch (error) {
-      console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
-    }
-    reportJumpRequests(state.requests);
-    // Where the skip's time and requests went, in one line (skipPhases.js),
-    // and on the result for the panel's own log entry.
-    const phaseSummary = state.phases?.finish();
-    if (phaseSummary?.phases?.length) {
-      logDebugEvent("turn", `Time skip phases: ${formatSkipPhases(phaseSummary)}.`, phaseSummary);
-    }
-    return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
+    return await afterJumpWritten(applied, { applyArgs, signal, phases: state.phases, date: targetDate });
   } catch (error) {
     if (error?.projectsHeld) setPendingProjectsJump({ applyArgs, message: error.message });
     // Finished, but its campaign is no longer the one open, so nothing was
     // written (applySimulationResult checks before anything is). It is kept for
-    // that campaign rather than lost with every request it cost, and written when
-    // the campaign is next opened (applyParkedTurn), the way a turn held at the
-    // board is retried: the same apply, on the same arguments.
+    // that campaign, in memory and in its store, rather than lost with every
+    // request it cost, and offered when the campaign is next opened
+    // (loadParkedTurn, applyParkedTurn): the same apply, on the same arguments,
+    // with every answer it was given (applyArgs.replay).
     else if (error?.campaignSwitched && context.campaignId) {
+      // The skip's phase tracker speaks to a panel that is gone by then.
+      applyArgs.phases = null;
       parkFinishedTurn({ campaignId: context.campaignId, applyArgs });
-      logDebugEvent("turn", "The skip finished while another campaign was open; it is kept and will be written when its campaign is opened again.", {
+      logDebugEvent("turn", "The skip finished while another campaign was open; it is kept for its campaign, to be applied or discarded there.", {
         campaign: context.campaignId,
         events: normalizeArray(result.events).length,
       });
+      // Not waited for: the skip is over, and the save now open should not be
+      // held up by it. Anything that removes the stored copy waits for it.
+      void storeKeptTurn(context.campaignId, applyArgs);
     }
     throw error;
   }
@@ -14534,7 +14679,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (!evaluationMode) {
     discardPendingProjectsJump();
     discardPendingJumpSegment();
-    discardParkedTurn();
+    // A kept skip too, and its stored copy: this skip starts from the campaign
+    // as it stands, and a new round makes the kept one stale anyway.
+    if (discardParkedTurn()) void forgetStoredParkedTurn(activeCampaignId());
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed

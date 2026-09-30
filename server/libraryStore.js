@@ -4239,6 +4239,41 @@ const writeGameSnapshots = (gameId, snapshots) => {
   return { ok: true };
 };
 
+// A time skip that finished while another game was open, kept for this one
+// until the player applies or discards it (src/Game/AI/parkedTurn.js). By game
+// id, because it is written while ANOTHER game is the active one. One per game;
+// not in the bundle, a copy or an export: it belongs to this game's round, and
+// is dropped by the game that reads it once that round has passed.
+const PARKED_TURN_FILE = "storage/parked-turn.json";
+const getGameParkedTurnPath = (gameId) => path.join(getGameDirectory(gameId), PARKED_TURN_FILE);
+
+const readGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  const value = readJsonFile(getGameParkedTurnPath(gameId), null);
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+};
+
+const writeGameParkedTurn = (gameId, parkedTurn) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  if (!parkedTurn || typeof parkedTurn !== "object" || Array.isArray(parkedTurn)) {
+    throw new Error("A kept turn must be an object.");
+  }
+  if (String(parkedTurn.campaignId ?? "") !== gameId) {
+    throw new Error(`This kept turn belongs to another game: ${parkedTurn.campaignId}`);
+  }
+  writeJsonFileAtomic(getGameParkedTurnPath(gameId), parkedTurn);
+  return { ok: true };
+};
+
+const removeGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  fs.rmSync(getGameParkedTurnPath(gameId), { force: true });
+  return { ok: true };
+};
+
 export {
   createGame,
   createScenario,
@@ -4260,9 +4295,11 @@ export {
   restoreFromTrash,
   updateScenarioFromBundle,
   readGameSnapshots,
+  readGameParkedTurn,
   readRuntimeJsonAsset,
   resolveRuntimeGeojsonAsset,
   removeGameAsset,
+  removeGameParkedTurn,
   removeScenarioAsset,
   resolveGameUploadAsset,
   resolveScenarioCoarseRegionsAsset,
@@ -4275,6 +4312,7 @@ export {
   uploadGameAsset,
   uploadScenarioAsset,
   writeGameSnapshots,
+  writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
   recoverPendingTurnCommit,
