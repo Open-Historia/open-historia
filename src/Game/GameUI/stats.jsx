@@ -17,7 +17,7 @@ import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
-import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { ensureCountryAssessed, ensureIntelligenceRated, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
@@ -1198,7 +1198,7 @@ const AdvancedStatsModal = ({
             <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
-                        {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
+                        {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
@@ -2377,7 +2377,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             {flagUrl && !flagFailed ? (
                 <img
                 alt=""
-                src={flagUrl}
+                src={bundledFlagUrl(flagUrl)}
                 onError={() => setFlagFailed(true)}
                 style={{ height: "100%", objectFit: "cover", width: "100%" }}
                 />

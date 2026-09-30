@@ -37,7 +37,7 @@ import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
-import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import {
   PROJECT_BOARD_LIMIT,
   applyProjectOpsToWorld,
@@ -301,7 +301,7 @@ const OwnerBadge = ({ flagUrl, mine, name }) => {
         {flagUrl && !flagFailed ? (
           <img
             alt=""
-            src={flagUrl}
+            src={bundledFlagUrl(flagUrl)}
             onError={() => setFlagFailed(true)}
             style={{ height: "100%", objectFit: "cover", width: "100%" }}
           />

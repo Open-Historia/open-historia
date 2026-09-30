@@ -34,7 +34,7 @@ import {
     loadCountryNames as loadCachedCountryNames,
     readJson,
 } from "../../runtime/assets.js";
-import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -320,7 +320,7 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
     const h = height ?? size;
     return url ? (
         <img
-            src={url}
+            src={bundledFlagUrl(url)}
             alt={alt}
             style={{
                 width: w, height: h, objectFit: "cover", borderRadius: "2px",

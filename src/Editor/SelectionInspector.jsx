@@ -25,6 +25,7 @@ import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { rgbToHex } from "./fields.jsx";
 import { normalizeGroups } from "../runtime/groups.js";
 import { commonClaimants, claimantDelta, applyClaimantDelta } from "./claimantEdits.js";
+import { bundledFlagUrl } from "../runtime/countryFlags.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -292,7 +293,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {ownerFlag && (
               <img
-                src={ownerFlag}
+                src={bundledFlagUrl(ownerFlag)}
                 alt=""
                 style={{ width: 26, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
               />

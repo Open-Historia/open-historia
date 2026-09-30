@@ -5,7 +5,7 @@ import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM } from "../../runtime/mobileUi.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { useLibraryState } from "../../runtime/library.js";
 
@@ -187,7 +187,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = fal
         >
         {flagUrl && !imageFailed ? (
             <img
-            src={flagUrl}
+            src={bundledFlagUrl(flagUrl)}
             alt={displayName}
             onError={() => setImageFailed(true)}
             style={{ borderRadius: "5px", boxShadow: "0 0 0 1px rgba(255,255,255,0.16)", height: "100%", objectFit: "cover", width: "100%" }}

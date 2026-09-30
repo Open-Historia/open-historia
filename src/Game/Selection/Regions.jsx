@@ -11,7 +11,7 @@ import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -655,7 +655,7 @@ const RegionPopup = () => {
         <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(41,41,45,0.6)" }}>
         {showFlagImage ? (
             <img
-            src={flagState.imageUrl}
+            src={bundledFlagUrl(flagState.imageUrl)}
             alt={displayCountry}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}

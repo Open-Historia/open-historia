@@ -322,11 +322,27 @@ Raster tiles are warmed via `warmRemoteResources` / `warmRemoteResource` (`asset
 
 ---
 
+## 11. Built-in flags (`public/flags/`)
+
+The flags the game draws for standard countries ship with every build (website, desktop, Android), so they show offline and no flag request leaves the device. Added 2026-09-29; before that every flag was fetched from flagcdn.com as it was drawn.
+
+| Piece | What it is |
+|---|---|
+| `public/flags/<code>.svg` | What the panels, pickers and chat draw |
+| `public/flags/w160/<code>.png` | What the map's unit counters rasterise: a canvas cannot size an SVG with no width, and a few (Bangladesh, Uruguay, Christmas Island) have none |
+| `scripts/fetch-flags.mjs` | Downloads the set from flagcdn.com (Flagpedia.net's flags, public domain) and writes `src/runtime/generated/bundledFlagCodes.js`. 256 codes, 4.1 MB: every code flagcdn serves except the US states (7.9 MB the game never asks for), so the countries and territories, the EU, the UN, Kosovo and the four UK nations. The files are committed; a build never needs the network for them |
+| `bundledFlagUrl(url, { raster })` (`countryFlags.js`) | Maps a flagcdn address onto the shipped copy, under the build's `BASE_URL` (`/play/flags/` on the website): the SVG for an SVG, the 160 px PNG for any raster size and for every `raster` request; anything else (an uploaded data URL, a hub image, an unshipped code) unchanged |
+
+Scenarios and saves keep **storing** the flagcdn address (`flagImageUrlFromGid`, `listBuiltInFlags`, *Fill standard flags*): every version and every other install understands it, where a path into this build's files would break on an older version, and the website's `/play/` base would disagree with the desktop about where the files are. The address becomes the local copy only where a flag is drawn, so every `<img>` and canvas that shows a flag goes through `bundledFlagUrl`; `src/runtime/bundledFlags.test.js` fails on an `<img>` whose `src` names a flag without it, and checks the files against the list.
+
+---
+
 ## Quick file map
 
 | File | Role |
 |---|---|
 | `src/runtime/assets.js` | Client asset layer: read/write/warm/prime, caches, derived catalogs, basemap protocols |
+| `src/runtime/countryFlags.js` | Country codes, flag emoji, the flagcdn address of a built-in flag, and `bundledFlagUrl` (the shipped copy, §11) |
 | `src/runtime/preload.js` | 30 s startup warm sequence + progress model |
 | `src/runtime/web/router.js` | Web-build `fetch` interceptor for `/api/*` (pmtiles → `VITE_OH_PMTILES_URL`) |
 | `src/runtime/web/contentTrust.js` | Web-build hash-verified content-node fetch |

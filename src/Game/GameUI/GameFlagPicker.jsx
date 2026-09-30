@@ -5,6 +5,7 @@ import { resolvePolityFlag, setPolityFlag } from "../../runtime/polityFlags.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { GAME_FLAG_LIMIT, gameFlagChoices } from "./gameFlagChoices.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 
 const MAX_FLAG_WIDTH = 256;
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
@@ -86,7 +87,7 @@ const FlagCard = ({ imageUrl, label, meta, onClick, selected = false }) => (
         }}
     >
         <div style={{ width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {imageUrl ? <img src={imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.72rem" }}>No preview</span>}
+            {imageUrl ? <img src={bundledFlagUrl(imageUrl)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /> : <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.72rem" }}>No preview</span>}
         </div>
         <div style={{ fontSize: "0.75rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
         {meta && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem", overflow: "hidden", textOverflow: "ellipsis" }}>{meta}</div>}
@@ -342,7 +343,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
         <div style={{ position: "fixed", inset: 0, zIndex: 12050, background: "rgba(2,6,23,0.78)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})` }}>
             <div style={{ width: "min(56rem, 96vw)", maxHeight: isMobile ? `calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : "88vh", display: "flex", flexDirection: "column", background: "rgba(16,18,24,0.99)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: 16, boxShadow: "0 24px 70px rgba(0,0,0,0.6)", overflow: "hidden", color: "white", fontFamily: "sans-serif" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", padding: "1rem 1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                    {current.imageUrl ? <img src={current.imageUrl} alt="" style={{ width: 46, height: 29, objectFit: "cover", borderRadius: 4, boxShadow: "0 0 0 1px rgba(255,255,255,0.18)" }} /> : <div style={{ width: 46, height: 29, borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)" }} />}
+                    {current.imageUrl ? <img src={bundledFlagUrl(current.imageUrl)} alt="" style={{ width: 46, height: 29, objectFit: "cover", borderRadius: 4, boxShadow: "0 0 0 1px rgba(255,255,255,0.18)" }} /> : <div style={{ width: 46, height: 29, borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)" }} />}
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 800, fontSize: "1rem" }}>Change flag</div>
                         <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity?.name || polity?.polityKey || polity?.code}</div>

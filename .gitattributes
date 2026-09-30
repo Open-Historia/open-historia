@@ -10,6 +10,10 @@
 public/content-manifest.json text eol=lf
 public/node-directory.json text eol=lf
 
+# The built-in flags (scripts/fetch-flags.mjs): stored exactly as flagcdn.com serves
+# them, so a checkout on any platform ships the same bytes.
+public/flags/** -text
+
 # NOTE: the large world-map binaries (*.pmtiles, regions-seed.geojson,
 # cities-seed.json, the default scenario's regions.geojson) used to be tracked in
 # Git LFS. They are no longer in the repo at all - they are hosted as GitHub

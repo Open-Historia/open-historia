@@ -8,7 +8,7 @@ import Panel from "./Panel.jsx";
 import { inputStyle, pillButton } from "./editorStyles.js";
 import { ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
-import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import PuppetFields from "./PuppetFields.jsx";
@@ -590,7 +590,7 @@ const PolitiesPanel = ({
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.58)", width: 52 }}>Flag</span>
-            {flags?.[current.key] && <img src={flags[current.key]} alt="" style={{ width: 28, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />}
+            {flags?.[current.key] && <img src={bundledFlagUrl(flags[current.key])} alt="" style={{ width: 28, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />}
             <button type="button" style={pillButton(false)} onClick={() => onOpenFlagPicker?.(current.key)}>
               {flags?.[current.key] ? "Change" : "Choose flag"}
             </button>

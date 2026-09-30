@@ -11,6 +11,7 @@
 // scripts/generate-country-tables.mjs, and is committed — see that script for why
 // it derives the table from the real lookup below rather than restating it.
 import NAME_TO_ALPHA2 from "./generated/nameToAlpha2.js";
+import BUNDLED_FLAG_CODES from "./generated/bundledFlagCodes.js";
 
 // ISO 3166-1 alpha-3 -> alpha-2.
 const ISO3_TO_ISO2 = {
@@ -115,6 +116,35 @@ export const gidToAlpha2 = (owner) => {
     const iso3 = DISPUTED_TERRITORY_PARENT[code] ?? SPECIAL_TERRITORY_PARENT[code] ?? code;
     const alpha2 = ISO3_TO_ISO2[iso3];
     return alpha2 ? alpha2.toLowerCase() : null;
+};
+
+// The built-in flags ship with the game (public/flags/, from Flagpedia's
+// flagcdn.com set, public domain; scripts/fetch-flags.mjs), so they draw offline
+// and no flag request leaves the device. Scenarios and saves keep storing the
+// flagcdn address below: every version and every other install understands it,
+// where a path into this build's files would break on an older one, and a site
+// built under /play/ would disagree with the desktop about where the files are.
+// The address becomes the bundled copy only where a flag is drawn:
+// bundledFlagUrl, at every <img> and canvas that shows one.
+const BUNDLED_FLAG_SET = new Set(BUNDLED_FLAG_CODES);
+const FLAGCDN_URL = /^https?:\/\/flagcdn\.com\/(?:(?:[wh]\d+|\d+x\d+)\/)?([a-z]{2}(?:-[a-z]{2,3})?)\.(svg|png|webp|jpe?g)(?:[?#].*)?$/i;
+const flagBase = () => {
+    const base = typeof import.meta !== "undefined" && import.meta.env?.BASE_URL ? import.meta.env.BASE_URL : "/";
+    return `${base.endsWith("/") ? base : `${base}/`}flags/`;
+};
+
+// A flagcdn address as the copy that shipped: the SVG for an SVG, the 160 px PNG
+// for any raster size, and for everything when `raster` is asked for (a canvas
+// cannot size an SVG with no width, and a few of these have none). Anything
+// else (an uploaded data URL, a hub image, a code not bundled) comes back as is.
+export const bundledFlagUrl = (url, { raster = false } = {}) => {
+    if (typeof url !== "string") return url;
+    const match = FLAGCDN_URL.exec(url.trim());
+    if (!match) return url;
+    const code = match[1].toLowerCase();
+    if (!BUNDLED_FLAG_SET.has(code)) return url;
+    const base = flagBase();
+    return !raster && match[2].toLowerCase() === "svg" ? `${base}${code}.svg` : `${base}w160/${code}.png`;
 };
 
 // flagcdn.com SVG flag URL for a GID_0 code, or null if unknown.

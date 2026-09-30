@@ -14,6 +14,7 @@ import { lazy, Suspense, useState } from "react";
 import { createPortal } from "react-dom";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 
 // The editor's flag picker drops in unchanged — it is prop-driven and pulls in no
 // editor stores. It returns a flag STRING (a flagcdn URL or a PNG data URL) or
@@ -123,7 +124,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy, mode = "fact
           {/* Wraps on a narrow phone rather than pushing Remove off the card. */}
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
             {flag ? (
-              <img src={flag} alt="" style={{ width: 34, height: 22, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />
+              <img src={bundledFlagUrl(flag)} alt="" style={{ width: 34, height: 22, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />
             ) : (
               <span aria-hidden="true" style={{ fontSize: "1.4rem" }}>🏳️</span>
             )}

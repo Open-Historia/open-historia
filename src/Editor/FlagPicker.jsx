@@ -25,6 +25,7 @@ import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 import { listFlags, saveFlag, deleteFlag } from "../runtime/flagLibrary.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { CommunitySourceBadge } from "./BasemapPicker.jsx";
+import { bundledFlagUrl } from "../runtime/countryFlags.js";
 
 const overlay = {
   position: "fixed",
@@ -120,7 +121,7 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
     <div style={{ aspectRatio: "3 / 2", background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       {imageUrl ? (
         <img
-          src={imageUrl}
+          src={bundledFlagUrl(imageUrl)}
           alt=""
           loading="lazy"
           style={{ width: "100%", height: "100%", objectFit: "contain" }}
