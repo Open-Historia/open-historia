@@ -119,9 +119,14 @@ test("a phrase that finds nothing reports every place it could have been naming"
 // Mediterranean Sea", "Ionian Sea, Eastern Mediterranean" and "Black Sea" could
 // be placed at none of them, because the map names no water, and it stopped.
 //
+// Modern Day's own map, as it ships: its regions are numbered ("2001"), not
+// GADM ids, and it is the map the fleet in that Game sailed on.
+const MODERN_DAY_REGIONS = JSON.parse(readFileSync(new URL("../../../server/seed/default/regions.geojson", import.meta.url), "utf8"))
+    .features.filter((feature) => feature?.geometry);
+const modernDayRegionAt = (point) => MODERN_DAY_REGIONS.find((feature) => pointInGeometry(point, feature.geometry)) ?? null;
 // The test map stands in for the real world here: its gazetteer is handed the
-// real seas, as the game's is when the real-world map is loaded.
-const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionIds: ["UKR.11_1", "UKR.12_1", "ROU.3_1"] }) };
+// seas the real-world map has.
+const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionAt: modernDayRegionAt }) };
 const placeOnEarth = (phrase) => resolvePlacement(phrase, earthGazetteer);
 
 test("a named sea is open water in that sea, whatever words come with it", () => {
@@ -141,12 +146,24 @@ test("a named sea is open water in that sea, whatever words come with it", () =>
     assert.ok(distanceKm([placeOnEarth("Black Sea").lng, placeOnEarth("Black Sea").lat], [34, 43.2]) < 1);
 });
 
+test("Modern Day's own map, numbered regions and all, is the real world and has the real seas", () => {
+    assert.ok(MODERN_DAY_REGIONS.length > 1000);
+    assert.ok(!MODERN_DAY_REGIONS.some((feature) => /^[A-Z]{3}\.\d+/.test(String(feature.properties?.id))), "its ids are not GADM ids");
+    const seas = seasForMap({ regionAt: modernDayRegionAt });
+    assert.ok(seas.some((sea) => sea.name === "Black Sea"));
+    // Every real sea's point is open water on it, or near enough to find some.
+    for (const sea of seas) {
+        assert.ok(nearestSea(sea.point, { regionAt: modernDayRegionAt }), sea.name);
+    }
+});
+
 test("the real seas are the real-world map's only: a map of its own does not know the Black Sea", () => {
-    assert.ok(seasForMap({ regionIds: ["UKR.11_1", "GBR.1_1"] }).some((sea) => sea.name === "Black Sea"));
-    // A hand-drawn world: its own ids, perhaps a re-owned stock row or two.
-    const ownMap = seasForMap({ regionIds: ["westeros-north", "westeros-vale", "essos-pentos", "UKR.11_1"] });
+    // The test map: a few regions, none where Earth's continents are.
+    const ownMap = seasForMap({ regionAt: gazetteer.regionAt });
     assert.deepEqual(ownMap, []);
-    assert.deepEqual(seasForMap({ regionIds: [] }), []);
+    // A map that is land everywhere, or that has no geometry, is not Earth either.
+    assert.deepEqual(seasForMap({ regionAt: () => ({ id: "x" }) }), []);
+    assert.deepEqual(seasForMap({}), []);
 
     const spot = resolvePlacement("Black Sea", { ...gazetteer, seas: ownMap });
     assert.equal(spot.how, undefined);
@@ -156,7 +173,7 @@ test("the real seas are the real-world map's only: a map of its own does not kno
 
 test("a map of its own places fleets in the seas its scenario declares", () => {
     const seas = seasForMap({
-        regionIds: ["el-n", "el-s", "wm-n"],
+        regionAt: gazetteer.regionAt,
         declared: [
             { name: "Narrow Sea", aliases: ["the Narrows"], point: [36, 45] },
             { name: "Sunset Sea", lng: 20, lat: 45 },
@@ -175,7 +192,7 @@ test("a map of its own places fleets in the seas its scenario declares", () => {
     assert.equal(resolvePlacement("Sunset Sea", own).how, "sea");
 
     // On the real-world map too, and a scenario's own sea wins a shared name.
-    const earth = seasForMap({ regionIds: ["UKR.11_1"], declared: [{ name: "Black Sea", point: [31, 44] }] });
+    const earth = seasForMap({ regionAt: modernDayRegionAt, declared: [{ name: "Black Sea", point: [31, 44] }] });
     assert.deepEqual(earth.find((sea) => sea.name === "Black Sea").point, [31, 44]);
     assert.ok(earth.some((sea) => sea.name === "Ionian Sea"));
 });

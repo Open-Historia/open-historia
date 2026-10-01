@@ -789,24 +789,32 @@ export const declaredSeas = (list) => asArray(list).flatMap((entry) => {
     return [{ name, aliases: asArray(entry?.aliases).map(asText).filter(Boolean), point: [lng, lat] }];
 });
 
-// Whether the loaded map is the real world: most of its regions carry the stock
-// GADM ids ("UKR.11_1") the real-world map is drawn from. A scenario on its own
-// map has its own ids, and on such a world the stock rows are filtered out
-// before they get here (promptContext.js filterToRenderedRegions), so a few
-// re-owned stock rows on a mostly hand-drawn map do not make it Earth. This is
-// the map, not the scenario's history: an alternate or fictional story told on
-// the real map still has the real seas.
-const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
-export const isRealWorldMap = (regionIds) => {
-    const ids = asArray(regionIds).map(asText).filter(Boolean);
-    return ids.length > 0 && ids.filter((id) => STOCK_REGION_ID.test(id)).length * 2 > ids.length;
+// Whether the loaded map is the real world, told by its land and water: the
+// map has land under the middle of the continents and none in the middle of the
+// oceans and the inland seas. Not by its region ids — the stock map's are GADM
+// ids ("UKR.11_1"), but Modern Day's own redrawn map numbers them ("2001") —
+// and not by the world's builtInMap stamp, which a scenario started from
+// scratch copies with Modern Day's world.json and keeps over a map of its own.
+// Where the coastlines are Earth's, the real seas are where they say they are,
+// whatever the story: an alternate or fictional one told on the real map still
+// has them. One land point may be missing (a region left undrawn); no ocean
+// point may be land.
+const EARTH_LAND_PROBES = [
+    [-3.7, 40.4], [37.6, 55.75], [31.2, 30.05], [116.4, 39.9], [-98, 38.5],
+    [-47.9, -15.8], [133.9, -23.7], [77.2, 28.6], [18.7, 15.5],
+];
+const EARTH_WATER_PROBES = [[-35, 30], [-150, 10], [80, -10], [34, 43.2], [18, 34.5], [-15, -25]];
+export const isRealWorldMap = (regionAt) => {
+    if (typeof regionAt !== "function") return false;
+    if (EARTH_WATER_PROBES.some((point) => regionAt(point))) return false;
+    return EARTH_LAND_PROBES.filter((point) => regionAt(point)).length >= EARTH_LAND_PROBES.length - 1;
 };
 
 // The seas a gazetteer offers: the scenario's own first, so they win a shared
 // name, then the real ones when the map is the real world.
-export const seasForMap = ({ regionIds = [], declared = [] } = {}) => [
+export const seasForMap = ({ regionAt = null, declared = [] } = {}) => [
     ...declaredSeas(declared),
-    ...(isRealWorldMap(regionIds) ? EARTH_SEAS.map(([[name, ...aliases], point]) => ({ name, aliases, point })) : []),
+    ...(isRealWorldMap(regionAt) ? EARTH_SEAS.map(([[name, ...aliases], point]) => ({ name, aliases, point })) : []),
 ];
 
 // The gazetteer's seas by every name they go by, built once per list.
