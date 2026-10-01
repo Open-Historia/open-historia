@@ -8360,6 +8360,7 @@ const applySimulationResult = async ({
         warUpdates,
         relationUpdates,
         agreementUpdates,
+        puppetUpdates,
         storylineUpdates,
         stopDate: nextGame.gameDate,
         summary: result.summary,
