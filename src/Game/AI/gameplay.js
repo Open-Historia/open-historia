@@ -159,6 +159,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
+import { buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -7521,6 +7522,18 @@ const applySimulationResult = async ({
         + "Answer each of them this period, in an event that lists that order's id in actionIds — an event that tells the story without naming the id does not resolve it.",
     );
   }
+  // "Stop when my events fail" (AI/playerTurnFailures.js): the player's refused
+  // events and unanswered orders hold the turn here, where both are final and
+  // nothing has been written — and before the board, so a hold costs it nothing.
+  if (result.holdOnPlayerFailures) {
+    const playerFailures = collectPlayerTurnFailures({
+      filedEvents,
+      actions: nextActions,
+      settled: result.clearActions,
+      acknowledged: result.acknowledgedFailures,
+    });
+    if (hasPlayerTurnFailures(playerFailures)) throw playerEventsHeldError(playerFailures);
+  }
   let nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
@@ -13634,11 +13647,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
         },
       );
-      const scriptedPlan = planScriptedEvents(authoredScriptedBeats, {
-        world: ledgerWorld,
-        resolvedState: state.scriptedEventState,
-        pendingState: state.scriptedEventPending,
-      });
+      // A retry of the player's failed events (retryHeldPlayerEvents) writes no
+      // scripted beat: the period's were decided by the answer it adds to.
+      const scriptedPlan = context.amend
+        ? { eligible: [], pendingState: state.scriptedEventPending }
+        : planScriptedEvents(authoredScriptedBeats, {
+          world: ledgerWorld,
+          resolvedState: state.scriptedEventState,
+          pendingState: state.scriptedEventPending,
+        });
       state.scriptedEventPending = scriptedPlan.pendingState;
       const scriptedBeats = scriptedPlan.eligible;
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
@@ -13647,8 +13664,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
-      const minEvents = Math.max(pacedMin, scriptedBeats.length);
-      const maxEvents = Math.max(pacedMax, scriptedBeats.length + 1);
+      // A retry of the player's failed events asks for those and no more.
+      const amendCount = context.amend
+        ? Math.max(1, normalizeArray(context.amend.failures?.events).length, normalizeArray(context.amend.failures?.orders).length)
+        : 0;
+      const minEvents = context.amend ? 1 : Math.max(pacedMin, scriptedBeats.length);
+      const maxEvents = context.amend ? amendCount + 1 : Math.max(pacedMax, scriptedBeats.length + 1);
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
       // once for the whole jump and only the dates move per segment.
@@ -13740,7 +13761,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || segmentCount > 1 || scriptedPoliticalRequirements.length
+        ...(evaluation || context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
@@ -13749,7 +13770,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext, buildSegmentInstruction({
+        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext,
+          // What failed for the player, on a retry from a turn held on it
+          // (playerTurnFailures.js): the whole skip again, or only those events.
+          normalizeString(context.retryDirective),
+          context.amend ? buildPlayerEventRetryDirective(context.amend.failures, { originDate, targetDate }) : "",
+          buildSegmentInstruction({
           mode,
           segmentIndex,
           segmentCount,
@@ -13994,6 +14020,16 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         generationSource: segmentGeneration?.source || "ai",
       });
 
+      if (context.amend) {
+        // Added to the period, not a period of its own: no search for more
+        // events on its account, no summary or stop date of its own, and it
+        // may answer only the orders it was asked about.
+        state.breadthRepairContexts.pop();
+        payload.events = restrictToRetriedOrders(payload.events, context.amend.orderIds);
+        payload.summary = "";
+        payload.stopDate = context.amend.stopDate;
+        payload.clearActions = context.amend.clearActions;
+      }
       state.segmentPayloads.push(payload);
       // What this segment asked the model to move, for the skip's one motion
       // repair pass. Recorded only with the committed segment, so a failed
@@ -14024,6 +14060,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     // history and never create resumable pending-jump state in the live game.
     if (evaluation) throw error;
     const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
+
+    // A retry of the player's failed events adds to a period already written:
+    // it never falls back, which would replace that period with canned events.
+    // Held like a failed segment, so Retry asks again and Discard drops it all.
+    if (context.amend) {
+      holdTurn(HELD_TURN.segment, { context, state });
+      throw segmentHeldError({ cause: error, completedSegments: state.segmentPayloads.length, segmentCount, segmentIndex });
+    }
 
     // The request fits no model the player has (contextWindow.js): canned events
     // would hide that, skip after skip. The turn refuses instead, with the
@@ -14874,6 +14918,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     boardProvisionalEventIds: state.boardProvisionalEventIds,
     receipt: state.receipt,
     scriptedEventState: state.scriptedEventState,
+    // A canned turn is never held: the fallback page already says the model is
+    // not answering. Nor once the player chose to keep the turn as it is.
+    holdOnPlayerFailures: Boolean(context.stopOnPlayerFailures) && !state.playerFailuresAccepted
+      && normalizeString(state.generation?.source) !== "fallback",
+    acknowledgedFailures: state.acknowledgedFailures ?? [],
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -14925,11 +14974,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     // A check made inside the apply failed (the timeline clean-up): held by
     // the checks, like the rest, so the same Retry and Continue answer it.
     if (error?.heldKind === HELD_TURN.checks) holdTurn(HELD_TURN.checks, { context, state });
+    if (error?.heldKind === HELD_TURN.events) holdTurn(HELD_TURN.events, { context, state, failures: error.playerFailures });
     throw error;
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null } = {}) => {
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null, retryDirective = "" } = {}) => {
   const evaluationMode = evaluation && typeof evaluation === "object";
   // Starting a fresh LIVE turn abandons any jump still held on a failed segment.
   // The A/B lab is observational and must not touch any live pending/simulation
@@ -15022,6 +15072,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     segmentDays,
     targetDate,
     variables,
+    // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
+    // once, at the start, so a toggle mid-skip does not change the skip.
+    stopOnPlayerFailures: !evaluationMode && getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // A whole skip run again from that notice: what failed the first time.
+    retryDirective: normalizeString(retryDirective),
   };
   const jumpState = {
     generatedSoFar: [],
@@ -15162,8 +15217,110 @@ export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailed
   }
 };
 
-export const simulateAutoJump = async ({ days = 365, signal, onEvents, onProgress } = {}) =>
-  simulateTimelineJump({ days, mode: "auto", signal, onEvents, onProgress });
+export const simulateAutoJump = async ({ days = 365, signal, onEvents, onProgress, retryDirective = "" } = {}) =>
+  simulateTimelineJump({ days, mode: "auto", signal, onEvents, onProgress, retryDirective });
+
+// The turn is generated and waiting, not lost: with "Stop when my events fail"
+// on, the player's own events were refused or their orders got no outcome
+// (playerTurnFailures.js). Carries the list for the notice.
+const playerEventsHeldError = (failures) => {
+  const error = new Error(describePlayerTurnFailures(failures));
+  error.heldKind = HELD_TURN.events;
+  error.playerFailures = failures;
+  return error;
+};
+
+// What a held turn's notice offers to run again, for the Timeline panel: its
+// length and mode for "Retry the whole skip", and what failed, to tell the
+// model. Null when no turn is held on its events.
+export const heldPlayerEventsRetry = () => {
+  const held = getHeldTurn(HELD_TURN.events);
+  if (!held) return null;
+  const { context, failures } = held;
+  return {
+    days: context.safeDays,
+    mode: context.mode,
+    failures,
+    directive: buildPlayerEventRetryDirective(failures, { wholeSkip: true }),
+  };
+};
+
+// Finish a turn held on the player's failed events (HELD_TURN.events).
+//
+// keep: the turn lands as it would have with the setting off.
+// Otherwise the failed events are written again, in place, without undoing
+// anything — nothing was written: ONE more writing request for the same period
+// (runJumpSegments, with context.amend), told what failed and shown what was
+// already written, whose answer is screened, placed and validated like any
+// segment's. Then the whole turn finishes again with every event in it: the
+// checks are asked afresh (they answered for a turn without these events), the
+// orders are attributed and settled, and the apply writes it once. Retrying
+// individual events after a turn was written would mean applying impacts into
+// a world that has moved on; holding the turn is what keeps this the same path
+// as a normal skip. Still failing, it is held again with what is left, and the
+// player decides again.
+export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress, signal } = {}) => {
+  const held = getHeldTurn(HELD_TURN.events);
+  if (!held) throw new Error("There is no turn waiting on your events.");
+  const { context, state, failures } = held;
+  beginSimulation();
+  try {
+    if (keep) {
+      state.playerFailuresAccepted = true;
+      return await attemptHeldTurn(HELD_TURN.events, held, () => finishTimelineJump({ context, signal, state }), {
+        signal,
+        onCancel: () => { state.playerFailuresAccepted = false; },
+      });
+    }
+    const before = {
+      checks: state.checks,
+      receipt: state.receipt,
+      acknowledgedFailures: state.acknowledgedFailures,
+      requests: state.requests,
+      phases: state.phases,
+      nextSegment: state.nextSegment,
+      segmentOrigin: state.segmentOrigin,
+    };
+    const titles = normalizeArray(failures?.events).map((event) => event.title);
+    const lastPayload = state.segmentPayloads.at(-1) ?? {};
+    const amendContext = {
+      ...context,
+      segmentDays: [context.safeDays],
+      amend: {
+        failures,
+        orderIds: normalizeArray(failures?.orders).map((order) => order.id),
+        stopDate: normalizeString(lastPayload.stopDate) || context.targetDate,
+        clearActions: lastPayload.clearActions !== false,
+      },
+    };
+    // A fresh decision to spend, as any retry is.
+    const spentSoFar = state.requests ?? { used: 0, refused: 0 };
+    state.requests = {
+      ...createJumpRequests({
+        segments: 1,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      }),
+      used: spentSoFar.used,
+      refused: spentSoFar.refused,
+    };
+    state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
+    state.checks = createTurnChecks();
+    state.acknowledgedFailures = [...normalizeArray(state.acknowledgedFailures), ...titles];
+    state.receipt = dropRetriedReceiptNotes(state.receipt, titles);
+    state.nextSegment = 0;
+    state.segmentOrigin = context.originDate;
+    return await attemptHeldTurn(HELD_TURN.events, held, async () => {
+      await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
+      return finishTimelineJump({ context, signal, state });
+    }, {
+      signal,
+      // A cancelled retry leaves the turn exactly as it was held.
+      onCancel: () => { Object.assign(state, before); },
+    });
+  } finally {
+    endSimulation();
+  }
+};
 
 // ---- GM Console: previewable, revalidated, audited transactions ------------
 // The AI plans a structured transaction; native code validates it against the

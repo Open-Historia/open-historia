@@ -48,7 +48,7 @@ test("group and institution evaluation can use a frozen bundle and canonical gov
 });
 
 test("event evaluation reuses jump generation but returns before live apply/persistence", () => {
-  assert.match(gameplaySource, /simulateTimelineJump = async \(\{ days, mode = "jump", onEvents, onProgress, signal, evaluation = null \}/);
+  assert.match(gameplaySource, /simulateTimelineJump = async \(\{ days, mode = "jump", onEvents, onProgress, signal, evaluation = null(?:, retryDirective = "")? \}/);
   assert.match(gameplaySource, /if \(evaluationMode\) \{[\s\S]*mergeSegmentPayloads[\s\S]*evaluation: true/);
   assert.match(gameplaySource, /if \(!evaluation\) await repairSkipStorylineMotion/);
   assert.match(gameplaySource, /if \(evaluation\) throw error/);

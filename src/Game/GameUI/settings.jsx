@@ -2176,6 +2176,10 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way, and Gemini arrives all at once regardless.
                     </div>
+                    <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
+                    <div style={settingsHelper}>
+                    Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.
+                    </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
                     Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later, applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
@@ -2414,6 +2418,7 @@ const SettingsMenu = ({
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
         // Ships ON too.
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
+        stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
     }));
 
