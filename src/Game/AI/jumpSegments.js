@@ -238,10 +238,11 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const events = [];
   const diplomaticOutreach = [];
   // Ledger records (warUpdates / relationUpdates / agreementUpdates /
-  // puppetUpdates / storylineUpdates). By the time a segment is accepted its records are bound to that segment's own
-  // event ids (gameplay.js validateSegmentLedgers), so they simply concatenate;
-  // a record still in its raw line form is split into lines, which the ledger
-  // decoders accept too.
+  // puppetUpdates / storylineUpdates). By the time a segment is accepted its
+  // records are bound to that segment's own event ids (gameplay.js
+  // validateSegmentLedgers), so they simply concatenate; a record still in its
+  // raw line form is split into lines, which the ledger decoders accept too.
+  // Every list here must also be handed on in finishTimelineJump's result.
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];

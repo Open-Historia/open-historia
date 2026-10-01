@@ -1,18 +1,22 @@
 /*! Open Historia — a skip's ledger records, segment to world: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/skipLedgerPipeline.test.js
 //
-// gameplay.js cannot be imported without the whole app, so this walks the same
-// steps it takes, in its order, with the pieces it calls: each segment is
-// validated (which repairs an unbound line) and bound to its own temporary event
-// ids, the segments are merged into one round, the round's events get their
-// canonical ids and the records follow them, and the round is applied.
+// gameplay.js cannot be imported without the whole app, so this walks its main
+// steps with the pieces it calls: each segment is validated (which repairs an
+// unbound line) and bound to its own temporary event ids, the segments are
+// merged into one round, the round's events get their canonical ids and the
+// records follow them, and the round is applied. The integrity screen and the
+// curator, which only drop records whose events they drop, are left out. The
+// hand-off between the merge and the apply (finishTimelineJump's result) is
+// read as source, like checksHold.test.js does.
 //
-// A puppet line went missing in the merge: every Loyalty change, install and
-// release a skip wrote was dropped there, after it had already moved the
-// in-turn ledger the next segment reads.
+// A puppet line went missing in the merge and again in that hand-off: every
+// Loyalty change, install and release a skip wrote was dropped, after it had
+// already moved the in-turn ledger the next segment reads.
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   applyDiplomaticUpdates,
   bindAgreementUpdatesToEvents,
@@ -185,4 +189,18 @@ test("relations and agreements tied by native binding reach the world the same w
   assert.deepEqual(merge.relations[0].sourceEventIds ?? merge.relations[0].eventIds, ["event-ai-r0008-02981219-004"]);
   assert.equal(merge.agreements.length, 1);
   assert.equal(merge.agreements[0].id, "stark-bolton-levy");
+});
+
+// The merge is handed to the apply as a result object built field by field, so
+// a ledger the merge carries can still be left behind there.
+test("the skip hands every ledger the merge carries on to the apply", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const finish = gameplay.slice(gameplay.indexOf("const finishTimelineJump = async"));
+  const result = finish.slice(finish.indexOf("const result = {"), finish.indexOf("const applyArgs = {"));
+  assert.ok(result.length > 0, "finishTimelineJump's result was not found");
+  const ledgers = Object.keys(mergeSegmentPayloads([])).filter((key) => key.endsWith("Updates"));
+  assert.ok(ledgers.includes("puppetUpdates"));
+  for (const key of ledgers) {
+    assert.match(result, new RegExp(`\\b${key}: merged\\.${key}\\b`), `${key} is not handed to the apply`);
+  }
 });

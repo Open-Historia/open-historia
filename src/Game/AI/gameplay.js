@@ -14843,6 +14843,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     warUpdates: merged.warUpdates,
     relationUpdates: merged.relationUpdates,
     agreementUpdates: merged.agreementUpdates,
+    puppetUpdates: merged.puppetUpdates,
     storylineUpdates: merged.storylineUpdates,
     breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
