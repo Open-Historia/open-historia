@@ -94,6 +94,8 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",
+  // A scenario map's own named seas, for placing fleets (placement.js declaredSeas).
+  "seas",
   "simulationRules",
   "startingTimelineText",
 ];

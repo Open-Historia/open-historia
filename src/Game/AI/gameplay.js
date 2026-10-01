@@ -136,7 +136,7 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
-import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -2060,6 +2060,9 @@ const buildPlacementGazetteer = (context, world) => {
   const markers = normalizeArray(world?.markers).filter((marker) => Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat));
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
   const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
+  // The named seas this map has: the real ones on the real-world map, and any
+  // the scenario declares (placement.js seasForMap).
+  const seas = seasForMap({ regionIds: withGeometry.map((row) => row.id), declared: world?.seas });
 
   // Which country a token names, as this map knows it: the owner label its
   // regions carry (aliases and legacy codes included), and the ISO3 a stock
@@ -2251,7 +2254,7 @@ const buildPlacementGazetteer = (context, world) => {
     const key = (name) => fold(context.resolveOwner(name) || name);
     return Boolean(key(a)) && key(a) === key(b);
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf, placesNamedIn, samePolity };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, holdsLand, capitalOf, placesNamedIn, samePolity };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);

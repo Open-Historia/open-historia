@@ -703,9 +703,15 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "",
 // keep ordering it on. A named sea is now a point in open water inside it,
 // tried only after every name the map itself knows.
 //
+// The seas belong to the map, not to this file. The gazetteer hands in its own
+// `seas` (seasForMap): the real ones below only when the real-world map is
+// loaded, and whatever a scenario with its own map declares in its world
+// (`world.seas`). A hand-drawn world declaring none gets none, so a fleet
+// there is never sent to where the Black Sea would be on Earth.
+//
 // [lng, lat], each a spot well out from any shore. Names are matched whole,
 // with or without "the".
-const SEAS = [
+const EARTH_SEAS = [
     [["Mediterranean Sea", "Mediterranean", "the Med"], [18, 34.5]],
     [["Western Mediterranean"], [5, 38.5]],
     [["Central Mediterranean"], [17, 35]],
@@ -769,19 +775,70 @@ const SEAS = [
     [["Arctic Ocean", "Arctic"], [0, 85]],
     [["Southern Ocean"], [0, -60]],
 ];
-const SEA_BY_NAME = new Map(SEAS.flatMap(([names, point]) => names.map((name) => [stripArticle(name).toLowerCase(), { name: names[0], point }])));
+const seaKey = (name) => stripArticle(name).toLowerCase();
 
-// The sea a phrase names: each comma part of it, the first and most particular
-// first, so "Ionian Sea, Eastern Mediterranean" is the Ionian Sea; then the
-// names its readings give, so "western Black Sea" is the Black Sea. null when
-// it names none.
-const seaInPhrase = (phrase, readings) => {
+// A scenario's own seas, as its world declares them:
+//   "seas": [{ "name": "Narrow Sea", "aliases": ["the Narrows"], "point": [lng, lat] }]
+// (`lng` and `lat` in place of `point` are read too). An entry without a name
+// or a usable point is skipped.
+export const declaredSeas = (list) => asArray(list).flatMap((entry) => {
+    const name = asText(entry?.name);
+    const point = Array.isArray(entry?.point) ? entry.point.map(Number) : [Number(entry?.lng), Number(entry?.lat)];
+    const [lng, lat] = point;
+    if (!name || !Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) return [];
+    return [{ name, aliases: asArray(entry?.aliases).map(asText).filter(Boolean), point: [lng, lat] }];
+});
+
+// Whether the loaded map is the real world: most of its regions carry the stock
+// GADM ids ("UKR.11_1") the real-world map is drawn from. A scenario on its own
+// map has its own ids, and on such a world the stock rows are filtered out
+// before they get here (promptContext.js filterToRenderedRegions), so a few
+// re-owned stock rows on a mostly hand-drawn map do not make it Earth. This is
+// the map, not the scenario's history: an alternate or fictional story told on
+// the real map still has the real seas.
+const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
+export const isRealWorldMap = (regionIds) => {
+    const ids = asArray(regionIds).map(asText).filter(Boolean);
+    return ids.length > 0 && ids.filter((id) => STOCK_REGION_ID.test(id)).length * 2 > ids.length;
+};
+
+// The seas a gazetteer offers: the scenario's own first, so they win a shared
+// name, then the real ones when the map is the real world.
+export const seasForMap = ({ regionIds = [], declared = [] } = {}) => [
+    ...declaredSeas(declared),
+    ...(isRealWorldMap(regionIds) ? EARTH_SEAS.map(([[name, ...aliases], point]) => ({ name, aliases, point })) : []),
+];
+
+// The gazetteer's seas by every name they go by, built once per list.
+const seaIndexes = new WeakMap();
+const seaIndexOf = (seas) => {
+    if (!Array.isArray(seas) || !seas.length) return null;
+    if (!seaIndexes.has(seas)) {
+        const index = new Map();
+        for (const sea of seas) {
+            for (const name of [sea.name, ...asArray(sea.aliases)]) {
+                const key = seaKey(name);
+                if (key && !index.has(key)) index.set(key, { name: sea.name, point: sea.point });
+            }
+        }
+        seaIndexes.set(seas, index);
+    }
+    return seaIndexes.get(seas);
+};
+
+// The sea a phrase names, among the gazetteer's seas: each comma part of it,
+// the first and most particular first, so "Ionian Sea, Eastern Mediterranean"
+// is the Ionian Sea; then the names its readings give, so "western Black Sea"
+// is the Black Sea. null when it names none, or the map has no seas.
+const seaInPhrase = (phrase, readings, seas) => {
+    const index = seaIndexOf(seas);
+    if (!index) return null;
     const names = [
         ...asText(phrase).split(",").map((part) => part.trim()),
         ...readings.map((reading) => reading.name),
     ];
     for (const name of names) {
-        const sea = SEA_BY_NAME.get(stripArticle(asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "")).toLowerCase());
+        const sea = index.get(seaKey(asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "")));
         if (sea) return sea;
     }
     return null;
@@ -825,7 +882,7 @@ const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) =
     // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
     // can say what the phrase nearly matched. The message quotes the first, which
     // is the whole phrase, because that is what the model actually wrote.
-    const sea = seaInPhrase(phrase, readings);
+    const sea = seaInPhrase(phrase, readings, gazetteer.seas);
     if (sea) {
         // A point inside the sea; if the map has land there after all, the open
         // water nearest it.
@@ -885,6 +942,6 @@ export const PLACEMENT_DIRECTIVE = [
     "- \"Donetsk Oblast, Ukraine facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
     "- \"coast of Crimea, Ukraine\" — on land at the sea's edge. \"off Sevastopol, Ukraine\" — AT SEA, for fleets.",
     "- \"between Kyiv, Ukraine and Kharkiv, Ukraine\" — halfway.",
-    "- \"Black Sea\", \"Ionian Sea\", \"South Atlantic\" — open water in that sea or ocean, for fleets.",
+    "- \"Black Sea\", \"Ionian Sea\", \"South Atlantic\" — open water in that sea or ocean, for fleets, on a map that knows it.",
     "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
 ].join("\n");

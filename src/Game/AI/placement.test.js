@@ -35,6 +35,7 @@ import {
     describeApproximatePlacement,
     resolvePlacement,
     resolveRegionPlacement,
+    seasForMap,
 } from "./placement.js";
 
 const box = (west, south, east, north) => ({ type: "Polygon", coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]] });
@@ -117,6 +118,11 @@ test("a phrase that finds nothing reports every place it could have been naming"
 // Seen in a player's Game (2026-09-30): a fleet sent to "Central Mediterranean,
 // Mediterranean Sea", "Ionian Sea, Eastern Mediterranean" and "Black Sea" could
 // be placed at none of them, because the map names no water, and it stopped.
+//
+// The test map stands in for the real world here: its gazetteer is handed the
+// real seas, as the game's is when the real-world map is loaded.
+const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionIds: ["UKR.11_1", "UKR.12_1", "ROU.3_1"] }) };
+const placeOnEarth = (phrase) => resolvePlacement(phrase, earthGazetteer);
 
 test("a named sea is open water in that sea, whatever words come with it", () => {
     for (const [phrase, label] of [
@@ -126,13 +132,52 @@ test("a named sea is open water in that sea, whatever words come with it", () =>
         ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
         ["in the South Atlantic", "South Atlantic"],
     ]) {
-        const spot = place(phrase);
+        const spot = placeOnEarth(phrase);
         assert.equal(spot.error, undefined, phrase);
         assert.equal(spot.how, "sea", phrase);
         assert.equal(spot.label, label, phrase);
         assert.equal(gazetteer.regionAt([spot.lng, spot.lat]), null, `${phrase} is at sea`);
     }
-    assert.ok(distanceKm([place("Black Sea").lng, place("Black Sea").lat], [34, 43.2]) < 1);
+    assert.ok(distanceKm([placeOnEarth("Black Sea").lng, placeOnEarth("Black Sea").lat], [34, 43.2]) < 1);
+});
+
+test("the real seas are the real-world map's only: a map of its own does not know the Black Sea", () => {
+    assert.ok(seasForMap({ regionIds: ["UKR.11_1", "GBR.1_1"] }).some((sea) => sea.name === "Black Sea"));
+    // A hand-drawn world: its own ids, perhaps a re-owned stock row or two.
+    const ownMap = seasForMap({ regionIds: ["westeros-north", "westeros-vale", "essos-pentos", "UKR.11_1"] });
+    assert.deepEqual(ownMap, []);
+    assert.deepEqual(seasForMap({ regionIds: [] }), []);
+
+    const spot = resolvePlacement("Black Sea", { ...gazetteer, seas: ownMap });
+    assert.equal(spot.how, undefined);
+    assert.match(spot.error, /Black Sea/);
+    assert.match(place("Black Sea").error, /Black Sea/, "and a gazetteer with no seas at all knows none");
+});
+
+test("a map of its own places fleets in the seas its scenario declares", () => {
+    const seas = seasForMap({
+        regionIds: ["el-n", "el-s", "wm-n"],
+        declared: [
+            { name: "Narrow Sea", aliases: ["the Narrows"], point: [36, 45] },
+            { name: "Sunset Sea", lng: 20, lat: 45 },
+            { name: "Nowhere Sea" },
+            { aliases: ["no name"], point: [1, 1] },
+        ],
+    });
+    assert.deepEqual(seas.map((sea) => sea.name), ["Narrow Sea", "Sunset Sea"], "an entry without a name or a point is skipped");
+    const own = { ...gazetteer, seas };
+    for (const phrase of ["Narrow Sea", "the Narrows", "into the Narrow Sea"]) {
+        const spot = resolvePlacement(phrase, own);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, "Narrow Sea", phrase);
+        assert.deepEqual([spot.lng, spot.lat], [36, 45], phrase);
+    }
+    assert.equal(resolvePlacement("Sunset Sea", own).how, "sea");
+
+    // On the real-world map too, and a scenario's own sea wins a shared name.
+    const earth = seasForMap({ regionIds: ["UKR.11_1"], declared: [{ name: "Black Sea", point: [31, 44] }] });
+    assert.deepEqual(earth.find((sea) => sea.name === "Black Sea").point, [31, 44]);
+    assert.ok(earth.some((sea) => sea.name === "Ionian Sea"));
 });
 
 test("a place the map names is preferred to a sea of the same name", () => {
