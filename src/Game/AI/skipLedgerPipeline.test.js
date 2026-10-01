@@ -23,6 +23,7 @@ import {
   decodeRelationUpdates,
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
+import { journalTurn, truncateTurn } from "./intervene.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 
@@ -64,21 +65,34 @@ const acceptSegment = (candidate, segmentIndex) => {
   return candidate;
 };
 
-// What finishTimelineJump and applySimulationResult do with the segments.
-const applyRound = (segments, { round = 8 } = {}) => {
+// What finishTimelineJump and applySimulationResult do with the segments: the
+// round, as it is applied and journaled for Intervene.
+const joinRound = (segments, { round = 8 } = {}) => {
   const merged = mergeSegmentPayloads(segments, { targetDate: "0299-01-27" });
   const identity = allocateCanonicalTurnEventIds({ existingEvents: [], newEvents: merged.events, round });
-  return applyDiplomaticUpdates({
-    world,
+  return {
+    events: identity.events,
+    warUpdates: remapLedgerEventIds(merged.warUpdates, identity.idMap),
     relationUpdates: remapLedgerEventIds(merged.relationUpdates, identity.idMap),
     agreementUpdates: remapLedgerEventIds(merged.agreementUpdates, identity.idMap),
     puppetUpdates: remapLedgerEventIds(merged.puppetUpdates, identity.idMap),
-    puppetStates: true,
-    events: identity.events,
+    storylineUpdates: [],
     stopDate: "0299-01-27",
-    round,
-  });
+  };
 };
+
+const applyJoined = (joined, { round = 8 } = {}) => applyDiplomaticUpdates({
+  world,
+  relationUpdates: joined.relationUpdates,
+  agreementUpdates: joined.agreementUpdates,
+  puppetUpdates: joined.puppetUpdates,
+  puppetStates: true,
+  events: joined.events,
+  stopDate: joined.stopDate,
+  round,
+});
+
+const applyRound = (segments, options) => applyJoined(joinRound(segments, options), options);
 
 const quietSegment = () => ({
   events: [
@@ -133,6 +147,22 @@ test("a puppet line naming an event its segment does not have binds to no other 
   const merge = applyRound([acceptSegment(first, 0), acceptSegment(second, 1)]);
   assert.equal(merge.world.puppets.find((entry) => entry.puppet === "House Bolton").loyalty, 60);
   assert.match(merge.droppedPuppetUpdates[0]?.reason ?? "", /tied to no event/);
+});
+
+// A record's event number counts its own segment's events; once its event ids
+// are the round's, the number points at some other event of the round. An
+// Intervene that cut the record's event must not keep it on that other one.
+test("an Intervene that cuts a later segment's event cuts the records bound to it", () => {
+  const second = muster();
+  second.relationUpdates = "House Stark~House Bolton~-20~strained~~The levies are withheld";
+  const joined = joinRound([acceptSegment(quietSegment(), 0), acceptSegment(second, 1)]);
+  const { result } = truncateTurn(journalTurn(joined), 2, { originDate: "0298-11-28" });
+  assert.deepEqual(result.puppetUpdates, [], "its event was the round's fourth");
+  assert.deepEqual(result.relationUpdates, []);
+
+  const merge = applyJoined(result);
+  assert.equal(merge.world.puppets.find((entry) => entry.puppet === "House Bolton").loyalty, 60);
+  assert.deepEqual(merge.relations, []);
 });
 
 test("relations and agreements naming an event their segment does not have bind to no other segment's event either", () => {
