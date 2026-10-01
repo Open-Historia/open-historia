@@ -2039,21 +2039,35 @@ const resolveUniqueSemanticAuthority = (event, records, {
 // Ironclad Survey Teams" answered by a long event about the survey teams'
 // deployment, refused for the same reason. Every contender is one of the
 // player's own orders, so the authority is the player's whichever it is; the
-// best one is the authorityRef, and every order the event names is bound.
+// best one is the authorityRef.
+//
+// Only the named orders the event itself carries out are bound: each must, on
+// its own, share two distinctive words with the event (a score at the bar). An
+// event that answers one order but names three would otherwise settle all
+// three; the ones it does not carry out are returned as `unproven`, and their
+// ids are taken off the event (bindWorldEventAuthorityRefs).
 const CLAIMED_ORDER_THRESHOLD = 0.25;
 const resolvePlayerOrderAuthority = (event, records, { playerCanonical = "" } = {}) => {
   const resolved = resolveUniqueSemanticAuthority(event, records, { playerCanonical, threshold: 0.34, margin: 0.1 });
-  if (resolved.match) return { ...resolved, matches: [resolved.match] };
-
   const claimedIds = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
   const claimed = resolved.scored.filter((entry) => claimedIds.has(entry.id));
-  if (!claimed.length) return { ...resolved, matches: [] };
+  const proven = claimed.filter((entry) => entry.score >= CLAIMED_ORDER_THRESHOLD);
+  // One order the event plainly answers: it, and the other named orders the
+  // event also carries out, are bound; the rest of what it names is not.
+  if (resolved.match) {
+    const matches = [resolved.match, ...proven.filter((entry) => entry.id !== resolved.match.id)];
+    const unproven = claimed.filter((entry) => !matches.some((match) => match.id === entry.id)).map((entry) => entry.id);
+    return { ...resolved, matches, unproven };
+  }
+
+  if (!proven.length) return { ...resolved, matches: [], unproven: [] };
   const together = resolveUniqueSemanticAuthority(event, [{
-    id: claimed[0].id,
-    text: claimed.map((entry) => entry.text).join(" "),
+    id: proven[0].id,
+    text: proven.map((entry) => entry.text).join(" "),
   }], { playerCanonical, threshold: CLAIMED_ORDER_THRESHOLD, margin: 0 });
-  if (!together.match) return { ...resolved, matches: [] };
-  return { match: claimed[0], matches: claimed, scored: resolved.scored, reason: "named-player-orders-match" };
+  if (!together.match) return { ...resolved, matches: [], unproven: [] };
+  const unproven = claimed.filter((entry) => !proven.includes(entry)).map((entry) => entry.id);
+  return { match: proven[0], matches: proven, unproven, scored: resolved.scored, reason: "named-player-orders-match" };
 };
 
 const mirrorPrimaryAgencyRow = (agency) => {
@@ -2251,6 +2265,8 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     }
 
     const boundActionIds = [];
+    // Named by the event but not carried out by it (resolvePlayerOrderAuthority).
+    const unprovenActionIds = new Set();
     rows = rows.map((row, rowIndex) => {
       const next = { ...row };
       const polity = normalizeString(row?.polity || row?.sovereignPolity);
@@ -2268,6 +2284,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       if (authority === "player-order") {
         const resolved = resolvePlayerOrderAuthority(eventWithAgency, actionRecords, { playerCanonical });
         next.authorityRef = resolved.match?.id || "";
+        for (const id of normalizeArray(resolved.unproven)) unprovenActionIds.add(id);
         if (resolved.match) {
           boundActionIds.push(...resolved.matches.map((entry) => entry.id));
           applied += 1;
@@ -2377,7 +2394,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     const knownActionIds = currentActionIds(actions);
     const claimedActionIds = normalizeArray(eventWithAgency?.impacts?.actionIds)
       .map(normalizeString)
-      .filter((id) => id && knownActionIds.has(id));
+      .filter((id) => id && knownActionIds.has(id) && !unprovenActionIds.has(id));
     const boundActionIdList = [...new Set([...claimedActionIds, ...boundActionIds])];
     const existingImpacts = eventWithAgency?.impacts && typeof eventWithAgency.impacts === "object" && !Array.isArray(eventWithAgency.impacts)
       ? eventWithAgency.impacts

@@ -315,6 +315,20 @@ test("one event carrying out several queued player orders it names is the player
   assert.deepEqual([...candidate.events[0].impacts.actionIds].sort(), ["action-bombard", "action-shield", "action-strike"]);
 });
 
+test("an event naming several queued orders settles only the ones it carries out", () => {
+  const candidate = {
+    events: [event(
+      "Royal Navy Drones Strike the Kerch Strait Bridge",
+      "On the British Empire's orders, loitering munitions launched from a Royal Navy task group struck the Kerch Strait Bridge, damaging two spans and breaking the Russian blockade of Odesa.",
+      { playerRelated: true, kind: "military", impacts: { actionIds: ["action-strike", "action-shield", "action-bombard"] } },
+    )],
+  };
+
+  assert.equal(validateWorldPlayerAgencyPayload(candidate, empireOpts), "");
+  assert.equal(candidate.events[0].agency.authority, "player-order");
+  assert.deepEqual(candidate.events[0].impacts.actionIds, ["action-strike"]);
+});
+
 test("naming queued player orders does not authorize an event that does not carry them out", () => {
   const candidate = {
     events: [event(

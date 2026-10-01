@@ -88,6 +88,10 @@ export const toFiledEvent = (row, event = null) => {
     fate,
     note,
     ...ownership(source),
+    // In memory only, never saved (normalizeFiledEvents): which event this
+    // was, so a retry's event is not mistaken for the one it replaces
+    // (AI/playerTurnFailures.js).
+    ...(clean(row?.id || source?.id) ? { eventId: clean(row?.id || source?.id) } : {}),
   };
 };
 

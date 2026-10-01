@@ -15,7 +15,7 @@ import {
     loadRegionCatalog,
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, heldPlayerEventsRetry, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { canInterveneInLastTurn, declineInteractiveOffer, heldSkipToRerun, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { HELD_TURN, NO_RESPONSE_BODY_NOTE, discardHeldTurn } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -2746,16 +2746,16 @@ const DateWidget = ({
     // there is nothing to undo; the new skip discards the held turn itself.
     const retryWholeSkip = async () => {
         if (isRetryingHeld || isLoading || held?.kind !== HELD_TURN.events) return;
-        const again = await heldPlayerEventsRetry();
-        if (!again) {
+        const rerun = await heldSkipToRerun();
+        if (!rerun) {
             setHeld(null);
             return;
         }
         logDebugEvent("turn", "The whole skip is run again after the player's events failed.", {
-            events: (again.failures?.events ?? []).map((event) => event.title),
-            orders: (again.failures?.orders ?? []).map((order) => order.title),
+            events: (rerun.failures?.events ?? []).map((event) => event.title),
+            orders: (rerun.failures?.orders ?? []).map((order) => order.title),
         });
-        await runJump(again.days, again.mode === "auto" ? "auto" : "jump", { retryDirective: again.directive });
+        await runJump(rerun.days, rerun.mode === "auto" ? "auto" : "jump", { retryDirective: rerun.directive });
     };
 
     const acceptModeSuggestion = () => {

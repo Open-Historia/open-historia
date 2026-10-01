@@ -159,7 +159,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
-import { buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, restrictToRetriedOrders } from "./playerTurnFailures.js";
+import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -2465,6 +2465,14 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
         lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = "";
+      } else {
+        // Inland, with no sea within reach: there is nowhere for a fleet to go,
+        // so the placement is dropped (a move with no destination is not made)
+        // rather than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        delete target[lngKey]; delete target[latKey];
+        target.regionId = "";
+        continue;
       }
     }
 
@@ -13798,6 +13806,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          // A retry's events are new events in a period whose first answer used
+          // the same temporary ids (segment-1-event-1) and maybe the same ids of
+          // the model's own: each gets a prefix of its own, before anything is
+          // bound to it, so the two answers can never be mistaken for each other.
+          if (context.amend) {
+            normalizeArray(candidate?.events).forEach((event, index) => {
+              if (event && typeof event === "object" && !normalizeString(event.id).startsWith(`retry-${context.amend.round}-`)) event.id = `retry-${context.amend.round}-${normalizeString(event.id) || `event-${index + 1}`}`;
+            });
+          }
           // politicalClaims uses the model's 1-based event numbers. Bind those
           // numbers to the actual event objects BEFORE chronological sorting so
           // the claim cannot drift onto another event when the model wrote dates
@@ -14063,11 +14080,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
     // A retry of the player's failed events adds to a period already written:
     // it never falls back, which would replace that period with canned events.
-    // Held like a failed segment, so Retry asks again and Discard drops it all.
-    if (context.amend) {
-      holdTurn(HELD_TURN.segment, { context, state });
-      throw segmentHeldError({ cause: error, completedSegments: state.segmentPayloads.length, segmentCount, segmentIndex });
-    }
+    // retryHeldPlayerEvents puts the turn back on its events notice.
+    if (context.amend) throw error;
 
     // The request fits no model the player has (contextWindow.js): canned events
     // would hide that, skip after skip. The turn refuses instead, with the
@@ -15223,8 +15237,8 @@ export const simulateAutoJump = async ({ days = 365, signal, onEvents, onProgres
 // The turn is generated and waiting, not lost: with "Stop when my events fail"
 // on, the player's own events were refused or their orders got no outcome
 // (playerTurnFailures.js). Carries the list for the notice.
-const playerEventsHeldError = (failures) => {
-  const error = new Error(describePlayerTurnFailures(failures));
+const playerEventsHeldError = (failures, { retryError = "" } = {}) => {
+  const error = new Error(describePlayerTurnFailures(failures, { retryError }));
   error.heldKind = HELD_TURN.events;
   error.playerFailures = failures;
   return error;
@@ -15233,7 +15247,7 @@ const playerEventsHeldError = (failures) => {
 // What a held turn's notice offers to run again, for the Timeline panel: its
 // length and mode for "Retry the whole skip", and what failed, to tell the
 // model. Null when no turn is held on its events.
-export const heldPlayerEventsRetry = () => {
+export const heldSkipToRerun = () => {
   const held = getHeldTurn(HELD_TURN.events);
   if (!held) return null;
   const { context, failures } = held;
@@ -15243,6 +15257,17 @@ export const heldPlayerEventsRetry = () => {
     failures,
     directive: buildPlayerEventRetryDirective(failures, { wholeSkip: true }),
   };
+};
+
+// A held turn's state, shallow, with a copy of each list: what a retry pushes
+// onto (the segments, their events, the filed cards) is put back by
+// restoreHeldState, and a field the retry added is removed.
+const snapshotHeldState = (state) => Object.fromEntries(
+  Object.entries(state).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]),
+);
+const restoreHeldState = (state, snapshot) => {
+  for (const key of Object.keys(state)) if (!(key in snapshot)) delete state[key];
+  for (const [key, value] of Object.entries(snapshot)) state[key] = Array.isArray(value) ? [...value] : value;
 };
 
 // Finish a turn held on the player's failed events (HELD_TURN.events).
@@ -15272,15 +15297,10 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
         onCancel: () => { state.playerFailuresAccepted = false; },
       });
     }
-    const before = {
-      checks: state.checks,
-      receipt: state.receipt,
-      acknowledgedFailures: state.acknowledgedFailures,
-      requests: state.requests,
-      phases: state.phases,
-      nextSegment: state.nextSegment,
-      segmentOrigin: state.segmentOrigin,
-    };
+    // The turn as it was held, to put back when the retry is cancelled or its
+    // own request fails: every field, and a copy of every list the segments
+    // push onto, so nothing the retry added is left behind.
+    const before = snapshotHeldState(state);
     const titles = normalizeArray(failures?.events).map((event) => event.title);
     const lastPayload = state.segmentPayloads.at(-1) ?? {};
     const amendContext = {
@@ -15305,17 +15325,31 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
     };
     state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
     state.checks = createTurnChecks();
-    state.acknowledgedFailures = [...normalizeArray(state.acknowledgedFailures), ...titles];
+    state.acknowledgedFailures = [...normalizeArray(state.acknowledgedFailures), ...acknowledgeFailures(failures)];
+    state.retryRound = (state.retryRound ?? 0) + 1;
+    amendContext.amend.round = state.retryRound;
     state.receipt = dropRetriedReceiptNotes(state.receipt, titles);
     state.nextSegment = 0;
     state.segmentOrigin = context.originDate;
     return await attemptHeldTurn(HELD_TURN.events, held, async () => {
-      await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
+      try {
+        await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        // The retry's own request failed: the turn goes back to being held on
+        // its events, as it was, with all three choices still there — never
+        // the canned fallback, and never a segment notice whose Discard would
+        // throw the whole skip away.
+        restoreHeldState(state, before);
+        holdTurn(HELD_TURN.events, held);
+        logDebugEvent("turn", "Retrying the player's failed events failed; the turn is held as it was.", { reason: normalizeString(error?.message) });
+        throw playerEventsHeldError(failures, { retryError: normalizeString(error?.message) || "the AI returned no usable answer" });
+      }
       return finishTimelineJump({ context, signal, state });
     }, {
       signal,
       // A cancelled retry leaves the turn exactly as it was held.
-      onCancel: () => { Object.assign(state, before); },
+      onCancel: () => { restoreHeldState(state, before); },
     });
   } finally {
     endSimulation();

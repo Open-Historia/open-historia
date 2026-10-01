@@ -1,8 +1,10 @@
+/*! Open Historia — a skip that stops when the player's own events fail: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/playerTurnFailures.test.js
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+    acknowledgeFailures,
     buildPlayerEventRetryDirective,
     collectPlayerTurnFailures,
     describePlayerTurnFailures,
@@ -77,8 +79,28 @@ test("nothing failed: nothing is shown and the turn is not held", () => {
 });
 
 test("an event already shown and retried is not reported again", () => {
-    const failures = collectPlayerTurnFailures({ filedEvents: [refusedOperation], acknowledged: [operation.title.toUpperCase()] });
-    assert.deepEqual(failures.events, []);
+    const first = toFiledEvent({ id: "segment-1-event-3", route: "PLAYER_AGENCY_AUTHORITY" }, operation);
+    const shown = collectPlayerTurnFailures({ filedEvents: [first] });
+    assert.deepEqual(acknowledgeFailures(shown), [{ eventId: "segment-1-event-3" }]);
+    assert.deepEqual(collectPlayerTurnFailures({ filedEvents: [first], acknowledged: acknowledgeFailures(shown) }).events, []);
+});
+
+test("a retried event refused again is reported again, even under the same title", () => {
+    const first = toFiledEvent({ id: "segment-1-event-3", route: "PLAYER_AGENCY_AUTHORITY" }, operation);
+    const retried = toFiledEvent({ id: "retry-1-segment-1-event-1", route: "PLAYER_AGENCY_AUTHORITY" }, operation);
+    const acknowledged = acknowledgeFailures(collectPlayerTurnFailures({ filedEvents: [first] }));
+    const again = collectPlayerTurnFailures({ filedEvents: [first, retried], acknowledged });
+    assert.deepEqual(again.events.map((event) => event.eventId), ["retry-1-segment-1-event-1"]);
+    assert.equal(again.events[0].title, operation.title);
+    // A card with no id at all falls back to its title.
+    const noId = toFiledEvent({ route: "PLAYER_AGENCY_AUTHORITY" }, operation);
+    assert.deepEqual(acknowledgeFailures(collectPlayerTurnFailures({ filedEvents: [noId] })), [{ title: operation.title }]);
+});
+
+test("the event id a card carries in memory is never saved", () => {
+    const card = toFiledEvent({ id: "segment-1-event-3", route: "PLAYER_AGENCY_AUTHORITY" }, operation);
+    assert.equal(card.eventId, "segment-1-event-3");
+    assert.equal(normalizeFiledEvents([card])[0].eventId, undefined);
 });
 
 test("the filed card keeps whose it was through a save", () => {
@@ -99,6 +121,7 @@ test("the notice says what failed, and the retry tells the model each item by na
     assert.match(directive, /Write ONLY the events that carry these out/);
     assert.match(buildPlayerEventRetryDirective(failures, { wholeSkip: true }), /Write the period again/);
     assert.equal(buildPlayerEventRetryDirective({ events: [], orders: [] }), "");
+    assert.match(describePlayerTurnFailures(failures, { retryError: "the provider timed out" }), /^Retrying the failed events did not work \(the provider timed out\); the skip is as it was\. This skip is ready/);
 });
 
 test("a targeted retry can resolve only the orders it was given, and resolves them", () => {
@@ -154,13 +177,16 @@ test("the setting is off unless switched on, and never holds a canned turn or on
 test("a targeted retry is a segment like any other, that never falls back over the period", () => {
     const segments = section("const runJumpSegments = async", "\nexport const ");
     assert.match(segments, /evaluation \|\| context\.amend \|\| segmentCount > 1/, "no canned fallback for the retry's own request");
-    assert.match(segments, /if \(context\.amend\) \{\s+holdTurn\(HELD_TURN\.segment/, "a failed retry is held, not canned");
+    assert.match(segments, /if \(context\.amend\) throw error;/, "a failed retry is never canned");
+    assert.match(segments, /event\.id = `retry-\$\{context\.amend\.round\}-/, "a retry's events get ids of their own");
     assert.match(segments, /payload\.events = restrictToRetriedOrders\(payload\.events, context\.amend\.orderIds\)/);
     // The same validator, date range and integrity screen as every segment.
     assert.equal((segments.match(/validatePayload: withReceiptDraft/g) ?? []).length, 1);
     assert.ok(segments.indexOf("screenSegmentPayload(payload") < segments.indexOf("// Added to the period, not a period of its own"), "screened before it is added");
     const retry = section("export const retryHeldPlayerEvents = async", "\n};\n");
-    assert.match(retry, /attemptHeldTurn\(HELD_TURN\.events, held, async \(\) => \{\s+await runJumpSegments\(\{ context: amendContext/);
+    assert.match(retry, /attemptHeldTurn\(HELD_TURN\.events, held, async \(\) => \{\s+try \{\s+await runJumpSegments\(\{ context: amendContext/);
+    assert.match(retry, /restoreHeldState\(state, before\);\s+holdTurn\(HELD_TURN\.events, held\);/, "the retry's own failure keeps the turn held on its events, as it was");
+    assert.match(retry, /onCancel: \(\) => \{ restoreHeldState\(state, before\); \}/);
     assert.match(retry, /return finishTimelineJump\(\{ context, signal, state \}\)/, "then the whole turn finishes the normal way");
     assert.match(retry, /state\.checks = createTurnChecks\(\)/, "with every check asked afresh");
 });

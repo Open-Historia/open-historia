@@ -38,19 +38,26 @@ const fold = (value) => asText(value).toLowerCase();
 // - Orders: a queued order still planned and overdue once the turn has settled
 //   its orders (playerFocus.js settleOrders). A turn that does not settle orders
 //   (a scene) has failed none.
-// `acknowledged` names events already shown to the player and retried: the
-// first refusal stays on the turn's filed cards, but it is not news twice.
+// `acknowledged` lists the failures already shown to the player and retried
+// (acknowledgeFailures): the first refusal stays on the turn's filed cards, but
+// it is not news twice. Told apart by the event's id, never its title alone: a
+// retry is asked to write the same event again and usually keeps the title, and
+// a retried event refused again IS news.
 export const collectPlayerTurnFailures = ({ filedEvents = [], actions = [], settled = true, acknowledged = [] } = {}) => {
-    const seen = new Set(asArray(acknowledged).map(fold).filter(Boolean));
+    const ackIds = new Set(asArray(acknowledged).map((entry) => asText(entry?.eventId)).filter(Boolean));
+    const ackTitles = new Set(asArray(acknowledged).filter((entry) => !asText(entry?.eventId)).map((entry) => fold(entry?.title)).filter(Boolean));
+    const seen = new Set();
     const events = [];
     for (const entry of asArray(filedEvents)) {
         if (!entry || entry.player !== true) continue;
         const title = asText(entry.title);
+        const eventId = asText(entry.eventId);
         const actionIds = asArray(entry.actionIds).map(asText).filter(Boolean);
-        if (!title || seen.has(fold(title))) continue;
+        if (!title || seen.has(eventId || fold(title))) continue;
+        if (eventId ? ackIds.has(eventId) : ackTitles.has(fold(title))) continue;
         if (entry.fate !== "not-recorded" && !actionIds.length) continue;
-        seen.add(fold(title));
-        events.push({ title, reason: asText(entry.note) || "Kept off the timeline by the engine's checks", actionIds });
+        seen.add(eventId || fold(title));
+        events.push({ title, reason: asText(entry.note) || "Kept off the timeline by the engine's checks", actionIds, ...(eventId ? { eventId } : {}) });
     }
     const orders = settled === false ? [] : asArray(actions)
         .filter((action) => asText(action?.status) === "planned" && action?.overdue === true && asText(action?.id))
@@ -58,16 +65,25 @@ export const collectPlayerTurnFailures = ({ filedEvents = [], actions = [], sett
     return { events, orders };
 };
 
+// What a retry adds to `acknowledged`: each failed event, by its id where it
+// has one.
+export const acknowledgeFailures = (failures) => asArray(failures?.events)
+    .map((event) => (asText(event?.eventId) ? { eventId: asText(event.eventId) } : { title: asText(event?.title) }));
+
 export const hasPlayerTurnFailures = (failures) => Boolean(asArray(failures?.events).length || asArray(failures?.orders).length);
 
 // The held notice's message: what failed, in the player's words.
-export const describePlayerTurnFailures = (failures) => {
+// `retryError`: the retry's own request failed, and the turn is held as it was.
+export const describePlayerTurnFailures = (failures, { retryError = "" } = {}) => {
     const events = asArray(failures?.events);
     const orders = asArray(failures?.orders);
     const parts = [];
+    const retried = asText(retryError)
+        ? `Retrying the failed events did not work (${asText(retryError)}); the skip is as it was. `
+        : "";
     if (events.length) parts.push(`${events.length === 1 ? "an event" : `${events.length} events`} about your country did not make it onto the timeline`);
     if (orders.length) parts.push(`${orders.length === 1 ? "one of your orders was" : `${orders.length} of your orders were`} not carried out`);
-    return `This skip is ready, but ${parts.join(" and ") || "nothing failed"}, so nothing has been saved yet. `
+    return `${retried}This skip is ready, but ${parts.join(" and ") || "nothing failed"}, so nothing has been saved yet. `
         + "Retry the failed events, retry the whole skip, or keep it and move on.";
 };
 

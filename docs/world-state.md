@@ -296,7 +296,7 @@ If a board ever genuinely needs more than this, the answer is not a bigger numbe
 
 Everything date-derived — overdue, due-soon, a slipped milestone, a programme untouched for several rounds — is **not stored**. It is computed from the game clock by `src/runtime/projects.js` (import-free, unit-tested in a bare checkout), so it cannot go stale between AI turns. That split is the point of the feature: the model owns what only it can know, the calendar owns the rest.
 
-Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately — `buildFreshWorldSeedFromScenario` carries *authored settings* across, and projects are play state. (`units` *is* in the list since the map editor gained a Units panel: a scenario's authored starting formations carry into every game made from it — map-editor.md §9b. So, since 2026-09-25, are `markers`, `puppets`, `groups` and `groupAreas`, which the Workshop now authors too: a scenario's structures, puppet states and groups reach every game made from it, even one that was played in place.)
+Not in `TEMPLATE_WORLD_OVERRIDE_KEYS`, deliberately — `buildFreshWorldSeedFromScenario` carries *authored settings* across, and projects are play state. (`units` *is* in the list since the map editor gained a Units panel: a scenario's authored starting formations carry into every game made from it — map-editor.md §9b. So, since 2026-09-25, are `markers`, `puppets`, `groups` and `groupAreas`, which the Workshop now authors too: a scenario's structures, puppet states and groups reach every game made from it, even one that was played in place. And `seas`, a scenario map's own named seas for placing fleets — `[{ "name", "aliases", "point": [lng, lat] }]`, see ai-overview.md, placing things by name.)
 
 #### Espionage on the board
 
