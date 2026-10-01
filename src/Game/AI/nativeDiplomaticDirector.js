@@ -1015,9 +1015,14 @@ const salvageUnboundAgreementUpdates = (
 // the ledger. Repair it the way relations and agreements are repaired: only an
 // unbound line, only to the ONE event that names both parties, and never on the
 // GM preview. A line the model did tie keeps the event it named.
+//
+// A line left unbound loses the event numbers it came with: they count this
+// segment's events, and once the round's segments are joined the same number
+// can name another segment's event, which would bind the line to it at apply.
 const salvageUnboundPuppetUpdates = (updates, events, world) => {
   const normalizedEvents = normalizeEvents(events);
   let repaired = 0;
+  let unbound = 0;
   const output = bindPuppetUpdatesToEvents(updates, normalizedEvents).map((update) => {
     if (linkedEvents(update, normalizedEvents).length) return update;
     const parties = [update?.overlord, update?.puppet].filter(Boolean);
@@ -1027,7 +1032,10 @@ const salvageUnboundPuppetUpdates = (updates, events, world) => {
       subjectText: `${update?.op || ""} ${update?.kind || ""} ${update?.note || ""}`,
       minimumActorHits: Math.max(1, parties.length),
     });
-    if (inferredIndex < 0) return update;
+    if (inferredIndex < 0) {
+      unbound += 1;
+      return { ...update, eventIndexes: [], eventIds: [] };
+    }
     const eventId = clean(normalizedEvents[inferredIndex]?.id);
     repaired += 1;
     console.warn(
@@ -1036,7 +1044,7 @@ const salvageUnboundPuppetUpdates = (updates, events, world) => {
     );
     return { ...update, eventIndexes: [inferredIndex], eventIds: eventId ? [eventId] : [] };
   });
-  return { updates: output, repaired };
+  return { updates: output, repaired, unbound };
 };
 
 export const bindDiplomaticLedgerToCausalEvents = (
@@ -1094,7 +1102,7 @@ export const bindDiplomaticLedgerToCausalEvents = (
   candidate.agreementUpdates = agreementUpdates;
 
   const puppetBinding = salvageUnboundPuppetUpdates(candidate?.puppetUpdates, events, world);
-  if (puppetBinding.repaired) candidate.puppetUpdates = puppetBinding.updates;
+  if (puppetBinding.repaired || puppetBinding.unbound) candidate.puppetUpdates = puppetBinding.updates;
 
   return {
     relationUpdates,
