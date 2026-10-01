@@ -2020,6 +2020,42 @@ const resolveUniqueSemanticAuthority = (event, records, {
   return { match: best, scored, reason: "unique-semantic-match" };
 };
 
+// One event can carry out several of the player's queued orders at once: an
+// advisor that queues "strike the bridge", "break the blockade" and "deploy air
+// defence" gets one event, "Britain launches strike operations and an air
+// defence shield", that answers all three. Measured one order at a time, each
+// covers only its own part of the event, so none reaches the threshold (or all
+// tie and the match is called ambiguous). Seen in a player's Game
+// (2026-09-30): such an event was then read as a ministry's routine work,
+// refused as delegated-routine, and dropped, taking the player's orders and
+// the fleet's move with it.
+//
+// So the orders the event names in impacts.actionIds, when they are CURRENT
+// queued orders, are also measured together, as one text, and at a lower bar
+// (CLAIMED_ORDER_THRESHOLD) than an order the event does not name. The ids are
+// never trusted alone: the event still has to share at least two distinctive
+// words with what the orders say (authoritySemanticScore caps anything less at
+// 0.24). The same went for a single order (2026-09-30): "Mobilize Project
+// Ironclad Survey Teams" answered by a long event about the survey teams'
+// deployment, refused for the same reason. Every contender is one of the
+// player's own orders, so the authority is the player's whichever it is; the
+// best one is the authorityRef, and every order the event names is bound.
+const CLAIMED_ORDER_THRESHOLD = 0.25;
+const resolvePlayerOrderAuthority = (event, records, { playerCanonical = "" } = {}) => {
+  const resolved = resolveUniqueSemanticAuthority(event, records, { playerCanonical, threshold: 0.34, margin: 0.1 });
+  if (resolved.match) return { ...resolved, matches: [resolved.match] };
+
+  const claimedIds = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
+  const claimed = resolved.scored.filter((entry) => claimedIds.has(entry.id));
+  if (!claimed.length) return { ...resolved, matches: [] };
+  const together = resolveUniqueSemanticAuthority(event, [{
+    id: claimed[0].id,
+    text: claimed.map((entry) => entry.text).join(" "),
+  }], { playerCanonical, threshold: CLAIMED_ORDER_THRESHOLD, margin: 0 });
+  if (!together.match) return { ...resolved, matches: [] };
+  return { match: claimed[0], matches: claimed, scored: resolved.scored, reason: "named-player-orders-match" };
+};
+
 const mirrorPrimaryAgencyRow = (agency) => {
   const rows = normalizeArray(agency?.sovereignActors);
   const primary = rows[0];
@@ -2230,14 +2266,10 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       if (!isPlayer) return next;
 
       if (authority === "player-order") {
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, actionRecords, {
-          playerCanonical,
-          threshold: 0.34,
-          margin: 0.1,
-        });
+        const resolved = resolvePlayerOrderAuthority(eventWithAgency, actionRecords, { playerCanonical });
         next.authorityRef = resolved.match?.id || "";
         if (resolved.match) {
-          boundActionIds.push(resolved.match.id);
+          boundActionIds.push(...resolved.matches.map((entry) => entry.id));
           applied += 1;
           bindings.push({
             eventIndex,
@@ -2590,11 +2622,7 @@ const deriveNativeEventAgency = (event, {
   let actionMatch = null;
   let commitmentMatch = null;
   if (playerMentioned) {
-    actionMatch = resolveUniqueSemanticAuthority(event, actionRecords, {
-      playerCanonical,
-      threshold: 0.34,
-      margin: 0.1,
-    });
+    actionMatch = resolvePlayerOrderAuthority(event, actionRecords, { playerCanonical });
     commitmentMatch = resolveUniqueSemanticAuthority(event, commitmentRecords, {
       playerCanonical,
       threshold: 0.28,

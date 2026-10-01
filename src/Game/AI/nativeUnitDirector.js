@@ -342,14 +342,28 @@ const selectUnitDirectorCandidates = (events) => normalizeArray(events)
   .map((event, index) => ({ event, index }))
   .filter(({ event }) => hasMilitaryContent(event) && eventNeedsNativeUnitDirector(event));
 
+// The event's combatants that have no unit at all: a war between powers the
+// map gives no counters to (Russia and Ukraine in a player's Modern Day Game,
+// 2026-09-30) otherwise stays a war nobody can see, because the director only
+// moves the units it is shown. Owners compare by name, ignoring case.
+const combatantsWithoutUnits = (event, units) => {
+  const owners = new Set(units.map((unit) => normalizeString(unit?.ownerCode).toLowerCase()).filter(Boolean));
+  return [...new Set(normalizeArray(event?.combatants).map(normalizeString).filter(Boolean))]
+    .filter((name) => !owners.has(name.toLowerCase()));
+};
+
 const unitDirectorAnalyzerInput = (candidates, units) => ({
-  candidates: candidates.map(({ event, index }) => ({
-    eventIndex: index,
-    date: normalizeString(event?.date),
-    title: normalizeString(event?.title),
-    description: normalizeString(event?.description),
-    existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
-  })),
+  candidates: candidates.map(({ event, index }) => {
+    const unrepresented = combatantsWithoutUnits(event, units);
+    return {
+      eventIndex: index,
+      date: normalizeString(event?.date),
+      title: normalizeString(event?.title),
+      description: normalizeString(event?.description),
+      existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
+      ...(unrepresented.length ? { combatantsWithoutUnits: unrepresented } : {}),
+    };
+  }),
   units: units.map(summarizeUnit),
 });
 

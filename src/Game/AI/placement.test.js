@@ -28,6 +28,7 @@ import {
     hashText,
     interiorPoint,
     nearestInteriorPoint,
+    nearestSea,
     offsetPoint,
     pointInGeometry,
     readPlacement,
@@ -109,6 +110,55 @@ test("a phrase that finds nothing reports every place it could have been naming"
         ["between Nowhereshire and Elsewhere", "Nowhereshire", "Elsewhere"],
         "the whole phrase, then each end of it",
     );
+});
+
+// --- seas and oceans ---
+//
+// Seen in a player's Game (2026-09-30): a fleet sent to "Central Mediterranean,
+// Mediterranean Sea", "Ionian Sea, Eastern Mediterranean" and "Black Sea" could
+// be placed at none of them, because the map names no water, and it stopped.
+
+test("a named sea is open water in that sea, whatever words come with it", () => {
+    for (const [phrase, label] of [
+        ["Black Sea", "Black Sea"],
+        ["the Black Sea", "Black Sea"],
+        ["Ionian Sea, Eastern Mediterranean", "Ionian Sea"],
+        ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
+        ["in the South Atlantic", "South Atlantic"],
+    ]) {
+        const spot = place(phrase);
+        assert.equal(spot.error, undefined, phrase);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, label, phrase);
+        assert.equal(gazetteer.regionAt([spot.lng, spot.lat]), null, `${phrase} is at sea`);
+    }
+    assert.ok(distanceKm([place("Black Sea").lng, place("Black Sea").lat], [34, 43.2]) < 1);
+});
+
+test("a place the map names is preferred to a sea of the same name", () => {
+    const named = resolvePlacement("Black Sea", { ...gazetteer, find: (name) => (fold(name) === "black sea" ? { kind: "marker", name: "Black Sea", point: [31, 51] } : null) });
+    assert.deepEqual([named.lng, named.lat], [31, 51]);
+});
+
+test("a region name written where the regionId goes still places the move", () => {
+    const spot = resolveRegionPlacement("Eastland South", gazetteer, { seedText: "u-1" });
+    assert.equal(spot.error, undefined);
+    assert.equal(spot.regionId, "el-s");
+});
+
+test("a point on land goes to the sea off that coast; a point at sea stays put", () => {
+    const off = nearestSea([36, 48.3], gazetteer);
+    assert.ok(off, "Eastland South has a southern shore");
+    assert.equal(gazetteer.regionAt(off), null);
+    assert.ok(distanceKm(off, [36, 48.3]) < 120, "and it is the water nearest the port");
+    assert.deepEqual(nearestSea([36, 45], gazetteer), [36, 45]);
+});
+
+test("a fleet put on land is moved to sea in the placement pass", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(body.includes('atSea: normalizeString(mover?.type).toLowerCase() === "naval"'), "a moving fleet is marked");
+    assert.ok(body.includes("entry.atSea && gazetteer.regionAt([lng, lat])") && body.includes("nearestSea([lng, lat], gazetteer"), "and taken off the land");
 });
 
 // --- geometry ---

@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventNeedsNativeUnitDirector, orderRaisesForces, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, eventNeedsNativeUnitDirector, orderRaisesForces, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -121,4 +121,17 @@ test("money or votes raised for an army are not a new formation", () => {
   assert.equal(eventNeedsNativeUnitDirector({ title: "Parliament Raises Funds for the Army" }), false);
   const { acceptedByEvent } = raising("Parliament Raises Funds for the Army", "The defence budget grows for the troops.");
   assert.equal(acceptedByEvent.get(0), undefined);
+});
+
+test("a combatant with no unit at all is named to the director, so the war gets a counter", () => {
+  const input = buildUnitDirectorInput({
+    events: [{
+      title: "Russian Forces Capture Melitopol and Advance Toward Mariupol",
+      description: "Russian armoured columns advance from Crimea and capture Melitopol after heavy fighting with Ukrainian defenders.",
+      kind: "military",
+      combatants: ["Russia", "Ukraine"],
+    }],
+    world: { units: [{ id: "u-ukr", name: "Ukrainian 93rd Brigade", type: "infantry", ownerCode: "Ukraine", strength: 80, lng: 35.4, lat: 47.1 }] },
+  });
+  assert.deepEqual(input.candidates[0].combatantsWithoutUnits, ["Russia"]);
 });
