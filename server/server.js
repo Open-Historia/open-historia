@@ -1609,7 +1609,7 @@ app.put("/api/basemaps/:id/payload", largeJsonParser, (req, res) => {
 // Scenarios that name it.
 app.put("/api/basemaps/:id/source", jsonParser, (req, res) => {
   try {
-    res.json(setTiledBasemapSource(req.params.id, req.body?.payloadUrl));
+    res.json(setTiledBasemapSource(req.params.id, req.body?.payloadUrl, req.body?.previewUrl));
   } catch (error) {
     sendError(res, 400, error);
   }

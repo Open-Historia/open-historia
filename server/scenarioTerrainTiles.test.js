@@ -157,3 +157,21 @@ test("migration is idempotent, and a scenario without relief is untouched", () =
   assert.deepEqual(result.painted, { kind: "vector" });
   assert.equal(result.library, 1);
 });
+
+test("an export tells players where to download its Tiled Basemap, once the author has published it", () => {
+  const root = buildDataDir();
+  const result = runStore(root, `
+    ${LEGACY_BUNDLE}
+    store.importScenarioBundle(bundle);
+    await store.migrateEmbeddedTiledArchives();
+    const hash = store.getScenarioDetails("relief").data.world.background.tiled.hash;
+    const before = store.exportScenarioBundle("relief").data.world.background.tiled;
+    const meta = basemaps.findBasemapMetaByHash(hash);
+    basemaps.setTiledBasemapSource(meta.id, "https://github.com/author/maps/releases/download/v1/relief.pmtiles");
+    const after = store.exportScenarioBundle("relief").data.world.background.tiled;
+    ${report(`{ before, after }`)}
+  `);
+  assert.equal(result.before.hubUrl, undefined, "no link until the author publishes the map");
+  assert.equal(result.after.hubUrl, "https://github.com/author/maps/releases/download/v1/relief.pmtiles");
+  assert.equal(result.after.hash, result.before.hash);
+});

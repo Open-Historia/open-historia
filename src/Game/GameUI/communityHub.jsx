@@ -24,6 +24,9 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
+  findCommunityBasemapByHash,
+  prepareTiledBasemapRelease,
+  publishBasemap,
   splitScenarioBundleImage,
 } from "../../runtime/communityBasemaps.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
@@ -38,6 +41,9 @@ import {
   fetchHubPosts,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
+import { findTiledBasemap } from "../../runtime/tiledBasemaps.js";
+import { scenarioTiledBasemap } from "../Map/scenarioTerrain.js";
+import TiledBasemapOffer from "../Map/TiledBasemapOffer.jsx";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
@@ -372,6 +378,22 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
   </div>
 );
 
+// A scenario on a Tiled Basemap shares its map with the same Publish click
+// (docs/adr/0005): the first time, the author is walked through putting the map
+// in a GitHub release; the bundle then carries the download link, and the map
+// gets its own Basemaps post unless the hub already has one. Null when the
+// scenario names no map the author has.
+const readyScenarioTiledBasemap = async (bundle) => {
+  const background = bundle.data?.world?.background;
+  const tiled = scenarioTiledBasemap(background);
+  const meta = tiled && (await findTiledBasemap(tiled.hash));
+  if (!meta) return null;
+  const ready = await prepareTiledBasemapRelease(meta);
+  if (!ready?.source?.payloadUrl) return { meta, linked: false, needsPost: false };
+  background.tiled = { ...background.tiled, hubUrl: background.tiled.hubUrl || ready.source.payloadUrl };
+  return { meta: ready, linked: true, needsPost: !(await findCommunityBasemapByHash(tiled.hash)) };
+};
+
 const CommunityPanel = ({ fullPage = false, onImported }) => {
   const { scenarios } = useLibraryState();
   const touch = useTouchPrimary();
@@ -380,6 +402,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
+  // The last step of installing a scenario on a detailed map the player lacks:
+  // { basemap, details }. The download is offered here, with its size, and the
+  // library moves on to the Scenarios tab only once it is answered (downloaded,
+  // or "Not now"). It sits above both views, so browsing posts meanwhile does
+  // not cancel it (docs/adr/0005).
+  const [missingMap, setMissingMap] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
@@ -506,7 +534,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // the player edits it the link stays, marked edited, so they can suggest
       // their changes back to the post (server/hubProvenance.js).
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      const tiled = scenarioTiledBasemap(bundle.data?.world?.background);
       const details = await importScenarioBundle(bundle);
+      // A scenario on a detailed map offers that map's download right here, with
+      // its size, rather than leaving the player to meet it over the map. The
+      // browser version cannot hold one and shows the painted map instead.
+      const mapToOffer = tiled?.hubUrl && !import.meta.env.VITE_OH_WEB && !(await findTiledBasemap(tiled.hash)) ? tiled : null;
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
       // or fails the import — fire and forget.
@@ -525,7 +558,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
       }
-      onImported?.(details);
+      // While an earlier install's map offer is still open (perhaps downloading),
+      // it keeps the page: moving on now would cancel it, and its answer moves on.
+      // This scenario's own map, if any, is then offered over the map instead.
+      if (missingMap) return;
+      if (mapToOffer) setMissingMap({ basemap: mapToOffer, details });
+      else onImported?.(details);
     } catch (nextError) {
       const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
       if (stillRelevant) {
@@ -543,6 +581,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     setError(null);
     try {
       const bundle = await exportScenarioBundle(scenario.id);
+      const tiledMap = await readyScenarioTiledBasemap(bundle);
       // If this scenario's custom basemap is already on the community hub,
       // reference it instead of re-embedding the whole image (smaller bundle).
       const dedup = await dedupeScenarioBundleBackground(bundle).catch(() => ({ referenced: false, needsPublish: false }));
@@ -617,6 +656,14 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
         `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
       window.open(scenarioUrl, "_blank", "noopener");
+      if (tiledMap?.needsPost) await publishBasemap(tiledMap.meta, null);
+      if (tiledMap?.linked) {
+        extra += tiledMap.needsPost
+          ? ` A second page opened for its detailed map's own post in the Basemaps tab; everything there is filled in, so just submit it too.`
+          : " Players installing it are offered its detailed map as part of the install.";
+      } else if (tiledMap) {
+        extra += " Its detailed map isn't shared, so players will see the painted map; publish again to share it.";
+      }
       // After the page is open: a browser only lets a click open a window for
       // a moment, and this write is not worth losing the page over.
       if (!scenario.hubPublished?.key) {
@@ -634,10 +681,19 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     }
   };
 
+  const finishInstall = () => {
+    const { details } = missingMap;
+    setMissingMap(null);
+    onImported?.(details);
+  };
+
   return (
     // As the main menu's Community tab (fullPage) the surrounding page owns
     // scrolling; as a floating panel it caps its own height and scrolls itself.
     <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: `calc(${APP_HEIGHT} - 11rem)`, overflowY: "auto", paddingRight: "0.2rem" }) }}>
+      {missingMap && (
+        <TiledBasemapOffer key={missingMap.basemap.hash} basemap={missingMap.basemap} atInstall onDone={finishInstall} onDismiss={finishInstall} />
+      )}
       {selectedPost ? (
         <ScenarioDetail
           post={selectedPost}

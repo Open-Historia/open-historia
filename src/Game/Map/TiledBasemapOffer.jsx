@@ -4,6 +4,9 @@
 // the scenario's painted fallback, so nothing waits on this: it is an offer, with
 // progress and a way to cancel. When the download lands, the map switches to the
 // relief by itself (useCustomBackground listens for it).
+// The hub shows the same offer as part of installing a scenario (`atInstall`),
+// in its own words and in the flow of the page, so most players never see the
+// banner over the map at all.
 import React, { useEffect, useRef, useState } from "react";
 import { formatBytes, installTiledBasemap } from "../../runtime/tiledBasemaps.js";
 
@@ -36,7 +39,17 @@ const button = {
   cursor: "pointer",
 };
 
-export default function TiledBasemapOffer({ basemap }) {
+const atInstallPanel = {
+  ...panel,
+  position: "static",
+  transform: "none",
+  width: "auto",
+  maxWidth: "none",
+  marginBottom: "0.9rem",
+  boxShadow: "none",
+};
+
+export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, onDismiss }) {
   const [phase, setPhase] = useState("offer"); // offer | downloading | failed | dismissed
   const [progress, setProgress] = useState({ received: 0, total: basemap?.bytes || null });
   const [error, setError] = useState("");
@@ -65,6 +78,8 @@ export default function TiledBasemapOffer({ basemap }) {
         onProgress: (next) => setProgress((prev) => ({ received: next.received, total: next.total || prev.total })),
       });
       // The map switches to the relief on its own; this banner goes with it.
+      // The hub, which has no map to switch, is told instead.
+      onDone?.();
     } catch (caught) {
       if (caught?.name === "AbortError") {
         setPhase("offer");
@@ -78,7 +93,7 @@ export default function TiledBasemapOffer({ basemap }) {
   const percent = progress.total ? Math.min(100, Math.round((progress.received / progress.total) * 100)) : null;
 
   return (
-    <div role="status" aria-live="polite" style={panel}>
+    <div role="status" aria-live="polite" style={atInstall ? atInstallPanel : panel}>
       {phase === "downloading" ? (
         <>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Downloading {name}…</div>
@@ -94,15 +109,19 @@ export default function TiledBasemapOffer({ basemap }) {
         </>
       ) : (
         <>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>This scenario's detailed map isn't downloaded</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            {atInstall ? "This scenario comes with a detailed terrain map" : "This scenario's detailed map isn't downloaded"}
+          </div>
           <div style={{ opacity: 0.8, marginBottom: basemap.hubUrl ? 10 : 6 }}>
-            {basemap.hubUrl
+            {atInstall
+              ? `Download "${name}"${size ? ` (${size})` : ""} now to see the terrain up close. It downloads once and every scenario on this map shares it. Without it the scenario plays on its painted map, and you can download it later from the map.`
+              : basemap.hubUrl
               ? `You're seeing its painted map. Download "${name}"${size ? ` (${size})` : ""} to see the terrain up close. It downloads once and every scenario on this map shares it.`
               : `You're seeing its painted map. "${name}" isn't linked to a download; ask the scenario's author, or look for it in the Basemaps tab of the community hub.`}
           </div>
           {phase === "failed" && <div style={{ color: "#f3a8a8", marginBottom: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" style={button} onClick={() => setPhase("dismissed")}>Not now</button>
+            <button type="button" style={button} onClick={() => { setPhase("dismissed"); onDismiss?.(); }}>Not now</button>
             {basemap.hubUrl && (
               <button type="button" style={{ ...button, background: "rgba(96,165,250,0.28)", borderColor: "rgba(96,165,250,0.5)" }} onClick={start}>
                 {phase === "failed" ? "Try again" : `Download${size ? ` ${size}` : ""}`}

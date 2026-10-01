@@ -224,15 +224,28 @@ export const setTiledBasemapFallback = (id, geojson) => {
 
 // Where a Tiled Basemap is published: the release download link of its
 // .pmtiles file, which Scenarios naming it pass on so a player without it can
-// download it. Only a GitHub release link to a .pmtiles file is accepted.
+// download it. Only a GitHub release link to a .pmtiles file is accepted, and,
+// optionally, one to the preview picture beside it in the same kind of release
+// (the hub's card for the map; a picture inside the post itself would read, to
+// an older game, as an image basemap to install).
 const RELEASE_LINK = /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/releases\/download\/[^\s]+\.pmtiles$/i;
-export const setTiledBasemapSource = (id, payloadUrl) => {
+const RELEASE_PREVIEW_LINK = /^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/releases\/download\/[^\s]+\.(?:png|jpe?g|webp)$/i;
+export const setTiledBasemapSource = (id, payloadUrl, previewUrl) => {
   const meta = requireTiledMeta(id);
   const link = String(payloadUrl || "").trim();
   if (!RELEASE_LINK.test(link)) {
     throw new Error("That isn't a GitHub release download link to a .pmtiles file (https://github.com/<you>/<repo>/releases/download/<tag>/<file>.pmtiles).");
   }
-  const next = { ...meta, source: { ...(meta.source || {}), payloadUrl: link, payloadVia: "tiled" }, updatedAt: new Date().toISOString() };
+  const preview = String(previewUrl || "").trim();
+  if (preview && !RELEASE_PREVIEW_LINK.test(preview)) {
+    throw new Error("That isn't a GitHub release download link to a .png, .jpg or .webp picture.");
+  }
+  const { previewUrl: _previous, ...source } = meta.source || {};
+  const next = {
+    ...meta,
+    source: { ...source, payloadUrl: link, payloadVia: "tiled", ...(preview ? { previewUrl: preview } : {}) },
+    updatedAt: new Date().toISOString(),
+  };
   writeJson(metaPath(id), next);
   return next;
 };

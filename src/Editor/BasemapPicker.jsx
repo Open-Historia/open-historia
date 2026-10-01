@@ -12,8 +12,8 @@ import { useEffect, useRef, useState } from "react";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
-import { announceTiledBasemap, formatBytes, listTiledBasemapUsers, setTiledBasemapFallback, setTiledBasemapSource, uploadTiledBasemap } from "../runtime/tiledBasemaps.js";
-import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
+import { announceTiledBasemap, formatBytes, listTiledBasemapUsers, setTiledBasemapFallback, uploadTiledBasemap } from "../runtime/tiledBasemaps.js";
+import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, prepareTiledBasemapRelease, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
 const overlay = {
@@ -260,25 +260,17 @@ const BasemapPicker = ({
     if (bm.kind === "tiled") {
       // Too large to attach to a post: it goes in a GitHub release, and the post
       // links it. The link is kept, so scenarios naming this map can offer it.
-      let meta = bm;
-      if (!bm.source?.payloadUrl) {
-        const link = window.prompt(
-          `"${bm.name}" is ${formatBytes(bm.bytes) || "too large"} to attach to a hub post, so it's shared as a GitHub release file:\n\n` +
-          "1. On GitHub, open any repository of yours (or make one) and choose Releases → Draft a new release.\n" +
-          `2. Attach the .pmtiles file (${bm.name}) and publish the release.\n` +
-          "3. Copy the file's download link and paste it here.\n\nRelease download link:",
-        );
-        if (!link) return;
-        try {
-          meta = await setTiledBasemapSource(bm.id, link);
-          refresh();
-        } catch (e) {
-          window.alert(e?.message || String(e));
-          return;
-        }
+      let meta;
+      try {
+        meta = await prepareTiledBasemapRelease(bm);
+      } catch (e) {
+        window.alert(e?.message || String(e));
+        return;
       }
+      if (!meta) return;
+      if (meta !== bm) refresh();
       await publishBasemap(meta, null);
-      window.alert("On the GitHub page that opened, check the release link is in the post, add a preview picture if you like, then submit. Scenarios you save with this map from now on tell players where to download it.");
+      window.alert("On the GitHub page that opened, everything is filled in: check the links, then submit. Scenarios you publish with this map from now on tell players where to download it.");
       return;
     }
     try {

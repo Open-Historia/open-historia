@@ -5,6 +5,7 @@
 // follows its progress, and tells the map when a Basemap has arrived so a
 // scenario waiting for it can switch from its painted fallback to the relief.
 
+import { PMTiles } from "pmtiles";
 import { runtimeAbsoluteUrl } from "./assets.js";
 
 const API = "/api/basemaps";
@@ -99,12 +100,13 @@ export const installTiledBasemap = async ({ url, name, source, expectedHash, onP
   }
 };
 
-// Where a Tiled Basemap is published (its release download link).
-export const setTiledBasemapSource = async (id, payloadUrl) => {
+// Where a Tiled Basemap is published (its release download link, and the
+// optional preview picture's).
+export const setTiledBasemapSource = async (id, payloadUrl, previewUrl) => {
   const response = await fetch(`${API}/${encodeURIComponent(id)}/source`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payloadUrl }),
+    body: JSON.stringify({ payloadUrl, ...(previewUrl ? { previewUrl } : {}) }),
   });
   if (!response.ok) throw new Error(await readError(response));
   return response.json();
@@ -136,4 +138,54 @@ export const formatBytes = (bytes) => {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
   return `${Math.max(1, Math.round(n / 1024))} KB`;
+};
+
+// A preview picture of a Tiled Basemap: its lowest zoom, the tiles covering its
+// bounds stitched together (at most 4×4, from the middle), as a PNG Blob. The
+// author attaches it to the map's release, where the hub shows it as the card.
+const TILE_MIME = { 2: "image/png", 3: "image/jpeg", 4: "image/webp", 5: "image/avif" };
+const PREVIEW_MAX_TILES = 4;
+const PREVIEW_MAX_WIDTH = 1024;
+const tileX = (lon, n) => Math.min(n - 1, Math.max(0, Math.floor(((lon + 180) / 360) * n)));
+const tileY = (lat, n) => {
+  const rad = (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180;
+  return Math.min(n - 1, Math.max(0, Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n)));
+};
+const middleSpan = (from, to) => {
+  const count = Math.min(PREVIEW_MAX_TILES, to - from + 1);
+  const start = from + Math.floor((to - from + 1 - count) / 2);
+  return Array.from({ length: count }, (_, i) => start + i);
+};
+
+export const renderTiledBasemapPreview = async (id) => {
+  const archive = new PMTiles(tiledBasemapArchiveUrl(id));
+  const header = await archive.getHeader();
+  const mime = TILE_MIME[header.tileType];
+  if (!mime) throw new Error("This map's tiles are not pictures.");
+  const z = header.minZoom;
+  const n = 2 ** z;
+  const xs = middleSpan(tileX(header.minLon, n), tileX(header.maxLon, n));
+  const ys = middleSpan(tileY(header.maxLat, n), tileY(header.minLat, n));
+  const tiles = await Promise.all(ys.flatMap((y, row) => xs.map(async (x, col) => {
+    const tile = await archive.getZxy(z, x, y).catch(() => null);
+    if (!tile?.data?.byteLength) return null;
+    const bitmap = await createImageBitmap(new Blob([tile.data], { type: mime })).catch(() => null);
+    return bitmap && { bitmap, row, col };
+  })));
+  const drawn = tiles.filter(Boolean);
+  if (!drawn.length) throw new Error("This map has no tiles at its lowest zoom.");
+  const size = drawn[0].bitmap.width;
+  const scale = Math.min(1, PREVIEW_MAX_WIDTH / (size * xs.length));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(size * xs.length * scale);
+  canvas.height = Math.round(size * ys.length * scale);
+  const context = canvas.getContext("2d");
+  for (const { bitmap, row, col } of drawn) {
+    context.drawImage(bitmap, col * size * scale, row * size * scale, size * scale, size * scale);
+    bitmap.close?.();
+  }
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => (blob ? resolve(blob) : reject(new Error("The preview could not be drawn."))),
+    "image/png",
+  ));
 };

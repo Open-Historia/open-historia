@@ -3613,6 +3613,17 @@ const buildScenarioBundleAsset = (scenarioId, assetKey) => {
   };
 };
 
+// A shared scenario tells players where to download its Tiled Basemap: once the
+// author has published the map, the link they gave the library travels in the
+// export, so a hub install can fetch the map without asking anyone for it.
+const withTiledBasemapLink = (world) => {
+  const tiled = world?.background?.tiled;
+  if (!tiled?.hash || tiled.hubUrl) return world;
+  const payloadUrl = findBasemapMetaByHash(tiled.hash)?.source?.payloadUrl;
+  if (!payloadUrl) return world;
+  return { ...world, background: { ...world.background, tiled: { ...tiled, hubUrl: payloadUrl } } };
+};
+
 const exportScenarioBundle = (scenarioId) => {
   const summary = getScenarioSummary(scenarioId);
   const details = getScenarioDetails(scenarioId);
@@ -3647,7 +3658,7 @@ const exportScenarioBundle = (scenarioId) => {
       events: cloneJson(details.data.events),
       game: cloneJson(details.data.game),
       prompts: cloneJson(details.data.prompts),
-      world: cloneJson(details.data.world),
+      world: cloneJson(withTiledBasemapLink(details.data.world)),
     },
     exportedAt: new Date().toISOString(),
     mode: "full",

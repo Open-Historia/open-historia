@@ -364,6 +364,17 @@ test("an author records where a Tiled Basemap is published, and only a GitHub re
   for (const bad of ["https://example.com/westeros.pmtiles", "https://github.com/someone/maps/blob/main/westeros.pmtiles", "javascript:alert(1)"]) {
     assert.equal((await api("PUT", `/api/basemaps/${id}/source`, { payloadUrl: bad })).status, 400, bad);
   }
+
+  // The preview picture, beside it in a release, is optional; a link to it is
+  // kept, anything else refused, and a later link without one drops the old one.
+  const preview = "https://github.com/someone/maps/releases/download/v1/westeros-preview.png";
+  const withPreview = await api("PUT", `/api/basemaps/${id}/source`, { payloadUrl: link, previewUrl: preview });
+  assert.equal(withPreview.status, 200, withPreview.text);
+  assert.equal(withPreview.json.source.previewUrl, preview);
+  const badPreview = await api("PUT", `/api/basemaps/${id}/source`, { payloadUrl: link, previewUrl: "https://example.com/westeros.png" });
+  assert.equal(badPreview.status, 400);
+  const withoutPreview = await api("PUT", `/api/basemaps/${id}/source`, { payloadUrl: link });
+  assert.equal(withoutPreview.json.source.previewUrl, undefined);
 });
 
 test("the library can say which scenarios name a Tiled Basemap", async () => {
