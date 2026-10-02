@@ -8,6 +8,8 @@ A map drawn in detail, such as a hand-rendered relief of a fictional world at zo
 
 The archive is downloaded once, **streamed to the player's disk as it arrives**, and served to the map from there by byte range. It is capped at **500 MB**. It is shared on the community hub as a **GitHub release file in any repository**, linked from a basemap post, because the hub's attachment route stops at GitHub's 10 MB (images) and 25 MB (files).
 
+> Where the archive comes from, and how a Scenario names it, is superseded by [ADR 0006](0006-official-basemap-list.md): one official list in `Open-Historia/Open-Historia-basemaps`, maps named by id and lowest version, never by link. The streaming, the cap, the checks and the rendering below stand.
+
 ## Considered Options
 
 - **Terrain inside the Scenario (the first cut of this branch).** Rejected. Every Scenario on the same map would carry its own copy, so several Game of Thrones starts (298 AC, Robert's Rebellion, the Dance of the Dragons) would each be a 460 MB download. The terrain would also ride inside the Scenario bundle's JSON as base64. That pushes it into the 512 MB request limit and into V8's string ceiling, which sits at about the same size and cannot be raised. The map is the basemap and the Scenario is what is placed on it, which is how authors already think about it.
