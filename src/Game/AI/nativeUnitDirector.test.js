@@ -162,7 +162,9 @@ test("both sides of the event's war count as its combatants", () => {
 test("a warring power the director left without a spawn is raised by the engine, once", () => {
   const input = buildUnitDirectorInput({ events: [warEvent, { ...warEvent, title: "Second clash" }], world: warWorld });
   const answer = { eventOrders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Russian 58th Army", type: "infantry", ownerCode: "Russia" }, at: "Kherson, Ukraine" }] }] };
-  assert.deepEqual(missingCombatantSpawns(input, answer).map(({ eventIndex, power }) => [eventIndex, power]), [[0, "Ukraine"]]);
+  const missing = missingCombatantSpawns(input, answer);
+  assert.deepEqual(missing.map(({ power }) => power), ["Ukraine"]);
+  assert.deepEqual(missing[0].events.map(({ eventIndex }) => eventIndex), [0, 1], "every event naming it, to find a place in");
   assert.deepEqual(missingCombatantSpawns(input, { eventOrders: [] }).map(({ power }) => power), ["Russia", "Ukraine"]);
 });
 

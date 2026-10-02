@@ -14272,11 +14272,17 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
   const readPlaces = placeReaderFor(bundle);
   const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
   payload.eventOrders = normalizeArray(payload.eventOrders);
-  for (const { eventIndex, power, text } of missing) {
-    const at = pickCombatantPlace(power, await readPlaces(text).catch(() => []));
-    if (!at) continue;
-    payload.eventOrders.push({ eventIndex, unitOps: [nativeCombatantSpawn(power, at)] });
-    logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${at}.`);
+  for (const { power, events } of missing) {
+    let chosen = null;
+    for (const { eventIndex, text } of events) {
+      const at = pickCombatantPlace(power, await readPlaces(text).catch(() => []));
+      if (at) { chosen = { eventIndex, at }; break; }
+    }
+    // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
+    // where the map says Odessa, and "the Black Sea"): the power's own land.
+    chosen ??= { eventIndex: events[0].eventIndex, at: power };
+    payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at)] });
+    logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${chosen.at}.`);
   }
 };
 

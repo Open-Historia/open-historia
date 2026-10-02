@@ -369,25 +369,26 @@ const combatantsWithoutUnits = (event, units, wars = []) => {
 // can ignore it: in a live check on that Game (2026-10-02) the review was told
 // "Russia has no unit" and moved the player's Falklands garrison to Kherson
 // instead. So the engine makes sure of it. For each power the director left
-// without a spawn, one formation is raised where the first event naming it as a
-// combatant puts the fighting: the first place in that event the power holds,
-// else the first place it names on the map. One per power per skip.
+// without a spawn, one formation is raised where the events naming it as a
+// combatant put the fighting: of those events, in order, the first that names a
+// place on the map (the place the power holds, else the first named). One per
+// power per skip. `events` lists them, so the caller can try each in turn.
 export const missingCombatantSpawns = (input, payload) => {
   const spawned = new Set(normalizeArray(payload?.eventOrders)
     .flatMap((entry) => normalizeArray(entry?.unitOps))
     .filter((op) => normalizeString(op?.op).toLowerCase() === "spawn")
     .map((op) => normalizeString(op?.unit?.ownerCode ?? op?.unit?.owner).toLowerCase())
     .filter(Boolean));
-  const out = [];
+  const byPower = new Map();
   for (const candidate of normalizeArray(input?.candidates)) {
     for (const power of normalizeArray(candidate?.combatantsWithoutUnits)) {
       const key = normalizeString(power).toLowerCase();
       if (!key || spawned.has(key)) continue;
-      spawned.add(key);
-      out.push({ eventIndex: candidate.eventIndex, power: normalizeString(power), text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
+      if (!byPower.has(key)) byPower.set(key, { power: normalizeString(power), events: [] });
+      byPower.get(key).events.push({ eventIndex: candidate.eventIndex, text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
     }
   }
-  return out;
+  return [...byPower.values()];
 };
 
 // Of the places an event names (lookupTools.js placesNamedIn), where the power's
