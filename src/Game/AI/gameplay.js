@@ -1058,6 +1058,14 @@ const screenSegmentPayload = (payload, {
   analysis,
   priorEvents,
   world,
+  // The player's queued orders and chats: an event the player ordered is
+  // authorised by one of them, and the screen re-checks that authority. Without
+  // them it could find no order and refused the player's own events as someone
+  // else's routine work (seen in a live check on a player's save, 2026-10-02:
+  // three of the player's events dropped after the validator had bound each to
+  // its order).
+  actions = [],
+  chats = [],
   game,
   state,
   originDate,
@@ -1091,6 +1099,8 @@ const screenSegmentPayload = (payload, {
     priorEvents,
     world,
     game,
+    actions,
+    chats,
     analysis,
   });
   if (screened.dropped?.length) {
@@ -7442,6 +7452,8 @@ const applySimulationResult = async ({
       priorEvents: [...priorEvents, ...curatedEvents],
       world: baseWorld,
       game: baseGame,
+      actions: baseActions,
+      chats: baseChats,
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
@@ -14029,6 +14041,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         priorEvents: segmentBundle.events,
         world: ledgerWorld,
         game: bundle.game,
+        actions: bundle.actions,
+        chats: bundle.chats,
         state,
         originDate: state.segmentOrigin,
         targetDate: segmentTarget,

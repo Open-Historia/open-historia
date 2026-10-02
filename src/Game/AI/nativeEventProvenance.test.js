@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { readFileSync } from "node:fs";
 import {
   bindWorldEventAuthorityRefs,
+  screenGeneratedWorldEvents,
   validateWorldPlayerAgencyPayload,
 } from "./nativeWorldIntegrity.js";
 
@@ -354,4 +356,30 @@ test("a long event carrying out the one queued player order it names is the play
   assert.equal(validateWorldPlayerAgencyPayload(candidate, { ...empireOpts, actions }), "");
   assert.equal(candidate.events[0].agency.authority, "player-order");
   assert.equal(candidate.events[0].agency.authorityRef, "action-ironclad");
+});
+
+// Seen in a live check on a player's save (2026-10-02): the validator bound the
+// Aegis event to the player's order, and the integrity screen, called without
+// the queued orders, could find no order and dropped it with two others.
+test("the integrity screen keeps a player's ordered event when it is given the orders", () => {
+  const aegis = event(
+    "British Empire Deploys Advanced Project Aegis Air Defense Umbrella Across Ukrainian Cities",
+    "The British Ministry of Defence delivered advanced Project Aegis mobile radar grids and surface-to-air missile batteries to central and western Ukrainian cities, establishing a defensive umbrella against Russian missile barrages.",
+    { playerRelated: true, kind: "military", impacts: { actionIds: ["action-shield"] } },
+  );
+  const candidate = { events: [aegis] };
+  assert.equal(validateWorldPlayerAgencyPayload(candidate, empireOpts), "");
+  assert.equal(candidate.events[0].agency.authority, "player-order");
+
+  const withOrders = screenGeneratedWorldEvents({ events: candidate.events, world: empireWorld, game: { country: "British Empire" }, actions: empireOrders, chats: [] });
+  assert.deepEqual(withOrders.dropped, []);
+  const withoutOrders = screenGeneratedWorldEvents({ events: structuredClone(candidate.events), world: empireWorld, game: { country: "British Empire" } });
+  assert.equal(withoutOrders.dropped[0]?.route, "PLAYER_AGENCY_AUTHORITY", "which is why the game must pass them");
+});
+
+test("the game passes the queued orders and chats to every integrity screen of a skip", () => {
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(source, /const screened = screenGeneratedWorldEvents\(\{\s+events: taggedEvents,\s+priorEvents,\s+world,\s+game,\s+actions,\s+chats,/);
+  assert.match(source, /screenSegmentPayload\(payload, \{[^}]*actions: bundle\.actions,\s+chats: bundle\.chats,/);
+  assert.match(source, /const repairScreened = screenGeneratedWorldEvents\(\{[^}]*actions: baseActions,\s+chats: baseChats,/);
 });
