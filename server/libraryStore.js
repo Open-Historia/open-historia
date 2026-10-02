@@ -3517,12 +3517,18 @@ const runEmbeddedArchiveMigration = async () => {
   }
 };
 
-// The scenarios whose background names a Tiled Basemap (by its content hash):
-// what deleting it would leave on their painted fallback.
-const listScenariosNamingTiledBasemap = (hash) => {
-  if (!hash) return [];
+// The scenarios whose background names a Tiled Basemap, by its official id or
+// by one of its checksums: what deleting it would leave on their painted
+// fallback.
+const listScenariosNamingTiledBasemap = (meta) => {
+  const hashes = new Set([meta?.contentHash, ...(meta?.supersedes || [])].filter(Boolean));
+  const officialId = meta?.official?.id || null;
+  if (!hashes.size && !officialId) return [];
   return listScenarioIdsOnDisk()
-    .filter((scenarioId) => readJsonFile(getScenarioJsonPath(scenarioId, "world"), null)?.background?.tiled?.hash === hash)
+    .filter((scenarioId) => {
+      const tiled = readJsonFile(getScenarioJsonPath(scenarioId, "world"), null)?.background?.tiled;
+      return Boolean(tiled) && ((officialId && tiled.id === officialId) || hashes.has(tiled.hash));
+    })
     .map((scenarioId) => ({ id: scenarioId, name: readJsonFile(getScenarioMetaPath(scenarioId), {})?.name || scenarioId }));
 };
 
@@ -3613,15 +3619,18 @@ const buildScenarioBundleAsset = (scenarioId, assetKey) => {
   };
 };
 
-// A shared scenario tells players where to download its Tiled Basemap: once the
-// author has published the map, the link they gave the library travels in the
-// export, so a hub install can fetch the map without asking anyone for it.
-const withTiledBasemapLink = (world) => {
+// A shared scenario names an official map by its id and version, so players
+// can download it from the official list (docs/adr/0006). A scenario that still
+// names its map by checksum (made before the map was on the list, or from the
+// author's own file) is exported naming the official map that file is, when it
+// is one; otherwise it stays as it is, and players see its painted map.
+const withOfficialTiledName = (world) => {
   const tiled = world?.background?.tiled;
-  if (!tiled?.hash || tiled.hubUrl) return world;
-  const payloadUrl = findBasemapMetaByHash(tiled.hash)?.source?.payloadUrl;
-  if (!payloadUrl) return world;
-  return { ...world, background: { ...world.background, tiled: { ...tiled, hubUrl: payloadUrl } } };
+  if (!tiled?.hash || tiled.id) return world;
+  const official = findBasemapMetaByHash(tiled.hash)?.official;
+  if (!official?.id) return world;
+  const { hash: _hash, hubUrl: _hubUrl, ...rest } = tiled;
+  return { ...world, background: { ...world.background, tiled: { ...rest, id: official.id, version: official.version } } };
 };
 
 const exportScenarioBundle = (scenarioId) => {
@@ -3658,7 +3667,7 @@ const exportScenarioBundle = (scenarioId) => {
       events: cloneJson(details.data.events),
       game: cloneJson(details.data.game),
       prompts: cloneJson(details.data.prompts),
-      world: cloneJson(withTiledBasemapLink(details.data.world)),
+      world: cloneJson(withOfficialTiledName(details.data.world)),
     },
     exportedAt: new Date().toISOString(),
     mode: "full",

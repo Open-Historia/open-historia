@@ -198,22 +198,16 @@ export const inspectTiledArchive = async (file) => {
 const jobs = new Map();
 const JOB_TTL_MS = 30 * 60 * 1000;
 
-export const cleanBasemapSource = (source, fallbackUrl = "") => {
-  const clean = {};
-  if (source && typeof source === "object") {
-    if (source.community === true) clean.community = true;
-    for (const key of ["url", "payloadUrl", "payloadVia", "hash"]) {
-      if (typeof source[key] === "string" && source[key].length <= 2048) clean[key] = source[key];
-    }
+// `key`: the same download asked for again while it runs (two scenarios on one
+// map, installed one after the other) joins the running job instead of
+// fetching the file twice.
+export const startInstallJob = ({ run, key = null }) => {
+  if (key) {
+    for (const job of jobs.values()) if (job.key === key && job.status === "running") return job.id;
   }
-  if (!clean.url && fallbackUrl) clean.url = fallbackUrl;
-  return clean;
-};
-
-export const startInstallJob = ({ run }) => {
   const id = crypto.randomUUID();
   const controller = new AbortController();
-  const job = { id, status: "running", received: 0, total: null, error: null, basemap: null, controller, endedAt: 0 };
+  const job = { id, key, status: "running", received: 0, total: null, error: null, basemap: null, controller, endedAt: 0 };
   jobs.set(id, job);
   (async () => {
     try {
@@ -242,7 +236,7 @@ export const startInstallJob = ({ run }) => {
 export const getInstallJob = (id) => {
   const job = jobs.get(id);
   if (!job) return null;
-  const { controller: _controller, endedAt: _endedAt, ...visible } = job;
+  const { controller: _controller, endedAt: _endedAt, key: _key, ...visible } = job;
   return visible;
 };
 

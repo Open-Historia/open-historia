@@ -256,12 +256,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       setCustomBgId(bm.id);
       const previous = d.doc?.metadata?.tiledBasemap;
+      // An official map is named by its id and the version on screen, the
+      // lowest the scenario needs (docs/adr/0006); the author's own map, not on
+      // the official list, by its checksum.
       d.patchMetadata({
         tiledBasemap: {
-          hash: bm.contentHash,
+          ...(bm.official?.id ? { id: bm.official.id, version: bm.official.version } : { hash: bm.contentHash }),
           name: bm.name,
-          ...(bm.bytes ? { bytes: bm.bytes } : {}),
-          ...(bm.source?.payloadUrl ? { hubUrl: bm.source.payloadUrl } : {}),
           ...(Array.isArray(previous?.fillOpacity) ? { fillOpacity: previous.fillOpacity } : {}),
         },
       });

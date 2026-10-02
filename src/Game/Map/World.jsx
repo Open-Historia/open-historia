@@ -5,6 +5,7 @@ import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
 import { buildScenarioTerrainStyle, publishShownRelief } from "./scenarioTerrain.js";
 import TiledBasemapOffer from "./TiledBasemapOffer.jsx";
+import { dismissTiledUpdate, isTiledUpdateDismissed } from "../../runtime/tiledBasemaps.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
@@ -602,7 +603,14 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // the scenario's basemap does, unless the player picked one in Settings → Map.
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
-  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled } = useCustomBackground();
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled, tiledUpdate } = useCustomBackground();
+  // A newer version of the detailed map is offered once: "Not now" is
+  // remembered for that version, unless the scenario was made on it.
+  const [dismissedUpdate, setDismissedUpdate] = useState("");
+  const updateKey = tiledUpdate ? `${tiledUpdate.id}@${tiledUpdate.version}` : "";
+  const shownUpdate = tiledUpdate && dismissedUpdate !== updateKey && (tiledUpdate.needed || !isTiledUpdateDismissed(tiledUpdate.id, tiledUpdate.version))
+    ? tiledUpdate
+    : null;
   const isGlobe = projection === "globe";
   // The player's basemap pick (Settings → Map) is local to this browser and
   // reversible. Empty — the default — leaves the scenario author's background
@@ -1302,9 +1310,23 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
           Loading tiles…
         </div>
       )}
-      {/* The scenario names a Tiled Basemap the player does not have: its painted
-          fallback is on screen; offer the download (Map/TiledBasemapOffer.jsx). */}
-      {useScenarioBackground && missingTiled && <TiledBasemapOffer key={missingTiled.hash} basemap={missingTiled} />}
+      {/* The scenario names a Tiled Basemap the player does not have: its basic
+          map is on screen; offer the download. Or they have it, and the
+          official list has a newer version: offer that, never forced
+          (Map/TiledBasemapOffer.jsx). */}
+      {useScenarioBackground && missingTiled && (
+        <TiledBasemapOffer key={`${missingTiled.id || missingTiled.hash}@${missingTiled.version || ""}`} basemap={missingTiled} />
+      )}
+      {useScenarioBackground && !missingTiled && shownUpdate && (
+        <TiledBasemapOffer
+          key={updateKey}
+          basemap={shownUpdate}
+          onDismiss={() => {
+            if (!shownUpdate.needed) dismissTiledUpdate(shownUpdate.id, shownUpdate.version);
+            setDismissedUpdate(updateKey);
+          }}
+        />
+      )}
     </div>
   );
 }

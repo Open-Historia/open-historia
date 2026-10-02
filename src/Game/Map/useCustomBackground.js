@@ -2,7 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import { JSON_URLS, getPmtilesArchive, readJson } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { findTiledBasemap, subscribeTiledBasemaps, tiledBasemapArchiveUrl } from "../../runtime/tiledBasemaps.js";
+import {
+  fetchOfficialBasemaps,
+  findOfficialBasemap,
+  findOfficialEntry,
+  findTiledBasemap,
+  subscribeTiledBasemaps,
+  tiledBasemapArchiveUrl,
+} from "../../runtime/tiledBasemaps.js";
 import { resolveTiledBasemap, scenarioTiledBasemap, wantsScenarioTerrain } from "./scenarioTerrain.js";
 import { useWorldBackground } from "./useWorldState.js";
 
@@ -20,11 +27,15 @@ const probeArchive = async (pmtilesUrl) => {
 
 // The scenario's background as the map draws it. `missingTiled` is set when the
 // scenario names a Tiled Basemap the player does not have yet (Map shows its
-// painted fallback meanwhile, and the game offers the download).
+// basic map meanwhile, and the game offers the download); `tiledUpdate` when
+// they have it and the official list has a newer version
+// (Map/scenarioTerrain.js tiledBasemapOffer).
+const EMPTY = { background: null, declared: false, basemap: null, missingTiled: null, tiledUpdate: null };
+
 export function useCustomBackground() {
   const { background: bgDescriptor, basemap: worldBasemap } = useWorldBackground();
   const terrainSetting = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain);
-  const [state, setState] = useState({ background: null, declared: false, basemap: null, missingTiled: null });
+  const [state, setState] = useState(EMPTY);
   const keyRef = useRef("");
   const descriptorRef = useRef("");
   // Bumped when a Tiled Basemap is installed or removed, so a scenario waiting
@@ -44,7 +55,7 @@ export function useCustomBackground() {
     keyRef.current = bgKey;
 
     if (!bgKey) {
-      setState({ background: null, declared: false, basemap, missingTiled: null });
+      setState({ ...EMPTY, basemap });
       return;
     }
 
@@ -54,10 +65,11 @@ export function useCustomBackground() {
     // screen meanwhile; a different background starts from nothing.
     const sameDescriptor = descriptorRef.current === JSON.stringify(bgDescriptor);
     descriptorRef.current = JSON.stringify(bgDescriptor);
-    setState((s) => ({ background: sameDescriptor ? s.background : null, declared: true, basemap, missingTiled: null }));
+    setState((s) => ({ ...EMPTY, background: sameDescriptor ? s.background : null, declared: true, basemap }));
 
     let cancelled = false;
     let payloadFailed = false;
+    const current = () => !cancelled && keyRef.current === bgKey;
 
     (async () => {
       let data = null;
@@ -66,32 +78,57 @@ export function useCustomBackground() {
       } catch {
         payloadFailed = true;
       }
-      let drawn = { tiles: null, missing: null };
+      let meta = null;
+      let drawn = { tiles: null, missing: null, update: null };
       if (namedTiledBasemap && data?.geojson) {
-        const meta = await findTiledBasemap(namedTiledBasemap.hash);
+        meta = namedTiledBasemap.id ? await findOfficialBasemap(namedTiledBasemap.id) : await findTiledBasemap(namedTiledBasemap.hash);
         drawn = resolveTiledBasemap({
           descriptor: bgDescriptor,
           setting: terrainSetting,
           basemap: meta,
           archiveUrl: meta ? tiledBasemapArchiveUrl(meta.id) : "",
         });
-        if (drawn.tiles && !(await probeArchive(drawn.tiles.url))) drawn = { tiles: null, missing: null };
+        if (drawn.tiles && !(await probeArchive(drawn.tiles.url))) {
+          meta = null;
+          drawn = { tiles: null, missing: null, update: null };
+        }
       }
-      if (cancelled || keyRef.current !== bgKey) return;
+      if (!current()) return;
 
       if (bgDescriptor?.kind === "image" && data?.dataUrl) {
-        setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap, missingTiled: null });
-      } else if (bgDescriptor?.kind === "vector" && data?.geojson) {
-        setState({
-          background: { kind: "vector", geojson: data.geojson, ...(drawn.tiles ? { terrain: drawn.tiles } : {}) },
-          declared: true,
-          basemap,
-          missingTiled: drawn.missing,
-        });
-      } else {
-        if (payloadFailed) keyRef.current = "";
-        setState({ background: null, declared: false, basemap, missingTiled: null });
+        setState({ ...EMPTY, background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap });
+        return;
       }
+      if (!(bgDescriptor?.kind === "vector" && data?.geojson)) {
+        if (payloadFailed) keyRef.current = "";
+        setState({ ...EMPTY, basemap });
+        return;
+      }
+      // The map draws now. What to offer for an official map waits on the
+      // official list, which may be slow or unreachable and must never hold
+      // the map up; a map named by checksum alone has nothing to look up.
+      // A basic map with nothing drawn on it makes the detailed map the only one.
+      const onlyMap = !(data.geojson.features?.length > 0);
+      const withOnly = (offer) => (offer && onlyMap ? { ...offer, onlyMap: true } : offer);
+      setState({
+        ...EMPTY,
+        background: { kind: "vector", geojson: data.geojson, ...(drawn.tiles ? { terrain: drawn.tiles } : {}) },
+        declared: true,
+        basemap,
+        missingTiled: namedTiledBasemap?.id ? null : withOnly(drawn.missing),
+      });
+      const officialId = namedTiledBasemap?.id || meta?.official?.id;
+      if (!officialId) return;
+      const official = findOfficialEntry(await fetchOfficialBasemaps(), officialId);
+      if (!current()) return;
+      const offered = resolveTiledBasemap({
+        descriptor: bgDescriptor,
+        setting: terrainSetting,
+        basemap: meta,
+        archiveUrl: meta ? tiledBasemapArchiveUrl(meta.id) : "",
+        official,
+      });
+      setState((s) => ({ ...s, missingTiled: withOnly(offered.missing), tiledUpdate: offered.update }));
     })();
 
     return () => {

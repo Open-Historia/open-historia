@@ -1,9 +1,11 @@
 /*! Open Historia — tiled basemaps client © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Finds, installs and tracks Tiled Basemaps in the player's library
-// (docs/adr/0005-tiled-basemaps-stream-to-disk.md). The game server does the
-// work: it streams the archive to disk and checks it. This only starts that job,
-// follows its progress, and tells the map when a Basemap has arrived so a
-// scenario waiting for it can switch from its painted fallback to the relief.
+// (docs/adr/0005-tiled-basemaps-stream-to-disk.md). They are downloaded only
+// from the official list (docs/adr/0006-official-basemap-list.md). The game
+// server does the work: it reads the list, streams the archive to disk and
+// checks it against the list's checksum. This only starts that job, follows its
+// progress, and tells the map when a Basemap has arrived so a scenario waiting
+// for it can switch from its painted fallback to the relief.
 
 import { PMTiles } from "pmtiles";
 import { runtimeAbsoluteUrl } from "./assets.js";
@@ -21,6 +23,37 @@ export const findTiledBasemap = async (hash) => {
   }
 };
 
+// The player's copy of an official map (any version), or null.
+export const findOfficialBasemap = async (officialId) => {
+  if (!officialId) return null;
+  try {
+    const response = await fetch(`${API}/official/${encodeURIComponent(officialId)}`, { cache: "no-store" });
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+};
+
+// The official list: [{ id, name, author?, license?, versions: [{ version,
+// bytes, sha256, preview?, notes? }], installed: { libraryId, version } | null }].
+// Read at most every few minutes; `refresh` reads it again now. Never throws:
+// with no list (offline, or the browser version) it is empty, with `error`.
+const LIST_TTL_MS = 5 * 60 * 1000;
+let listCache = null;
+export const fetchOfficialBasemaps = async ({ refresh = false } = {}) => {
+  if (!refresh && listCache && Date.now() - listCache.at < LIST_TTL_MS) return listCache.list;
+  try {
+    const response = await fetch(`${API}/official${refresh ? "?refresh=1" : ""}`, { cache: "no-store" });
+    if (!response.ok) return { basemaps: [], error: await readError(response) };
+    const list = await response.json();
+    listCache = { at: Date.now(), list };
+    return list;
+  } catch (error) {
+    return { basemaps: [], error: error?.message || String(error) };
+  }
+};
+export const findOfficialEntry = (list, officialId) => list?.basemaps?.find((entry) => entry.id === officialId) || null;
+
 // Where the map reads a Tiled Basemap's archive (by byte range).
 export const tiledBasemapArchiveUrl = (id) => runtimeAbsoluteUrl(`${API}/${encodeURIComponent(id)}/archive`);
 
@@ -32,14 +65,14 @@ const readError = async (response) => {
   }
 };
 
-// Starts an install from a GitHub release link; resolves to the job id.
-// `expectedHash`: the map a scenario or hub post names; the server refuses a
-// download with other contents.
-export const startTiledBasemapInstall = async ({ url, name, source, expectedHash } = {}) => {
-  const response = await fetch(`${API}/tiled/install`, {
+// Starts installing an official map (its newest version unless `version` is
+// given); resolves to the job id. The server downloads it only if the player
+// has no copy that new, and joins a download of it already running.
+export const startOfficialBasemapInstall = async ({ id, version } = {}) => {
+  const response = await fetch(`${API}/official/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, name, source, ...(/^[a-f0-9]{64}$/.test(String(expectedHash || "")) ? { expectedHash } : {}) }),
+    body: JSON.stringify({ id, ...(Number.isInteger(version) ? { version } : {}) }),
   });
   if (!response.ok) throw new Error(await readError(response));
   return (await response.json()).jobId;
@@ -79,8 +112,8 @@ export const setTiledBasemapFallback = async (id, geojson) => {
 
 // Runs an install to the end, reporting progress; resolves to the new library
 // entry. `signal` cancels the download on the server too.
-export const installTiledBasemap = async ({ url, name, source, expectedHash, onProgress, signal, pollMs = 500 } = {}) => {
-  const jobId = await startTiledBasemapInstall({ url, name, source, expectedHash });
+export const installOfficialBasemap = async ({ id, version, onProgress, signal, pollMs = 500 } = {}) => {
+  const jobId = await startOfficialBasemapInstall({ id, version });
   const cancel = () => cancelTiledBasemapInstall(jobId);
   signal?.addEventListener("abort", cancel, { once: true });
   try {
@@ -88,6 +121,7 @@ export const installTiledBasemap = async ({ url, name, source, expectedHash, onP
       const job = await getTiledBasemapInstall(jobId);
       onProgress?.({ received: job.received || 0, total: job.total || null });
       if (job.status === "done") {
+        listCache = null;
         announceTiledBasemap(job.basemap);
         return job.basemap;
       }
@@ -98,18 +132,6 @@ export const installTiledBasemap = async ({ url, name, source, expectedHash, onP
   } finally {
     signal?.removeEventListener("abort", cancel);
   }
-};
-
-// Where a Tiled Basemap is published (its release download link, and the
-// optional preview picture's).
-export const setTiledBasemapSource = async (id, payloadUrl, previewUrl) => {
-  const response = await fetch(`${API}/${encodeURIComponent(id)}/source`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payloadUrl, ...(previewUrl ? { previewUrl } : {}) }),
-  });
-  if (!response.ok) throw new Error(await readError(response));
-  return response.json();
 };
 
 // The scenarios that name a Tiled Basemap ([{ id, name }]).
@@ -129,7 +151,46 @@ export const subscribeTiledBasemaps = (listener) => {
   return () => listeners.delete(listener);
 };
 export const announceTiledBasemap = (meta) => {
+  listCache = null;
   for (const listener of listeners) listener(meta || null);
+};
+
+// Getting a map onto the official list: the author opens a request on the
+// official repository, prefilled with what the reviewers check the file
+// against, and the team uploads it as a release once it is approved.
+export const OFFICIAL_BASEMAPS_REPO_URL = "https://github.com/Open-Historia/Open-Historia-basemaps";
+export const officialBasemapSubmissionUrl = (meta) => {
+  const body = [
+    "Please add this detailed map to the official list.",
+    "",
+    `- Name: ${meta?.name || ""}`,
+    `- Size: ${formatBytes(meta?.bytes)} (${Number(meta?.bytes) || 0} bytes)`,
+    `- SHA-256: ${meta?.contentHash || ""}`,
+    `- Zooms: ${meta?.minzoom ?? "?"}–${meta?.maxzoom ?? "?"}`,
+    "",
+    "Where the team can download the .pmtiles file to review it (any link):",
+    "",
+    "",
+    "Who made it, and its licence (credit any sources it is drawn from):",
+    "",
+  ].join("\n");
+  return `${OFFICIAL_BASEMAPS_REPO_URL}/issues/new?title=${encodeURIComponent(`[Submit map] ${meta?.name || "Detailed map"}`)}&body=${encodeURIComponent(body)}`;
+};
+
+// "Not now" on an optional update, remembered per map and version on this
+// device: the next version is offered again, this one is not.
+const dismissedKey = (officialId) => `oh:tiled-update-dismissed:${officialId}`;
+export const isTiledUpdateDismissed = (officialId, version) => {
+  try {
+    return Number(window.localStorage.getItem(dismissedKey(officialId))) >= Number(version);
+  } catch {
+    return false;
+  }
+};
+export const dismissTiledUpdate = (officialId, version) => {
+  try {
+    window.localStorage.setItem(dismissedKey(officialId), String(version));
+  } catch { /* not remembered: offered again next time */ }
 };
 
 export const formatBytes = (bytes) => {
@@ -142,7 +203,8 @@ export const formatBytes = (bytes) => {
 
 // A preview picture of a Tiled Basemap: its lowest zoom, the tiles covering its
 // bounds stitched together (at most 4×4, from the middle), as a PNG Blob. The
-// author attaches it to the map's release, where the hub shows it as the card.
+// library shows it as the map's card; a maintainer adds it to the official
+// release beside the map.
 const TILE_MIME = { 2: "image/png", 3: "image/jpeg", 4: "image/webp", 5: "image/avif" };
 const PREVIEW_MAX_TILES = 4;
 const PREVIEW_MAX_WIDTH = 1024;

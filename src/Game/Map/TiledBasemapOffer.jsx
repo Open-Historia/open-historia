@@ -1,14 +1,16 @@
 /*! Open Historia — offer to download a scenario's Tiled Basemap © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shown over the map when the scenario names a Tiled Basemap the player does not
-// have (docs/adr/0005-tiled-basemaps-stream-to-disk.md). The map meanwhile shows
-// the scenario's painted fallback, so nothing waits on this: it is an offer, with
-// progress and a way to cancel. When the download lands, the map switches to the
-// relief by itself (useCustomBackground listens for it).
+// have, or has an older version of than the official list
+// (docs/adr/0005-tiled-basemaps-stream-to-disk.md, docs/adr/0006-official-basemap-list.md).
+// The map meanwhile shows the scenario's basic map (or the version the player
+// has), so nothing waits on this: it is an offer, with its size, progress and a
+// way to cancel. When the download lands, the map switches to it by itself
+// (useCustomBackground listens for it).
 // The hub shows the same offer as part of installing a scenario (`atInstall`),
-// in its own words and in the flow of the page, so most players never see the
-// banner over the map at all.
+// in the flow of the page, so most players never see the banner over the map.
 import React, { useEffect, useRef, useState } from "react";
-import { formatBytes, installTiledBasemap } from "../../runtime/tiledBasemaps.js";
+import { formatBytes, installOfficialBasemap } from "../../runtime/tiledBasemaps.js";
+import { tiledBasemapWording } from "./tiledBasemapWording.js";
 
 const panel = {
   position: "absolute",
@@ -56,13 +58,14 @@ export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, 
   const controllerRef = useRef(null);
 
   // Leaving (another scenario, or the Basemap arrived) stops a download in
-  // flight. World.jsx keys this on the Basemap's hash, so a different one
+  // flight. World.jsx keys this on the map and version, so a different one
   // starts over with fresh state.
   useEffect(() => () => controllerRef.current?.abort(), []);
 
   if (!basemap || phase === "dismissed") return null;
   const name = basemap.name || "its detailed map";
-  const size = formatBytes(basemap.bytes);
+  const words = tiledBasemapWording(basemap, { atInstall });
+  const canDownload = Boolean(words.accept && basemap.id && basemap.version);
 
   const start = async () => {
     const controller = new AbortController();
@@ -70,10 +73,9 @@ export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, 
     setPhase("downloading");
     setError("");
     try {
-      await installTiledBasemap({
-        url: basemap.hubUrl,
-        name: basemap.name,
-        expectedHash: basemap.hash,
+      await installOfficialBasemap({
+        id: basemap.id,
+        version: basemap.version,
         signal: controller.signal,
         onProgress: (next) => setProgress((prev) => ({ received: next.received, total: next.total || prev.total })),
       });
@@ -109,22 +111,14 @@ export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, 
         </>
       ) : (
         <>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>
-            {atInstall ? "This scenario comes with a detailed terrain map" : "This scenario's detailed map isn't downloaded"}
-          </div>
-          <div style={{ opacity: 0.8, marginBottom: basemap.hubUrl ? 10 : 6 }}>
-            {atInstall
-              ? `Download "${name}"${size ? ` (${size})` : ""} now to see the terrain up close. It downloads once and every scenario on this map shares it. Without it the scenario plays on its painted map, and you can download it later from the map.`
-              : basemap.hubUrl
-              ? `You're seeing its painted map. Download "${name}"${size ? ` (${size})` : ""} to see the terrain up close. It downloads once and every scenario on this map shares it.`
-              : `You're seeing its painted map. "${name}" isn't linked to a download; ask the scenario's author, or look for it in the Basemaps tab of the community hub.`}
-          </div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{words.title}</div>
+          <div style={{ opacity: 0.8, marginBottom: 10 }}>{words.body}</div>
           {phase === "failed" && <div style={{ color: "#f3a8a8", marginBottom: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" style={button} onClick={() => { setPhase("dismissed"); onDismiss?.(); }}>Not now</button>
-            {basemap.hubUrl && (
+            <button type="button" style={button} onClick={() => { setPhase("dismissed"); onDismiss?.(); }}>{words.decline}</button>
+            {canDownload && (
               <button type="button" style={{ ...button, background: "rgba(96,165,250,0.28)", borderColor: "rgba(96,165,250,0.5)" }} onClick={start}>
-                {phase === "failed" ? "Try again" : `Download${size ? ` ${size}` : ""}`}
+                {phase === "failed" ? "Try again" : words.accept}
               </button>
             )}
           </div>

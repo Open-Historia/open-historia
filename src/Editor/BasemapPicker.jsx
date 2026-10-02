@@ -12,8 +12,17 @@ import { useEffect, useRef, useState } from "react";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
-import { announceTiledBasemap, formatBytes, listTiledBasemapUsers, setTiledBasemapFallback, uploadTiledBasemap } from "../runtime/tiledBasemaps.js";
-import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, prepareTiledBasemapRelease, publishBasemap } from "../runtime/communityBasemaps.js";
+import {
+  announceTiledBasemap,
+  fetchOfficialBasemaps,
+  formatBytes,
+  installOfficialBasemap,
+  listTiledBasemapUsers,
+  officialBasemapSubmissionUrl,
+  setTiledBasemapFallback,
+  uploadTiledBasemap,
+} from "../runtime/tiledBasemaps.js";
+import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
 const overlay = {
@@ -159,6 +168,84 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
   </div>
 );
 
+// The official detailed maps (docs/adr/0006): each with its size and what the
+// player has. A map they have is never downloaded again; a newer version
+// replaces it.
+const OfficialMaps = ({ list, loading, download, onRefresh, onDownload, onCancel }) => (
+  <div>
+    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
+      <div style={{ ...rowTitle, margin: 0 }}>Official detailed maps</div>
+      <div style={{ flex: 1 }} />
+      <button type="button" style={tabBtn(false)} onClick={onRefresh}>↻ Refresh</button>
+    </div>
+    <div style={dim}>
+      Large terrain maps that stay sharp up close, checked by the Open Historia team. Each downloads once, and every scenario on it shares it.
+      To submit your own, use the ⤴ button on its card in My Basemaps.
+    </div>
+    {list.error && (
+      <div style={{ ...dim, color: "#fecaca" }}>
+        {list.basemaps.length ? `Showing the last list this game saw (${list.error}).` : list.error}
+      </div>
+    )}
+    {loading && !list.basemaps.length ? (
+      <div style={dim}>Loading the official list…</div>
+    ) : !list.basemaps.length ? (
+      !list.error && <div style={dim}>No official detailed maps yet.</div>
+    ) : (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.8rem" }}>
+        {list.basemaps.map((entry) => {
+          const latest = entry.versions[entry.versions.length - 1];
+          const have = entry.installed?.version || 0;
+          const upToDate = have >= latest.version;
+          const size = formatBytes(latest.bytes);
+          const busy = download?.id === entry.id;
+          const label = busy
+            ? `Downloading…${download.percent !== null ? ` ${download.percent}%` : ""}`
+            : upToDate ? `✓ Downloaded (v${have})`
+              : have ? `⬆ Update to v${latest.version} (${size})` : `⬇ Download (${size})`;
+          return (
+            <div key={entry.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
+              <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
+                {latest.preview ? (
+                  <img
+                    src={latest.preview}
+                    alt=""
+                    loading="lazy"
+                    onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                ) : (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
+                )}
+                <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
+                  v{latest.version} · {size}
+                </span>
+              </div>
+              <div style={{ padding: "0.5rem 0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700 }}>{entry.name}</div>
+                {entry.author && <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.5)" }}>by {entry.author}</div>}
+                {entry.license && <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{entry.license}</div>}
+                {have > 0 && !upToDate && latest.notes && (
+                  <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.65)" }}>New in v{latest.version}: {latest.notes}</div>
+                )}
+                <button
+                  type="button"
+                  disabled={upToDate || Boolean(download)}
+                  onClick={() => onDownload(entry)}
+                  style={{ ...tabBtn(false), cursor: upToDate || download ? "default" : "pointer", opacity: upToDate ? 0.7 : 1 }}
+                >
+                  {label}
+                </button>
+                {busy && <button type="button" style={tabBtn(false)} onClick={onCancel}>Cancel</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </div>
+);
+
 const BasemapPicker = ({
   open,
   onClose,
@@ -169,7 +256,7 @@ const BasemapPicker = ({
   onUpload,
   currentVectorGeojson = null,
 }) => {
-  const [tab, setTab] = useState("mine"); // mine | community
+  const [tab, setTab] = useState("mine"); // mine | official | community
   const [mine, setMine] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -178,9 +265,13 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
-  const [installPercent, setInstallPercent] = useState(null);
-  const installControllerRef = useRef(null);
   const [tiledBusy, setTiledBusy] = useState(false);
+  // Official detailed maps (docs/adr/0006): the list, and the one downloading.
+  const [official, setOfficial] = useState({ basemaps: [] });
+  const [officialLoading, setOfficialLoading] = useState(false);
+  const [officialLoaded, setOfficialLoaded] = useState(false);
+  const [download, setDownload] = useState(null); // { id, percent }
+  const downloadControllerRef = useRef(null);
 
   const refresh = () => {
     setLoading(true);
@@ -207,6 +298,23 @@ const BasemapPicker = ({
     if (open && tab === "community" && !communityLoaded) loadCommunity();
   }, [open, tab, communityLoaded]);
 
+  const loadOfficial = (refresh = false) => {
+    setOfficialLoading(true);
+    fetchOfficialBasemaps({ refresh })
+      .then(setOfficial)
+      .finally(() => {
+        setOfficialLoading(false);
+        setOfficialLoaded(true);
+      });
+  };
+
+  useEffect(() => {
+    if (open && tab === "official" && !officialLoaded) loadOfficial();
+  }, [open, tab, officialLoaded]);
+
+  // Stops a download in flight when the picker goes away.
+  useEffect(() => () => downloadControllerRef.current?.abort(), []);
+
   if (!open) return null;
 
   const handleUpload = async (file) => {
@@ -229,7 +337,7 @@ const BasemapPicker = ({
       const users = await listTiledBasemapUsers(bm.id);
       const size = formatBytes(bm.bytes);
       const message = users.length
-        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their painted map until it's downloaded again. Delete it?`
+        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their basic map until it's downloaded again. Delete it?`
         : `Delete "${bm.name}"${size ? ` and free ${size}` : ""}?`;
       if (!window.confirm(message)) return;
     }
@@ -258,19 +366,15 @@ const BasemapPicker = ({
 
   const handlePublish = async (bm) => {
     if (bm.kind === "tiled") {
-      // Too large to attach to a post: it goes in a GitHub release, and the post
-      // links it. The link is kept, so scenarios naming this map can offer it.
-      let meta;
-      try {
-        meta = await prepareTiledBasemapRelease(bm);
-      } catch (e) {
-        window.alert(e?.message || String(e));
+      // Too large for a hub post, and players only download detailed maps from
+      // the official list: the author asks for it to be added, and the team
+      // reviews it and uploads it (docs/adr/0006).
+      if (bm.official) {
+        window.alert(`"${bm.name}" is already on the official list (version ${bm.official.version}). Scenarios you publish with it offer it to players.`);
         return;
       }
-      if (!meta) return;
-      if (meta !== bm) refresh();
-      await publishBasemap(meta, null);
-      window.alert("On the GitHub page that opened, everything is filled in: check the links, then submit. Scenarios you publish with this map from now on tell players where to download it.");
+      window.open(officialBasemapSubmissionUrl(bm), "_blank", "noopener");
+      window.alert("Players only download detailed maps from the official Open Historia list. On the GitHub page that opened, add a link where the team can download your .pmtiles file to review it, and who made it, then submit. Once it's added, scenarios you publish with it offer it to players; until then they see the basic map.");
       return;
     }
     try {
@@ -287,22 +391,37 @@ const BasemapPicker = ({
   const handleInstall = async (post) => {
     if (busyId) return;
     setBusyId(post.id);
-    setInstallPercent(null);
-    const controller = new AbortController();
-    installControllerRef.current = controller;
     try {
-      await installCommunityBasemap(post, {
-        signal: controller.signal,
-        onProgress: ({ received, total }) => setInstallPercent(total ? Math.round((received / total) * 100) : null),
-      });
+      await installCommunityBasemap(post);
       refresh();
       setTab("mine");
     } catch (e) {
-      if (e?.name !== "AbortError") window.alert(`Install failed: ${e?.message || e}`);
+      window.alert(`Install failed: ${e?.message || e}`);
     } finally {
-      installControllerRef.current = null;
       setBusyId(null);
-      setInstallPercent(null);
+    }
+  };
+
+  // Downloads (or updates to) an official map's newest version. Nothing is
+  // downloaded twice: the server keeps one copy per map, replacing the older.
+  const handleOfficialDownload = async (entry) => {
+    if (download) return;
+    const controller = new AbortController();
+    downloadControllerRef.current = controller;
+    setDownload({ id: entry.id, percent: null });
+    try {
+      await installOfficialBasemap({
+        id: entry.id,
+        signal: controller.signal,
+        onProgress: ({ received, total }) => setDownload({ id: entry.id, percent: total ? Math.round((received / total) * 100) : null }),
+      });
+      refresh();
+      loadOfficial();
+    } catch (e) {
+      if (e?.name !== "AbortError") window.alert(`Download failed: ${e?.message || e}`);
+    } finally {
+      downloadControllerRef.current = null;
+      setDownload(null);
     }
   };
 
@@ -312,6 +431,7 @@ const BasemapPicker = ({
         <div style={headerBar}>
           <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
+          <button type="button" style={tabBtn(tab === "official")} onClick={() => setTab("official")}>Detailed maps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
           <div style={{ flex: 1 }} />
           <label style={uploadBtn}>
@@ -375,7 +495,9 @@ const BasemapPicker = ({
                         title={bm.name}
                         imageUrl={bm.thumbnail}
                         active={currentCustomId === bm.id}
-                        badge={bm.kind === "tiled" ? `detailed · ${formatBytes(bm.bytes)}` : bm.kind === "vector" ? "vector" : undefined}
+                        badge={bm.kind === "tiled"
+                          ? `detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`
+                          : bm.kind === "vector" ? "vector" : undefined}
                         onClick={() => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
@@ -385,6 +507,15 @@ const BasemapPicker = ({
                 )}
               </div>
             </>
+          ) : tab === "official" ? (
+            <OfficialMaps
+              list={official}
+              loading={officialLoading}
+              download={download}
+              onRefresh={() => loadOfficial(true)}
+              onDownload={handleOfficialDownload}
+              onCancel={() => downloadControllerRef.current?.abort()}
+            />
           ) : (
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem" }}>
@@ -423,10 +554,8 @@ const BasemapPicker = ({
                         ) : (
                           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
                         )}
-                        {(post.kind === "vector" || post.kind === "tiled") && (
-                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
-                            {post.kind === "tiled" ? `detailed${post.bytes ? ` · ${formatBytes(post.bytes)}` : ""}` : "vector"}
-                          </span>
+                        {post.kind === "vector" && (
+                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>vector</span>
                         )}
                         {post.fromScenario && (
                           <span title="Shared as part of a scenario — installing pulls the map out of that scenario's file" style={{ position: "absolute", right: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>from scenario</span>
@@ -447,15 +576,8 @@ const BasemapPicker = ({
                             opacity: canInstall ? 1 : 0.5,
                           }}
                         >
-                          {busyId === post.id
-                            ? `Installing…${installPercent !== null ? ` ${installPercent}%` : ""}`
-                            : `⬇ Install${post.kind === "tiled" && post.bytes ? ` (${formatBytes(post.bytes)})` : ""}`}
+                          {busyId === post.id ? "Installing…" : "⬇ Install"}
                         </button>
-                        {busyId === post.id && post.kind === "tiled" && (
-                          <button type="button" style={tabBtn(false)} onClick={() => installControllerRef.current?.abort()}>
-                            Cancel
-                          </button>
-                        )}
                       </div>
                     </div>
                     );

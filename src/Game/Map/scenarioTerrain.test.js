@@ -11,49 +11,106 @@ import {
   subscribeShownRelief,
   resolveTiledBasemap,
   scenarioTiledBasemap,
+  tiledBasemapOffer,
   wantsScenarioTerrain,
 } from "./scenarioTerrain.js";
 
 const HASH = "a".repeat(64);
-const NAMED = { kind: "vector", tiled: { hash: HASH, name: "Westeros relief", bytes: 485_000_000, hubUrl: "https://github.com/x/y/releases/download/v1/westeros.pmtiles" } };
-const INSTALLED = { id: "westeros-relief", kind: "tiled", contentHash: HASH, minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4] };
+// A scenario names an official map by id and the lowest version it needs
+// (docs/adr/0006), or the author's own map by checksum.
+const NAMED = { kind: "vector", tiled: { id: "westeros-relief", version: 9, name: "Westeros relief" } };
+const BY_HASH = { kind: "vector", tiled: { hash: HASH, name: "My relief" } };
+const INSTALLED = { id: "westeros-relief-v9", kind: "tiled", contentHash: HASH, official: { id: "westeros-relief", version: 9 }, minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4] };
+const v = (version, bytes = 400_000_000 + version) => ({ version, bytes, sha256: String(version % 10).repeat(64) });
+const OFFICIAL = { id: "westeros-relief", name: "Westeros & Essos relief", versions: [v(8), v(9), v(10)] };
 
-test("only a vector background can name a Tiled Basemap, by its content hash", () => {
+test("only a vector background can name a Tiled Basemap: by official id and version, or by checksum", () => {
   assert.equal(scenarioTiledBasemap(null), null);
   assert.equal(scenarioTiledBasemap({ kind: "vector" }), null);
-  assert.equal(scenarioTiledBasemap({ kind: "image", tiled: { hash: HASH } }), null, "an image background already replaces the map");
+  assert.equal(scenarioTiledBasemap({ kind: "image", tiled: { id: "westeros-relief" } }), null, "an image background already replaces the map");
   assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { hash: "not-a-hash" } }), null);
+  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "Not An Id!" } }), null);
   assert.deepEqual(scenarioTiledBasemap(NAMED), NAMED.tiled);
-  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { hash: HASH, hubUrl: "javascript:alert(1)" } }).hubUrl, undefined, "only an https link is kept");
+  assert.deepEqual(scenarioTiledBasemap(BY_HASH), BY_HASH.tiled);
+  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief" } }).version, 1, "no version: any will do");
+  assert.deepEqual(
+    scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief", version: 9, hash: HASH, hubUrl: "https://x", onlyMap: true } }),
+    { id: "westeros-relief", version: 9, onlyMap: true },
+    "an official id wins over a checksum, and a download link is never taken from a scenario",
+  );
 });
 
 test("an installed Tiled Basemap is drawn with the zooms and bounds of its own archive", () => {
-  const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/api/basemaps/westeros-relief/archive" });
+  const { tiles: terrain, missing, update } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/api/basemaps/westeros-relief-v9/archive" });
   assert.equal(missing, null);
-  assert.deepEqual(terrain, { minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/api/basemaps/westeros-relief/archive" });
+  assert.equal(update, null, "no official list read: nothing to offer");
+  assert.deepEqual(terrain, { minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/api/basemaps/westeros-relief-v9/archive" });
   const style = buildScenarioTerrainStyle(terrain, terrain.url);
   assert.equal(style.sources["custom-bg-terrain"].maxzoom, 14);
-  assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/westeros-relief/archive/{z}/{x}/{y}"]);
+  assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/westeros-relief-v9/archive/{z}/{x}/{y}"]);
 });
 
-test("a Tiled Basemap the player does not have leaves the painted fallback, and says what to download", () => {
-  const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "" });
+test("a map the player does not have leaves the basic map, and offers the newest official version with its size", () => {
+  const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: OFFICIAL });
   assert.equal(terrain, null, "no relief source: the vector background alone");
-  assert.deepEqual(missing, NAMED.tiled);
+  assert.deepEqual(missing, { id: "westeros-relief", name: "Westeros & Essos relief", version: 10, bytes: 400_000_010 }, "the newest, so later scenarios need nothing more");
 });
 
-test("Painted, an image, or a plain vector background asks for no relief and offers no download", () => {
+test("a map that is the scenario's only map says so in its offer", () => {
+  const onlyMap = { kind: "vector", tiled: { ...NAMED.tiled, onlyMap: true } };
+  assert.equal(tiledBasemapOffer({ named: scenarioTiledBasemap(onlyMap), installed: null, official: OFFICIAL }).missing.onlyMap, true);
+});
+
+test("a map the official list does not have (or could not be read) is unavailable; one named by checksum alone cannot be downloaded", () => {
+  const offline = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: null });
+  assert.deepEqual(offline.missing, { id: "westeros-relief", name: "Westeros relief", unavailable: true });
+  const tooOld = tiledBasemapOffer({ named: { id: "westeros-relief", version: 11 }, installed: null, official: OFFICIAL });
+  assert.equal(tooOld.missing.unavailable, true, "the list has no version as new as the scenario needs");
+  const own = resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: null, archiveUrl: "", official: null });
+  assert.deepEqual(own.missing, { hash: HASH, name: "My relief", unofficial: true });
+});
+
+test("a newer version is offered, never forced: the player's version is drawn meanwhile", () => {
+  const made8 = { kind: "vector", tiled: { id: "westeros-relief", version: 8 } };
+  const optional = resolveTiledBasemap({ descriptor: made8, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a", official: OFFICIAL });
+  assert.ok(optional.tiles, "drawn on the version the player has");
+  assert.equal(optional.missing, null, "never a second download of the same map");
+  assert.deepEqual(optional.update, { id: "westeros-relief", name: "Westeros & Essos relief", version: 10, bytes: 400_000_010, have: 9, needed: false });
+
+  const made10 = { kind: "vector", tiled: { id: "westeros-relief", version: 10 } };
+  const needed = resolveTiledBasemap({ descriptor: made10, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a", official: OFFICIAL });
+  assert.ok(needed.tiles, "a scenario made on a newer version still draws on the older one");
+  assert.equal(needed.missing, null);
+  assert.equal(needed.update.needed, true);
+
+  const current = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: { ...INSTALLED, official: { id: "westeros-relief", version: 10 } }, archiveUrl: "http://x/a", official: OFFICIAL });
+  assert.equal(current.update, null, "the newest already");
+});
+
+test("a scenario naming a file by checksum is drawn on that file, or on the newer version that replaced it", () => {
+  const exact = resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a" });
+  assert.ok(exact.tiles);
+  const replaced = { ...INSTALLED, contentHash: "b".repeat(64), supersedes: [HASH], official: { id: "westeros-relief", version: 10 } };
+  assert.ok(resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: replaced, archiveUrl: "http://x/a" }).tiles);
+});
+
+test("Painted, an image, or a plain vector background asks for no relief and offers nothing", () => {
   for (const [descriptor, setting] of [[NAMED, SCENARIO_TERRAIN_PAINTED], [{ kind: "image" }, ""], [{ kind: "vector" }, ""]]) {
-    assert.deepEqual(resolveTiledBasemap({ descriptor, setting, basemap: INSTALLED, archiveUrl: "http://x/a" }), { tiles: null, missing: null });
+    assert.deepEqual(
+      resolveTiledBasemap({ descriptor, setting, basemap: INSTALLED, archiveUrl: "http://x/a", official: OFFICIAL }),
+      { tiles: null, missing: null, update: null },
+    );
   }
 });
 
-test("a library entry that is not a Tiled Basemap, or has another hash, is not drawn", () => {
-  for (const basemap of [{ ...INSTALLED, kind: "vector" }, { ...INSTALLED, contentHash: "b".repeat(64) }]) {
-    const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap, archiveUrl: "http://x/a" });
+test("a library entry that is not a Tiled Basemap, or another map, is not drawn", () => {
+  for (const basemap of [{ ...INSTALLED, kind: "vector" }, { ...INSTALLED, official: { id: "middle-earth", version: 9 } }]) {
+    const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap, archiveUrl: "http://x/a", official: OFFICIAL });
     assert.equal(terrain, null);
-    assert.deepEqual(missing, NAMED.tiled);
+    assert.equal(missing.version, 10);
   }
+  const other = resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: { ...INSTALLED, contentHash: "b".repeat(64) }, archiveUrl: "http://x/a" });
+  assert.equal(other.tiles, null);
 });
 
 test("zooms are clamped and ordered; bad bounds are dropped", () => {

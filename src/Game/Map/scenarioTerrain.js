@@ -3,10 +3,16 @@
 // tiles in a PMTiles archive, painted terrain that stays sharp when zoomed in,
 // where the vector shapes can only be flat colour. The archive lives in the
 // player's Basemap library, downloaded once and shared by every scenario that
-// names it (docs/adr/0005-tiled-basemaps-stream-to-disk.md); the scenario only
-// names it, by the hash of its bytes:
+// names it (docs/adr/0005-tiled-basemaps-stream-to-disk.md). The scenario only
+// names it: an official map by its id and the lowest version it needs, looked
+// up in the official list (docs/adr/0006-official-basemap-list.md), or the
+// author's own map, not on that list, by the checksum of its bytes:
 //
-//   world.background = { kind: "vector", tiled: { hash, name, bytes, hubUrl }, fillOpacity? }
+//   world.background = { kind: "vector", tiled: { id, version, name, onlyMap? }, fillOpacity? }
+//   world.background = { kind: "vector", tiled: { hash, name }, fillOpacity? }
+//
+// `onlyMap`: the author drew no painted map, so without the detailed one the
+// scenario is empty sea; the download offer says so.
 //
 // The vector background is always the base and always loads; the tiles draw on
 // top of it. So a game that predates this feature, a player who has not
@@ -46,31 +52,71 @@ const normalizeFillOpacityStops = (value) => {
   return stops;
 };
 
+const OFFICIAL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const CHECKSUM = /^[a-f0-9]{64}$/;
+
 // The Tiled Basemap a scenario names, or null. Only a vector background can
-// name one (an image background already replaces the whole map), and only by a
-// SHA-256 content hash; a hub link is kept only when it is https.
+// name one (an image background already replaces the whole map): an official
+// map by id and lowest version (1 when unsaid), else a map by its SHA-256.
 export const scenarioTiledBasemap = (descriptor) => {
   const tiled = descriptor?.kind === "vector" ? descriptor.tiled : null;
-  if (!tiled || typeof tiled !== "object" || !/^[a-f0-9]{64}$/.test(String(tiled.hash || ""))) return null;
-  const bytes = Number(tiled.bytes);
-  const hubUrl = /^https:\/\//i.test(String(tiled.hubUrl || "")) ? String(tiled.hubUrl) : "";
+  if (!tiled || typeof tiled !== "object") return null;
+  const id = OFFICIAL_ID.test(String(tiled.id || "")) ? String(tiled.id) : "";
+  const hash = CHECKSUM.test(String(tiled.hash || "")) ? String(tiled.hash) : "";
+  if (!id && !hash) return null;
+  const version = Number(tiled.version);
   return {
-    hash: tiled.hash,
+    ...(id ? { id, version: Number.isInteger(version) && version >= 1 ? version : 1 } : { hash }),
     ...(tiled.name ? { name: String(tiled.name).slice(0, 80) } : {}),
-    ...(Number.isFinite(bytes) && bytes > 0 ? { bytes } : {}),
-    ...(hubUrl ? { hubUrl } : {}),
+    ...(tiled.onlyMap === true ? { onlyMap: true } : {}),
   };
 };
 
+// What to offer the player for a named map, given the copy they have
+// (`installed`, a library entry or null) and the official list's entry for it
+// (`official`, or null when the list could not be read):
+//  - `missing`: they have no copy. An official map offers its newest version
+//    (so later scenarios on it need nothing more); one the list does not have
+//    says so (`unavailable`), and a map named by checksum alone cannot be
+//    downloaded at all (`unofficial`).
+//  - `update`: they have a copy and the list has a newer version. Never a
+//    second download of what they have: a scenario made on a newer version
+//    still draws on theirs (`needed`: it was made on a newer one than theirs).
+export const tiledBasemapOffer = ({ named, installed, official }) => {
+  if (!named) return { missing: null, update: null };
+  const latest = official?.versions?.[official.versions.length - 1] || null;
+  const name = official?.name || named.name || installed?.name || "";
+  const extra = named.onlyMap ? { onlyMap: true } : {};
+  const offer = (version, more = {}) => ({ id: official.id, name, version: version.version, bytes: version.bytes, ...extra, ...more });
+  if (!installed) {
+    if (named.hash) return { missing: { hash: named.hash, name, unofficial: true, ...extra }, update: null };
+    if (latest && latest.version >= named.version) return { missing: offer(latest), update: null };
+    return { missing: { id: named.id, name, unavailable: true, ...extra }, update: null };
+  }
+  const have = Number(installed.official?.version);
+  if (latest && official.id === installed.official?.id && latest.version > have) {
+    return { missing: null, update: offer(latest, { have, needed: Boolean(named.version && named.version > have) }) };
+  }
+  return { missing: null, update: null };
+};
+
+// The library entry is the map the scenario names: the same official map (any
+// version), or the same file, or a newer version that replaced that file.
+const isNamedBasemap = (named, basemap) => basemap?.kind === "tiled" && (named.id
+  ? basemap.official?.id === named.id
+  : basemap.contentHash === named.hash || (basemap.supersedes || []).includes(named.hash));
+
 // What the map draws of a scenario's Tiled Basemap: its tiles (zooms and bounds
-// read from the Basemap's own archive, the fill ramp the scenario's), or, when
-// the named Basemap is not in the library, none, plus the Basemap to offer for
-// download. `basemap` is the library entry found for the hash, if any;
-// `archiveUrl` is where its archive is served.
-export const resolveTiledBasemap = ({ descriptor, setting, basemap, archiveUrl }) => {
+// read from the Basemap's own archive, the fill ramp the scenario's), and what
+// to offer (tiledBasemapOffer). `basemap` is the library entry found for it, if
+// any; `archiveUrl` is where its archive is served; `official`, the official
+// list's entry for it.
+export const resolveTiledBasemap = ({ descriptor, setting, basemap, archiveUrl, official = null }) => {
   const named = wantsScenarioTerrain(setting) ? scenarioTiledBasemap(descriptor) : null;
-  if (!named) return { tiles: null, missing: null };
-  if (basemap?.kind !== "tiled" || basemap.contentHash !== named.hash || !archiveUrl) return { tiles: null, missing: named };
+  if (!named) return { tiles: null, missing: null, update: null };
+  const installed = isNamedBasemap(named, basemap) && archiveUrl ? basemap : null;
+  const { missing, update } = tiledBasemapOffer({ named, installed, official });
+  if (!installed) return { tiles: null, missing, update };
   const minzoom = clampZoom(basemap.minzoom, 0);
   const maxzoom = Math.max(minzoom, clampZoom(basemap.maxzoom, minzoom));
   const fillOpacity = normalizeFillOpacityStops(descriptor.fillOpacity);
@@ -83,6 +129,7 @@ export const resolveTiledBasemap = ({ descriptor, setting, basemap, archiveUrl }
       url: `pmtiles://${archiveUrl}`,
     },
     missing: null,
+    update,
   };
 };
 

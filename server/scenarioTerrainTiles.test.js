@@ -158,7 +158,7 @@ test("migration is idempotent, and a scenario without relief is untouched", () =
   assert.equal(result.library, 1);
 });
 
-test("an export tells players where to download its Tiled Basemap, once the author has published it", () => {
+test("an export names the official map its file is, by id and version; a map not on the list stays named by checksum", () => {
   const root = buildDataDir();
   const result = runStore(root, `
     ${LEGACY_BUNDLE}
@@ -166,12 +166,17 @@ test("an export tells players where to download its Tiled Basemap, once the auth
     await store.migrateEmbeddedTiledArchives();
     const hash = store.getScenarioDetails("relief").data.world.background.tiled.hash;
     const before = store.exportScenarioBundle("relief").data.world.background.tiled;
-    const meta = basemaps.findBasemapMetaByHash(hash);
-    basemaps.setTiledBasemapSource(meta.id, "https://github.com/author/maps/releases/download/v1/relief.pmtiles");
+    basemaps.tagOfficialBasemaps({ basemaps: [{ id: "relief-world", versions: [{ version: 3, sha256: hash }] }] });
     const after = store.exportScenarioBundle("relief").data.world.background.tiled;
-    ${report(`{ before, after }`)}
+    const meta = basemaps.findOfficialBasemapMeta("relief-world");
+    ${report(`{ hash, before, after, official: meta?.official ?? null, users: store.listScenariosNamingTiledBasemap(meta) }`)}
   `);
-  assert.equal(result.before.hubUrl, undefined, "no link until the author publishes the map");
-  assert.equal(result.after.hubUrl, "https://github.com/author/maps/releases/download/v1/relief.pmtiles");
-  assert.equal(result.after.hash, result.before.hash);
+  assert.equal(result.before.hash, result.hash, "not on the official list: named by its checksum");
+  assert.equal(result.before.id, undefined);
+  assert.deepEqual(result.official, { id: "relief-world", version: 3 }, "the library's copy is that official version");
+  assert.equal(result.after.id, "relief-world");
+  assert.equal(result.after.version, 3, "the version the author has is the lowest the scenario needs");
+  assert.equal(result.after.hash, undefined, "named by id, not by file");
+  assert.equal(result.after.name, "Relief World");
+  assert.deepEqual(result.users, [{ id: "relief", name: "Relief World" }], "a scenario naming it by checksum still counts as using it");
 });

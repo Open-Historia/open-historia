@@ -2977,7 +2977,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             : null;
       // A named Tiled Basemap (with the scenario's own fill ramp) re-opens as
       // chosen, so Apply & Play keeps naming it.
-      const tiledBasemap = bgDesc?.kind === "vector" && bgDesc.tiled?.hash
+      const tiledBasemap = bgDesc?.kind === "vector" && (bgDesc.tiled?.id || bgDesc.tiled?.hash)
         ? { ...bgDesc.tiled, ...(Array.isArray(bgDesc.fillOpacity) ? { fillOpacity: bgDesc.fillOpacity } : {}) }
         : null;
       setMapEditorSeed({

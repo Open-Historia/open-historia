@@ -60,23 +60,29 @@ import {
   clearInterruptedDownloads,
   createTiledBasemap,
   findBasemapMetaByHash,
+  findOfficialBasemapMeta,
   getBasemapArchivePath,
   getBasemapCatalog,
   getBasemapPayload,
   getBasemapMeta,
   incomingArchivePath,
   setTiledBasemapFallback,
-  setTiledBasemapSource,
+  tagOfficialBasemaps,
 } from "./basemapStore.js";
 import {
   TooLargeError,
   cancelInstallJob,
-  cleanBasemapSource,
   downloadToFile,
   getInstallJob,
   receiveToFile,
   startInstallJob,
 } from "./tiledBasemaps.js";
+import {
+  createOfficialCatalogReader,
+  findOfficialEntry,
+  isOfficialReleaseUrl,
+  latestOfficialVersion,
+} from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import { renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
@@ -1515,29 +1521,73 @@ app.get("/api/basemaps/:id/payload", (req, res) => {
   }
 });
 
-// ---- Tiled Basemaps (docs/adr/0005) --------------------------------------
-// Installed from a GitHub release as a background job the client polls: the
-// archive streams to disk, is checked, and only then joins the library.
-app.post("/api/basemaps/tiled/install", jsonParser, (req, res) => {
+// ---- Tiled Basemaps (docs/adr/0005, docs/adr/0006) -------------------------
+// Detailed maps come only from the official list (server/officialBasemaps.js):
+// the game reads which maps and versions exist, and installs one as a
+// background job the client polls. The archive streams to disk, must match the
+// list's checksum, and only then joins the library, replacing any other
+// version of the same map.
+const OFFICIAL_LIST_FILE = path.join(DATA_DIR, "basemaps-official.json");
+const readOfficialCatalog = createOfficialCatalogReader({
+  fetchHop: (url) => fetchHubHop(url),
+  isAllowed: isHubDownloadUrl,
+  readSaved: () => JSON.parse(fs.readFileSync(OFFICIAL_LIST_FILE, "utf8")),
+  save: (catalog) => fs.writeFileSync(OFFICIAL_LIST_FILE, JSON.stringify(catalog)),
+  cap: TILED_BASEMAP_MAX_BYTES,
+});
+
+// The official maps, each with the version this player has (if any), so the
+// game can offer a download or an update. Reading it also marks any copy the
+// player already has, byte for byte, as that official version.
+app.get("/api/basemaps/official", async (req, res) => {
   try {
-    const { url: fileUrl, name, author, thumbnail, source, expectedHash } = req.body ?? {};
-    if (expectedHash !== undefined && !/^[a-f0-9]{64}$/.test(String(expectedHash))) {
-      return sendError(res, 400, new Error("expectedHash must be a SHA-256 hex digest."));
+    const catalog = await readOfficialCatalog({ force: req.query.refresh === "1" });
+    tagOfficialBasemaps(catalog);
+    const basemaps = catalog.basemaps.map((entry) => {
+      const installed = findOfficialBasemapMeta(entry.id);
+      return { ...entry, installed: installed ? { libraryId: installed.id, version: installed.official.version } : null };
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ basemaps, stale: Boolean(catalog.stale), ...(catalog.error ? { error: catalog.error } : {}) });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+// The player's copy of an official map, whatever its version, or 404.
+app.get("/api/basemaps/official/:officialId", (req, res) => {
+  const meta = findOfficialBasemapMeta(String(req.params.officialId));
+  if (!meta) return sendError(res, 404, new Error("This map is not downloaded."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(meta);
+});
+
+// Installs an official map: `{ id, version? }`, the newest version when none is
+// given. A version the player already has (or a newer one) is not downloaded
+// again, and asking twice while it downloads joins the download in progress.
+app.post("/api/basemaps/official/install", jsonParser, async (req, res) => {
+  try {
+    const officialId = String(req.body?.id || "");
+    const catalog = await readOfficialCatalog();
+    const entry = findOfficialEntry(catalog, officialId);
+    if (!entry) {
+      return sendError(res, 404, new Error(catalog.error
+        ? `The official map list could not be read (${catalog.error}).`
+        : "That map is not on the official list."));
     }
-    let target;
-    try {
-      target = new URL(String(fileUrl ?? ""));
-    } catch {
-      return sendError(res, 400, new Error("A Tiled Basemap needs the link to its file."));
-    }
-    if (!isHubDownloadUrl(target)) {
-      return sendError(res, 400, new Error("Tiled Basemaps can only be installed from GitHub (a release download link)."));
-    }
+    const asked = req.body?.version === undefined ? null : Number(req.body.version);
+    const version = asked === null ? latestOfficialVersion(entry) : entry.versions.find((v) => v.version === asked);
+    if (!version) return sendError(res, 404, new Error(`Version ${asked} of that map is not on the official list.`));
+    // The list was checked as it was read; checked again here, where it is used.
+    if (!isOfficialReleaseUrl(version.url)) return sendError(res, 400, new Error("That map's link is not an official release."));
+    const installed = findOfficialBasemapMeta(entry.id);
     const jobId = startInstallJob({
+      key: `${entry.id}@${version.version}`,
       run: async ({ signal, onProgress }) => {
+        if (installed && installed.official.version >= version.version) return installed;
         const file = incomingArchivePath();
         await downloadToFile({
-          url: target.href,
+          url: version.url,
           dest: file,
           cap: TILED_BASEMAP_MAX_BYTES,
           isAllowed: isHubDownloadUrl,
@@ -1548,16 +1598,16 @@ app.post("/api/basemaps/tiled/install", jsonParser, (req, res) => {
         // createTiledBasemap removes the file if it is refused or cancelled.
         return createTiledBasemap({
           file,
-          name,
-          author,
-          thumbnail,
-          source: cleanBasemapSource(source, target.href),
-          expectedHash,
+          name: entry.name,
+          author: entry.author,
+          source: { official: true, url: version.url },
+          expectedHash: version.sha256,
+          official: { id: entry.id, version: version.version },
           signal,
         });
       },
     });
-    res.status(202).json({ jobId });
+    res.status(202).json({ jobId, version: version.version });
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -1605,21 +1655,11 @@ app.put("/api/basemaps/:id/payload", largeJsonParser, (req, res) => {
   }
 });
 
-// Where the author published it (a release download link), passed on by the
-// Scenarios that name it.
-app.put("/api/basemaps/:id/source", jsonParser, (req, res) => {
-  try {
-    res.json(setTiledBasemapSource(req.params.id, req.body?.payloadUrl, req.body?.previewUrl));
-  } catch (error) {
-    sendError(res, 400, error);
-  }
-});
-
 // Which scenarios name it: what deleting it would leave on their painted fallback.
 app.get("/api/basemaps/:id/users", (req, res) => {
   const meta = getBasemapMeta(req.params.id);
   if (!meta) return sendError(res, 404, new Error("Basemap not in the library."));
-  res.json(meta.kind === "tiled" ? listScenariosNamingTiledBasemap(meta.contentHash) : []);
+  res.json(meta.kind === "tiled" ? listScenariosNamingTiledBasemap(meta) : []);
 });
 
 // The archive itself, by byte range, for the map's pmtiles reader.

@@ -2124,10 +2124,10 @@ const SettingsWorkspace = ({
                     <div style={fieldGroupStyle}>
                         <label style={labelStyle} htmlFor="game-scenario-terrain">Scenario terrain</label>
                         <select id="game-scenario-terrain" value={scenarioTerrain} onChange={(event) => updateScenarioTerrain(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-                            <option value="" style={{ color: "black" }}>Relief (detailed, when the scenario has it)</option>
-                            <option value={SCENARIO_TERRAIN_PAINTED} style={{ color: "black" }}>Painted</option>
+                            <option value="" style={{ color: "black" }}>Detailed map (when the scenario has one)</option>
+                            <option value={SCENARIO_TERRAIN_PAINTED} style={{ color: "black" }}>Basic map</option>
                         </select>
-                        <div style={helperStyle}>For scenarios with their own map. Relief stays sharp when zoomed in; Painted is lighter. Scenarios without relief always use Painted.</div>
+                        <div style={helperStyle}>For scenarios with their own map. The detailed map stays sharp when zoomed in; the basic map is lighter. Scenarios without a detailed map always use the basic map.</div>
                     </div>
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the

@@ -158,19 +158,25 @@ const buildCitiesForGame = (features) => ({
 // (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
 // reach here. Returns { background: null } when there's nothing.
 //
-// A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { hash, name,
-// bytes, hubUrl, fillOpacity }) is NAMED on a vector background, never carried
-// (docs/adr/0005). The vector drawing on screen is its painted fallback; with
-// none, the fallback is an empty drawing (the sea colour) until it downloads.
+// A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { id, version,
+// name, fillOpacity } for an official map, { hash, name, fillOpacity } for
+// their own) is NAMED on a vector background, never carried (docs/adr/0005,
+// 0006). The vector drawing on screen is its basic map; with none, the basic
+// map is an empty drawing (the sea colour), and the scenario says the detailed
+// map is its only one (`onlyMap`), so the download offer can say so too.
 const EMPTY_FALLBACK = { type: "FeatureCollection", features: [] };
-const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
+export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
-  if (tiledBasemap?.hash) {
-    const { fillOpacity, ...named } = tiledBasemap;
-    const geojson = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) ? bg.geojson : EMPTY_FALLBACK;
+  if (tiledBasemap?.id || tiledBasemap?.hash) {
+    const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
+    const drawn = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) && bg.geojson.features.length > 0;
     return {
-      background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
-      backgroundData: { geojson },
+      background: {
+        kind: "vector",
+        tiled: { ...named, ...(drawn ? {} : { onlyMap: true }) },
+        ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}),
+      },
+      backgroundData: { geojson: drawn ? bg.geojson : EMPTY_FALLBACK },
     };
   }
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
