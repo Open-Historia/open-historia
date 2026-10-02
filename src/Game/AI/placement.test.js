@@ -142,6 +142,8 @@ test("a named sea is open water in that sea, whatever words come with it", () =>
         ["eastern Mediterranean", "Eastern Mediterranean"],
         ["North Sea", "North Sea"],
         ["the open Atlantic", "Atlantic Ocean"],
+        // A sea, then a place in it the map does not know: the sea.
+        ["western Black Sea off Atlantis", "Black Sea"],
     ]) {
         const spot = placeOnEarth(phrase);
         assert.equal(spot.error, undefined, phrase);

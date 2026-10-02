@@ -856,6 +856,8 @@ const seaInPhrase = (phrase, readings, seas) => {
     }
     return null;
 };
+// "<sea> off <port>": the sea, the word, the place.
+const SEA_THEN_PLACE = /^(.+?)\s+(off|near|outside)\s+(.+)$/i;
 // "the western …", "north-eastern …", "the open …": a part of a sea, not its name.
 const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west))?(?:ern)?|east(?:ern)?|west(?:ern)?|central|upper|lower|inner|outer|open|mid|middle)\s+(?:part of\s+|reaches of\s+)?(?:the\s+)?/i;
 
@@ -897,7 +899,17 @@ const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) =
     // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
     // can say what the phrase nearly matched. The message quotes the first, which
     // is the whole phrase, because that is what the model actually wrote.
-    const sea = seaInPhrase(phrase, readings, gazetteer.seas);
+    // "western Black Sea off Odesa, Ukraine": a sea, then where in it. The
+    // where is the more exact of the two, so it is tried first; the sea is
+    // what is left when it names nothing. Seen in a live check on a player's
+    // save (2026-10-02): the whole phrase named nothing and the move was dropped.
+    const within = asText(phrase).match(SEA_THEN_PLACE);
+    const seaPart = within && seaInPhrase(within[1], [], gazetteer.seas);
+    if (seaPart) {
+        const placed = resolveExactly(`${within[2]} ${within[3]}`, gazetteer, { seedText, owner });
+        if (!placed.error) return placed;
+    }
+    const sea = seaPart || seaInPhrase(phrase, readings, gazetteer.seas);
     if (sea) {
         // A point inside the sea; if the map has land there after all, the open
         // water nearest it.

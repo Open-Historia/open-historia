@@ -19,7 +19,7 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, missingCombatantSpawns, nativeCombatantSpawn, pickCombatantPlace } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
@@ -14248,6 +14248,24 @@ const TIMELINE_CURATOR_INSTRUCTION =
 
 const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit director unavailable; existing simulator unitOps preserved." });
 
+// A warring power the director left with no counter gets one from the engine
+// (nativeUnitDirector.js missingCombatantSpawns), placed like the director's own
+// spawns and kept by the same rules. In place, on the answer this skip uses.
+const raiseMissingCombatants = async (answer, input, bundle) => {
+  if (!answer) return;
+  const missing = missingCombatantSpawns(input, answer.payload);
+  if (!missing.length) return;
+  const readPlaces = placeReaderFor(bundle);
+  const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
+  payload.eventOrders = normalizeArray(payload.eventOrders);
+  for (const { eventIndex, power, text } of missing) {
+    const at = pickCombatantPlace(power, await readPlaces(text).catch(() => []));
+    if (!at) continue;
+    payload.eventOrders.push({ eventIndex, unitOps: [nativeCombatantSpawn(power, at)] });
+    logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${at}.`);
+  }
+};
+
 // The director's orders may say where in words too. Placed here, before the
 // director's own rules measure the move, because those rules read coordinates.
 // Where the events' own units stand once they are applied: the formations a
@@ -14348,6 +14366,7 @@ const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = n
     const answer = review
       ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
       : await askAsCheck("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+    await raiseMissingCombatants(answer, input, bundle);
     await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
     return answer;
   };

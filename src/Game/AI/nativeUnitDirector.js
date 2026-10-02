@@ -345,16 +345,73 @@ const selectUnitDirectorCandidates = (events) => normalizeArray(events)
 // The event's combatants that have no unit at all: a war between powers the
 // map gives no counters to (Russia and Ukraine in a player's Modern Day Game,
 // 2026-09-30) otherwise stays a war nobody can see, because the director only
-// moves the units it is shown. Owners compare by name, ignoring case.
-const combatantsWithoutUnits = (event, units) => {
+// moves the units it is shown. The combatants are the event's own and both
+// sides of the war it is bound to: the events of that Game named only the
+// player and Russia, so Ukraine was never counted. Owners compare by name,
+// ignoring case.
+const warSidesOf = (event, wars) => {
+  const war = normalizeArray(wars).find((entry) => normalizeString(entry?.id) && normalizeString(entry?.id) === normalizeString(event?.warId));
+  return war && normalizeString(war.status).toLowerCase() !== "ended" ? [...normalizeArray(war.sideA), ...normalizeArray(war.sideB)] : [];
+};
+const combatantsWithoutUnits = (event, units, wars = []) => {
   const owners = new Set(units.map((unit) => normalizeString(unit?.ownerCode).toLowerCase()).filter(Boolean));
-  return [...new Set(normalizeArray(event?.combatants).map(normalizeString).filter(Boolean))]
-    .filter((name) => !owners.has(name.toLowerCase()));
+  const names = [...normalizeArray(event?.combatants), ...warSidesOf(event, wars)].map(normalizeString).filter(Boolean);
+  const seen = new Set();
+  return names.filter((name) => {
+    const key = name.toLowerCase();
+    if (owners.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
-const unitDirectorAnalyzerInput = (candidates, units) => ({
+// The director is told who has no counter, and asked to spawn one, but a model
+// can ignore it: in a live check on that Game (2026-10-02) the review was told
+// "Russia has no unit" and moved the player's Falklands garrison to Kherson
+// instead. So the engine makes sure of it. For each power the director left
+// without a spawn, one formation is raised where the first event naming it as a
+// combatant puts the fighting: the first place in that event the power holds,
+// else the first place it names on the map. One per power per skip.
+export const missingCombatantSpawns = (input, payload) => {
+  const spawned = new Set(normalizeArray(payload?.eventOrders)
+    .flatMap((entry) => normalizeArray(entry?.unitOps))
+    .filter((op) => normalizeString(op?.op).toLowerCase() === "spawn")
+    .map((op) => normalizeString(op?.unit?.ownerCode ?? op?.unit?.owner).toLowerCase())
+    .filter(Boolean));
+  const out = [];
+  for (const candidate of normalizeArray(input?.candidates)) {
+    for (const power of normalizeArray(candidate?.combatantsWithoutUnits)) {
+      const key = normalizeString(power).toLowerCase();
+      if (!key || spawned.has(key)) continue;
+      spawned.add(key);
+      out.push({ eventIndex: candidate.eventIndex, power: normalizeString(power), text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
+    }
+  }
+  return out;
+};
+
+// Of the places an event names (lookupTools.js placesNamedIn), where the power's
+// formation goes: one it holds, else one it is the lawful owner of, else the
+// first on the map. null when the event names nowhere on the map.
+export const pickCombatantPlace = (power, places) => {
+  const key = normalizeString(power).toLowerCase();
+  const onMap = normalizeArray(places).filter((place) => normalizeString(place?.regionId));
+  const held = onMap.find((place) => normalizeString(place?.controller).toLowerCase() === key)
+    ?? onMap.find((place) => normalizeString(place?.lawfulOwner).toLowerCase() === key)
+    ?? onMap[0];
+  return held ? normalizeString(held.place) : null;
+};
+
+export const nativeCombatantSpawn = (power, at) => ({
+  op: "spawn",
+  at,
+  unit: { name: `${power} Field Army`, type: "infantry", ownerCode: power, strength: 100, posture: "holding" },
+  note: `${power} is fighting with no formation on the map; the engine raised one where the event puts its forces.`,
+});
+
+const unitDirectorAnalyzerInput = (candidates, units, wars = []) => ({
   candidates: candidates.map(({ event, index }) => {
-    const unrepresented = combatantsWithoutUnits(event, units);
+    const unrepresented = combatantsWithoutUnits(event, units, wars);
     return {
       eventIndex: index,
       date: normalizeString(event?.date),
@@ -370,7 +427,7 @@ const unitDirectorAnalyzerInput = (candidates, units) => ({
 // null when no event needs the director.
 export const buildUnitDirectorInput = ({ events = [], world = {} } = {}) => {
   const candidates = selectUnitDirectorCandidates(events);
-  return candidates.length ? unitDirectorAnalyzerInput(candidates, normalizeUnits(world?.units)) : null;
+  return candidates.length ? unitDirectorAnalyzerInput(candidates, normalizeUnits(world?.units), world?.wars) : null;
 };
 
 export const directGeneratedUnitOps = async ({
@@ -398,7 +455,7 @@ export const directGeneratedUnitOps = async ({
   let analysis = null;
 
   try {
-    analysis = await analyzeBatch(unitDirectorAnalyzerInput(candidates, units));
+    analysis = await analyzeBatch(unitDirectorAnalyzerInput(candidates, units, world?.wars));
   } catch (error) {
     console.warn("[unit director] analysis failed; preserving simulator unitOps unchanged.", error);
     return sourceEvents;

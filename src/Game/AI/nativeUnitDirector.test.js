@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildUnitDirectorInput, eventNeedsNativeUnitDirector, orderRaisesForces, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, eventNeedsNativeUnitDirector, missingCombatantSpawns, nativeCombatantSpawn, orderRaisesForces, pickCombatantPlace, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -134,4 +134,57 @@ test("a combatant with no unit at all is named to the director, so the war gets 
     world: { units: [{ id: "u-ukr", name: "Ukrainian 93rd Brigade", type: "infantry", ownerCode: "Ukraine", strength: 80, lng: 35.4, lat: 47.1 }] },
   });
   assert.deepEqual(input.candidates[0].combatantsWithoutUnits, ["Russia"]);
+});
+
+// Seen in a live check on that Game (2026-10-02): the events named only the
+// player and Russia as combatants, and the review, told Russia had no unit,
+// moved another unit instead. Both sides of the event's war count, and the
+// engine raises the missing formation itself.
+const warEvent = {
+  title: "Russian Forces Capture Melitopol and Advance Toward Mariupol",
+  description: "Russian armoured columns advance from Crimea and capture Melitopol after heavy fighting with Ukrainian defenders.",
+  kind: "military",
+  warId: "war-russia-ukraine-2022",
+  combatants: ["British Empire", "Russia"],
+};
+const warWorld = {
+  units: [{ id: "u-be", name: "Black Sea Vanguard Task Group", type: "naval", ownerCode: "British Empire", strength: 90, lng: 30.9, lat: 45.5 }],
+  wars: [{ id: "war-russia-ukraine-2022", status: "active", sideA: ["Russia"], sideB: ["Ukraine"] }],
+};
+
+test("both sides of the event's war count as its combatants", () => {
+  const input = buildUnitDirectorInput({ events: [warEvent], world: warWorld });
+  assert.deepEqual(input.candidates[0].combatantsWithoutUnits, ["Russia", "Ukraine"]);
+  const ended = buildUnitDirectorInput({ events: [warEvent], world: { ...warWorld, wars: [{ ...warWorld.wars[0], status: "ended" }] } });
+  assert.deepEqual(ended.candidates[0].combatantsWithoutUnits, ["Russia"]);
+});
+
+test("a warring power the director left without a spawn is raised by the engine, once", () => {
+  const input = buildUnitDirectorInput({ events: [warEvent, { ...warEvent, title: "Second clash" }], world: warWorld });
+  const answer = { eventOrders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Russian 58th Army", type: "infantry", ownerCode: "Russia" }, at: "Kherson, Ukraine" }] }] };
+  assert.deepEqual(missingCombatantSpawns(input, answer).map(({ eventIndex, power }) => [eventIndex, power]), [[0, "Ukraine"]]);
+  assert.deepEqual(missingCombatantSpawns(input, { eventOrders: [] }).map(({ power }) => power), ["Russia", "Ukraine"]);
+});
+
+test("the raised formation goes where the event puts the power's forces", () => {
+  const places = [
+    { place: "Kherson", regionId: "318", controller: "Russia", lawfulOwner: "Ukraine" },
+    { place: "Mykolaiv", regionId: "300", controller: "Ukraine" },
+    { place: "Atlantis", region: "not on this map" },
+  ];
+  assert.equal(pickCombatantPlace("Russia", places), "Kherson");
+  assert.equal(pickCombatantPlace("Ukraine", places), "Mykolaiv");
+  assert.equal(pickCombatantPlace("Moldova", places), "Kherson", "else the first place on the map");
+  assert.equal(pickCombatantPlace("Russia", [{ place: "Atlantis", region: "not on this map" }]), null);
+  const spawn = nativeCombatantSpawn("Ukraine", "Mykolaiv");
+  assert.equal(spawn.op, "spawn");
+  assert.equal(spawn.at, "Mykolaiv");
+  assert.equal(spawn.unit.ownerCode, "Ukraine");
+});
+
+test("the engine's own spawn passes the director's rules: a power with no unit may be raised", () => {
+  const events = [{ ...warEvent, impacts: { unitOps: [] } }];
+  const spawn = { ...nativeCombatantSpawn("Ukraine", "Mykolaiv"), unit: { ...nativeCombatantSpawn("Ukraine", "Mykolaiv").unit, lng: 32, lat: 47 } };
+  const { acceptedByEvent } = sanitizeDirectorOrders({ events, orders: [{ eventIndex: 0, unitOps: [spawn] }], units: warWorld.units, game: {} });
+  assert.equal(acceptedByEvent.get(0)?.length, 1);
 });
