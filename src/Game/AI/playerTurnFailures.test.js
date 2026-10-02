@@ -10,9 +10,11 @@ import {
     describePlayerTurnFailures,
     dropRetriedReceiptNotes,
     hasPlayerTurnFailures,
+    keepRetryBoundRecords,
     restrictToRetriedOrders,
 } from "./playerTurnFailures.js";
 import { normalizeFiledEvents, toFiledEvent } from "../../runtime/filedEvents.js";
+import { bindPuppetUpdatesToEvents } from "./nativeDiplomaticDirector.js";
 import { settleOrders } from "./playerFocus.js";
 
 // Seen in a player's Game (2026-09-30): the time skip answered three queued
@@ -189,4 +191,30 @@ test("a targeted retry is a segment like any other, that never falls back over t
     assert.match(retry, /onCancel: \(\) => \{ restoreHeldState\(state, before\); \}/);
     assert.match(retry, /return finishTimelineJump\(\{ context, signal, state \}\)/, "then the whole turn finishes the normal way");
     assert.match(retry, /state\.checks = createTurnChecks\(\)/, "with every check asked afresh");
+});
+
+// Checked on Mark's request after the puppet-loyalty fix reached beta
+// (2026-10-02): a skip's puppet changes now reach the world, so a retry's must
+// not apply the first answer's twice. A puppet "suppress" adds to loyalty.
+test("a targeted retry keeps only the puppet and ledger changes of its own events", () => {
+    const events = [{ id: "retry-1-segment-1-event-1", title: "Russia Crushes Protests in Minsk" }];
+    const puppets = bindPuppetUpdatesToEvents([
+        "suppress~Russia~Belarus~~~~1~the retry's own event",
+        "suppress~Russia~Belarus~~~~~restated from the first answer, bound to nothing",
+        "loyalty~Russia~Belarus~~40~~~a value, but still not the retry's to set",
+    ].join("\n"), events);
+    assert.equal(puppets.length, 3);
+    const kept = keepRetryBoundRecords(puppets, events.map((event) => event.id));
+    assert.deepEqual(kept.map((record) => [record.op, record.eventIds]), [["suppress", ["retry-1-segment-1-event-1"]]]);
+
+    // A war or relation record bound to a first-answer event is not the retry's either.
+    assert.deepEqual(keepRetryBoundRecords([{ id: "w", eventIds: ["segment-1-event-4"] }, { id: "r", eventIds: ["retry-1-segment-1-event-1"] }], ["retry-1-segment-1-event-1"]).map((record) => record.id), ["r"]);
+    assert.deepEqual(keepRetryBoundRecords([{ id: "w" }], []), []);
+    assert.equal(keepRetryBoundRecords("raw~line", ["x"]), "raw~line");
+});
+
+test("the retry's segment is filtered to its own puppet, war, relation and agreement records", () => {
+    const segments = section("const runJumpSegments = async", "\nexport const ");
+    assert.match(segments, /for \(const key of \["warUpdates", "relationUpdates", "agreementUpdates", "puppetUpdates"\]\) \{\s+payload\[key\] = keepRetryBoundRecords\(payload\[key\], retryEventIds\);/);
+    assert.ok(segments.indexOf("keepRetryBoundRecords(payload[key]") < segments.indexOf("state.segmentPayloads.push(payload)"), "before the segment is added to the turn");
 });

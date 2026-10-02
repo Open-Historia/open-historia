@@ -120,6 +120,24 @@ export const restrictToRetriedOrders = (events, orderIds) => {
     });
 };
 
+// A targeted retry adds events to a period already written, and its answer's
+// ledger records (war, relation, agreement, puppet) are kept only
+// when they belong to those events. A record bound to none of them restates the
+// period, and some ops are not safe twice: a puppet "suppress" raises loyalty by
+// a step each time it is applied. \`eventIds\` are the retry's own events. A list
+// the answer did not decode (a raw string) is left alone, and an empty one stays.
+export const keepRetryBoundRecords = (records, eventIds) => {
+    if (!Array.isArray(records)) return records;
+    const ids = asArray(eventIds).map(asText).filter(Boolean);
+    if (!ids.length) return [];
+    return records.filter((record) => {
+        const bound = asArray(record?.eventIds).map(asText);
+        if (bound.length) return bound.some((id) => ids.includes(id));
+        const serialized = JSON.stringify(record ?? {});
+        return ids.some((id) => serialized.includes(id));
+    });
+};
+
 // The receipt the next skip reads (runtime/applicationReceipt.js) said each
 // failed event "did not reach the timeline". Once it has been retried that is
 // no longer the news: a retried event that lands must not be written again next

@@ -159,7 +159,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
-import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, restrictToRetriedOrders } from "./playerTurnFailures.js";
+import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -14060,6 +14060,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         payload.summary = "";
         payload.stopDate = context.amend.stopDate;
         payload.clearActions = context.amend.clearActions;
+        // And its ledger records only for its own events: the first answer's
+        // war, relation, agreement and puppet changes stand, and are
+        // not applied a second time (a repeated puppet "suppress" would raise
+        // loyalty twice).
+        const retryEventIds = normalizeArray(payload.events).map((event) => normalizeString(event?.id));
+        for (const key of ["warUpdates", "relationUpdates", "agreementUpdates", "puppetUpdates"]) {
+          payload[key] = keepRetryBoundRecords(payload[key], retryEventIds);
+        }
       }
       state.segmentPayloads.push(payload);
       // What this segment asked the model to move, for the skip's one motion
