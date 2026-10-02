@@ -6,9 +6,9 @@
 // size, its SHA-256 and its release link. Upload the file to the release with
 // exactly that tag and file name, then commit basemaps.json.
 //
-//   node scripts/official-basemap-entry.mjs <file.pmtiles> --id westeros-relief --version 9
-//     [--list ../Open-Historia-basemaps/basemaps.json] [--tag westeros-relief-v9]
-//     [--name "Westeros & Essos relief"] [--author "…"] [--license "…"]
+//   node scripts/official-basemap-entry.mjs <file.pmtiles> --id got-world --version 9
+//     [--list ../Open-Historia-basemaps/basemaps.json] [--tag got-world-v9]
+//     [--name "Game of Thrones world map"] [--author "…"] [--license "…"]
 //     [--notes "What changed"] [--preview <file name in the same release>]
 //
 // Without --list it only prints the entry. A version already in the list is
@@ -36,7 +36,7 @@ if (!file) fail("Usage: node scripts/official-basemap-entry.mjs <file.pmtiles> -
 
 const id = option("id");
 const version = Number(option("version"));
-if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(id || ""))) fail("--id must be lower-case letters, digits and dashes, like westeros-relief.");
+if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(id || ""))) fail("--id must be lower-case letters, digits and dashes, like got-world.");
 if (!Number.isInteger(version) || version < 1) fail("--version must be a whole number from 1.");
 
 const { size } = fs.statSync(file);

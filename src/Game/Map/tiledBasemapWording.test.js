@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { tiledBasemapWording } from "./tiledBasemapWording.js";
 
-const MAP = { id: "westeros-relief", name: "Westeros & Essos relief", version: 9, bytes: 463 * 1024 * 1024 };
+const MAP = { id: "got-world", name: "Game of Thrones world map", version: 9, bytes: 463 * 1024 * 1024 };
 
 test("at install, the player chooses: download now, or play on the basic map", () => {
   const words = tiledBasemapWording(MAP, { atInstall: true });
@@ -22,13 +22,13 @@ test("at install, the player chooses: download now, or play on the basic map", (
 test("over the map, a missing map is offered with its size", () => {
   const words = tiledBasemapWording(MAP);
   assert.equal(words.title, "You're seeing the basic map");
-  assert.match(words.body, /"Westeros & Essos relief" \(463 MB\)/);
+  assert.match(words.body, /"Game of Thrones world map" \(463 MB\)/);
   assert.equal(words.accept, "Download 463 MB");
 });
 
 test("an update says what the player has, that it replaces it, and whether the scenario was made on it", () => {
   const optional = tiledBasemapWording({ ...MAP, version: 10, have: 9, needed: false });
-  assert.equal(optional.title, 'A newer version of "Westeros & Essos relief" is available');
+  assert.equal(optional.title, 'A newer version of "Game of Thrones world map" is available');
   assert.match(optional.body, /Version 10 \(463 MB\) replaces your version 9/);
   assert.equal(optional.accept, "Update 463 MB");
   const needed = tiledBasemapWording({ ...MAP, version: 10, have: 9, needed: true });

@@ -15,7 +15,7 @@ import {
 } from "./officialBasemaps.js";
 
 const HASH = (c) => c.repeat(64);
-const release = (file) => `${OFFICIAL_RELEASES_PREFIX}westeros-relief-v9/${file}`;
+const release = (file) => `${OFFICIAL_RELEASES_PREFIX}got-world-v9/${file}`;
 const good = (version, extra = {}) => ({ version, url: release(`terrain-v${version}.pmtiles`), bytes: 1000 + version, sha256: HASH(String(version % 10)), ...extra });
 
 test("only the official repository's release downloads count", () => {
@@ -35,8 +35,8 @@ test("each map's versions are checked, sorted, and one per number", () => {
   const { basemaps } = parseOfficialCatalog({
     format: 1,
     basemaps: [{
-      id: "westeros-relief",
-      name: "Westeros & Essos relief",
+      id: "got-world",
+      name: "Game of Thrones world map",
       author: "Mark",
       license: "CC BY-NC-SA 3.0",
       versions: [
@@ -52,14 +52,14 @@ test("each map's versions are checked, sorted, and one per number", () => {
   });
   assert.equal(basemaps.length, 1);
   const [entry] = basemaps;
-  assert.equal(entry.name, "Westeros & Essos relief");
+  assert.equal(entry.name, "Game of Thrones world map");
   assert.equal(entry.license, "CC BY-NC-SA 3.0");
   assert.deepEqual(entry.versions.map((v) => v.version), [9, 10]);
   assert.equal(entry.versions[0].bytes, 1009, "the first listing of a number wins");
   assert.equal(entry.versions[1].notes, "Sharper coasts");
   assert.equal(entry.versions[1].preview, release("preview.png"));
   assert.equal(latestOfficialVersion(entry).version, 10);
-  assert.equal(findOfficialEntry({ basemaps }, "westeros-relief"), entry);
+  assert.equal(findOfficialEntry({ basemaps }, "got-world"), entry);
   assert.equal(findOfficialEntry({ basemaps }, "nowhere"), null);
 });
 

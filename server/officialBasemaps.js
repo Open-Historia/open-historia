@@ -8,7 +8,7 @@
 // repository, Open-Historia/Open-Historia-basemaps, and list it in that
 // repository's `basemaps.json` (docs/adr/0006-official-basemap-list.md):
 //
-//   { "format": 1, "basemaps": [ { "id": "westeros-relief", "name": "…",
+//   { "format": 1, "basemaps": [ { "id": "got-world", "name": "…",
 //       "author": "…", "license": "…",
 //       "versions": [ { "version": 9, "url": "https://github.com/Open-Historia/
 //         Open-Historia-basemaps/releases/download/<tag>/<file>.pmtiles",

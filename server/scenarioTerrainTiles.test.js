@@ -186,7 +186,7 @@ test("a scenario naming a detailed map must carry a basic map: one without is re
   const result = runStore(root, `
     const bundle = store.exportScenarioBundle("painted");
     bundle.scenario = { ...bundle.scenario, id: "no-basic", name: "No Basic Map" };
-    bundle.data.world = { ...bundle.data.world, background: { kind: "vector", tiled: { id: "westeros-relief", version: 9 } } };
+    bundle.data.world = { ...bundle.data.world, background: { kind: "vector", tiled: { id: "got-world", version: 9 } } };
     const attempt = (assets) => {
       try {
         store.importScenarioBundle({ ...bundle, assets: { ...bundle.assets, ...assets } }, { setSelected: false });

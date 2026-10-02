@@ -18,74 +18,74 @@ import {
 const HASH = "a".repeat(64);
 // A scenario names an official map by id and the lowest version it needs
 // (docs/adr/0006), or the author's own map by checksum.
-const NAMED = { kind: "vector", tiled: { id: "westeros-relief", version: 9, name: "Westeros relief" } };
+const NAMED = { kind: "vector", tiled: { id: "got-world", version: 9, name: "Game of Thrones world map" } };
 const BY_HASH = { kind: "vector", tiled: { hash: HASH, name: "My relief" } };
-const INSTALLED = { id: "westeros-relief-v9", kind: "tiled", contentHash: HASH, official: { id: "westeros-relief", version: 9 }, minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4] };
+const INSTALLED = { id: "got-world-v9", kind: "tiled", contentHash: HASH, official: { id: "got-world", version: 9 }, minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4] };
 const v = (version, bytes = 400_000_000 + version) => ({ version, bytes, sha256: String(version % 10).repeat(64) });
-const OFFICIAL = { id: "westeros-relief", name: "Westeros & Essos relief", versions: [v(8), v(9), v(10)] };
+const OFFICIAL = { id: "got-world", name: "Game of Thrones world map", versions: [v(8), v(9), v(10)] };
 
 test("only a vector background can name a Tiled Basemap: by official id and version, or by checksum", () => {
   assert.equal(scenarioTiledBasemap(null), null);
   assert.equal(scenarioTiledBasemap({ kind: "vector" }), null);
-  assert.equal(scenarioTiledBasemap({ kind: "image", tiled: { id: "westeros-relief" } }), null, "an image background already replaces the map");
+  assert.equal(scenarioTiledBasemap({ kind: "image", tiled: { id: "got-world" } }), null, "an image background already replaces the map");
   assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { hash: "not-a-hash" } }), null);
   assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "Not An Id!" } }), null);
   assert.deepEqual(scenarioTiledBasemap(NAMED), NAMED.tiled);
   assert.deepEqual(scenarioTiledBasemap(BY_HASH), BY_HASH.tiled);
-  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief" } }).version, 1, "no version: any will do");
+  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "got-world" } }).version, 1, "no version: any will do");
   assert.deepEqual(
-    scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief", version: 9, hash: HASH, hubUrl: "https://x" } }),
-    { id: "westeros-relief", version: 9 },
+    scenarioTiledBasemap({ kind: "vector", tiled: { id: "got-world", version: 9, hash: HASH, hubUrl: "https://x" } }),
+    { id: "got-world", version: 9 },
     "an official id wins over a checksum, and a download link is never taken from a scenario",
   );
 });
 
 test("an installed Tiled Basemap is drawn with the zooms and bounds of its own archive", () => {
-  const { tiles: terrain, missing, update } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/api/basemaps/westeros-relief-v9/archive" });
+  const { tiles: terrain, missing, update } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/api/basemaps/got-world-v9/archive" });
   assert.equal(missing, null);
   assert.equal(update, null, "no official list read: nothing to offer");
-  assert.deepEqual(terrain, { minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/api/basemaps/westeros-relief-v9/archive" });
+  assert.deepEqual(terrain, { minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/api/basemaps/got-world-v9/archive" });
   const style = buildScenarioTerrainStyle(terrain, terrain.url);
   assert.equal(style.sources["custom-bg-terrain"].maxzoom, 14);
-  assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/westeros-relief-v9/archive/{z}/{x}/{y}"]);
+  assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/got-world-v9/archive/{z}/{x}/{y}"]);
 });
 
 test("a map the player does not have leaves the basic map, and offers the newest official version with its size", () => {
   const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: OFFICIAL });
   assert.equal(terrain, null, "no relief source: the vector background alone");
-  assert.deepEqual(missing, { id: "westeros-relief", name: "Westeros & Essos relief", version: 10, bytes: 400_000_010 }, "the newest, so later scenarios need nothing more");
+  assert.deepEqual(missing, { id: "got-world", name: "Game of Thrones world map", version: 10, bytes: 400_000_010 }, "the newest, so later scenarios need nothing more");
 });
 
 test("a map the official list does not have (or could not be read) is unavailable; one named by checksum alone cannot be downloaded", () => {
   const offline = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: null });
-  assert.deepEqual(offline.missing, { id: "westeros-relief", name: "Westeros relief", unavailable: true });
-  const tooOld = tiledBasemapOffer({ named: { id: "westeros-relief", version: 11 }, installed: null, official: OFFICIAL });
+  assert.deepEqual(offline.missing, { id: "got-world", name: "Game of Thrones world map", unavailable: true });
+  const tooOld = tiledBasemapOffer({ named: { id: "got-world", version: 11 }, installed: null, official: OFFICIAL });
   assert.equal(tooOld.missing.unavailable, true, "the list has no version as new as the scenario needs");
   const own = resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: null, archiveUrl: "", official: null });
   assert.deepEqual(own.missing, { hash: HASH, name: "My relief", unofficial: true });
 });
 
 test("a newer version is offered, never forced: the player's version is drawn meanwhile", () => {
-  const made8 = { kind: "vector", tiled: { id: "westeros-relief", version: 8 } };
+  const made8 = { kind: "vector", tiled: { id: "got-world", version: 8 } };
   const optional = resolveTiledBasemap({ descriptor: made8, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a", official: OFFICIAL });
   assert.ok(optional.tiles, "drawn on the version the player has");
   assert.equal(optional.missing, null, "never a second download of the same map");
-  assert.deepEqual(optional.update, { id: "westeros-relief", name: "Westeros & Essos relief", version: 10, bytes: 400_000_010, have: 9, needed: false });
+  assert.deepEqual(optional.update, { id: "got-world", name: "Game of Thrones world map", version: 10, bytes: 400_000_010, have: 9, needed: false });
 
-  const made10 = { kind: "vector", tiled: { id: "westeros-relief", version: 10 } };
+  const made10 = { kind: "vector", tiled: { id: "got-world", version: 10 } };
   const needed = resolveTiledBasemap({ descriptor: made10, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a", official: OFFICIAL });
   assert.ok(needed.tiles, "a scenario made on a newer version still draws on the older one");
   assert.equal(needed.missing, null);
   assert.equal(needed.update.needed, true);
 
-  const current = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: { ...INSTALLED, official: { id: "westeros-relief", version: 10 } }, archiveUrl: "http://x/a", official: OFFICIAL });
+  const current = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: { ...INSTALLED, official: { id: "got-world", version: 10 } }, archiveUrl: "http://x/a", official: OFFICIAL });
   assert.equal(current.update, null, "the newest already");
 });
 
 test("a scenario naming a file by checksum is drawn on that file, or on the newer version that replaced it", () => {
   const exact = resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a" });
   assert.ok(exact.tiles);
-  const replaced = { ...INSTALLED, contentHash: "b".repeat(64), supersedes: [HASH], official: { id: "westeros-relief", version: 10 } };
+  const replaced = { ...INSTALLED, contentHash: "b".repeat(64), supersedes: [HASH], official: { id: "got-world", version: 10 } };
   assert.ok(resolveTiledBasemap({ descriptor: BY_HASH, setting: "", basemap: replaced, archiveUrl: "http://x/a" }).tiles);
 });
 

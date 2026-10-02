@@ -11,8 +11,8 @@ import { DETAILED_MAP_NEEDS_BASIC_MAP, buildBackgroundForGame } from "./exportPr
 const DRAWN = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [0, 0] } }] } };
 
 test("an official map is named by id and version over the drawing on screen", () => {
-  const { background, backgroundData } = buildBackgroundForGame(DRAWN, { id: "westeros-relief", version: 9, name: "Westeros", fillOpacity: [[2, 0.4], [10, 0.2]] });
-  assert.deepEqual(background, { kind: "vector", tiled: { id: "westeros-relief", version: 9, name: "Westeros" }, fillOpacity: [[2, 0.4], [10, 0.2]] });
+  const { background, backgroundData } = buildBackgroundForGame(DRAWN, { id: "got-world", version: 9, name: "Westeros", fillOpacity: [[2, 0.4], [10, 0.2]] });
+  assert.deepEqual(background, { kind: "vector", tiled: { id: "got-world", version: 9, name: "Westeros" }, fillOpacity: [[2, 0.4], [10, 0.2]] });
   assert.deepEqual(backgroundData, { geojson: DRAWN.geojson });
 });
 
