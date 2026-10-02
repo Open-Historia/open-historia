@@ -349,13 +349,20 @@ const selectUnitDirectorCandidates = (events) => normalizeArray(events)
 // sides of the war it is bound to: the events of that Game named only the
 // player and Russia, so Ukraine was never counted. Owners compare by name,
 // ignoring case.
+// The war's leading powers (the first of each side) come first, then the
+// event's own combatants, then the rest of each side: when only a few can be
+// given a counter, the principals of the war are the ones that should be.
 const warSidesOf = (event, wars) => {
   const war = normalizeArray(wars).find((entry) => normalizeString(entry?.id) && normalizeString(entry?.id) === normalizeString(event?.warId));
-  return war && normalizeString(war.status).toLowerCase() !== "ended" ? [...normalizeArray(war.sideA), ...normalizeArray(war.sideB)] : [];
+  if (!war || normalizeString(war.status).toLowerCase() === "ended") return { principals: [], members: [] };
+  const sideA = normalizeArray(war.sideA);
+  const sideB = normalizeArray(war.sideB);
+  return { principals: [sideA[0], sideB[0]].filter(Boolean), members: [...sideA.slice(1), ...sideB.slice(1)] };
 };
 const combatantsWithoutUnits = (event, units, wars = []) => {
   const owners = new Set(units.map((unit) => normalizeString(unit?.ownerCode).toLowerCase()).filter(Boolean));
-  const names = [...normalizeArray(event?.combatants), ...warSidesOf(event, wars)].map(normalizeString).filter(Boolean);
+  const sides = warSidesOf(event, wars);
+  const names = [...sides.principals, ...normalizeArray(event?.combatants), ...sides.members].map(normalizeString).filter(Boolean);
   const seen = new Set();
   return names.filter((name) => {
     const key = name.toLowerCase();
@@ -370,9 +377,13 @@ const combatantsWithoutUnits = (event, units, wars = []) => {
 // "Russia has no unit" and moved the player's Falklands garrison to Kherson
 // instead. So the engine makes sure of it. For each power the director left
 // without a spawn, one formation is raised where the events naming it as a
-// combatant put the fighting: of those events, in order, the first that names a
-// place on the map (the place the power holds, else the first named). One per
-// power per skip. `events` lists them, so the caller can try each in turn.
+// combatant put the fighting: a place in them the power holds, else the part of
+// its own land nearest the first place they name (gameplay.js
+// raiseMissingCombatants). One per power per skip, and at most
+// MAX_RAISED_COMBATANTS a skip, the wars' leading powers first, so a war is shown
+// without filling the board with a counter for every ally. `events` lists the
+// events naming each, so the caller can try each in turn.
+export const MAX_RAISED_COMBATANTS = 2;
 export const missingCombatantSpawns = (input, payload) => {
   const spawned = new Set(normalizeArray(payload?.eventOrders)
     .flatMap((entry) => normalizeArray(entry?.unitOps))
@@ -388,19 +399,39 @@ export const missingCombatantSpawns = (input, payload) => {
       byPower.get(key).events.push({ eventIndex: candidate.eventIndex, text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
     }
   }
-  return [...byPower.values()];
+  return [...byPower.values()].slice(0, MAX_RAISED_COMBATANTS);
 };
 
 // Of the places an event names (lookupTools.js placesNamedIn), where the power's
-// formation goes: one it holds, else one it is the lawful owner of, else the
-// first on the map. null when the event names nowhere on the map.
+// formation goes: one it holds. Never one another power holds — seen in a live
+// check (2026-10-02), "the first place named" put a Russian army in Kyiv, which
+// reads as Russia having taken it. When it holds none of them, the first place on
+// the map is returned as `anchorRegionId`, for the caller to find the power's
+// own land nearest it. null when the event names nowhere on the map.
 export const pickCombatantPlace = (power, places) => {
   const key = normalizeString(power).toLowerCase();
   const onMap = normalizeArray(places).filter((place) => normalizeString(place?.regionId));
-  const held = onMap.find((place) => normalizeString(place?.controller).toLowerCase() === key)
-    ?? onMap.find((place) => normalizeString(place?.lawfulOwner).toLowerCase() === key)
-    ?? onMap[0];
-  return held ? normalizeString(held.place) : null;
+  const held = onMap.find((place) => normalizeString(place?.controller).toLowerCase() === key);
+  if (held) return { at: normalizeString(held.place) };
+  return onMap.length ? { anchorRegionId: normalizeString(onMap[0].regionId) } : null;
+};
+
+// The power's own region nearest a point: where its side of a front is, when the
+// events name only the other side's places. Rows are the lookup context's
+// (owner after overrides, centroid [lng, lat]). null when it holds no land.
+export const nearestOwnRegion = ({ power, anchor, rows }) => {
+  const key = normalizeString(power).toLowerCase();
+  if (!Array.isArray(anchor) || !key) return null;
+  let best = null;
+  let bestDistance = Infinity;
+  for (const row of normalizeArray(rows)) {
+    if (normalizeString(row?.owner).toLowerCase() !== key || !Array.isArray(row?.centroid)) continue;
+    const dLng = (row.centroid[0] - anchor[0]) * Math.cos((anchor[1] * Math.PI) / 180);
+    const dLat = row.centroid[1] - anchor[1];
+    const distance = dLng * dLng + dLat * dLat;
+    if (distance < bestDistance) { bestDistance = distance; best = row; }
+  }
+  return best ? normalizeString(best.name) : null;
 };
 
 export const nativeCombatantSpawn = (power, at) => ({

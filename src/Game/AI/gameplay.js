@@ -19,7 +19,7 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, missingCombatantSpawns, nativeCombatantSpawn, pickCombatantPlace } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
@@ -14277,14 +14277,23 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
   if (!answer) return;
   const missing = missingCombatantSpawns(input, answer.payload);
   if (!missing.length) return;
-  const readPlaces = placeReaderFor(bundle);
+  const context = await lazyLookupContext(bundle)();
   const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
   payload.eventOrders = normalizeArray(payload.eventOrders);
   for (const { power, events } of missing) {
     let chosen = null;
+    let anchor = null;
     for (const { eventIndex, text } of events) {
-      const at = pickCombatantPlace(power, await readPlaces(text).catch(() => []));
-      if (at) { chosen = { eventIndex, at }; break; }
+      const pick = pickCombatantPlace(power, placesNamedIn(context, text));
+      if (pick?.at) { chosen = { eventIndex, at: pick.at }; break; }
+      if (pick?.anchorRegionId && !anchor) anchor = { eventIndex, regionId: pick.anchorRegionId };
+    }
+    // The events name only places another power holds: the power's own land
+    // nearest the first of them, its side of the front.
+    if (!chosen && anchor) {
+      const centre = normalizeArray(context?.rows).find((row) => row.id === anchor.regionId)?.centroid;
+      const own = nearestOwnRegion({ power, anchor: centre, rows: context?.rows });
+      if (own) chosen = { eventIndex: anchor.eventIndex, at: own };
     }
     // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
     // where the map says Odessa, and "the Black Sea"): the power's own land.

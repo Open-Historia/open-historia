@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildUnitDirectorInput, eventNeedsNativeUnitDirector, missingCombatantSpawns, nativeCombatantSpawn, orderRaisesForces, pickCombatantPlace, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, orderRaisesForces, pickCombatantPlace, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -174,9 +174,9 @@ test("the raised formation goes where the event puts the power's forces", () => 
     { place: "Mykolaiv", regionId: "300", controller: "Ukraine" },
     { place: "Atlantis", region: "not on this map" },
   ];
-  assert.equal(pickCombatantPlace("Russia", places), "Kherson");
-  assert.equal(pickCombatantPlace("Ukraine", places), "Mykolaiv");
-  assert.equal(pickCombatantPlace("Moldova", places), "Kherson", "else the first place on the map");
+  assert.deepEqual(pickCombatantPlace("Russia", places), { at: "Kherson" });
+  assert.deepEqual(pickCombatantPlace("Ukraine", places), { at: "Mykolaiv" }, "a place the power holds, never one it only claims");
+  assert.deepEqual(pickCombatantPlace("Moldova", places), { anchorRegionId: "318" }, "holding none: where the fighting is, to find its own land near");
   assert.equal(pickCombatantPlace("Russia", [{ place: "Atlantis", region: "not on this map" }]), null);
   const spawn = nativeCombatantSpawn("Ukraine", "Mykolaiv");
   assert.equal(spawn.op, "spawn");
@@ -189,4 +189,30 @@ test("the engine's own spawn passes the director's rules: a power with no unit m
   const spawn = { ...nativeCombatantSpawn("Ukraine", "Mykolaiv"), unit: { ...nativeCombatantSpawn("Ukraine", "Mykolaiv").unit, lng: 32, lat: 47 } };
   const { acceptedByEvent } = sanitizeDirectorOrders({ events, orders: [{ eventIndex: 0, unitOps: [spawn] }], units: warWorld.units, game: {} });
   assert.equal(acceptedByEvent.get(0)?.length, 1);
+});
+
+// Seen in a live check (2026-10-02): with no place it held named, Russia's
+// raised army was put in Kyiv, which reads as Russia having taken it.
+test("a power that holds none of the named places is raised on its own side, nearest the fighting", () => {
+  const rows = [
+    { id: "kyiv", name: "Kyiv", owner: "Ukraine", centroid: [30.5, 50.45] },
+    { id: "moscow", name: "Moscow", owner: "Russia", centroid: [37.6, 55.75] },
+    { id: "belgorod", name: "Belgorod", owner: "Russia", centroid: [36.6, 50.6] },
+    { id: "bryansk", name: "Bryansk", owner: "Russia", centroid: [34.4, 53.25] },
+  ];
+  assert.equal(nearestOwnRegion({ power: "Russia", anchor: [30.5, 50.45], rows }), "Bryansk", "about 400 km from Kyiv, against 430 for Belgorod and 750 for Moscow");
+  assert.equal(nearestOwnRegion({ power: "Moldova", anchor: [30.5, 50.45], rows }), null);
+  assert.equal(nearestOwnRegion({ power: "Russia", anchor: undefined, rows }), null);
+});
+
+test("the engine raises at most a couple of formations a skip, the wars' leading powers first", () => {
+  const world = {
+    units: [],
+    wars: [{ id: "war-big", status: "active", sideA: ["Russia", "Belarus", "Chechnya"], sideB: ["Ukraine", "Moldova"] }],
+  };
+  const input = buildUnitDirectorInput({ events: [{ ...warEvent, warId: "war-big", combatants: ["Belarus", "Moldova"] }], world });
+  assert.deepEqual(input.candidates[0].combatantsWithoutUnits.slice(0, 2), ["Russia", "Ukraine"], "principals first");
+  const raised = missingCombatantSpawns(input, { eventOrders: [] }).map(({ power }) => power);
+  assert.equal(raised.length, MAX_RAISED_COMBATANTS);
+  assert.deepEqual(raised, ["Russia", "Ukraine"]);
 });
