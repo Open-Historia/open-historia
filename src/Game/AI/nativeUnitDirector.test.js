@@ -216,3 +216,20 @@ test("the engine raises at most a couple of formations a skip, the wars' leading
   assert.equal(raised.length, MAX_RAISED_COMBATANTS);
   assert.deepEqual(raised, ["Russia", "Ukraine"]);
 });
+
+// Seen in a live check (2026-10-02): a month of fighting in Ukraine written as
+// "world" events bound to no war and naming no combatants, so no counter came.
+test("an unbound military event is read as the active war whose powers it names", () => {
+  const unbound = {
+    title: "Ukrainian Forces Advance Along Frontlines Following Allied Strike Operations",
+    description: "Ukrainian mechanized brigades advance against Russian positions near Kherson after heavy fighting.",
+    kind: "world",
+  };
+  const world = { units: [], wars: [{ id: "war-ru-ua", status: "active", sideA: ["Russia"], sideB: ["Ukraine"] }, { id: "war-uk-sy", status: "active", sideA: ["United Kingdom"], sideB: ["Syria"] }] };
+  assert.deepEqual(buildUnitDirectorInput({ events: [unbound], world }).candidates[0].combatantsWithoutUnits, ["Russia", "Ukraine"]);
+  // Bound to a war, it is that war, whatever it names.
+  assert.deepEqual(buildUnitDirectorInput({ events: [{ ...unbound, warId: "war-uk-sy" }], world }).candidates[0].combatantsWithoutUnits, ["United Kingdom", "Syria"]);
+  // Naming no warring power, it is no war.
+  const elsewhere = { ...unbound, title: "Mechanized Brigades Advance in a Border Clash", description: "Brigades advance after heavy fighting." };
+  assert.equal(buildUnitDirectorInput({ events: [elsewhere], world }).candidates[0].combatantsWithoutUnits, undefined);
+});

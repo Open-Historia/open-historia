@@ -352,9 +352,36 @@ const selectUnitDirectorCandidates = (events) => normalizeArray(events)
 // The war's leading powers (the first of each side) come first, then the
 // event's own combatants, then the rest of each side: when only a few can be
 // given a counter, the principals of the war are the ones that should be.
+const isActiveWar = (war) => war && normalizeString(war.status).toLowerCase() !== "ended";
+// Whether an event's text names a power: its name, or its stem as an adjective
+// ("Russian forces", "Ukrainian brigades", "Syrian army"). Whole words only.
+const textNamesPower = (text, power) => {
+  const name = normalizeString(power);
+  if (name.length < 3) return false;
+  const stem = name.length > 5 ? name.slice(0, name.length - 2) : name;
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\p{L}])(${escape(name)}|${escape(stem)}\\p{L}*)`, "iu").test(text);
+};
+// The war an event is about: the one it is bound to, else — the model does not
+// always bind its combat to the war (a live check, 2026-10-02: a month of
+// fighting in Ukraine written as unbound "world" events, and no counter raised)
+// — the one active war whose two leading powers it names, else the one active
+// war whose leading power it names, when only one war fits.
+const warOfEvent = (event, wars) => {
+  const active = normalizeArray(wars).filter(isActiveWar);
+  const bound = active.find((war) => normalizeString(war?.id) && normalizeString(war?.id) === normalizeString(event?.warId));
+  if (bound) return bound;
+  if (normalizeString(event?.warId)) return null;
+  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const principals = (war) => [normalizeArray(war.sideA)[0], normalizeArray(war.sideB)[0]].filter(Boolean);
+  const both = active.filter((war) => principals(war).length === 2 && principals(war).every((power) => textNamesPower(text, power)));
+  if (both.length === 1) return both[0];
+  const either = active.filter((war) => principals(war).some((power) => textNamesPower(text, power)));
+  return either.length === 1 ? either[0] : null;
+};
 const warSidesOf = (event, wars) => {
-  const war = normalizeArray(wars).find((entry) => normalizeString(entry?.id) && normalizeString(entry?.id) === normalizeString(event?.warId));
-  if (!war || normalizeString(war.status).toLowerCase() === "ended") return { principals: [], members: [] };
+  const war = warOfEvent(event, wars);
+  if (!war) return { principals: [], members: [] };
   const sideA = normalizeArray(war.sideA);
   const sideB = normalizeArray(war.sideB);
   return { principals: [sideA[0], sideB[0]].filter(Boolean), members: [...sideA.slice(1), ...sideB.slice(1)] };
