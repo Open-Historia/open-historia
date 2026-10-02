@@ -25,6 +25,10 @@ const turn = () => journalTurn({
     ],
     relationUpdates: [{ id: "rel-1", a: "A", b: "B", eventIndexes: [3] }],
     agreementUpdates: [],
+    puppetUpdates: [
+        { op: "install", overlord: "A", puppet: "C", eventIds: ["event-ai-r0002-20140510-003"] },
+        { op: "loyalty", overlord: "D", puppet: "E", eventIds: ["event-ai-r0002-20140425-001"] },
+    ],
     storylineUpdates: [{ id: "story-1", eventIds: ["event-ai-r0002-20140425-001", "event-ai-r0002-20140518-004"] }],
     stopDate: "2014-05-21",
     summary: "A month of war.",
@@ -55,6 +59,7 @@ test("ledger records bound only to discarded events go with them; baselines and 
     assert.deepEqual(result.warUpdates.map((update) => update.op), ["start", "note"], "the ceasefire was bound to a discarded event");
     assert.deepEqual(result.relationUpdates, [], "bound by index to the fourth event");
     assert.equal(result.storylineUpdates.length, 1, "bound to a kept event as well as a discarded one");
+    assert.deepEqual(result.puppetUpdates.map((update) => update.op), ["loyalty"], "the install was bound to a discarded event");
 });
 
 test("a stop keeps at least one event and never more than the round has", () => {
