@@ -136,6 +136,12 @@ test("a named sea is open water in that sea, whatever words come with it", () =>
         ["Ionian Sea, Eastern Mediterranean", "Ionian Sea"],
         ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
         ["in the South Atlantic", "South Atlantic"],
+        // A part of a sea is that sea, but a sea named for its part stays itself.
+        ["western Black Sea", "Black Sea"],
+        ["the north-western Black Sea, off Odessa", "Black Sea"],
+        ["eastern Mediterranean", "Eastern Mediterranean"],
+        ["North Sea", "North Sea"],
+        ["the open Atlantic", "Atlantic Ocean"],
     ]) {
         const spot = placeOnEarth(phrase);
         assert.equal(spot.error, undefined, phrase);

@@ -846,11 +846,18 @@ const seaInPhrase = (phrase, readings, seas) => {
         ...readings.map((reading) => reading.name),
     ];
     for (const name of names) {
-        const sea = index.get(seaKey(asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "")));
+        const plain = asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "");
+        // The name itself first, so the North Sea and the South Atlantic stay
+        // themselves; then without a part of it, so "the western Black Sea" is
+        // the Black Sea. Seen in a player's Game (2026-10-02, a live check): a
+        // fleet sent to "western Black Sea" was dropped.
+        const sea = index.get(seaKey(plain)) ?? index.get(seaKey(plain.replace(SEA_PART, "")));
         if (sea) return sea;
     }
     return null;
 };
+// "the western …", "north-eastern …", "the open …": a part of a sea, not its name.
+const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west))?(?:ern)?|east(?:ern)?|west(?:ern)?|central|upper|lower|inner|outer|open|mid|middle)\s+(?:part of\s+|reaches of\s+)?(?:the\s+)?/i;
 
 // Where a thing put on land goes to be at sea: the nearest open water within
 // maxKm, searched in widening rings, then a little further out so it is not on
