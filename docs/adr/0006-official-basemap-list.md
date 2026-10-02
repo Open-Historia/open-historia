@@ -18,6 +18,7 @@ A player keeps **one copy per map**. A copy of any version satisfies every Scena
 
 ## Consequences
 
+- Every Scenario on a detailed map must also carry a **basic map**: its painted vector background, with something drawn on it. The Map Editor will not pick a detailed map without one, and a Scenario bundle naming a detailed map with an empty basic map is refused on import. A player who does not download the detailed map, or whose game cannot show it (an older version, the web build), always sees a map, never empty sea.
 - The game reads the list from `raw.githubusercontent.com` at most every ten minutes, and keeps the last good copy on disk (`DATA_DIR/basemaps-official.json`). Offline, the maps it last saw are still offered, marked stale. A list that cannot be read never holds the map up: the Scenario draws first, and the offer appears when the list arrives.
 - Each entry is checked as it is read (`server/officialBasemaps.js`), and a bad one is left out on its own: a link outside the official releases, a malformed checksum, a size over the 500 MB cap.
 - The install route takes `{ id, version? }`, never a link. Two installs of the same version share one download, and a version the player already has (or a newer one) downloads nothing.

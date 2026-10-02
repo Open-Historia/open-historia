@@ -34,8 +34,8 @@ test("only a vector background can name a Tiled Basemap: by official id and vers
   assert.deepEqual(scenarioTiledBasemap(BY_HASH), BY_HASH.tiled);
   assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief" } }).version, 1, "no version: any will do");
   assert.deepEqual(
-    scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief", version: 9, hash: HASH, hubUrl: "https://x", onlyMap: true } }),
-    { id: "westeros-relief", version: 9, onlyMap: true },
+    scenarioTiledBasemap({ kind: "vector", tiled: { id: "westeros-relief", version: 9, hash: HASH, hubUrl: "https://x" } }),
+    { id: "westeros-relief", version: 9 },
     "an official id wins over a checksum, and a download link is never taken from a scenario",
   );
 });
@@ -54,11 +54,6 @@ test("a map the player does not have leaves the basic map, and offers the newest
   const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: OFFICIAL });
   assert.equal(terrain, null, "no relief source: the vector background alone");
   assert.deepEqual(missing, { id: "westeros-relief", name: "Westeros & Essos relief", version: 10, bytes: 400_000_010 }, "the newest, so later scenarios need nothing more");
-});
-
-test("a map that is the scenario's only map says so in its offer", () => {
-  const onlyMap = { kind: "vector", tiled: { ...NAMED.tiled, onlyMap: true } };
-  assert.equal(tiledBasemapOffer({ named: scenarioTiledBasemap(onlyMap), installed: null, official: OFFICIAL }).missing.onlyMap, true);
 });
 
 test("a map the official list does not have (or could not be read) is unavailable; one named by checksum alone cannot be downloaded", () => {

@@ -107,15 +107,12 @@ export function useCustomBackground() {
       // The map draws now. What to offer for an official map waits on the
       // official list, which may be slow or unreachable and must never hold
       // the map up; a map named by checksum alone has nothing to look up.
-      // A basic map with nothing drawn on it makes the detailed map the only one.
-      const onlyMap = !(data.geojson.features?.length > 0);
-      const withOnly = (offer) => (offer && onlyMap ? { ...offer, onlyMap: true } : offer);
       setState({
         ...EMPTY,
         background: { kind: "vector", geojson: data.geojson, ...(drawn.tiles ? { terrain: drawn.tiles } : {}) },
         declared: true,
         basemap,
-        missingTiled: namedTiledBasemap?.id ? null : withOnly(drawn.missing),
+        missingTiled: namedTiledBasemap?.id ? null : drawn.missing,
       });
       const officialId = namedTiledBasemap?.id || meta?.official?.id;
       if (!officialId) return;
@@ -128,7 +125,7 @@ export function useCustomBackground() {
         archiveUrl: meta ? tiledBasemapArchiveUrl(meta.id) : "",
         official,
       });
-      setState((s) => ({ ...s, missingTiled: withOnly(offered.missing), tiledUpdate: offered.update }));
+      setState((s) => ({ ...s, missingTiled: offered.missing, tiledUpdate: offered.update }));
     })();
 
     return () => {

@@ -53,7 +53,7 @@ import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { buildGameSeed } from "./exportPreset.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP, buildGameSeed } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -251,7 +251,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       } catch {
         fallback = null;
       }
-      if (fallback) {
+      const current = normalizeBackground(customBg);
+      const hasBasicMap = (fallback?.features?.length > 0) || (current?.kind === "vector" && current.geojson?.features?.length > 0);
+      if (!hasBasicMap) {
+        window.alert(DETAILED_MAP_NEEDS_BASIC_MAP);
+        return;
+      }
+      if (fallback?.features?.length > 0) {
         setCustomBg(rebuildPersistedBackground({ kind: "vector", geojson: fallback }, { persisted: false }));
       }
       setCustomBgId(bm.id);

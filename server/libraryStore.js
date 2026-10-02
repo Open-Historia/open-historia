@@ -3688,6 +3688,29 @@ const exportScenarioBundle = (scenarioId) => {
   };
 };
 
+// A scenario on a detailed map must carry a basic map too: a painted vector
+// background with something drawn on it (docs/adr/0006). It is what a player
+// sees before the detailed map downloads, or if they never download it, or on a
+// game that cannot show one; without it they would see empty sea.
+const DETAILED_MAP_NEEDS_BASIC_MAP =
+  "This scenario names a detailed map but has no basic map. A scenario on a detailed map must also carry a basic (painted) map, so players who don't download the detailed one still see a map.";
+const bundleBasicMapFeatures = (asset) => {
+  if (asset?.mode !== "embedded") return 0;
+  try {
+    const payload = asset.encoding === "base64" || typeof asset.data === "string"
+      ? JSON.parse(Buffer.from(String(asset.data ?? ""), "base64").toString("utf-8"))
+      : asset.data;
+    return Array.isArray(payload?.geojson?.features) ? payload.geojson.features.length : 0;
+  } catch {
+    return 0;
+  }
+};
+const assertBundleHasBasicMap = (data, assets) => {
+  if (!data?.world?.background?.tiled) return;
+  if (data.world.background.kind === "vector" && bundleBasicMapFeatures(assets?.backgroundData) > 0) return;
+  throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP);
+};
+
 const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   ensureScenarioStore();
 
@@ -3701,6 +3724,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
+  assertBundleHasBasicMap(bundle.data, bundle.assets);
 
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
@@ -3811,6 +3835,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
+  assertBundleHasBasicMap(bundle.data, bundle.assets);
 
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};

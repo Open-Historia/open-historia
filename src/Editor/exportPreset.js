@@ -161,22 +161,20 @@ const buildCitiesForGame = (features) => ({
 // A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { id, version,
 // name, fillOpacity } for an official map, { hash, name, fillOpacity } for
 // their own) is NAMED on a vector background, never carried (docs/adr/0005,
-// 0006). The vector drawing on screen is its basic map; with none, the basic
-// map is an empty drawing (the sea colour), and the scenario says the detailed
-// map is its only one (`onlyMap`), so the download offer can say so too.
-const EMPTY_FALLBACK = { type: "FeatureCollection", features: [] };
+// 0006). The vector drawing on screen is its basic map, and a scenario on a
+// detailed map must have one: a player who does not download the detailed map,
+// or whose game cannot show it, still gets a map, never empty sea.
+export const DETAILED_MAP_NEEDS_BASIC_MAP =
+  "A scenario on a detailed map needs a basic map too, so players who don't download the detailed one still see a map. Draw or upload a painted (vector) basemap first, then choose the detailed map.";
 export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
   if (tiledBasemap?.id || tiledBasemap?.hash) {
     const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
     const drawn = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) && bg.geojson.features.length > 0;
+    if (!drawn) throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP);
     return {
-      background: {
-        kind: "vector",
-        tiled: { ...named, ...(drawn ? {} : { onlyMap: true }) },
-        ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}),
-      },
-      backgroundData: { geojson: drawn ? bg.geojson : EMPTY_FALLBACK },
+      background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
+      backgroundData: { geojson: bg.geojson },
     };
   }
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };

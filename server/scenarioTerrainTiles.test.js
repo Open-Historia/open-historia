@@ -180,3 +180,37 @@ test("an export names the official map its file is, by id and version; a map not
   assert.equal(result.after.name, "Relief World");
   assert.deepEqual(result.users, [{ id: "relief", name: "Relief World" }], "a scenario naming it by checksum still counts as using it");
 });
+
+test("a scenario naming a detailed map must carry a basic map: one without is refused, and nothing is left behind", () => {
+  const root = buildDataDir();
+  const result = runStore(root, `
+    const bundle = store.exportScenarioBundle("painted");
+    bundle.scenario = { ...bundle.scenario, id: "no-basic", name: "No Basic Map" };
+    bundle.data.world = { ...bundle.data.world, background: { kind: "vector", tiled: { id: "westeros-relief", version: 9 } } };
+    const attempt = (assets) => {
+      try {
+        store.importScenarioBundle({ ...bundle, assets: { ...bundle.assets, ...assets } }, { setSelected: false });
+        return "imported";
+      } catch (error) {
+        return error.message;
+      }
+    };
+    const empty = attempt({ backgroundData: { mode: "embedded", data: { geojson: { type: "FeatureCollection", features: [] } } } });
+    const missing = attempt({ backgroundData: null });
+    const withBasic = attempt({});
+    const update = (() => {
+      try {
+        store.updateScenarioFromBundle("painted", { ...bundle, assets: { ...bundle.assets, backgroundData: { mode: "embedded", data: { geojson: { type: "FeatureCollection", features: [] } } } } });
+        return "updated";
+      } catch (error) {
+        return error.message;
+      }
+    })();
+    ${report(`{ empty, missing, withBasic, update, dirs: fs.readdirSync(path.join(ROOT, "scenarios")).filter((d) => !d.startsWith(".")).sort() }`)}
+  `);
+  assert.match(result.empty, /has no basic map/);
+  assert.match(result.missing, /has no basic map/);
+  assert.equal(result.withBasic, "imported", "with its painted map it imports");
+  assert.match(result.update, /has no basic map/);
+  assert.deepEqual(result.dirs, ["no-basic", "painted"], "the refused imports left no scenario behind");
+});

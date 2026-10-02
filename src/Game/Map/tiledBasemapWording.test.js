@@ -19,16 +19,6 @@ test("at install, the player chooses: download now, or play on the basic map", (
   assert.equal(words.decline, "Use basic map");
 });
 
-test("a scenario whose only map is the detailed one warns that without it there is only sea", () => {
-  const atInstall = tiledBasemapWording({ ...MAP, onlyMap: true }, { atInstall: true });
-  assert.equal(atInstall.title, "This scenario needs its detailed map");
-  assert.match(atInstall.body, /\(463 MB\) is the only map this scenario has/);
-  assert.match(atInstall.body, /empty sea/);
-  assert.equal(atInstall.decline, "Not now");
-  const overMap = tiledBasemapWording({ ...MAP, onlyMap: true });
-  assert.match(overMap.body, /only map this scenario has/);
-});
-
 test("over the map, a missing map is offered with its size", () => {
   const words = tiledBasemapWording(MAP);
   assert.equal(words.title, "You're seeing the basic map");
@@ -52,5 +42,4 @@ test("a map that cannot be downloaded offers no download", () => {
     assert.equal(words.decline, "OK");
     assert.match(words.body, /basic map/);
   }
-  assert.match(tiledBasemapWording({ name: "Mine", unofficial: true, onlyMap: true }).body, /empty sea/);
 });

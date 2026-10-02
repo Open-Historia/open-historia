@@ -8,11 +8,12 @@
 // up in the official list (docs/adr/0006-official-basemap-list.md), or the
 // author's own map, not on that list, by the checksum of its bytes:
 //
-//   world.background = { kind: "vector", tiled: { id, version, name, onlyMap? }, fillOpacity? }
+//   world.background = { kind: "vector", tiled: { id, version, name }, fillOpacity? }
 //   world.background = { kind: "vector", tiled: { hash, name }, fillOpacity? }
 //
-// `onlyMap`: the author drew no painted map, so without the detailed one the
-// scenario is empty sea; the download offer says so.
+// The vector background is the scenario's basic map, and one on a detailed map
+// always has one (the editor and the import both insist), so a player without
+// the detailed map always sees a map.
 //
 // The vector background is always the base and always loads; the tiles draw on
 // top of it. So a game that predates this feature, a player who has not
@@ -68,7 +69,6 @@ export const scenarioTiledBasemap = (descriptor) => {
   return {
     ...(id ? { id, version: Number.isInteger(version) && version >= 1 ? version : 1 } : { hash }),
     ...(tiled.name ? { name: String(tiled.name).slice(0, 80) } : {}),
-    ...(tiled.onlyMap === true ? { onlyMap: true } : {}),
   };
 };
 
@@ -86,12 +86,11 @@ export const tiledBasemapOffer = ({ named, installed, official }) => {
   if (!named) return { missing: null, update: null };
   const latest = official?.versions?.[official.versions.length - 1] || null;
   const name = official?.name || named.name || installed?.name || "";
-  const extra = named.onlyMap ? { onlyMap: true } : {};
-  const offer = (version, more = {}) => ({ id: official.id, name, version: version.version, bytes: version.bytes, ...extra, ...more });
+  const offer = (version, more = {}) => ({ id: official.id, name, version: version.version, bytes: version.bytes, ...more });
   if (!installed) {
-    if (named.hash) return { missing: { hash: named.hash, name, unofficial: true, ...extra }, update: null };
+    if (named.hash) return { missing: { hash: named.hash, name, unofficial: true }, update: null };
     if (latest && latest.version >= named.version) return { missing: offer(latest), update: null };
-    return { missing: { id: named.id, name, unavailable: true, ...extra }, update: null };
+    return { missing: { id: named.id, name, unavailable: true }, update: null };
   }
   const have = Number(installed.official?.version);
   if (latest && official.id === installed.official?.id && latest.version > have) {
