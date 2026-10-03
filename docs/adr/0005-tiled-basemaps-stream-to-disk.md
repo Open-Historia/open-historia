@@ -1,7 +1,3 @@
----
-status: proposed
----
-
 # Detailed terrain is a tiled Basemap, downloaded to disk once and shared by Scenarios
 
 A map drawn in detail, such as a hand-rendered relief of a fictional world at zoom 10 everywhere and more round its places, is hundreds of thousands of raster tiles: about 460 MB for the Game of Thrones map. It becomes a third kind of Basemap, **tiled**, next to `image` and `vector`. It is a PMTiles archive plus a small vector fallback. A Scenario points to it by id, exactly as it points to a library Basemap today, and never carries it.
@@ -23,7 +19,6 @@ The archive is downloaded once, **streamed to the player's disk as it arrives**,
 - The download must be checked before it is trusted: it has to parse as a PMTiles archive, and its header's zoom range and bounds become the Basemap's. The branch's authored `terrain.maxzoom` goes, because the archive already knows its own range.
 - The rendering on this branch is reused unchanged. That covers the `ohrelief` protocol, drawing a missing tile from its nearest ancestor, and the fill-opacity ramp. What moves is only where the archive comes from: a Basemap's own store instead of a Scenario asset.
 - A Scenario that names a tiled Basemap the player does not have must still open. It shows the Basemap's vector fallback, or the stock background, and offers the download. It must never fail to load.
-- The web build has no disk server, so a tiled Basemap there lives in IndexedDB as a blob, under the browser's own quota. Whether it is offered at all on the web build is decided in the spec.
+- The web build and the Android app have no disk server to stream to, so they never download a Tiled Basemap: a Scenario naming one shows its basic map there.
 - Existing `image` and `vector` Basemaps, and every existing Scenario and hub post, are untouched.
-- A Tiled Basemap's hub post carries **no picture**. An older game reads a post's picture as an image Basemap and would install the preview as the map; with none, and a `.pmtiles` link it does not recognise, it finds nothing to install, and a scenario naming the map just shows its painted fallback there. The card picture is a plain link to a preview in the same release, which only this version reads.
-- Sharing is one step for the author and one for the player. Publishing a scenario that names a Tiled Basemap walks the author, the first time, through putting the map and a preview the game draws for it in a release, bakes the download link into the bundle (`world.background.tiled.hubUrl`), and opens the map's own Basemaps post if the hub has none. Installing that scenario from the hub offers the map's download, with its size, before moving on; a player who skips it gets the same offer over the map.
+- Where the archive is hosted, how a Scenario names it, and how maps are submitted, approved, updated, archived and deleted: [ADR 0006](0006-official-basemap-list.md). The hub carries no detailed-map posts.
