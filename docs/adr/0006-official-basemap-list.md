@@ -4,7 +4,7 @@ status: proposed
 
 # Detailed maps come from one official list, by map id and version
 
-A Tiled Basemap ([ADR 0005](0005-tiled-basemaps-stream-to-disk.md)) is downloaded only from **`Open-Historia/Open-Historia-basemaps`**. Maintainers upload each map as a release there, one release per map version, and list it in that repository's `basemaps.json`: a stable **map id**, and for each **version** its release link, its size and its **SHA-256**. A Scenario names a map by id and the **lowest version it needs** (`world.background.tiled = { id, version, name }`), never by link. The game reads the list, downloads from it only, and checks every download against the list's checksum before it is used.
+A Tiled Basemap ([ADR 0005](0005-tiled-basemaps-stream-to-disk.md)) is downloaded only from **`Open-Historia/open-historia-basemaps`**. Maintainers upload each map as a release there, one release per map version, and list it in that repository's `basemaps.json`: a stable **map id**, and for each **version** its release link, its size and its **SHA-256**. A Scenario names a map by id and the **lowest version it needs** (`world.background.tiled = { id, version, name }`), never by link. The game reads the list, downloads from it only, and checks every download against the list's checksum before it is used.
 
 A player keeps **one copy per map**. A copy of any version satisfies every Scenario on that map: a Scenario made on a newer version than the player has still draws on theirs, and the newer version is **offered, never forced**. Installing a version replaces the others, and their checksums then find the new copy.
 

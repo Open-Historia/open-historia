@@ -20,12 +20,13 @@ const good = (version, extra = {}) => ({ version, url: release(`terrain-v${versi
 
 test("only the official repository's release downloads count", () => {
   assert.equal(isOfficialReleaseUrl(release("terrain-v9.pmtiles")), true);
+  assert.equal(isOfficialReleaseUrl("https://github.com/Open-Historia/Open-Historia-Basemaps/releases/download/got-world-v1/got-world-v1.pmtiles"), true, "GitHub names are read in any case");
   for (const bad of [
     "https://github.com/someone/maps/releases/download/v1/terrain.pmtiles",
-    "https://github.com/Open-Historia/Open-Historia-basemaps-evil/releases/download/v1/x.pmtiles",
-    "http://github.com/Open-Historia/Open-Historia-basemaps/releases/download/v1/x.pmtiles",
+    "https://github.com/Open-Historia/open-historia-basemaps-evil/releases/download/v1/x.pmtiles",
+    "http://github.com/Open-Historia/open-historia-basemaps/releases/download/v1/x.pmtiles",
     `${release("x.pmtiles")}?redirect=https://example.com`,
-    "https://example.com/Open-Historia/Open-Historia-basemaps/releases/download/v1/x.pmtiles",
+    "https://example.com/Open-Historia/open-historia-basemaps/releases/download/v1/x.pmtiles",
     "not a link",
     "",
   ]) assert.equal(isOfficialReleaseUrl(bad), false, bad);

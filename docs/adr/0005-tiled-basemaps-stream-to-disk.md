@@ -8,7 +8,7 @@ A map drawn in detail, such as a hand-rendered relief of a fictional world at zo
 
 The archive is downloaded once, **streamed to the player's disk as it arrives**, and served to the map from there by byte range. It is capped at **500 MB**. It is shared on the community hub as a **GitHub release file in any repository**, linked from a basemap post, because the hub's attachment route stops at GitHub's 10 MB (images) and 25 MB (files).
 
-> Where the archive comes from, and how a Scenario names it, is superseded by [ADR 0006](0006-official-basemap-list.md): one official list in `Open-Historia/Open-Historia-basemaps`, maps named by id and lowest version, never by link. The streaming, the cap, the checks and the rendering below stand.
+> Where the archive comes from, and how a Scenario names it, is superseded by [ADR 0006](0006-official-basemap-list.md): one official list in `Open-Historia/open-historia-basemaps`, maps named by id and lowest version, never by link. The streaming, the cap, the checks and the rendering below stand.
 
 ## Considered Options
 

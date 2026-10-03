@@ -5,13 +5,13 @@
 
 // Detailed maps are hundreds of megabytes, so they never travel in a scenario or
 // a hub post. Maintainers upload each one as a release of the project's own
-// repository, Open-Historia/Open-Historia-basemaps, and list it in that
+// repository, Open-Historia/open-historia-basemaps, and list it in that
 // repository's `basemaps.json` (docs/adr/0006-official-basemap-list.md):
 //
 //   { "format": 1, "basemaps": [ { "id": "got-world", "name": "…",
 //       "author": "…", "license": "…",
 //       "versions": [ { "version": 9, "url": "https://github.com/Open-Historia/
-//         Open-Historia-basemaps/releases/download/<tag>/<file>.pmtiles",
+//         open-historia-basemaps/releases/download/<tag>/<file>.pmtiles",
 //         "bytes": 463431905, "sha256": "…", "preview": "…", "notes": "…" } ] } ] }
 //
 // A scenario names a map by its id and the lowest version it needs; the game
@@ -19,7 +19,7 @@
 // from: a version whose link is not one of that repository's releases is
 // dropped, whatever the list says.
 
-const OFFICIAL_REPO = "Open-Historia/Open-Historia-basemaps";
+const OFFICIAL_REPO = "Open-Historia/open-historia-basemaps";
 export const OFFICIAL_RELEASES_PREFIX = `https://github.com/${OFFICIAL_REPO}/releases/download/`;
 export const OFFICIAL_CATALOG_URL =
   process.env.OH_BASEMAP_CATALOG_URL || `https://raw.githubusercontent.com/${OFFICIAL_REPO}/main/basemaps.json`;
@@ -40,7 +40,8 @@ export const isOfficialReleaseUrl = (value) => {
     return false;
   }
   if (TEST_ORIGIN && url.origin === TEST_ORIGIN) return true;
-  return url.href.startsWith(OFFICIAL_RELEASES_PREFIX) && !url.search && !url.hash && !url.pathname.includes("..");
+  // GitHub reads owner and repository names in any case, so the check does too.
+  return url.href.toLowerCase().startsWith(OFFICIAL_RELEASES_PREFIX.toLowerCase()) && !url.search && !url.hash && !url.pathname.includes("..");
 };
 
 const text = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");

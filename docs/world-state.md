@@ -59,7 +59,7 @@ A Basemap stored as an archive of map tiles and read a few tiles at a time as th
 _Avoid_: Relief, terrain (as the term for the record)
 
 **Official Basemap**:
-A Tiled Basemap on the official list in `Open-Historia/Open-Historia-basemaps`, the only place one is downloaded from. It has a fixed **map id** and numbered **versions**, each one exact file with its checksum. A Scenario names the map and the lowest version it needs; a player keeps one copy, of any version, and a newer version is offered, never forced.
+A Tiled Basemap on the official list in `Open-Historia/open-historia-basemaps`, the only place one is downloaded from. It has a fixed **map id** and numbered **versions**, each one exact file with its checksum. A Scenario names the map and the lowest version it needs; a player keeps one copy, of any version, and a newer version is offered, never forced.
 _Avoid_: Catalog entry, release (as the term for the map)
 
 **Game**:

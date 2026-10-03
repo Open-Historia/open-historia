@@ -158,7 +158,7 @@ export const announceTiledBasemap = (meta) => {
 // Getting a map onto the official list: the author opens a request on the
 // official repository, prefilled with what the reviewers check the file
 // against, and the team uploads it as a release once it is approved.
-export const OFFICIAL_BASEMAPS_REPO_URL = "https://github.com/Open-Historia/Open-Historia-basemaps";
+export const OFFICIAL_BASEMAPS_REPO_URL = "https://github.com/Open-Historia/open-historia-basemaps";
 export const officialBasemapSubmissionUrl = (meta) => {
   const body = [
     "Please add this detailed map to the official list.",

@@ -1,13 +1,13 @@
 /*! Open Historia — add a detailed map to the official list © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// For maintainers of Open-Historia/Open-Historia-basemaps
+// For maintainers of Open-Historia/open-historia-basemaps
 // (docs/adr/0006-official-basemap-list.md). Checks a .pmtiles file the way the
 // game will, then writes its entry into that repository's basemaps.json: its
 // size, its SHA-256 and its release link. Upload the file to the release with
 // exactly that tag and file name, then commit basemaps.json.
 //
 //   node scripts/official-basemap-entry.mjs <file.pmtiles> --id got-world --version 9
-//     [--list ../Open-Historia-basemaps/basemaps.json] [--tag got-world-v9]
+//     [--list ../open-historia-basemaps/basemaps.json] [--tag got-world-v1]
 //     [--name "Game of Thrones world map"] [--author "…"] [--license "…"]
 //     [--notes "What changed"] [--preview <file name in the same release>]
 //
