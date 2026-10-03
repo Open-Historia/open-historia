@@ -214,6 +214,8 @@ const Main = ({
   // Which workspace section the menu opens on; null is the quick menu. Set by
   // the AI setup prompt's Configure button, cleared whenever the menu closes.
   const [settingsInitialSection, setSettingsInitialSection] = useState(null);
+  // The main menu's Settings are for every game; a game's ☰ adds its own.
+  const [settingsScope, setSettingsScope] = useState("game");
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
@@ -518,6 +520,7 @@ const Main = ({
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
       <LibraryTopBar onOpenSettings={() => {
+        setSettingsScope("app");
         setSettingsInitialSection("general");
         setIsSettingsOpen(true);
       }} />
@@ -624,6 +627,7 @@ const Main = ({
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();
+            setSettingsScope("game");
             setSettingsInitialSection("ai");
             setIsSettingsOpen(true);
           }}
@@ -633,6 +637,7 @@ const Main = ({
         topOffset={TOP_BAR_OFFSET}
         hidden={isSettingsOpen}
         onToggle={() => {
+          setSettingsScope("game");
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
         }}
@@ -650,6 +655,7 @@ const Main = ({
             date: activeGame?.currentDate || "",
           }}
           initialSection={settingsInitialSection}
+          scope={settingsScope}
           onClose={() => {
             setSettingsInitialSection(null);
             setIsSettingsOpen(false);
