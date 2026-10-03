@@ -10,8 +10,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
-import { BACKGROUND_ACCEPT } from "./customBackground.js";
-import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
+import { ESRI_BASEMAPS } from "../runtime/assets.js";
+import { BACKGROUND_ACCEPT, loadBackgroundFile, vectorLayerToGeoJSON } from "./customBackground.js";
+import { addBackgroundToLibrary, listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import {
   announceTiledBasemap,
   fetchOfficialBasemaps,
@@ -168,84 +169,117 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
   </div>
 );
 
-// The official detailed maps (docs/adr/0006): each with its size and what the
-// player has. A map they have is never downloaded again; a newer version
-// replaces it.
-const OfficialMaps = ({ list, loading, download, onRefresh, onDownload, onCancel }) => (
-  <div>
-    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
-      <div style={{ ...rowTitle, margin: 0 }}>Official detailed maps</div>
-      <div style={{ flex: 1 }} />
-      <button type="button" style={tabBtn(false)} onClick={onRefresh}>↻ Refresh</button>
-    </div>
-    <div style={dim}>
-      Large terrain maps that stay sharp up close, checked by the Open Historia team. Each downloads once, and every scenario on it shares it.
-      To submit your own, use the ⤴ button on its card in My Basemaps.
-    </div>
-    {list.error && (
-      <div style={{ ...dim, color: "#fecaca" }}>
-        {list.basemaps.length ? `Showing the last list this game saw (${list.error}).` : list.error}
+// Detailed maps (docs/adr/0006), shown in the Community tab beside the hub's
+// basemaps: each with its size and what the player has. A map they have is never
+// downloaded again; a newer version replaces it.
+const DetailedMaps = ({ list, loading, download, onDownload, onCancel }) => {
+  const available = list.basemaps.filter((entry) => entry.versions.length > 0);
+  return (
+    <div>
+      <div style={dim}>
+        Large terrain maps that stay sharp up close. Each downloads once, and every scenario on it shares it.
+        To share your own, use the ⤴ button on its card in My Basemaps.
       </div>
-    )}
-    {loading && !list.basemaps.length ? (
-      <div style={dim}>Loading the official list…</div>
-    ) : !list.basemaps.some((entry) => entry.versions.length > 0) ? (
-      !list.error && <div style={dim}>No official detailed maps yet.</div>
-    ) : (
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.8rem" }}>
-        {list.basemaps.filter((entry) => entry.versions.length > 0).map((entry) => {
-          const latest = entry.versions[entry.versions.length - 1];
-          const have = entry.installed?.version || 0;
-          const upToDate = have >= latest.version;
-          const size = formatBytes(latest.bytes);
-          const busy = download?.id === entry.id;
-          const label = busy
-            ? `Downloading…${download.percent !== null ? ` ${download.percent}%` : ""}`
-            : upToDate ? `✓ Downloaded (v${have})`
-              : have ? `⬆ Update to v${latest.version} (${size})` : `⬇ Download (${size})`;
-          return (
-            <div key={entry.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
-              <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
-                {latest.preview ? (
-                  <img
-                    src={latest.preview}
-                    alt=""
-                    loading="lazy"
-                    onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
-                ) : (
-                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
-                )}
-                <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
-                  v{latest.version} · {size}
-                </span>
+      {list.error && (
+        <div style={{ ...dim, color: "#fecaca" }}>
+          {available.length ? `Showing the last list this game saw (${list.error}).` : list.error}
+        </div>
+      )}
+      {loading && !available.length ? (
+        <div style={dim}>Loading detailed maps…</div>
+      ) : !available.length ? (
+        !list.error && <div style={dim}>No detailed maps yet.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.8rem" }}>
+          {available.map((entry) => {
+            const latest = entry.versions[entry.versions.length - 1];
+            const have = entry.installed?.version || 0;
+            const upToDate = have >= latest.version;
+            const size = formatBytes(latest.bytes);
+            const busy = download?.id === entry.id;
+            const label = busy
+              ? `Downloading…${download.percent !== null ? ` ${download.percent}%` : ""}`
+              : upToDate ? `✓ Downloaded (v${have})`
+                : have ? `⬆ Update to v${latest.version} (${size})` : `⬇ Download (${size})`;
+            return (
+              <div key={entry.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
+                <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
+                  {latest.preview ? (
+                    <img
+                      src={latest.preview}
+                      alt=""
+                      loading="lazy"
+                      onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
+                  ) : (
+                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
+                  )}
+                  <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
+                    detailed · v{latest.version} · {size}
+                  </span>
+                </div>
+                <div style={{ padding: "0.5rem 0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <div style={{ fontSize: "0.8rem", fontWeight: 700 }}>{entry.name}</div>
+                  {entry.author && <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.5)" }}>by {entry.author}</div>}
+                  {entry.license && <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{entry.license}</div>}
+                  {have > 0 && !upToDate && latest.notes && (
+                    <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.65)" }}>New in v{latest.version}: {latest.notes}</div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={upToDate || Boolean(download)}
+                    onClick={() => onDownload(entry)}
+                    style={{ ...tabBtn(false), cursor: upToDate || download ? "default" : "pointer", opacity: upToDate ? 0.7 : 1 }}
+                  >
+                    {label}
+                  </button>
+                  {busy && <button type="button" style={tabBtn(false)} onClick={onCancel}>Cancel</button>}
+                </div>
               </div>
-              <div style={{ padding: "0.5rem 0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                <div style={{ fontSize: "0.8rem", fontWeight: 700 }}>{entry.name}</div>
-                {entry.author && <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.5)" }}>by {entry.author}</div>}
-                {entry.license && <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{entry.license}</div>}
-                {have > 0 && !upToDate && latest.notes && (
-                  <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.65)" }}>New in v{latest.version}: {latest.notes}</div>
-                )}
-                <button
-                  type="button"
-                  disabled={upToDate || Boolean(download)}
-                  onClick={() => onDownload(entry)}
-                  style={{ ...tabBtn(false), cursor: upToDate || download ? "default" : "pointer", opacity: upToDate ? 0.7 : 1 }}
-                >
-                  {label}
-                </button>
-                {busy && <button type="button" style={tabBtn(false)} onClick={onCancel}>Cancel</button>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    )}
-  </div>
-);
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
+// Which of the built-in (real-world) maps players may switch to in Settings →
+// Map while playing this scenario. null = any of them (the default, and every
+// scenario made before this existed); [] = only the scenario's own map, which
+// is what a made-up world wants (runtime/assets.js allowedBasemapIds).
+const AllowedBasemaps = ({ value, onChange }) => {
+  const all = value === null || value === undefined;
+  const chosen = new Set(all ? ESRI_BASEMAPS.map((b) => b.id) : value);
+  const toggle = (id) => {
+    const next = new Set(chosen);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next.size === ESRI_BASEMAPS.length ? null : ESRI_BASEMAPS.map((b) => b.id).filter((x) => next.has(x)));
+  };
+  return (
+    <div style={{ marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" }}>
+      <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Maps players can switch to</div>
+      <div style={{ ...dim, padding: "0 0 0.5rem" }}>
+        Players can always use this scenario&apos;s own map. Tick the built-in maps they may also pick in Settings → Map. For a made-up world, untick them all.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", alignItems: "center" }}>
+        <button type="button" style={tabBtn(all)} onClick={() => onChange(null)}>All</button>
+        <button type="button" style={tabBtn(!all && chosen.size === 0)} onClick={() => onChange([])}>None (own map only)</button>
+        {ESRI_BASEMAPS.map((b) => (
+          <label key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", cursor: "pointer" }}>
+            <input type="checkbox" checked={chosen.has(b.id)} onChange={() => toggle(b.id)} />
+            {b.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// `browse`: opened from Settings, outside the Map Editor. Players can download,
+// add and remove maps, but there is no scenario to apply one to.
 const BasemapPicker = ({
   open,
   onClose,
@@ -255,8 +289,13 @@ const BasemapPicker = ({
   onSelectCustom,
   onUpload,
   currentVectorGeojson = null,
+  browse = false,
+  allowedBasemaps,
+  onAllowedBasemapsChange,
 }) => {
-  const [tab, setTab] = useState("mine"); // mine | official | community
+  const [tab, setTab] = useState("mine"); // mine | community
+  // Community shows the hub's basemaps and the detailed maps, filtered.
+  const [communityFilter, setCommunityFilter] = useState("all"); // all | painted | detailed
   const [mine, setMine] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -265,7 +304,6 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
-  const [tiledBusy, setTiledBusy] = useState(false);
   // Official detailed maps (docs/adr/0006): the list, and the one downloading.
   const [official, setOfficial] = useState({ basemaps: [] });
   const [officialLoading, setOfficialLoading] = useState(false);
@@ -309,7 +347,7 @@ const BasemapPicker = ({
   };
 
   useEffect(() => {
-    if (open && tab === "official" && !officialLoaded) loadOfficial();
+    if (open && tab === "community" && !officialLoaded) loadOfficial();
   }, [open, tab, officialLoaded]);
 
   // Stops a download in flight when the picker goes away.
@@ -317,14 +355,38 @@ const BasemapPicker = ({
 
   if (!open) return null;
 
-  const handleUpload = async (file) => {
+  // Outside the editor there is nothing to apply a picture or painted map to:
+  // it only joins the library.
+  const addToLibrary = async (file) => {
+    const bg = await loadBackgroundFile(file);
+    const normalized = bg?.kind === "image" && bg.dataUrl
+      ? { kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect }
+      : bg?.kind === "vector" && bg.layer ? { kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) } : null;
+    if (!normalized) throw new Error("That file can only be used as a reference inside the Map Editor.");
+    await addBackgroundToLibrary(normalized, file.name.replace(/\.[^.]+$/, "") || "My basemap");
+  };
+
+  // One button for every kind of map: a .pmtiles file of picture tiles is a
+  // detailed map; anything else (a picture, a painted map, a vector-tile
+  // reference) goes where it always did.
+  const handleAdd = async (file) => {
     if (!file) return;
     setBusy(true);
     try {
-      await onUpload(file);
+      if (/\.pmtiles$/i.test(file.name)) {
+        try {
+          await handleAddTiled(file);
+          return;
+        } catch (e) {
+          // Vector tiles are a drawing reference for the editor, not a detailed map.
+          if (!/vector tiles/i.test(e?.message || "") || browse || !onUpload) throw e;
+        }
+      }
+      if (browse || !onUpload) await addToLibrary(file);
+      else await onUpload(file);
       refresh();
     } catch (e) {
-      window.alert(`Could not add that basemap: ${e?.message || e}`);
+      window.alert(`Could not add that map: ${e?.message || e}`);
     } finally {
       setBusy(false);
     }
@@ -351,17 +413,9 @@ const BasemapPicker = ({
   // the game server (never read here). The vector drawing currently on screen,
   // if any, becomes its painted fallback.
   const handleAddTiled = async (file) => {
-    if (!file) return;
-    setTiledBusy(true);
-    try {
-      const meta = await uploadTiledBasemap(file, { name: file.name.replace(/\.pmtiles$/i, "") });
-      if (currentVectorGeojson) await setTiledBasemapFallback(meta.id, currentVectorGeojson).catch(() => {});
-      refresh();
-    } catch (e) {
-      window.alert(`Could not add that detailed map: ${e?.message || e}`);
-    } finally {
-      setTiledBusy(false);
-    }
+    const meta = await uploadTiledBasemap(file, { name: file.name.replace(/\.pmtiles$/i, "") });
+    if (currentVectorGeojson) await setTiledBasemapFallback(meta.id, currentVectorGeojson).catch(() => {});
+    refresh();
   };
 
   const handlePublish = async (bm) => {
@@ -431,11 +485,13 @@ const BasemapPicker = ({
         <div style={headerBar}>
           <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
-          <button type="button" style={tabBtn(tab === "official")} onClick={() => setTab("official")}>Detailed maps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
           <div style={{ flex: 1 }} />
-          <label style={uploadBtn}>
-            {busy ? "Uploading…" : "⬆ Upload basemap"}
+          <label
+            style={uploadBtn}
+            title="A picture (.png, .jpg), a painted map (.geojson, .kml, .zip…), or a detailed map (.pmtiles of picture tiles, up to 500 MB)"
+          >
+            {busy ? "Adding…" : "⬆ Add your own map"}
             <input
               type="file"
               accept={acceptFor(BACKGROUND_ACCEPT)}
@@ -443,20 +499,7 @@ const BasemapPicker = ({
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
-                handleUpload(f);
-              }}
-            />
-          </label>
-          <label style={uploadBtn} title="A detailed map of raster tiles (a .pmtiles archive, up to 500 MB) that scenarios can name">
-            {tiledBusy ? "Adding…" : "⬆ Add detailed map"}
-            <input
-              type="file"
-              accept={acceptFor(".pmtiles")}
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = "";
-                handleAddTiled(f);
+                handleAdd(f);
               }}
             />
           </label>
@@ -466,6 +509,10 @@ const BasemapPicker = ({
         <div style={bodyBox}>
           {tab === "mine" ? (
             <>
+              {!browse && onAllowedBasemapsChange && (
+                <AllowedBasemaps value={allowedBasemaps} onChange={onAllowedBasemapsChange} />
+              )}
+              {!browse && (
               <div style={{ marginBottom: "1.3rem" }}>
                 <div style={rowTitle}>Built-in maps</div>
                 <div style={rowScroll}>
@@ -481,12 +528,13 @@ const BasemapPicker = ({
                   ))}
                 </div>
               </div>
+              )}
               <div>
                 <div style={rowTitle}>Your basemaps</div>
                 {loading ? (
                   <div style={dim}>Loading…</div>
                 ) : mine.length === 0 ? (
-                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image (it stays here so you can reuse it on any map).</div>
+                  <div style={dim}>No maps of your own yet. Use “⬆ Add your own map” to add a picture, a painted map or a detailed map; it stays here so you can reuse it on any scenario. Detailed maps you download from the Community tab appear here too.</div>
                 ) : (
                   <div style={rowScroll}>
                     {mine.map((bm) => (
@@ -494,11 +542,11 @@ const BasemapPicker = ({
                         key={bm.id}
                         title={bm.name}
                         imageUrl={bm.thumbnail}
-                        active={currentCustomId === bm.id}
+                        active={!browse && currentCustomId === bm.id}
                         badge={bm.kind === "tiled"
                           ? `detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`
                           : bm.kind === "vector" ? "vector" : undefined}
-                        onClick={() => { onSelectCustom(bm); onClose(); }}
+                        onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
                       />
@@ -507,19 +555,13 @@ const BasemapPicker = ({
                 )}
               </div>
             </>
-          ) : tab === "official" ? (
-            <OfficialMaps
-              list={official}
-              loading={officialLoading}
-              download={download}
-              onRefresh={() => loadOfficial(true)}
-              onDownload={handleOfficialDownload}
-              onCancel={() => downloadControllerRef.current?.abort()}
-            />
           ) : (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem", flexWrap: "wrap" }}>
                 <div style={{ ...rowTitle, margin: 0 }}>Community basemaps</div>
+                <button type="button" style={tabBtn(communityFilter === "all")} onClick={() => setCommunityFilter("all")}>All</button>
+                <button type="button" style={tabBtn(communityFilter === "painted")} onClick={() => setCommunityFilter("painted")}>Painted maps</button>
+                <button type="button" style={tabBtn(communityFilter === "detailed")} onClick={() => setCommunityFilter("detailed")}>Detailed maps</button>
                 <div style={{ flex: 1 }} />
                 <a
                   href="https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+is%3Aopen+label%3Abasemap"
@@ -529,8 +571,22 @@ const BasemapPicker = ({
                 >
                   Open hub ↗
                 </a>
-                <button type="button" style={tabBtn(false)} onClick={() => loadCommunity(true)}>↻ Refresh</button>
+                <button type="button" style={tabBtn(false)} onClick={() => { loadCommunity(true); loadOfficial(true); }}>↻ Refresh</button>
               </div>
+              {communityFilter !== "painted" && (
+                <div style={{ marginBottom: "1.3rem" }}>
+                  {communityFilter === "all" && <div style={rowTitle}>Detailed maps</div>}
+                  <DetailedMaps
+                    list={official}
+                    loading={officialLoading}
+                    download={download}
+                    onDownload={handleOfficialDownload}
+                    onCancel={() => downloadControllerRef.current?.abort()}
+                  />
+                </div>
+              )}
+              {communityFilter !== "detailed" && (<>
+              {communityFilter === "all" && <div style={rowTitle}>Painted maps</div>}
               {communityError && <div style={{ ...dim, color: "#fecaca" }}>{communityError}</div>}
               {communityLoading ? (
                 <div style={dim}>Loading community basemaps…</div>
@@ -584,6 +640,7 @@ const BasemapPicker = ({
                   })}
                 </div>
               )}
+              </>)}
             </div>
           )}
         </div>

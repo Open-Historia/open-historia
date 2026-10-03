@@ -668,6 +668,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.metadata.author = initialMap.author || "";
     // Restore the chosen built-in basemap so re-opening shows it (not the default).
     if (initialMap.basemap) base.metadata.basemap = initialMap.basemap;
+    // And which built-in maps players may switch to, so Apply keeps the choice.
+    if (Array.isArray(initialMap.allowedBasemaps)) base.metadata.allowedBasemaps = initialMap.allowedBasemaps;
     // Carry the restored background in the document metadata so Apply & Play
     // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
     // clearing the scenario's background when the user re-opens and re-applies.
@@ -1410,6 +1412,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onSelectCustom={selectLibraryBasemap}
         onUpload={uploadBasemap}
         currentVectorGeojson={normalizeBackground(customBg)?.kind === "vector" ? normalizeBackground(customBg).geojson : null}
+        allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
+        onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
       />
 
       <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />

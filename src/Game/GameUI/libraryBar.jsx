@@ -3008,6 +3008,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           : {},
         background,
         basemap: world.basemap || null,
+        allowedBasemaps: Array.isArray(world.allowedBasemaps) ? world.allowedBasemaps : null,
         // Carried like the flags above: a round-trip must not reset it.
         customCities: Boolean(world.customCities),
         // The scenario's starting units, so the Units panel edits what the game starts with.
@@ -3118,6 +3119,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         background: seed.world?.background ?? null,
         // The chosen built-in basemap so the game renders it (not always ocean).
         basemap: seed.world?.basemap ?? null,
+        // Which built-in maps players may switch to (null = any).
+        allowedBasemaps: seed.world?.allowedBasemaps ?? null,
         // The starting units placed in the Workshop (world.units, source "scenario").
         units: seed.world?.units ?? [],
         // The groups and their areas: the Workshop opened with the world's, so

@@ -148,6 +148,8 @@ const deriveMapState = (state) => ({
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
+  // A string, so an unchanged list keeps its identity: null = any built-in map.
+  allowedBasemaps: Array.isArray(state?.allowedBasemaps) ? state.allowedBasemaps.map(String).join(",") : null,
   ...(() => {
     const folded = foldOwnerTokens(state);
     return {
@@ -180,6 +182,7 @@ const sameMapState = (prev, next) =>
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
   prev.background === next.background &&
+  prev.allowedBasemaps === next.allowedBasemaps &&
   prev.labelFont === next.labelFont &&
   prev.labelHaloColor === next.labelHaloColor &&
   prev.labelTextColor === next.labelTextColor &&
@@ -353,6 +356,7 @@ export function useWorldBackground() {
     return {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
+      allowedBasemaps: current?.allowedBasemaps ?? null,
     };
   });
 
@@ -362,17 +366,18 @@ export function useWorldBackground() {
     const handler = (data) => {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
+      const allowedBasemaps = data?.allowedBasemaps ?? null;
 
       setState((prev) => {
         const backgroundSame =
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap) {
+        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps) {
           return prev;
         }
 
-        return { background, basemap };
+        return { background, basemap, allowedBasemaps };
       });
     };
 

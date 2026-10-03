@@ -17,6 +17,7 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   esriTileTemplate,
+  isAllowedBasemapOverride,
   isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
@@ -603,7 +604,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // the scenario's basemap does, unless the player picked one in Settings → Map.
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
-  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled, tiledUpdate } = useCustomBackground();
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled, tiledUpdate, allowedBasemaps: worldAllowedBasemaps } = useCustomBackground();
   // A newer version of the detailed map is offered once: "Not now" is
   // remembered for that version, unless the scenario was made on it.
   const [dismissedUpdate, setDismissedUpdate] = useState("");
@@ -617,7 +618,10 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // and basemap authoritative; only a real built-in id replaces them, so a
   // stray value left in localStorage by an older build changes nothing.
   const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
+  // The player's pick counts only if the scenario allows that map (chosen in
+  // the Map Editor; a made-up world usually allows none of the real ones).
+  const allowedBasemaps = worldAllowedBasemaps == null ? null : worldAllowedBasemaps.split(",").filter(Boolean);
+  const validBasemapOverride = isAllowedBasemapOverride(basemapOverride, allowedBasemaps) ? basemapOverride : "";
   const useScenarioBackground = !validBasemapOverride;
   const effectiveCustomBg = useScenarioBackground ? customBg : null;
   // Tell the political layers whether relief tiles are actually on screen, so

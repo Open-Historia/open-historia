@@ -165,7 +165,9 @@ const buildCitiesForGame = (features) => ({
 // detailed map must have one: a player who does not download the detailed map,
 // or whose game cannot show it, still gets a map, never empty sea.
 export const DETAILED_MAP_NEEDS_BASIC_MAP =
-  "A scenario on a detailed map needs a basic map too, so players who don't download the detailed one still see a map. Draw or upload a painted (vector) basemap first, then choose the detailed map.";
+  "This scenario needs a basic map first: it is what players see if they don't download the detailed map.\n\n"
+  + "In Basemap → My Basemaps, pick one of your painted maps (or add one with “⬆ Add your own map”), or draw one in the editor. Then choose the detailed map again.\n\n"
+  + "(A detailed map that comes with its own basic map uses that one automatically.)";
 export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
   if (tiledBasemap?.id || tiledBasemap?.hash) {
@@ -369,6 +371,9 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.
     basemap: doc.metadata?.basemap || null,
+    // Which built-in maps players may switch to in Settings → Map (null = any;
+    // [] = only the scenario's own map). Chosen in the basemap picker.
+    allowedBasemaps: Array.isArray(doc.metadata?.allowedBasemaps) ? doc.metadata.allowedBasemaps : null,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.

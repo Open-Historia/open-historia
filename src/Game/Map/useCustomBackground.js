@@ -33,7 +33,7 @@ const probeArchive = async (pmtilesUrl) => {
 const EMPTY = { background: null, declared: false, basemap: null, missingTiled: null, tiledUpdate: null };
 
 export function useCustomBackground() {
-  const { background: bgDescriptor, basemap: worldBasemap } = useWorldBackground();
+  const { background: bgDescriptor, basemap: worldBasemap, allowedBasemaps } = useWorldBackground();
   const terrainSetting = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain);
   const [state, setState] = useState(EMPTY);
   const keyRef = useRef("");
@@ -133,5 +133,6 @@ export function useCustomBackground() {
     };
   }, [bgKey, basemap, bgDescriptor, namedTiledBasemap, terrainSetting]);
 
-  return state;
+  // Which built-in maps the scenario lets the player switch to (a string; null = any).
+  return { ...state, allowedBasemaps };
 }
