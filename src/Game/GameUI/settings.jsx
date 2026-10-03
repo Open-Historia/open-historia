@@ -2020,7 +2020,11 @@ const SettingsWorkspace = ({
     ratingOn,
     onToggleRating,
     context,
+    // "app": opened from the main menu, so only settings that apply to every
+    // game. "game" (in a game's own menu): those too, plus this game's own.
+    scope = "game",
 }) => {
+    const forGame = scope !== "app";
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
@@ -2029,7 +2033,7 @@ const SettingsWorkspace = ({
     // The built-in maps this scenario lets the player switch to (chosen by its
     // author in the Map Editor; a made-up world may allow none).
     const { allowedBasemaps: allowedKey } = useWorldBackground();
-    const allowedBasemaps = allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
+    const allowedBasemaps = !forGame || allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
     const basemapChoices = allowedBuiltinBasemaps(allowedBasemaps);
     const shownBasemapStyle = isAllowedBasemapOverride(basemapStyle, allowedBasemaps) ? basemapStyle : "";
     useWorkspaceMorph(cardRef, fromRect, closing);
@@ -2142,10 +2146,12 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>
                             {basemapChoices.length === 0
                                 ? "This scenario uses its own map only."
-                                : "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."}
+                                : forGame
+                                    ? "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."
+                                    : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own map."}
                         </div>
                     </div>
-                    <ScenarioDetailedMapSetting labelStyle={labelStyle} helperStyle={helperStyle} fieldGroupStyle={fieldGroupStyle} />
+                    {forGame && <ScenarioDetailedMapSetting labelStyle={labelStyle} helperStyle={helperStyle} fieldGroupStyle={fieldGroupStyle} />}
                     <div style={fieldGroupStyle}>
                         <div style={labelStyle}>Basemaps</div>
                         <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
@@ -2207,7 +2213,11 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
-                    <PlayerFocusSetting />
+                    {forGame ? <PlayerFocusSetting /> : (
+                        <div style={{ ...helperStyle, marginBottom: "0.8rem" }}>
+                            Player focus is set for each game on its own: open the game, then ☰ → Settings → AI.
+                        </div>
+                    )}
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
@@ -2254,6 +2264,7 @@ const SettingsWorkspace = ({
                 >
                     <TaskPicks />
                 </SettingsSection>
+                {forGame && (
                 <SettingsSection
                 title="Political World A/B Lab"
                 description="Run the same frozen diplomacy, Council, vote or event-generation task with Political World context on/off — or push one actor through HAWK/DOVE sensitivity variants. The lab never applies either candidate to the campaign."
@@ -2271,6 +2282,7 @@ const SettingsWorkspace = ({
                     Pins every arm to one exact fallback-list entry, counterbalances run order, saves raw prompts/responses and proves the non-Political prompt hash matches before you interpret the result. Blind review is available to reduce confirmation bias.
                     </div>
                 </SettingsSection>
+                )}
                 <SettingsSection
                 title="Telemetry"
                 description="What the AI debug console can show about every call."
@@ -2319,10 +2331,12 @@ const SettingsWorkspace = ({
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
-                            {context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
+                            {forGame && context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
                         </div>
                         <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
+                            {forGame
+                                ? [context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"
+                                : "For every game. A game's own settings are in its ☰ menu."}
                         </div>
                     </div>
                     <button type="button" className="oh-tap" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
@@ -2424,6 +2438,9 @@ const SettingsMenu = ({
     // A workspace section to open on straight away (the AI setup prompt sends
     // the player to "ai"); null opens the quick menu.
     initialSection = null,
+    // "app" from the main menu: settings for every game, straight to the
+    // workspace, with no game menu behind it. "game" from a game's ☰.
+    scope = "game",
 }) => {
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
@@ -2547,9 +2564,10 @@ const SettingsMenu = ({
     if (activeSettingsSection) {
         return (
             <SettingsWorkspace
+            scope={scope}
             activeSection={activeSettingsSection}
             onSectionChange={setActiveSettingsSection}
-            onBack={backToMenu}
+            onBack={scope === "app" ? () => onClose?.() : backToMenu}
             fromRect={fromRect}
             closing={workspaceClosing}
             onClose={() => onClose?.()}
