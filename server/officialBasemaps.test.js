@@ -80,6 +80,13 @@ test("a bad map is dropped on its own; the rest of the list stands", () => {
   assert.deepEqual(parseOfficialCatalog({ basemaps: "nope" }), { basemaps: [] });
 });
 
+test("fields the game does not use, like a map's owners, are ignored and do not drop the map", () => {
+  const { basemaps } = parseOfficialCatalog({ format: 1, basemaps: [{ id: "got-world", name: "Game of Thrones world map", author: "SeventhDread", owners: ["SeventhDread", "someone"], license: "CC BY-NC-SA 3.0", versions: [good(1)] }] });
+  assert.deepEqual(basemaps.map((entry) => entry.id), ["got-world"]);
+  assert.equal(basemaps[0].owners, undefined);
+  assert.equal(basemaps[0].versions.length, 1);
+});
+
 test("a version larger than the download cap is not offered", () => {
   const { basemaps } = parseOfficialCatalog({ basemaps: [{ id: "big", versions: [good(1, { bytes: 600 })] }] }, { cap: 500 });
   assert.deepEqual(basemaps, []);
