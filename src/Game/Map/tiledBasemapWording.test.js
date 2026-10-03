@@ -43,3 +43,10 @@ test("a map that cannot be downloaded offers no download", () => {
     assert.match(words.body, /basic map/);
   }
 });
+
+test("a withdrawn map says it is no longer available, and offers nothing", () => {
+  const words = tiledBasemapWording({ name: "Game of Thrones world map", unavailable: true, withdrawn: true });
+  assert.equal(words.title, "This scenario's detailed map is no longer available");
+  assert.match(words.body, /withdrawn from the official Open Historia list, so you're seeing the basic map/);
+  assert.equal(words.accept, null);
+});

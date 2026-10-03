@@ -90,7 +90,9 @@ export const tiledBasemapOffer = ({ named, installed, official }) => {
   if (!installed) {
     if (named.hash) return { missing: { hash: named.hash, name, unofficial: true }, update: null };
     if (latest && latest.version >= named.version) return { missing: offer(latest), update: null };
-    return { missing: { id: named.id, name, unavailable: true }, update: null };
+    // Archived or deleted by the maintainers: no longer offered at all.
+    const withdrawn = official?.withdrawn ? { withdrawn: true } : {};
+    return { missing: { id: named.id, name, unavailable: true, ...withdrawn }, update: null };
   }
   const have = Number(installed.official?.version);
   if (latest && official.id === installed.official?.id && latest.version > have) {

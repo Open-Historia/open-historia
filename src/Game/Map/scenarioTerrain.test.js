@@ -202,3 +202,31 @@ test("with no ancestor, or no way to scale one, a missing relief tile is transpa
   const fallback = await cannotScale({ url: "ohrelief://http://x/terrain/5/3/3" }, new AbortController());
   assert.deepEqual([...fallback.data.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
 });
+
+// Archived and deleted versions never reach the game's list (server/officialBasemaps.js
+// drops them), so these lists hold only what is still downloadable.
+test("a player holding an archived or deleted version keeps it, and is offered the newest available one as an update", () => {
+  const holding2 = { ...INSTALLED, official: { id: "got-world", version: 9 } };
+  const listWithout9 = { ...OFFICIAL, versions: [v(8), v(10)] };
+  const drawn = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: holding2, archiveUrl: "http://x/a", official: listWithout9 });
+  assert.ok(drawn.tiles, "their copy still draws");
+  assert.equal(drawn.missing, null);
+  assert.equal(drawn.update.version, 10);
+});
+
+test("a scenario whose minimum version was deleted accepts any newer version still offered", () => {
+  const made9 = { kind: "vector", tiled: { id: "got-world", version: 9 } };
+  const { missing } = resolveTiledBasemap({ descriptor: made9, setting: "", basemap: null, archiveUrl: "", official: { ...OFFICIAL, versions: [v(8), v(10)] } });
+  assert.equal(missing.version, 10);
+  const none = resolveTiledBasemap({ descriptor: made9, setting: "", basemap: null, archiveUrl: "", official: { ...OFFICIAL, versions: [v(8)] } });
+  assert.equal(none.missing.unavailable, true, "only older versions left: the basic map");
+});
+
+test("a withdrawn map is no longer offered; a player who has it keeps drawing it, with no update", () => {
+  const withdrawn = { id: "got-world", name: "Game of Thrones world map", versions: [], withdrawn: true };
+  const without = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: withdrawn });
+  assert.deepEqual(without.missing, { id: "got-world", name: "Game of Thrones world map", unavailable: true, withdrawn: true });
+  const holding = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a", official: withdrawn });
+  assert.ok(holding.tiles);
+  assert.equal(holding.update, null);
+});

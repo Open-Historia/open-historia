@@ -149,3 +149,24 @@ test("a list that redirects off GitHub is refused", async () => {
   assert.deepEqual(list.basemaps, []);
   assert.match(list.error, /redirected off GitHub/);
 });
+
+test("archived and deleted versions are never offered; a map with none left is kept as withdrawn", () => {
+  const tombstone = (version) => ({ version, deleted: { date: "2026-10-03", reason: "takedown" } });
+  const { basemaps } = parseOfficialCatalog({
+    basemaps: [
+      { id: "some-gone", versions: [good(1), { ...good(2), archived: { date: "2026-10-03" } }, tombstone(3), good(4)] },
+      { id: "archived-map", archived: { date: "2026-10-03", reason: "licence" }, versions: [good(1)] },
+      { id: "deleted-map", deleted: { date: "2026-10-03" }, versions: [tombstone(1)] },
+      { id: "all-versions-gone", versions: [{ ...good(1), archived: { date: "x" } }, tombstone(2)] },
+    ],
+  });
+  const byId = Object.fromEntries(basemaps.map((entry) => [entry.id, entry]));
+  assert.deepEqual(byId["some-gone"].versions.map((v) => v.version), [1, 4], "v2 archived and v3 deleted are skipped");
+  assert.equal(byId["some-gone"].withdrawn, undefined);
+  assert.equal(latestOfficialVersion(byId["some-gone"]).version, 4);
+  for (const id of ["archived-map", "deleted-map", "all-versions-gone"]) {
+    assert.equal(byId[id].withdrawn, true, id);
+    assert.deepEqual(byId[id].versions, [], `${id} offers nothing to download`);
+    assert.equal(latestOfficialVersion(byId[id]), null);
+  }
+});

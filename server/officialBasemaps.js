@@ -46,7 +46,12 @@ export const isOfficialReleaseUrl = (value) => {
 
 const text = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 
+// An archived or deleted version is never downloadable. A deleted one is only
+// a tombstone (its number, never reused), with no link left to follow.
+const isWithdrawn = (raw) => Boolean(raw?.archived || raw?.deleted);
+
 const cleanVersion = (raw, cap) => {
+  if (isWithdrawn(raw)) return null;
   const version = Number(raw?.version);
   const bytes = Number(raw?.bytes);
   const sha256 = String(raw?.sha256 || "").toLowerCase();
@@ -67,7 +72,11 @@ const cleanVersion = (raw, cap) => {
 
 // The list as the game uses it: every entry checked, anything malformed or
 // pointing outside the official releases left out (never the whole list), and
-// each map's versions in rising order, one per number.
+// each map's versions in rising order, one per number. A map that maintainers
+// archived or deleted, or whose every version they did, stays in the list as
+// `withdrawn` with no versions: nothing to download, but the game can tell a
+// player the map is no longer available rather than that it never existed.
+// Players who already have it keep using their copy.
 export const parseOfficialCatalog = (raw, { cap = 0 } = {}) => {
   const basemaps = [];
   const seen = new Set();
@@ -76,18 +85,21 @@ export const parseOfficialCatalog = (raw, { cap = 0 } = {}) => {
     const id = String(entry?.id || "");
     if (!ID_PATTERN.test(id) || seen.has(id)) continue;
     const byNumber = new Map();
-    for (const candidate of (Array.isArray(entry.versions) ? entry.versions.slice(0, MAX_VERSIONS) : [])) {
+    const listed = Array.isArray(entry.versions) ? entry.versions.slice(0, MAX_VERSIONS) : [];
+    for (const candidate of listed) {
       const version = cleanVersion(candidate, cap);
       if (version && !byNumber.has(version.version)) byNumber.set(version.version, version);
     }
-    if (!byNumber.size) continue;
+    const withdrawn = isWithdrawn(entry) || (listed.length > 0 && listed.every(isWithdrawn));
+    if (!byNumber.size && !withdrawn) continue;
     seen.add(id);
     basemaps.push({
       id,
       name: text(entry.name, 80) || id,
       ...(text(entry.author, 80) ? { author: text(entry.author, 80) } : {}),
       ...(text(entry.license, 200) ? { license: text(entry.license, 200) } : {}),
-      versions: [...byNumber.values()].sort((a, b) => a.version - b.version),
+      versions: withdrawn ? [] : [...byNumber.values()].sort((a, b) => a.version - b.version),
+      ...(withdrawn ? { withdrawn: true } : {}),
     });
   }
   return { basemaps };

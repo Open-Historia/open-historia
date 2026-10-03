@@ -346,6 +346,20 @@ test("a map or version not on the official list cannot be installed", async () =
   assert.notEqual(byLink.status, 202);
 });
 
+test("a map the maintainers archived or deleted is listed as withdrawn and can't be installed", async () => {
+  const list = await setOfficialList([
+    ...baseList(),
+    map("gone", [{ ...version("relief", 1, ARCHIVES.relief), archived: { date: "2026-10-03", reason: "licence" } }]),
+  ]);
+  const gone = list.basemaps.find((entry) => entry.id === "gone");
+  assert.equal(gone.withdrawn, true);
+  assert.deepEqual(gone.versions, []);
+  const refused = await install("gone");
+  assert.equal(refused.status, 404);
+  assert.match(refused.json.error, /no longer available/);
+  await setOfficialList(baseList());
+});
+
 test("a download in progress reports progress, and nothing is installed until it completes", async () => {
   let release;
   holdStream = new Promise((resolve) => { release = resolve; });

@@ -1575,6 +1575,9 @@ app.post("/api/basemaps/official/install", jsonParser, async (req, res) => {
         ? `The official map list could not be read (${catalog.error}).`
         : "That map is not on the official list."));
     }
+    if (entry.withdrawn || !entry.versions.length) {
+      return sendError(res, 404, new Error("This map is no longer available from the official list."));
+    }
     const asked = req.body?.version === undefined ? null : Number(req.body.version);
     const version = asked === null ? latestOfficialVersion(entry) : entry.versions.find((v) => v.version === asked);
     if (!version) return sendError(res, 404, new Error(`Version ${asked} of that map is not on the official list.`));

@@ -32,6 +32,14 @@ export const tiledBasemapWording = (offer, { atInstall = false } = {}) => {
       decline: "OK",
     };
   }
+  if (offer?.withdrawn) {
+    return {
+      title: "This scenario's detailed map is no longer available",
+      body: `${name} was withdrawn from the official Open Historia list, so you're seeing the basic map.`,
+      accept: null,
+      decline: "OK",
+    };
+  }
   if (offer?.unavailable) {
     return {
       title: "This scenario's detailed map isn't available right now",

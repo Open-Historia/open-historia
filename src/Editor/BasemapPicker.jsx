@@ -189,11 +189,11 @@ const OfficialMaps = ({ list, loading, download, onRefresh, onDownload, onCancel
     )}
     {loading && !list.basemaps.length ? (
       <div style={dim}>Loading the official list…</div>
-    ) : !list.basemaps.length ? (
+    ) : !list.basemaps.some((entry) => entry.versions.length > 0) ? (
       !list.error && <div style={dim}>No official detailed maps yet.</div>
     ) : (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.8rem" }}>
-        {list.basemaps.map((entry) => {
+        {list.basemaps.filter((entry) => entry.versions.length > 0).map((entry) => {
           const latest = entry.versions[entry.versions.length - 1];
           const have = entry.installed?.version || 0;
           const upToDate = have >= latest.version;
