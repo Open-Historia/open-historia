@@ -1214,6 +1214,10 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     // The event that created or last moved this unit, so the popup can say what
     // put it there and click through to it.
     eventId: normalizeOptionalString(entry.eventId),
+    // The war the engine raised this formation for, when it was raised only so a
+    // war would have a counter (AI/nativeUnitDirector.js): it is disbanded when
+    // that war ends. Absent on every other unit.
+    ...(normalizeOptionalString(entry.raisedForWar) ? { raisedForWar: normalizeOptionalString(entry.raisedForWar) } : {}),
     source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
     orderId: normalizeOptionalString(entry.orderId),
     createdAt: normalizeOptionalString(entry.createdAt) || timestamp,

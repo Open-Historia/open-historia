@@ -422,7 +422,7 @@ export const missingCombatantSpawns = (input, payload) => {
     for (const power of normalizeArray(candidate?.combatantsWithoutUnits)) {
       const key = normalizeString(power).toLowerCase();
       if (!key || spawned.has(key)) continue;
-      if (!byPower.has(key)) byPower.set(key, { power: normalizeString(power), events: [] });
+      if (!byPower.has(key)) byPower.set(key, { power: normalizeString(power), warId: normalizeString(candidate?.warId), events: [] });
       byPower.get(key).events.push({ eventIndex: candidate.eventIndex, text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
     }
   }
@@ -461,16 +461,59 @@ export const nearestOwnRegion = ({ power, anchor, rows }) => {
   return best ? normalizeString(best.name) : null;
 };
 
-export const nativeCombatantSpawn = (power, at) => ({
+// `warId`: the war it is raised for, so it is disbanded when that war ends
+// (pruneWarUnits).
+export const nativeCombatantSpawn = (power, at, warId = "") => ({
   op: "spawn",
   at,
-  unit: { name: `${power} Field Army`, type: "infantry", ownerCode: power, strength: 100, posture: "holding" },
+  unit: {
+    name: `${power} Field Army`, type: "infantry", ownerCode: power, strength: 100, posture: "holding",
+    ...(normalizeString(warId) ? { raisedForWar: normalizeString(warId) } : {}),
+  },
   note: `${power} is fighting with no formation on the map; the engine raised one where the event puts its forces.`,
 });
+
+// Who holds land in a world: every owner and lawful sovereign of an overridden
+// region, lowercased. Read from the overrides alone, as isPolityLandless does.
+export const landHolders = (world) => new Set(
+  [...Object.values(world?.regionOwnershipOverrides ?? {}), ...Object.values(world?.regionSovereigntyOverrides ?? {})]
+    .map((owner) => normalizeString(owner).toLowerCase())
+    .filter(Boolean),
+);
+
+// What a war's end and a country's fall take off the map, after a turn's wars
+// and borders are applied. Nothing removed units before: they stayed where they
+// were until an event destroyed or disbanded them.
+//   - A formation the engine raised for a war (raisedForWar) is disbanded when
+//     that war is no longer active: it existed only to show the war.
+//   - Every unit of a power that held land when the turn began and holds none
+//     now: an annexed or conquered country keeps no armies. A power that never
+//     held land (a host, a horde, a company of exiles) is not touched.
+// Their standing orders go with them. Pure.
+export const pruneWarUnits = ({ units = [], orders = [], wars = [], heldBefore = new Set(), heldAfter = new Set() } = {}) => {
+  const active = new Set(normalizeArray(wars).filter(isActiveWar).map((war) => normalizeString(war?.id)).filter(Boolean));
+  const kept = [];
+  const removed = [];
+  for (const unit of normalizeArray(units)) {
+    const war = normalizeString(unit?.raisedForWar);
+    const owner = normalizeString(unit?.ownerCode).toLowerCase();
+    const warOver = Boolean(war) && !active.has(war);
+    const fallen = Boolean(owner) && heldBefore.has(owner) && !heldAfter.has(owner);
+    if (warOver || fallen) removed.push({ unit, reason: warOver ? "war-ended" : "lost-all-land" });
+    else kept.push(unit);
+  }
+  const gone = new Set(removed.map(({ unit }) => normalizeString(unit?.id)));
+  return {
+    units: kept,
+    orders: normalizeArray(orders).filter((order) => !gone.has(normalizeString(order?.unitId))),
+    removed,
+  };
+};
 
 const unitDirectorAnalyzerInput = (candidates, units, wars = []) => ({
   candidates: candidates.map(({ event, index }) => {
     const unrepresented = combatantsWithoutUnits(event, units, wars);
+    const war = unrepresented.length ? warOfEvent(event, wars) : null;
     return {
       eventIndex: index,
       date: normalizeString(event?.date),
@@ -478,6 +521,7 @@ const unitDirectorAnalyzerInput = (candidates, units, wars = []) => ({
       description: normalizeString(event?.description),
       existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
       ...(unrepresented.length ? { combatantsWithoutUnits: unrepresented } : {}),
+      ...(war?.id ? { warId: normalizeString(war.id) } : {}),
     };
   }),
   units: units.map(summarizeUnit),

@@ -19,7 +19,7 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
@@ -7861,6 +7861,22 @@ const applySimulationResult = async ({
     round: nextGame.round,
   });
   worldWithImpacts = storylineMerge.world;
+  // A war's end and a country's fall clear the map (nativeUnitDirector.js
+  // pruneWarUnits): the counters raised for a war that has ended, and the units
+  // of a power that held land when the turn began and holds none now.
+  {
+    const pruned = pruneWarUnits({
+      units: worldWithImpacts.units,
+      orders: worldWithImpacts.pendingUnitOrders,
+      wars: worldWithImpacts.wars,
+      heldBefore: landHolders(baseWorld),
+      heldAfter: landHolders(worldWithImpacts),
+    });
+    if (pruned.removed.length) {
+      worldWithImpacts = { ...worldWithImpacts, units: pruned.units, pendingUnitOrders: pruned.orders };
+      logDebugEvent("turn", `${pruned.removed.length} unit${pruned.removed.length === 1 ? "" : "s"} left the map: ${pruned.removed.map(({ unit, reason }) => `${unit.name} (${reason === "war-ended" ? "its war ended" : `${unit.ownerCode} holds no land`})`).join(", ")}.`);
+    }
+  }
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
@@ -14280,7 +14296,7 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
   const context = await lazyLookupContext(bundle)();
   const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
   payload.eventOrders = normalizeArray(payload.eventOrders);
-  for (const { power, events } of missing) {
+  for (const { power, warId, events } of missing) {
     let chosen = null;
     let anchor = null;
     for (const { eventIndex, text } of events) {
@@ -14298,7 +14314,7 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
     // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
     // where the map says Odessa, and "the Black Sea"): the power's own land.
     chosen ??= { eventIndex: events[0].eventIndex, at: power };
-    payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at)] });
+    payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at, warId)] });
     logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${chosen.at}.`);
   }
 };

@@ -1,7 +1,8 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, orderRaisesForces, pickCombatantPlace, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, orderRaisesForces, pickCombatantPlace, pruneWarUnits, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { normalizeUnitEntry } from "../../runtime/gameState.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -232,4 +233,63 @@ test("an unbound military event is read as the active war whose powers it names"
   // Naming no warring power, it is no war.
   const elsewhere = { ...unbound, title: "Mechanized Brigades Advance in a Border Clash", description: "Brigades advance after heavy fighting." };
   assert.equal(buildUnitDirectorInput({ events: [elsewhere], world }).candidates[0].combatantsWithoutUnits, undefined);
+});
+
+// Mark asked (2026-10-02): if you win the war, do the units disappear? They did
+// not: a unit left the map only when an event destroyed or disbanded it.
+test("a counter the engine raises remembers its war, and keeps it through a save", () => {
+  const world = { units: [], wars: [{ id: "war-ru-ua", status: "active", sideA: ["Russia"], sideB: ["Ukraine"] }] };
+  const input = buildUnitDirectorInput({ events: [{ ...warEvent, warId: "war-ru-ua" }], world });
+  assert.equal(input.candidates[0].warId, "war-ru-ua");
+  const [missing] = missingCombatantSpawns(input, { eventOrders: [] });
+  assert.equal(missing.warId, "war-ru-ua");
+  const spawn = nativeCombatantSpawn(missing.power, "Kerch", missing.warId);
+  assert.equal(spawn.unit.raisedForWar, "war-ru-ua");
+  assert.equal(normalizeUnitEntry({ ...spawn.unit, lng: 36.5, lat: 45.3 }).raisedForWar, "war-ru-ua");
+  assert.equal(normalizeUnitEntry({ name: "1st Army", ownerCode: "Russia", lng: 36.5, lat: 45.3 }).raisedForWar, undefined, "no other unit carries it");
+});
+
+test("when a war ends its raised counters are disbanded; a ceasefire keeps them", () => {
+  const units = [
+    { id: "ru", name: "Russia Field Army", ownerCode: "Russia", raisedForWar: "war-ru-ua" },
+    { id: "ua", name: "Ukraine Field Army", ownerCode: "Ukraine", raisedForWar: "war-ru-ua" },
+    { id: "bsv", name: "Black Sea Vanguard", ownerCode: "British Empire" },
+    { id: "ru-built", name: "58th Combined Arms Army", ownerCode: "Russia" },
+  ];
+  const orders = [{ id: "o1", unitId: "ru" }, { id: "o2", unitId: "bsv" }];
+  const held = new Set(["russia", "ukraine", "british empire"]);
+  const ended = pruneWarUnits({ units, orders, wars: [{ id: "war-ru-ua", status: "ended" }], heldBefore: held, heldAfter: held });
+  assert.deepEqual(ended.units.map((unit) => unit.id), ["bsv", "ru-built"], "the war's own formations go; ones built otherwise stay");
+  assert.deepEqual(ended.orders.map((order) => order.id), ["o2"], "and their standing orders with them");
+  assert.deepEqual(ended.removed.map(({ reason }) => reason), ["war-ended", "war-ended"]);
+  const ceasefire = pruneWarUnits({ units, orders, wars: [{ id: "war-ru-ua", status: "ceasefire" }], heldBefore: held, heldAfter: held });
+  assert.equal(ceasefire.units.length, 4);
+});
+
+test("a country that loses all its land loses its units; one that never held land keeps them", () => {
+  const before = { regionOwnershipOverrides: { r1: "Ukraine", r2: "Russia" } };
+  const after = { regionOwnershipOverrides: { r1: "Russia", r2: "Russia" } };
+  const units = [
+    { id: "ua", name: "Ukraine Field Army", ownerCode: "Ukraine" },
+    { id: "ua-2", name: "93rd Brigade", ownerCode: "Ukraine" },
+    { id: "ru", name: "1st Guards", ownerCode: "Russia" },
+    { id: "host", name: "Mance Rayder's Host", ownerCode: "Mance Rayder's Host" },
+  ];
+  const pruned = pruneWarUnits({ units, wars: [], heldBefore: landHolders(before), heldAfter: landHolders(after) });
+  assert.deepEqual(pruned.units.map((unit) => unit.id), ["ru", "host"]);
+  assert.deepEqual(pruned.removed.map(({ reason }) => reason), ["lost-all-land", "lost-all-land"]);
+  // An occupied homeland is still a homeland: lawful sovereignty counts as holding land.
+  const occupied = { ...after, regionSovereigntyOverrides: { r1: "Ukraine" } };
+  assert.equal(pruneWarUnits({ units, wars: [], heldBefore: landHolders(before), heldAfter: landHolders(occupied) }).removed.length, 0);
+});
+
+test("every turn clears the map after its wars and borders are applied, before anything is written", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const apply = source.slice(source.indexOf("const applySimulationResult = async"));
+  const prune = apply.indexOf("const pruned = pruneWarUnits({");
+  assert.ok(prune > 0);
+  assert.ok(prune > apply.indexOf("worldWithImpacts = storylineMerge.world;"), "after the wars and storylines");
+  assert.ok(prune < apply.indexOf("await writeCanonicalTurnState("), "before the write");
+  assert.match(apply, /heldBefore: landHolders\(baseWorld\),\s+heldAfter: landHolders\(worldWithImpacts\),/);
 });
