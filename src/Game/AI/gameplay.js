@@ -19,7 +19,7 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
@@ -136,7 +136,7 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
-import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -159,6 +159,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
+import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -1057,6 +1058,14 @@ const screenSegmentPayload = (payload, {
   analysis,
   priorEvents,
   world,
+  // The player's queued orders and chats: an event the player ordered is
+  // authorised by one of them, and the screen re-checks that authority. Without
+  // them it could find no order and refused the player's own events as someone
+  // else's routine work (seen in a live check on a player's save, 2026-10-02:
+  // three of the player's events dropped after the validator had bound each to
+  // its order).
+  actions = [],
+  chats = [],
   game,
   state,
   originDate,
@@ -1090,6 +1099,8 @@ const screenSegmentPayload = (payload, {
     priorEvents,
     world,
     game,
+    actions,
+    chats,
     analysis,
   });
   if (screened.dropped?.length) {
@@ -2251,7 +2262,11 @@ const buildPlacementGazetteer = (context, world) => {
     const key = (name) => fold(context.resolveOwner(name) || name);
     return Boolean(key(a)) && key(a) === key(b);
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf, placesNamedIn, samePolity };
+  // The named seas this map has: the real ones on the real-world map, and any
+  // the scenario declares (placement.js seasForMap).
+  const seas = seasForMap({ regionAt, declared: world?.seas });
+
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, holdsLand, capitalOf, placesNamedIn, samePolity };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2282,13 +2297,13 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), atSea: normalizeString(unit.type).toLowerCase() === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
         const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
         // A land formation's march ends on land, as its raising does: seen in a
         // player's Game (2026-09-29), an armoured division sent to a coastal
         // town stood in the sea, the model's guess a kilometre offshore.
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), title, context, path, owner: normalizeString(mover?.ownerCode) });
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode) });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2447,6 +2462,27 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
         lng = Number(ashore.point[0].toFixed(5)); lat = Number(ashore.point[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = ashore.region.id;
+      }
+    }
+
+    // And a fleet is not put ashore. Sent to a port or a province by its name or
+    // its regionId, it was given a point inside that land, and sailed about on
+    // it (a player's Game, 2026-09-30). It goes to the water off that coast.
+    if (entry.atSea && gazetteer.regionAt([lng, lat])) {
+      const offshore = nearestSea([lng, lat], gazetteer, { seed: placementHash(entry.id || entry.name) });
+      if (offshore) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed on land and was moved to the sea off its coast. Place fleets with "off <port>" or the name of a sea.`);
+        lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
+      } else {
+        // Inland, with no sea within reach: there is nowhere for a fleet to go,
+        // so the placement is dropped (a move with no destination is not made)
+        // rather than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        delete target[lngKey]; delete target[latKey];
+        target.regionId = "";
+        continue;
       }
     }
 
@@ -2989,7 +3025,7 @@ So use the wider picture to choose the sender and the moment — never to give t
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
     const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
-    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. CURRENT PERSISTENT UNITS is authoritative; do not spend lookup rounds rediscovering units or powers that are already supplied here. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit whenever the event establishes that formation at a materially different place: advances, marches, crosses, enters, reaches, arrives, embarks, sails, retreats, redeploys, establishes a camp/encampment, or fights at a named battlefield away from its current position. Set posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting.\n3. EXPLICIT RELOCATION IS NOT OPTIONAL. If a supplied event clearly says an identifiable existing formation changed location, return a move for that unit. Use the event's destination wording in 'at' (for example 'Etruria', 'toward Rome', 'Apulia') and let the native placement/unit engine ground it and enforce travel speed. A destination may be far away: the engine advances long orders over time as standing orders, so do NOT omit a move merely because the objective is beyond one turn's travel.\n4. A conscription law, mobilization order with no field movement, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n5. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again. A warship or submarine commissioned or delivered into service, or a squadron, air wing or task group formed or stood up, IS a new formation: spawn it for the power that commissioned it, at its home port or base, even when that power already has units. Laying down hulls, ordering ships or funding a programme is not.\n6. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n7. Do not invent military activity for diplomatic, political or economic events. Return no ops only when the event truly leaves every supplied persistent unit materially unchanged.\n8. Never change territory. The territory layer is separate.\n9. Use only supplied existing unit ids. Prefer 'at' to coordinates; copy the event's named destination instead of guessing longitude/latitude, and name the country after it ('Kharkiv, Ukraine').\n\nReturn exactly the required tool payload.`;
+    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. CURRENT PERSISTENT UNITS is authoritative; do not spend lookup rounds rediscovering units or powers that are already supplied here. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit whenever the event establishes that formation at a materially different place: advances, marches, crosses, enters, reaches, arrives, embarks, sails, retreats, redeploys, establishes a camp/encampment, or fights at a named battlefield away from its current position. Set posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting.\n3. EXPLICIT RELOCATION IS NOT OPTIONAL. If a supplied event clearly says an identifiable existing formation changed location, return a move for that unit. Use the event's destination wording in 'at' (for example 'Etruria', 'toward Rome', 'Apulia') and let the native placement/unit engine ground it and enforce travel speed. A destination may be far away: the engine advances long orders over time as standing orders, so do NOT omit a move merely because the objective is beyond one turn's travel.\n4. A conscription law, mobilization order with no field movement, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n5. A POWER WITH NO COUNTER IS NOT REPRESENTED. When an event has a power fighting, invading, defending or holding a front, and CURRENT PERSISTENT UNITS has no unit of that power (a candidate's combatantsWithoutUnits lists the ones the engine can tell), spawn ONE formation for it where the event puts its forces (for example 'Russian forces' at 'Donetsk Oblast, Ukraine'), even though the event does not say the formation is new. Its later events then move and weaken that same unit.\n6. Otherwise SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again. A warship or submarine commissioned or delivered into service, or a squadron, air wing or task group formed or stood up, IS a new formation: spawn it for the power that commissioned it, at its home port or base, even when that power already has units. Laying down hulls, ordering ships or funding a programme is not.\n7. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n8. Do not invent military activity for diplomatic, political or economic events. Return no ops only when the event truly leaves every supplied persistent unit materially unchanged.\n9. Never change territory. The territory layer is separate.\n10. Use only supplied existing unit ids for moves, strength and removal. Prefer 'at' to coordinates; copy the event's named destination instead of guessing longitude/latitude, and name the country after it ('Kharkiv, Ukraine').\n\nReturn exactly the required tool payload.`;
   }
 
   // GM territorial semantics: regionTransfers move LEGAL sovereignty, regionControlOps
@@ -7416,6 +7452,8 @@ const applySimulationResult = async ({
       priorEvents: [...priorEvents, ...curatedEvents],
       world: baseWorld,
       game: baseGame,
+      actions: baseActions,
+      chats: baseChats,
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
@@ -7503,6 +7541,18 @@ const applySimulationResult = async ({
       `${carriedOrders} of the player's queued order${carriedOrders === 1 ? " was" : "s were"} left without an outcome and ${carriedOrders === 1 ? "is" : "are"} carried over as overdue. `
         + "Answer each of them this period, in an event that lists that order's id in actionIds — an event that tells the story without naming the id does not resolve it.",
     );
+  }
+  // "Stop when my events fail" (AI/playerTurnFailures.js): the player's refused
+  // events and unanswered orders hold the turn here, where both are final and
+  // nothing has been written — and before the board, so a hold costs it nothing.
+  if (result.holdOnPlayerFailures) {
+    const playerFailures = collectPlayerTurnFailures({
+      filedEvents,
+      actions: nextActions,
+      settled: result.clearActions,
+      acknowledged: result.acknowledgedFailures,
+    });
+    if (hasPlayerTurnFailures(playerFailures)) throw playerEventsHeldError(playerFailures);
   }
   let nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
@@ -7811,6 +7861,22 @@ const applySimulationResult = async ({
     round: nextGame.round,
   });
   worldWithImpacts = storylineMerge.world;
+  // A war's end and a country's fall clear the map (nativeUnitDirector.js
+  // pruneWarUnits): the counters raised for a war that has ended, and the units
+  // of a power that held land when the turn began and holds none now.
+  {
+    const pruned = pruneWarUnits({
+      units: worldWithImpacts.units,
+      orders: worldWithImpacts.pendingUnitOrders,
+      wars: worldWithImpacts.wars,
+      heldBefore: landHolders(baseWorld),
+      heldAfter: landHolders(worldWithImpacts),
+    });
+    if (pruned.removed.length) {
+      worldWithImpacts = { ...worldWithImpacts, units: pruned.units, pendingUnitOrders: pruned.orders };
+      logDebugEvent("turn", `${pruned.removed.length} unit${pruned.removed.length === 1 ? "" : "s"} left the map: ${pruned.removed.map(({ unit, reason }) => `${unit.name} (${reason === "war-ended" ? "its war ended" : `${unit.ownerCode} holds no land`})`).join(", ")}.`);
+    }
+  }
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
@@ -13617,11 +13683,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
         },
       );
-      const scriptedPlan = planScriptedEvents(authoredScriptedBeats, {
-        world: ledgerWorld,
-        resolvedState: state.scriptedEventState,
-        pendingState: state.scriptedEventPending,
-      });
+      // A retry of the player's failed events (retryHeldPlayerEvents) writes no
+      // scripted beat: the period's were decided by the answer it adds to.
+      const scriptedPlan = context.amend
+        ? { eligible: [], pendingState: state.scriptedEventPending }
+        : planScriptedEvents(authoredScriptedBeats, {
+          world: ledgerWorld,
+          resolvedState: state.scriptedEventState,
+          pendingState: state.scriptedEventPending,
+        });
       state.scriptedEventPending = scriptedPlan.pendingState;
       const scriptedBeats = scriptedPlan.eligible;
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
@@ -13630,8 +13700,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
-      const minEvents = Math.max(pacedMin, scriptedBeats.length);
-      const maxEvents = Math.max(pacedMax, scriptedBeats.length + 1);
+      // A retry of the player's failed events asks for those and no more.
+      const amendCount = context.amend
+        ? Math.max(1, normalizeArray(context.amend.failures?.events).length, normalizeArray(context.amend.failures?.orders).length)
+        : 0;
+      const minEvents = context.amend ? 1 : Math.max(pacedMin, scriptedBeats.length);
+      const maxEvents = context.amend ? amendCount + 1 : Math.max(pacedMax, scriptedBeats.length + 1);
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
       // once for the whole jump and only the dates move per segment.
@@ -13723,7 +13797,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || segmentCount > 1 || scriptedPoliticalRequirements.length
+        ...(evaluation || context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
@@ -13732,7 +13806,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext, buildSegmentInstruction({
+        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext,
+          // What failed for the player, on a retry from a turn held on it
+          // (playerTurnFailures.js): the whole skip again, or only those events.
+          normalizeString(context.retryDirective),
+          context.amend ? buildPlayerEventRetryDirective(context.amend.failures, { originDate, targetDate }) : "",
+          buildSegmentInstruction({
           mode,
           segmentIndex,
           segmentCount,
@@ -13755,6 +13834,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          // A retry's events are new events in a period whose first answer used
+          // the same temporary ids (segment-1-event-1) and maybe the same ids of
+          // the model's own: each gets a prefix of its own, before anything is
+          // bound to it, so the two answers can never be mistaken for each other.
+          if (context.amend) {
+            normalizeArray(candidate?.events).forEach((event, index) => {
+              if (event && typeof event === "object" && !normalizeString(event.id).startsWith(`retry-${context.amend.round}-`)) event.id = `retry-${context.amend.round}-${normalizeString(event.id) || `event-${index + 1}`}`;
+            });
+          }
           // politicalClaims uses the model's 1-based event numbers. Bind those
           // numbers to the actual event objects BEFORE chronological sorting so
           // the claim cannot drift onto another event when the model wrote dates
@@ -13969,6 +14057,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         priorEvents: segmentBundle.events,
         world: ledgerWorld,
         game: bundle.game,
+        actions: bundle.actions,
+        chats: bundle.chats,
         state,
         originDate: state.segmentOrigin,
         targetDate: segmentTarget,
@@ -13977,6 +14067,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         generationSource: segmentGeneration?.source || "ai",
       });
 
+      if (context.amend) {
+        // Added to the period, not a period of its own: no search for more
+        // events on its account, no summary or stop date of its own, and it
+        // may answer only the orders it was asked about.
+        state.breadthRepairContexts.pop();
+        payload.events = restrictToRetriedOrders(payload.events, context.amend.orderIds);
+        payload.summary = "";
+        payload.stopDate = context.amend.stopDate;
+        payload.clearActions = context.amend.clearActions;
+        // And its ledger records only for its own events: the first answer's
+        // war, relation, agreement and puppet changes stand, and are
+        // not applied a second time (a repeated puppet "suppress" would raise
+        // loyalty twice).
+        const retryEventIds = normalizeArray(payload.events).map((event) => normalizeString(event?.id));
+        for (const key of ["warUpdates", "relationUpdates", "agreementUpdates", "puppetUpdates"]) {
+          payload[key] = keepRetryBoundRecords(payload[key], retryEventIds);
+        }
+      }
       state.segmentPayloads.push(payload);
       // What this segment asked the model to move, for the skip's one motion
       // repair pass. Recorded only with the committed segment, so a failed
@@ -14007,6 +14115,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     // history and never create resumable pending-jump state in the live game.
     if (evaluation) throw error;
     const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
+
+    // A retry of the player's failed events adds to a period already written:
+    // it never falls back, which would replace that period with canned events.
+    // retryHeldPlayerEvents puts the turn back on its events notice.
+    if (context.amend) throw error;
 
     // The request fits no model the player has (contextWindow.js): canned events
     // would hide that, skip after skip. The turn refuses instead, with the
@@ -14160,6 +14273,11 @@ const UNIT_DIRECTOR_INSTRUCTION =
   + "A garrison placed, stationed or established at a named place is likewise new: spawn it there with type \"garrison\"; never march an existing field formation in its place. "
   // A player asked for it (2026-09-29), and placement enforces it (militaryPosts.js).
   + "On the power's own land a garrison is placed directly. On another power's land one of the power's formations must stand there or arrive there in the same event: when none does, move a formation there and place the garrison on a later turn. "
+  // Seen in a player's Game (2026-09-30): Russia invaded Ukraine and fought
+  // for months with no counter on the map for either side. Neither had a unit
+  // when the war began, and the director, told to reuse existing units and to
+  // spawn only for a new formation, never gave them one.
+  + "A power that fights, invades or holds a front in an event and has no unit at all among the current units is not represented: spawn one formation for it where the event puts its forces. "
   + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
@@ -14167,6 +14285,39 @@ const TIMELINE_CURATOR_INSTRUCTION =
   "Analyze every supplied native timeline candidate with the required curator tool. Return exactly one judgment for every candidate index.";
 
 const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit director unavailable; existing simulator unitOps preserved." });
+
+// A warring power the director left with no counter gets one from the engine
+// (nativeUnitDirector.js missingCombatantSpawns), placed like the director's own
+// spawns and kept by the same rules. In place, on the answer this skip uses.
+const raiseMissingCombatants = async (answer, input, bundle) => {
+  if (!answer) return;
+  const missing = missingCombatantSpawns(input, answer.payload);
+  if (!missing.length) return;
+  const context = await lazyLookupContext(bundle)();
+  const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
+  payload.eventOrders = normalizeArray(payload.eventOrders);
+  for (const { power, warId, events } of missing) {
+    let chosen = null;
+    let anchor = null;
+    for (const { eventIndex, text } of events) {
+      const pick = pickCombatantPlace(power, placesNamedIn(context, text));
+      if (pick?.at) { chosen = { eventIndex, at: pick.at }; break; }
+      if (pick?.anchorRegionId && !anchor) anchor = { eventIndex, regionId: pick.anchorRegionId };
+    }
+    // The events name only places another power holds: the power's own land
+    // nearest the first of them, its side of the front.
+    if (!chosen && anchor) {
+      const centre = normalizeArray(context?.rows).find((row) => row.id === anchor.regionId)?.centroid;
+      const own = nearestOwnRegion({ power, anchor: centre, rows: context?.rows });
+      if (own) chosen = { eventIndex: anchor.eventIndex, at: own };
+    }
+    // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
+    // where the map says Odessa, and "the Black Sea"): the power's own land.
+    chosen ??= { eventIndex: events[0].eventIndex, at: power };
+    payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at, warId)] });
+    logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${chosen.at}.`);
+  }
+};
 
 // The director's orders may say where in words too. Placed here, before the
 // director's own rules measure the move, because those rules read coordinates.
@@ -14268,6 +14419,7 @@ const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = n
     const answer = review
       ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
       : await askAsCheck("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+    await raiseMissingCombatants(answer, input, bundle);
     await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
     return answer;
   };
@@ -14852,6 +15004,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     boardProvisionalEventIds: state.boardProvisionalEventIds,
     receipt: state.receipt,
     scriptedEventState: state.scriptedEventState,
+    // A canned turn is never held: the fallback page already says the model is
+    // not answering. Nor once the player chose to keep the turn as it is.
+    holdOnPlayerFailures: Boolean(context.stopOnPlayerFailures) && !state.playerFailuresAccepted
+      && normalizeString(state.generation?.source) !== "fallback",
+    acknowledgedFailures: state.acknowledgedFailures ?? [],
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -14903,11 +15060,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     // A check made inside the apply failed (the timeline clean-up): held by
     // the checks, like the rest, so the same Retry and Continue answer it.
     if (error?.heldKind === HELD_TURN.checks) holdTurn(HELD_TURN.checks, { context, state });
+    if (error?.heldKind === HELD_TURN.events) holdTurn(HELD_TURN.events, { context, state, failures: error.playerFailures });
     throw error;
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null } = {}) => {
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null, retryDirective = "" } = {}) => {
   const evaluationMode = evaluation && typeof evaluation === "object";
   // Starting a fresh LIVE turn abandons any jump still held on a failed segment.
   // The A/B lab is observational and must not touch any live pending/simulation
@@ -15000,6 +15158,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     segmentDays,
     targetDate,
     variables,
+    // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
+    // once, at the start, so a toggle mid-skip does not change the skip.
+    stopOnPlayerFailures: !evaluationMode && getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // A whole skip run again from that notice: what failed the first time.
+    retryDirective: normalizeString(retryDirective),
   };
   const jumpState = {
     generatedSoFar: [],
@@ -15140,8 +15303,130 @@ export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailed
   }
 };
 
-export const simulateAutoJump = async ({ days = 365, signal, onEvents, onProgress } = {}) =>
-  simulateTimelineJump({ days, mode: "auto", signal, onEvents, onProgress });
+export const simulateAutoJump = async ({ days = 365, signal, onEvents, onProgress, retryDirective = "" } = {}) =>
+  simulateTimelineJump({ days, mode: "auto", signal, onEvents, onProgress, retryDirective });
+
+// The turn is generated and waiting, not lost: with "Stop when my events fail"
+// on, the player's own events were refused or their orders got no outcome
+// (playerTurnFailures.js). Carries the list for the notice.
+const playerEventsHeldError = (failures, { retryError = "" } = {}) => {
+  const error = new Error(describePlayerTurnFailures(failures, { retryError }));
+  error.heldKind = HELD_TURN.events;
+  error.playerFailures = failures;
+  return error;
+};
+
+// What a held turn's notice offers to run again, for the Timeline panel: its
+// length and mode for "Retry the whole skip", and what failed, to tell the
+// model. Null when no turn is held on its events.
+export const heldSkipToRerun = () => {
+  const held = getHeldTurn(HELD_TURN.events);
+  if (!held) return null;
+  const { context, failures } = held;
+  return {
+    days: context.safeDays,
+    mode: context.mode,
+    failures,
+    directive: buildPlayerEventRetryDirective(failures, { wholeSkip: true }),
+  };
+};
+
+// A held turn's state, shallow, with a copy of each list: what a retry pushes
+// onto (the segments, their events, the filed cards) is put back by
+// restoreHeldState, and a field the retry added is removed.
+const snapshotHeldState = (state) => Object.fromEntries(
+  Object.entries(state).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]),
+);
+const restoreHeldState = (state, snapshot) => {
+  for (const key of Object.keys(state)) if (!(key in snapshot)) delete state[key];
+  for (const [key, value] of Object.entries(snapshot)) state[key] = Array.isArray(value) ? [...value] : value;
+};
+
+// Finish a turn held on the player's failed events (HELD_TURN.events).
+//
+// keep: the turn lands as it would have with the setting off.
+// Otherwise the failed events are written again, in place, without undoing
+// anything — nothing was written: ONE more writing request for the same period
+// (runJumpSegments, with context.amend), told what failed and shown what was
+// already written, whose answer is screened, placed and validated like any
+// segment's. Then the whole turn finishes again with every event in it: the
+// checks are asked afresh (they answered for a turn without these events), the
+// orders are attributed and settled, and the apply writes it once. Retrying
+// individual events after a turn was written would mean applying impacts into
+// a world that has moved on; holding the turn is what keeps this the same path
+// as a normal skip. Still failing, it is held again with what is left, and the
+// player decides again.
+export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress, signal } = {}) => {
+  const held = getHeldTurn(HELD_TURN.events);
+  if (!held) throw new Error("There is no turn waiting on your events.");
+  const { context, state, failures } = held;
+  beginSimulation();
+  try {
+    if (keep) {
+      state.playerFailuresAccepted = true;
+      return await attemptHeldTurn(HELD_TURN.events, held, () => finishTimelineJump({ context, signal, state }), {
+        signal,
+        onCancel: () => { state.playerFailuresAccepted = false; },
+      });
+    }
+    // The turn as it was held, to put back when the retry is cancelled or its
+    // own request fails: every field, and a copy of every list the segments
+    // push onto, so nothing the retry added is left behind.
+    const before = snapshotHeldState(state);
+    const titles = normalizeArray(failures?.events).map((event) => event.title);
+    const lastPayload = state.segmentPayloads.at(-1) ?? {};
+    const amendContext = {
+      ...context,
+      segmentDays: [context.safeDays],
+      amend: {
+        failures,
+        orderIds: normalizeArray(failures?.orders).map((order) => order.id),
+        stopDate: normalizeString(lastPayload.stopDate) || context.targetDate,
+        clearActions: lastPayload.clearActions !== false,
+      },
+    };
+    // A fresh decision to spend, as any retry is.
+    const spentSoFar = state.requests ?? { used: 0, refused: 0 };
+    state.requests = {
+      ...createJumpRequests({
+        segments: 1,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      }),
+      used: spentSoFar.used,
+      refused: spentSoFar.refused,
+    };
+    state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
+    state.checks = createTurnChecks();
+    state.acknowledgedFailures = [...normalizeArray(state.acknowledgedFailures), ...acknowledgeFailures(failures)];
+    state.retryRound = (state.retryRound ?? 0) + 1;
+    amendContext.amend.round = state.retryRound;
+    state.receipt = dropRetriedReceiptNotes(state.receipt, titles);
+    state.nextSegment = 0;
+    state.segmentOrigin = context.originDate;
+    return await attemptHeldTurn(HELD_TURN.events, held, async () => {
+      try {
+        await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
+      } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
+        // The retry's own request failed: the turn goes back to being held on
+        // its events, as it was, with all three choices still there — never
+        // the canned fallback, and never a segment notice whose Discard would
+        // throw the whole skip away.
+        restoreHeldState(state, before);
+        holdTurn(HELD_TURN.events, held);
+        logDebugEvent("turn", "Retrying the player's failed events failed; the turn is held as it was.", { reason: normalizeString(error?.message) });
+        throw playerEventsHeldError(failures, { retryError: normalizeString(error?.message) || "the AI returned no usable answer" });
+      }
+      return finishTimelineJump({ context, signal, state });
+    }, {
+      signal,
+      // A cancelled retry leaves the turn exactly as it was held.
+      onCancel: () => { restoreHeldState(state, before); },
+    });
+  } finally {
+    endSimulation();
+  }
+};
 
 // ---- GM Console: previewable, revalidated, audited transactions ------------
 // The AI plans a structured transaction; native code validates it against the

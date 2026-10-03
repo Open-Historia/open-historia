@@ -690,6 +690,197 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "",
     }
 };
 
+// ---------------------------------------------------------------------------
+// Seas and oceans: water the map leaves unnamed
+// ---------------------------------------------------------------------------
+//
+// On this map the sea is simply where no region is, so nothing in the
+// gazetteer is called "Black Sea" or "Ionian Sea" — and those are exactly the
+// names a model gives a fleet. Seen in a player's Game (2026-09-30): the Black
+// Sea Vanguard Task Group, sent to "Central Mediterranean, Mediterranean Sea"
+// and then to "Ionian Sea, Eastern Mediterranean", could not be placed either
+// time, so its moves were dropped and it sat where it was; the player had to
+// keep ordering it on. A named sea is now a point in open water inside it,
+// tried only after every name the map itself knows.
+//
+// The seas belong to the map, not to this file. The gazetteer hands in its own
+// `seas` (seasForMap): the real ones below only when the real-world map is
+// loaded, and whatever a scenario with its own map declares in its world
+// (`world.seas`). A hand-drawn world declaring none gets none, so a fleet
+// there is never sent to where the Black Sea would be on Earth.
+//
+// [lng, lat], each a spot well out from any shore. Names are matched whole,
+// with or without "the".
+const EARTH_SEAS = [
+    [["Mediterranean Sea", "Mediterranean", "the Med"], [18, 34.5]],
+    [["Western Mediterranean"], [5, 38.5]],
+    [["Central Mediterranean"], [17, 35]],
+    [["Eastern Mediterranean"], [28.5, 33.8]],
+    [["Ionian Sea"], [19, 37.5]],
+    [["Aegean Sea", "Aegean"], [25.6, 39.4]],
+    [["Adriatic Sea", "Adriatic"], [16, 42.6]],
+    [["Tyrrhenian Sea"], [12, 40]],
+    [["Ligurian Sea"], [9, 43.6]],
+    [["Balearic Sea"], [2, 40.6]],
+    [["Alboran Sea"], [-3.5, 36]],
+    [["Strait of Gibraltar"], [-5.6, 35.95]],
+    [["Levantine Sea"], [32.5, 33.5]],
+    [["Sea of Marmara"], [28.2, 40.75]],
+    [["Black Sea"], [34, 43.2]],
+    [["Sea of Azov"], [36.5, 46]],
+    [["Kerch Strait"], [36.55, 45.2]],
+    [["Caspian Sea"], [51, 42]],
+    [["Red Sea"], [38.5, 20]],
+    [["Gulf of Aden"], [48, 12.5]],
+    [["Arabian Sea"], [64, 16]],
+    [["Persian Gulf", "Arabian Gulf", "the Gulf"], [51.5, 27]],
+    [["Gulf of Oman"], [58.5, 24.8]],
+    [["Strait of Hormuz"], [56.4, 26.5]],
+    [["Indian Ocean"], [80, -10]],
+    [["Bay of Bengal"], [88, 15]],
+    [["Andaman Sea"], [96, 10]],
+    [["Strait of Malacca", "Malacca Strait"], [99.8, 3.6]],
+    [["South China Sea"], [114, 14]],
+    [["East China Sea"], [125, 29]],
+    [["Yellow Sea"], [123, 35.5]],
+    [["Sea of Japan", "East Sea"], [134, 40]],
+    [["Philippine Sea"], [132, 18]],
+    [["Taiwan Strait"], [119.5, 24.3]],
+    [["Sea of Okhotsk"], [150, 54]],
+    [["Bering Sea"], [-178, 58]],
+    [["Pacific Ocean", "Pacific"], [-150, 10]],
+    [["North Pacific", "North Pacific Ocean"], [-160, 35]],
+    [["South Pacific", "South Pacific Ocean"], [-130, -25]],
+    [["Coral Sea"], [155, -16]],
+    [["Tasman Sea"], [160, -38]],
+    [["Atlantic Ocean", "Atlantic"], [-35, 30]],
+    [["North Atlantic", "North Atlantic Ocean"], [-35, 45]],
+    [["South Atlantic", "South Atlantic Ocean"], [-15, -25]],
+    [["Caribbean Sea", "Caribbean"], [-75, 15]],
+    [["Gulf of Mexico"], [-90, 25]],
+    [["Gulf of Guinea"], [3, 2]],
+    [["Mozambique Channel"], [41, -18]],
+    [["North Sea"], [3, 56]],
+    [["English Channel", "the Channel"], [-2, 50.2]],
+    [["Irish Sea"], [-5, 53.5]],
+    [["Celtic Sea"], [-7.5, 50.5]],
+    [["Bay of Biscay"], [-5, 45.5]],
+    [["Norwegian Sea"], [2, 68]],
+    [["Barents Sea"], [40, 73]],
+    [["Baltic Sea", "Baltic"], [19, 56]],
+    [["Gulf of Finland"], [25, 59.8]],
+    [["Gulf of Bothnia"], [20.5, 62.5]],
+    [["Greenland Sea"], [-5, 75]],
+    [["Labrador Sea"], [-55, 58]],
+    [["Arctic Ocean", "Arctic"], [0, 85]],
+    [["Southern Ocean"], [0, -60]],
+];
+const seaKey = (name) => stripArticle(name).toLowerCase();
+
+// A scenario's own seas, as its world declares them:
+//   "seas": [{ "name": "Narrow Sea", "aliases": ["the Narrows"], "point": [lng, lat] }]
+// (`lng` and `lat` in place of `point` are read too). An entry without a name
+// or a usable point is skipped.
+export const declaredSeas = (list) => asArray(list).flatMap((entry) => {
+    const name = asText(entry?.name);
+    const point = Array.isArray(entry?.point) ? entry.point.map(Number) : [Number(entry?.lng), Number(entry?.lat)];
+    const [lng, lat] = point;
+    if (!name || !Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) return [];
+    return [{ name, aliases: asArray(entry?.aliases).map(asText).filter(Boolean), point: [lng, lat] }];
+});
+
+// Whether the loaded map is the real world, told by its land and water: the
+// map has land under the middle of the continents and none in the middle of the
+// oceans and the inland seas. Not by its region ids — the stock map's are GADM
+// ids ("UKR.11_1"), but Modern Day's own redrawn map numbers them ("2001") —
+// and not by the world's builtInMap stamp, which a scenario started from
+// scratch copies with Modern Day's world.json and keeps over a map of its own.
+// Where the coastlines are Earth's, the real seas are where they say they are,
+// whatever the story: an alternate or fictional one told on the real map still
+// has them. One land point may be missing (a region left undrawn); no ocean
+// point may be land.
+const EARTH_LAND_PROBES = [
+    [-3.7, 40.4], [37.6, 55.75], [31.2, 30.05], [116.4, 39.9], [-98, 38.5],
+    [-47.9, -15.8], [133.9, -23.7], [77.2, 28.6], [18.7, 15.5],
+];
+const EARTH_WATER_PROBES = [[-35, 30], [-150, 10], [80, -10], [34, 43.2], [18, 34.5], [-15, -25]];
+export const isRealWorldMap = (regionAt) => {
+    if (typeof regionAt !== "function") return false;
+    if (EARTH_WATER_PROBES.some((point) => regionAt(point))) return false;
+    return EARTH_LAND_PROBES.filter((point) => regionAt(point)).length >= EARTH_LAND_PROBES.length - 1;
+};
+
+// The seas a gazetteer offers: the scenario's own first, so they win a shared
+// name, then the real ones when the map is the real world.
+export const seasForMap = ({ regionAt = null, declared = [] } = {}) => [
+    ...declaredSeas(declared),
+    ...(isRealWorldMap(regionAt) ? EARTH_SEAS.map(([[name, ...aliases], point]) => ({ name, aliases, point })) : []),
+];
+
+// The gazetteer's seas by every name they go by, built once per list.
+const seaIndexes = new WeakMap();
+const seaIndexOf = (seas) => {
+    if (!Array.isArray(seas) || !seas.length) return null;
+    if (!seaIndexes.has(seas)) {
+        const index = new Map();
+        for (const sea of seas) {
+            for (const name of [sea.name, ...asArray(sea.aliases)]) {
+                const key = seaKey(name);
+                if (key && !index.has(key)) index.set(key, { name: sea.name, point: sea.point });
+            }
+        }
+        seaIndexes.set(seas, index);
+    }
+    return seaIndexes.get(seas);
+};
+
+// The sea a phrase names, among the gazetteer's seas: each comma part of it,
+// the first and most particular first, so "Ionian Sea, Eastern Mediterranean"
+// is the Ionian Sea; then the names its readings give, so "western Black Sea"
+// is the Black Sea. null when it names none, or the map has no seas.
+const seaInPhrase = (phrase, readings, seas) => {
+    const index = seaIndexOf(seas);
+    if (!index) return null;
+    const names = [
+        ...asText(phrase).split(",").map((part) => part.trim()),
+        ...readings.map((reading) => reading.name),
+    ];
+    for (const name of names) {
+        const plain = asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "");
+        // The name itself first, so the North Sea and the South Atlantic stay
+        // themselves; then without a part of it, so "the western Black Sea" is
+        // the Black Sea. Seen in a player's Game (2026-10-02, a live check): a
+        // fleet sent to "western Black Sea" was dropped.
+        const sea = index.get(seaKey(plain)) ?? index.get(seaKey(plain.replace(SEA_PART, "")));
+        if (sea) return sea;
+    }
+    return null;
+};
+// "<sea> off <port>": the sea, the word, the place.
+const SEA_THEN_PLACE = /^(.+?)\s+(off|near|outside)\s+(.+)$/i;
+// "the western …", "north-eastern …", "the open …": a part of a sea, not its name.
+const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west))?(?:ern)?|east(?:ern)?|west(?:ern)?|central|upper|lower|inner|outer|open|mid|middle)\s+(?:part of\s+|reaches of\s+)?(?:the\s+)?/i;
+
+// Where a thing put on land goes to be at sea: the nearest open water within
+// maxKm, searched in widening rings, then a little further out so it is not on
+// the shoreline. null when there is none in reach. A fleet is never left
+// standing in a city: seen in a player's Game (2026-09-30), a task group sent
+// to a port by its name moved about on land.
+const SEA_RINGS_KM = [8, 16, 25, 35, 50, 70, 100, 140, 200, 300, 400];
+export const nearestSea = (point, gazetteer, { seed = 0, maxKm = 400 } = {}) => {
+    if (!gazetteer.regionAt(point)) return point;
+    for (const km of SEA_RINGS_KM.filter((ring) => ring <= maxKm)) {
+        for (let step = 0; step < 16; step += 1) {
+            const bearing = (seed + step * 22.5) % 360;
+            const out = offsetPoint(point, bearing, km);
+            if (gazetteer.regionAt(out)) continue;
+            const further = offsetPoint(point, bearing, km + 12);
+            return gazetteer.regionAt(further) ? out : further;
+        }
+    }
+    return null;
+};
+
 const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
     const readings = readPlacement(phrase, { owner });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
@@ -708,6 +899,23 @@ const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) =
     // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
     // can say what the phrase nearly matched. The message quotes the first, which
     // is the whole phrase, because that is what the model actually wrote.
+    // "western Black Sea off Odesa, Ukraine": a sea, then where in it. The
+    // where is the more exact of the two, so it is tried first; the sea is
+    // what is left when it names nothing. Seen in a live check on a player's
+    // save (2026-10-02): the whole phrase named nothing and the move was dropped.
+    const within = asText(phrase).match(SEA_THEN_PLACE);
+    const seaPart = within && seaInPhrase(within[1], [], gazetteer.seas);
+    if (seaPart) {
+        const placed = resolveExactly(`${within[2]} ${within[3]}`, gazetteer, { seedText, owner });
+        if (!placed.error) return placed;
+    }
+    const sea = seaPart || seaInPhrase(phrase, readings, gazetteer.seas);
+    if (sea) {
+        // A point inside the sea; if the map has land there after all, the open
+        // water nearest it.
+        const point = nearestSea(sea.point, gazetteer, { seed });
+        if (point) return done(point, "sea", gazetteer, sea.name);
+    }
     const names = [...new Set(readings.flatMap((reading) => [reading.name, reading.first, reading.second]).map(asText).filter(Boolean))];
     const name = names[0] || asText(phrase);
     return { error: `no city, region, unit or structure on this map is called "${name}"`, name, names };
@@ -739,7 +947,13 @@ export const resolveRegionPlacement = (regionId, gazetteer, { seedText = "" } = 
     const id = asText(regionId);
     if (!id) return { error: "no region id" };
     const region = gazetteer.findRegionId?.(id);
-    if (!region) return { error: `no region on this map has the id "${id}"` };
+    if (!region) {
+        // A name in the id's place: a model writes `regionId: "Odessa"` as readily
+        // as the map's id for it. Seen in a player's Game (2026-09-30): a fleet's
+        // move to "Odessa" was dropped for having no coordinates.
+        const named = gazetteer.find ? resolveExactly(id, gazetteer, { seedText }) : null;
+        return named && !named.error ? named : { error: `no region on this map has the id "${id}"` };
+    }
     const point = interiorPoint(region.geometry, { seed: hashText(`${id}|${asText(seedText).toLowerCase()}`) });
     return point ? done(point, "region", gazetteer, region.name) : { error: `region "${region.name || id}" has no shape to stand in` };
 };
@@ -755,5 +969,6 @@ export const PLACEMENT_DIRECTIVE = [
     "- \"Donetsk Oblast, Ukraine facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
     "- \"coast of Crimea, Ukraine\" — on land at the sea's edge. \"off Sevastopol, Ukraine\" — AT SEA, for fleets.",
     "- \"between Kyiv, Ukraine and Kharkiv, Ukraine\" — halfway.",
+    "- \"Black Sea\", \"Ionian Sea\", \"South Atlantic\" — open water in that sea or ocean, for fleets, on a map that knows it.",
     "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
 ].join("\n");

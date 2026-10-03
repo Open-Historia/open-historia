@@ -50,7 +50,18 @@ const ROUTES = Object.freeze({
   EXACT_DUPLICATE: [FILED_FATES.notRecorded, REPEAT],
   NON_BELLIGERENT_WARTIME_CAUSALITY: [FILED_FATES.notRecorded, "Couldn't have happened: it assumes a war this country is not in"],
   UNSUPPORTED_REVERSAL: [FILED_FATES.notRecorded, "Contradicts what is already on the record"],
+  PLAYER_AGENCY_AUTHORITY: [FILED_FATES.notRecorded, "Not recorded: the game could not tell it was your government's order"],
 });
+
+// Whether a removed event was the player's: about their country, or citing one
+// of their orders. The Timeline panel stops on these when the player asks it to
+// (AI/playerTurnFailures.js).
+const ownership = (event) => {
+  const actionIds = (Array.isArray(event?.impacts?.actionIds) ? event.impacts.actionIds : [])
+    .map(clean).filter(Boolean).slice(0, 12);
+  const player = event?.playerRelated === true || actionIds.length > 0;
+  return { ...(player ? { player: true } : {}), ...(actionIds.length ? { actionIds } : {}) };
+};
 
 // A route added later falls back to the safe reading: not on the record.
 export const describeFiledRoute = (route) => {
@@ -76,6 +87,11 @@ export const toFiledEvent = (row, event = null) => {
     route,
     fate,
     note,
+    ...ownership(source),
+    // In memory only, never saved (normalizeFiledEvents): which event this
+    // was, so a retry's event is not mistaken for the one it replaces
+    // (AI/playerTurnFailures.js).
+    ...(clean(row?.id || source?.id) ? { eventId: clean(row?.id || source?.id) } : {}),
   };
 };
 
@@ -99,6 +115,7 @@ export const normalizeFiledEvents = (value) => {
       route,
       fate,
       note: clip(entry.note, 160) || described.note,
+      ...ownership({ playerRelated: entry.player === true, impacts: { actionIds: entry.actionIds } }),
     });
     if (out.length >= FILED_EVENTS_MAX) break;
   }

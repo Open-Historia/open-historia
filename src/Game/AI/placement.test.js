@@ -28,12 +28,14 @@ import {
     hashText,
     interiorPoint,
     nearestInteriorPoint,
+    nearestSea,
     offsetPoint,
     pointInGeometry,
     readPlacement,
     describeApproximatePlacement,
     resolvePlacement,
     resolveRegionPlacement,
+    seasForMap,
 } from "./placement.js";
 
 const box = (west, south, east, north) => ({ type: "Polygon", coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]] });
@@ -109,6 +111,125 @@ test("a phrase that finds nothing reports every place it could have been naming"
         ["between Nowhereshire and Elsewhere", "Nowhereshire", "Elsewhere"],
         "the whole phrase, then each end of it",
     );
+});
+
+// --- seas and oceans ---
+//
+// Seen in a player's Game (2026-09-30): a fleet sent to "Central Mediterranean,
+// Mediterranean Sea", "Ionian Sea, Eastern Mediterranean" and "Black Sea" could
+// be placed at none of them, because the map names no water, and it stopped.
+//
+// Modern Day's own map, as it ships: its regions are numbered ("2001"), not
+// GADM ids, and it is the map the fleet in that Game sailed on.
+const MODERN_DAY_REGIONS = JSON.parse(readFileSync(new URL("../../../server/seed/default/regions.geojson", import.meta.url), "utf8"))
+    .features.filter((feature) => feature?.geometry);
+const modernDayRegionAt = (point) => MODERN_DAY_REGIONS.find((feature) => pointInGeometry(point, feature.geometry)) ?? null;
+// The test map stands in for the real world here: its gazetteer is handed the
+// seas the real-world map has.
+const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionAt: modernDayRegionAt }) };
+const placeOnEarth = (phrase) => resolvePlacement(phrase, earthGazetteer);
+
+test("a named sea is open water in that sea, whatever words come with it", () => {
+    for (const [phrase, label] of [
+        ["Black Sea", "Black Sea"],
+        ["the Black Sea", "Black Sea"],
+        ["Ionian Sea, Eastern Mediterranean", "Ionian Sea"],
+        ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
+        ["in the South Atlantic", "South Atlantic"],
+        // A part of a sea is that sea, but a sea named for its part stays itself.
+        ["western Black Sea", "Black Sea"],
+        ["the north-western Black Sea, off Odessa", "Black Sea"],
+        ["eastern Mediterranean", "Eastern Mediterranean"],
+        ["North Sea", "North Sea"],
+        ["the open Atlantic", "Atlantic Ocean"],
+        // A sea, then a place in it the map does not know: the sea.
+        ["western Black Sea off Atlantis", "Black Sea"],
+    ]) {
+        const spot = placeOnEarth(phrase);
+        assert.equal(spot.error, undefined, phrase);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, label, phrase);
+        assert.equal(gazetteer.regionAt([spot.lng, spot.lat]), null, `${phrase} is at sea`);
+    }
+    assert.ok(distanceKm([placeOnEarth("Black Sea").lng, placeOnEarth("Black Sea").lat], [34, 43.2]) < 1);
+});
+
+test("Modern Day's own map, numbered regions and all, is the real world and has the real seas", () => {
+    assert.ok(MODERN_DAY_REGIONS.length > 1000);
+    assert.ok(!MODERN_DAY_REGIONS.some((feature) => /^[A-Z]{3}\.\d+/.test(String(feature.properties?.id))), "its ids are not GADM ids");
+    const seas = seasForMap({ regionAt: modernDayRegionAt });
+    assert.ok(seas.some((sea) => sea.name === "Black Sea"));
+    // Every real sea's point is open water on it, or near enough to find some.
+    for (const sea of seas) {
+        assert.ok(nearestSea(sea.point, { regionAt: modernDayRegionAt }), sea.name);
+    }
+});
+
+test("the real seas are the real-world map's only: a map of its own does not know the Black Sea", () => {
+    // The test map: a few regions, none where Earth's continents are.
+    const ownMap = seasForMap({ regionAt: gazetteer.regionAt });
+    assert.deepEqual(ownMap, []);
+    // A map that is land everywhere, or that has no geometry, is not Earth either.
+    assert.deepEqual(seasForMap({ regionAt: () => ({ id: "x" }) }), []);
+    assert.deepEqual(seasForMap({}), []);
+
+    const spot = resolvePlacement("Black Sea", { ...gazetteer, seas: ownMap });
+    assert.equal(spot.how, undefined);
+    assert.match(spot.error, /Black Sea/);
+    assert.match(place("Black Sea").error, /Black Sea/, "and a gazetteer with no seas at all knows none");
+});
+
+test("a map of its own places fleets in the seas its scenario declares", () => {
+    const seas = seasForMap({
+        regionAt: gazetteer.regionAt,
+        declared: [
+            { name: "Narrow Sea", aliases: ["the Narrows"], point: [36, 45] },
+            { name: "Sunset Sea", lng: 20, lat: 45 },
+            { name: "Nowhere Sea" },
+            { aliases: ["no name"], point: [1, 1] },
+        ],
+    });
+    assert.deepEqual(seas.map((sea) => sea.name), ["Narrow Sea", "Sunset Sea"], "an entry without a name or a point is skipped");
+    const own = { ...gazetteer, seas };
+    for (const phrase of ["Narrow Sea", "the Narrows", "into the Narrow Sea"]) {
+        const spot = resolvePlacement(phrase, own);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, "Narrow Sea", phrase);
+        assert.deepEqual([spot.lng, spot.lat], [36, 45], phrase);
+    }
+    assert.equal(resolvePlacement("Sunset Sea", own).how, "sea");
+
+    // On the real-world map too, and a scenario's own sea wins a shared name.
+    const earth = seasForMap({ regionAt: modernDayRegionAt, declared: [{ name: "Black Sea", point: [31, 44] }] });
+    assert.deepEqual(earth.find((sea) => sea.name === "Black Sea").point, [31, 44]);
+    assert.ok(earth.some((sea) => sea.name === "Ionian Sea"));
+});
+
+test("a place the map names is preferred to a sea of the same name", () => {
+    const named = resolvePlacement("Black Sea", { ...gazetteer, find: (name) => (fold(name) === "black sea" ? { kind: "marker", name: "Black Sea", point: [31, 51] } : null) });
+    assert.deepEqual([named.lng, named.lat], [31, 51]);
+});
+
+test("a region name written where the regionId goes still places the move", () => {
+    const spot = resolveRegionPlacement("Eastland South", gazetteer, { seedText: "u-1" });
+    assert.equal(spot.error, undefined);
+    assert.equal(spot.regionId, "el-s");
+});
+
+test("a point on land goes to the sea off that coast; a point at sea stays put", () => {
+    const off = nearestSea([36, 48.3], gazetteer);
+    assert.ok(off, "Eastland South has a southern shore");
+    assert.equal(gazetteer.regionAt(off), null);
+    assert.ok(distanceKm(off, [36, 48.3]) < 120, "and it is the water nearest the port");
+    assert.deepEqual(nearestSea([36, 45], gazetteer), [36, 45]);
+});
+
+test("a fleet put on land is moved to sea in the placement pass", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(body.includes('atSea: normalizeString(mover?.type).toLowerCase() === "naval"'), "a moving fleet is marked");
+    assert.ok(body.includes("entry.atSea && gazetteer.regionAt([lng, lat])") && body.includes("nearestSea([lng, lat], gazetteer"), "and taken off the land");
+    assert.ok(/was sent inland, too far from any sea for a fleet, and was not moved[\s\S]{0,200}delete target\[lngKey\]; delete target\[latKey\];/.test(body), "and with no sea in reach, not placed at all");
 });
 
 // --- geometry ---

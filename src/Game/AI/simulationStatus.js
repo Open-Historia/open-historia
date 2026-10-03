@@ -20,13 +20,17 @@ let activeSimulations = 0;
 //   board    the Projects & Operations board did not update (applySimulationResult)
 //   checks   a check after the events failed: the turn review, or with Save AI
 //            requests off one of the separate checks (turnChecks.js)
+//   events   with "Stop when my events fail" on, the player's own events were
+//            refused or their orders left without an outcome
+//            (AI/playerTurnFailures.js)
 // An error that holds a turn carries its kind as `heldKind`.
-export const HELD_TURN = Object.freeze({ segment: "segment", board: "board", checks: "checks" });
+export const HELD_TURN = Object.freeze({ segment: "segment", board: "board", checks: "checks", events: "events" });
 const heldTurns = new Map();
 const DISCARD_NOTES = Object.freeze({
   [HELD_TURN.segment]: "Held jump discarded; nothing was written and its finished segments are gone.",
   [HELD_TURN.board]: "Held turn discarded; the board was never updated and nothing was written.",
   [HELD_TURN.checks]: "Held turn discarded; a check after its events failed and nothing was written.",
+  [HELD_TURN.events]: "Held turn discarded; the player's events in it had failed and nothing was written.",
 });
 
 // The idle chat poll is mid-generation ("someone might be typing").

@@ -15,7 +15,7 @@ import {
     loadRegionCatalog,
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { canInterveneInLastTurn, declineInteractiveOffer, heldSkipToRerun, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { HELD_TURN, NO_RESPONSE_BODY_NOTE, discardHeldTurn } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -1329,7 +1329,39 @@ const HELD_NOTICE = Object.freeze({
         canContinue: true,
         stillFailing: "the checks still did not come back. Retrying again may help if the model is only busy; otherwise continue without them, or discard the turn.",
     },
+    // Settings, AI: "Stop when my events fail" (AI/playerTurnFailures.js).
+    [HELD_TURN.events]: {
+        retry: "Retry the failed events",
+        retrying: "Retrying the failed events…",
+        showProgress: true,
+        playerEvents: true,
+        stillFailing: "some of your events still failed. Retry them again, retry the whole skip, or keep it and move on.",
+    },
 });
+
+// What failed, for a turn held on the player's events: each refused event with
+// why, and each order that got no outcome.
+const HeldFailureList = ({ failures }) => {
+    const events = failures?.events ?? [];
+    const orders = failures?.orders ?? [];
+    if (!events.length && !orders.length) return null;
+    return (
+        <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        {events.map((event) => (
+            <li key={`event-${event.title}`}>
+            <span style={{ fontWeight: 600 }}>{event.title}</span>
+            <span style={{ color: "rgba(253,230,138,0.72)" }}> — {event.reason}</span>
+            </li>
+        ))}
+        {orders.map((order) => (
+            <li key={`order-${order.id}`}>
+            <span style={{ fontWeight: 600 }}>Order: {order.title}</span>
+            <span style={{ color: "rgba(253,230,138,0.72)" }}> — not carried out</span>
+            </li>
+        ))}
+        </ul>
+    );
+};
 
 const heldButtonStyle = (primary, busy) => ({
     background: primary ? "rgba(251,191,36,0.18)" : "rgba(255,255,255,0.06)",
@@ -1343,7 +1375,7 @@ const heldButtonStyle = (primary, busy) => ({
     padding: "0.5rem 0.7rem",
 });
 
-const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, onCancel = null }) => {
+const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, onCancel = null, onRetryWholeSkip = null }) => {
     const notice = HELD_NOTICE[held.kind];
     if (!notice) return null;
     return (
@@ -1362,6 +1394,7 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, o
         }}
         >
         <div>{held.message}</div>
+        {notice.playerEvents && <HeldFailureList failures={held.failures} />}
         {/* A failed retry otherwise re-renders the identical message, so the
             button reads as dead even though it ran. Say plainly that it was
             tried and did not work. */}
@@ -1379,6 +1412,16 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, o
                 Continue without them
                 </button>
             )}
+            {notice.playerEvents && (
+                <>
+                <button type="button" className="oh-tap-row" disabled={isRetrying || typeof onRetryWholeSkip !== "function"} onClick={() => onRetryWholeSkip?.()} style={heldButtonStyle(false, isRetrying)}>
+                Retry the whole skip
+                </button>
+                <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={() => onRetry({ keep: true })} style={heldButtonStyle(false, isRetrying)}>
+                Keep it and move on
+                </button>
+                </>
+            )}
             {/* While a retry runs, Cancel stands where Discard was: a retry on a
                 slow model can take minutes, and a cancelled one leaves the turn
                 held (simulationStatus.js attemptHeldTurn). */}
@@ -1386,7 +1429,7 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, o
                 <button type="button" className="oh-tap-row" onClick={onCancel} style={heldButtonStyle(false, false)}>
                 Cancel
                 </button>
-            ) : (
+            ) : notice.playerEvents ? null : (
                 <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={onDiscard} style={heldButtonStyle(false, isRetrying)}>
                 Discard the turn
                 </button>
@@ -1440,6 +1483,7 @@ const TimelineSkipPanel = ({
     onDiscardHeld,
     onJump,
     onRetryHeld,
+    onRetryWholeSkip,
     onUndo,
     progressLabel,
     sceneInProgress = false,
@@ -1709,6 +1753,7 @@ const TimelineSkipPanel = ({
             isRetrying={isRetryingHeld}
             progressLabel={progressLabel}
             onRetry={onRetryHeld}
+            onRetryWholeSkip={onRetryWholeSkip}
             onDiscard={onDiscardHeld}
             onCancel={onCancel}
             />
@@ -2281,6 +2326,8 @@ const DateWidget = ({
     const holdFrom = (heldError) => setHeld((current) => ({
         kind: heldError.heldKind,
         message: heldError.message || "The turn is held.",
+        // What failed, for a turn held on the player's events.
+        failures: heldError.playerFailures ?? null,
         retries: current?.kind === heldError.heldKind ? current.retries : 0,
     }));
     // The structured-output ladder has now twice found the same lower method
@@ -2421,7 +2468,9 @@ const DateWidget = ({
         setLocalOpenPanel((current) => (current === panelName ? null : panelName));
     }
 
-    const runJump = async (days, mode = "jump") => {
+    // retryDirective: a whole skip run again from a turn held on the player's
+    // events, telling the model what failed the first time.
+    const runJump = async (days, mode = "jump", { retryDirective = "" } = {}) => {
         if (!gameData || days == null || isLoading) {
             return;
         }
@@ -2493,9 +2542,10 @@ const DateWidget = ({
             // No onEvents with the setting off: nothing streams anywhere.
             const onEvents = live ? showStreamedEvents : undefined;
             const result = mode === "auto"
-            ? await simulateAutoJump({ days, signal: controller.signal, onProgress: showSkipPhase, onEvents })
+            ? await simulateAutoJump({ days, signal: controller.signal, onProgress: showSkipPhase, onEvents, retryDirective })
             : await simulateTimelineJump({
                 days,
+                retryDirective,
                 signal: controller.signal,
                 // What the skip is doing right now, in its own words
                 // (AI/skipPhases.js). Without this the spinner said the same
@@ -2607,13 +2657,14 @@ const DateWidget = ({
     // already generated is not regenerated — on a slow model that is the
     // difference between seconds and minutes. `withoutFailedChecks` (checks
     // only) takes the turn as the failed checks left it, asking no check again.
-    const retryHeld = async ({ withoutFailedChecks = false } = {}) => {
+    // keep (a turn held on the player's events): the turn lands as it is.
+    const retryHeld = async ({ withoutFailedChecks = false, keep = false } = {}) => {
         if (isRetryingHeld || !held) return;
         const { kind } = held;
         // A segment retry writes the rest of the round, so it streams like a jump.
         const live = kind === HELD_TURN.segment && getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
         setIsRetryingHeld(true);
-        if (!withoutFailedChecks) setHeld((current) => (current ? { ...current, retries: current.retries + 1 } : current));
+        if (!withoutFailedChecks && !keep) setHeld((current) => (current ? { ...current, retries: current.retries + 1 } : current));
         setJumpProgress("");
         if (kind === HELD_TURN.segment) {
             setSkipInFlight(live);
@@ -2637,7 +2688,9 @@ const DateWidget = ({
                 ? await retryPendingJumpSegment({ ...options, onEvents: live ? showStreamedEvents : undefined })
                 : kind === HELD_TURN.board
                     ? await retryPendingProjectsJump({ signal: controller.signal })
-                    : await retryPendingChecksJump({ ...options, withoutFailedChecks });
+                    : kind === HELD_TURN.events
+                        ? await retryHeldPlayerEvents({ ...options, keep })
+                        : await retryPendingChecksJump({ ...options, withoutFailedChecks });
             if (kind === HELD_TURN.segment) carryLiveReveal();
             else setVisibleEventCount(1);
             setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
@@ -2646,7 +2699,7 @@ const DateWidget = ({
             setEvents(result.events);
             setWorldState(result.world);
             setHeld(null);
-            logDebugEvent("turn", `Held turn (${kind}) finished ${withoutFailedChecks ? "without its failed checks " : ""}in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+            logDebugEvent("turn", `Held turn (${kind}) finished ${withoutFailedChecks ? "without its failed checks " : keep ? "as it was " : ""}in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
                 round: result.game?.round ?? 0,
                 events: result.events?.length ?? 0,
             });
@@ -2686,6 +2739,23 @@ const DateWidget = ({
     const discardHeld = () => {
         if (held) discardHeldTurn(held.kind);
         setHeld(null);
+    };
+
+    // A turn held on the player's events, run again from the start: the same
+    // length and mode, with the model told what failed. Nothing was written, so
+    // there is nothing to undo; the new skip discards the held turn itself.
+    const retryWholeSkip = async () => {
+        if (isRetryingHeld || isLoading || held?.kind !== HELD_TURN.events) return;
+        const rerun = await heldSkipToRerun();
+        if (!rerun) {
+            setHeld(null);
+            return;
+        }
+        logDebugEvent("turn", "The whole skip is run again after the player's events failed.", {
+            events: (rerun.failures?.events ?? []).map((event) => event.title),
+            orders: (rerun.failures?.orders ?? []).map((order) => order.title),
+        });
+        await runJump(rerun.days, rerun.mode === "auto" ? "auto" : "jump", { retryDirective: rerun.directive });
     };
 
     const acceptModeSuggestion = () => {
@@ -3277,6 +3347,7 @@ const DateWidget = ({
         onDiscardHeld={discardHeld}
         onJump={(days) => runJump(days, "jump")}
         onRetryHeld={retryHeld}
+        onRetryWholeSkip={retryWholeSkip}
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
