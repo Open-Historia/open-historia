@@ -9,6 +9,7 @@
 // (server-side library, thumbnailed), and a Community tab (filled in Phase 2).
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { ESRI_BASEMAPS } from "../runtime/assets.js";
 import { BACKGROUND_ACCEPT, loadBackgroundFile, vectorLayerToGeoJSON } from "./customBackground.js";
@@ -479,8 +480,11 @@ const BasemapPicker = ({
     }
   };
 
-  return (
-    <div style={overlay} onClick={onClose}>
+  // Drawn straight into the page, above everything: opened from Settings it
+  // would otherwise sit inside the settings card (which clips it and covers
+  // its header), and Settings itself is drawn at the very top of the page.
+  return createPortal(
+    <div style={{ ...overlay, zIndex: browse ? 2147483100 : overlay.zIndex }} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={headerBar}>
           <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
@@ -645,7 +649,8 @@ const BasemapPicker = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
