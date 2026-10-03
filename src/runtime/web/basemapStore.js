@@ -128,7 +128,7 @@ export const handleBasemaps = async ({ method, segments, body }) => {
   // (docs/adr/0005): the desktop app or a local server. Here a scenario naming
   // one simply finds it missing and shows its painted fallback, and an install
   // is refused in words rather than failing silently.
-  const tiledUnsupported = "Detailed (tiled) basemaps need the desktop app or a local Open Historia server. This browser version shows the scenario's basic map instead.";
+  const tiledUnsupported = "Detailed (tiled) basemaps need the desktop app or a local Open Historia server. This browser version shows the scenario's basemap instead.";
   if (id === "tiled") return errorResponse(tiledUnsupported, 501);
   if (id === "by-hash") return errorResponse("Basemap not in the library.", 404);
   // The official list (docs/adr/0006): nothing here can be downloaded, so it

@@ -161,13 +161,13 @@ const buildCitiesForGame = (features) => ({
 // A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { id, version,
 // name, fillOpacity } for an official map, { hash, name, fillOpacity } for
 // their own) is NAMED on a vector background, never carried (docs/adr/0005,
-// 0006). The vector drawing on screen is its basic map, and a scenario on a
+// 0006). The vector drawing on screen is its basemap, and a scenario on a
 // detailed map must have one: a player who does not download the detailed map,
 // or whose game cannot show it, still gets a map, never empty sea.
 export const DETAILED_MAP_NEEDS_BASIC_MAP =
-  "This scenario needs a basic map first: it is what players see if they don't download the detailed map.\n\n"
-  + "In Basemap → My Basemaps, pick one of your painted maps (or add one with “⬆ Add your own map”), or draw one in the editor. Then choose the detailed map again.\n\n"
-  + "(A detailed map that comes with its own basic map uses that one automatically.)";
+  "This scenario needs a basemap first: it is what players see if they don't download the detailed map.\n\n"
+  + "In Basemap → My Maps, pick one of Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then choose the detailed map again.\n\n"
+  + "(A detailed map that comes with its own basemap uses that one automatically.)";
 export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
   if (tiledBasemap?.id || tiledBasemap?.hash) {

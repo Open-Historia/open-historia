@@ -2129,7 +2129,7 @@ const SettingsWorkspace = ({
 
             {activeSection === "map" && (
                 <>
-                <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
+                <SettingsSection title="Basemap" description="The flat map drawn under the countries.">
                     <div style={fieldGroupStyle}>
                         <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
                         <select
@@ -2145,33 +2145,34 @@ const SettingsWorkspace = ({
                         </select>
                         <div style={helperStyle}>
                             {basemapChoices.length === 0
-                                ? "This scenario uses its own map only."
+                                ? "This scenario uses its own basemap only."
                                 : forGame
-                                    ? "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."
-                                    : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own map."}
+                                    ? "Scenario default uses the basemap chosen by the scenario author. Overrides apply immediately."
+                                    : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own basemap."}
                         </div>
                     </div>
+                </SettingsSection>
+                <SettingsSection title="Detailed maps" description="Large terrain maps drawn on top of a scenario's basemap, sharp when zoomed in.">
+                    <Toggle
+                        label="Show detailed maps"
+                        enabled={scenarioTerrain !== SCENARIO_TERRAIN_PAINTED}
+                        onToggle={() => updateScenarioTerrain(scenarioTerrain === SCENARIO_TERRAIN_PAINTED ? "" : SCENARIO_TERRAIN_PAINTED)}
+                    />
+                    <div style={helperStyle}>On: a scenario&apos;s detailed map is drawn when you have it. Off: only its basemap, which is lighter.</div>
                     {forGame && <ScenarioDetailedMapSetting labelStyle={labelStyle} helperStyle={helperStyle} fieldGroupStyle={fieldGroupStyle} />}
                     <div style={fieldGroupStyle}>
-                        <div style={labelStyle}>Basemaps</div>
                         <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
                             Browse and download maps…
                         </button>
-                        <div style={helperStyle}>Your maps, the community&apos;s painted maps, and detailed maps to download. To use one in a scenario, open that scenario in the Map Editor.</div>
+                        <div style={helperStyle}>Your basemaps and detailed maps, and the community&apos;s. To use one in a scenario, open that scenario in the Map Editor.</div>
                         {basemapsOpen && (
                             <Suspense fallback={null}>
                                 <BasemapPicker open browse onClose={() => setBasemapsOpen(false)} />
                             </Suspense>
                         )}
                     </div>
-                    <div style={fieldGroupStyle}>
-                        <label style={labelStyle} htmlFor="game-scenario-terrain">Scenario terrain</label>
-                        <select id="game-scenario-terrain" value={scenarioTerrain} onChange={(event) => updateScenarioTerrain(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-                            <option value="" style={{ color: "black" }}>Detailed map (when the scenario has one)</option>
-                            <option value={SCENARIO_TERRAIN_PAINTED} style={{ color: "black" }}>Basic map</option>
-                        </select>
-                        <div style={helperStyle}>For scenarios with their own map. The detailed map stays sharp when zoomed in; the basic map is lighter. Scenarios without a detailed map always use the basic map.</div>
-                    </div>
+                </SettingsSection>
+                <SettingsSection title="Labels" description="Which political labels are shown, and in what font.">
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
                         list only suggests common safe ones. Empty = whatever the

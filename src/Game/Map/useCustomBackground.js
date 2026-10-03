@@ -27,7 +27,7 @@ const probeArchive = async (pmtilesUrl) => {
 
 // The scenario's background as the map draws it. `missingTiled` is set when the
 // scenario names a Tiled Basemap the player does not have yet (Map shows its
-// basic map meanwhile, and the game offers the download); `tiledUpdate` when
+// basemap meanwhile, and the game offers the download); `tiledUpdate` when
 // they have it and the official list has a newer version
 // (Map/scenarioTerrain.js tiledBasemapOffer).
 const EMPTY = { background: null, declared: false, basemap: null, missingTiled: null, tiledUpdate: null };

@@ -19,6 +19,6 @@ The archive is downloaded once, **streamed to the player's disk as it arrives**,
 - The download must be checked before it is trusted: it has to parse as a PMTiles archive, and its header's zoom range and bounds become the Basemap's. The branch's authored `terrain.maxzoom` goes, because the archive already knows its own range.
 - The rendering on this branch is reused unchanged. That covers the `ohrelief` protocol, drawing a missing tile from its nearest ancestor, and the fill-opacity ramp. What moves is only where the archive comes from: a Basemap's own store instead of a Scenario asset.
 - A Scenario that names a tiled Basemap the player does not have must still open. It shows the Basemap's vector fallback, or the stock background, and offers the download. It must never fail to load.
-- The web build and the Android app have no disk server to stream to, so they never download a Tiled Basemap: a Scenario naming one shows its basic map there.
+- The web build and the Android app have no disk server to stream to, so they never download a Tiled Basemap: a Scenario naming one shows its basemap there.
 - Existing `image` and `vector` Basemaps, and every existing Scenario and hub post, are untouched.
 - Where the archive is hosted, how a Scenario names it, and how maps are submitted, approved, updated, archived and deleted: [ADR 0006](0006-official-basemap-list.md). The hub carries no detailed-map posts.

@@ -52,6 +52,7 @@ const BottomBar = ({
   basemap,
   hasCustomBackground,
   onOpenBasemaps,
+  detailedMapLabel = "",
   name,
   onNameChange,
   saveStatus,
@@ -112,6 +113,25 @@ const BottomBar = ({
       >
         <Icon name="layers" size={14} style={{ opacity: 0.75 }} />
         Basemap: {basemapLabel}
+      </button>
+      {/* The detailed map is drawn over the basemap: a separate thing, shown
+          separately, picked in the same Maps window. */}
+      <button
+        type="button"
+        onClick={() => onOpenBasemaps?.()}
+        title="A detailed map is drawn on top of the basemap. Pick one in My Maps → Your detailed maps"
+        style={{
+          ...inputStyle,
+          width: "auto",
+          padding: "6px 11px",
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          opacity: detailedMapLabel ? 1 : 0.7,
+        }}
+      >
+        Detailed map: {detailedMapLabel || "none"}
       </button>
 
       <input

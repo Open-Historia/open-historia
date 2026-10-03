@@ -3688,12 +3688,12 @@ const exportScenarioBundle = (scenarioId) => {
   };
 };
 
-// A scenario on a detailed map must carry a basic map too: a painted vector
+// A scenario on a detailed map must carry a basemap too: a painted vector
 // background with something drawn on it (docs/adr/0006). It is what a player
 // sees before the detailed map downloads, or if they never download it, or on a
 // game that cannot show one; without it they would see empty sea.
 const DETAILED_MAP_NEEDS_BASIC_MAP =
-  "This scenario names a detailed map but has no basic map. A scenario on a detailed map must also carry a basic (painted) map, so players who don't download the detailed one still see a map.";
+  "This scenario names a detailed map but has no basemap. A scenario on a detailed map must also carry a basemap, so players who don't download the detailed one still see a map.";
 const bundleBasicMapFeatures = (asset) => {
   if (asset?.mode !== "embedded") return 0;
   try {

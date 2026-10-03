@@ -83,7 +83,7 @@ export default function ScenarioDetailedMapSetting({ labelStyle, helperStyle, fi
   let status;
   let action = null;
   if (import.meta.env.VITE_OH_WEB) {
-    status = "This version of the game shows the scenario's basic map. Detailed maps need the desktop app.";
+    status = "This version of the game shows the scenario's basemap. Detailed maps need the desktop app.";
   } else if (!state) {
     status = "Checking…";
   } else if (progress) {
@@ -93,13 +93,13 @@ export default function ScenarioDetailedMapSetting({ labelStyle, helperStyle, fi
     status = `You have version ${offer.have}. Version ${offer.version}${size ? ` (${size})` : ""} is available and replaces it.`;
     action = <button type="button" style={button} onClick={start}>Update{size ? ` ${size}` : ""}</button>;
   } else if (offer?.withdrawn) {
-    status = "No longer available. You're playing on the basic map.";
+    status = "No longer available. You're playing on the basemap.";
   } else if (offer?.unofficial) {
-    status = "Not on the official list, so it can't be downloaded. You're playing on the basic map.";
+    status = "Not on the official list, so it can't be downloaded. You're playing on the basemap.";
   } else if (offer?.unavailable) {
-    status = "Not available right now (the official list couldn't be reached). You're playing on the basic map.";
+    status = "Not available right now (the official list couldn't be reached). You're playing on the basemap.";
   } else if (offer) {
-    status = `Not downloaded. You're playing on the basic map.`;
+    status = `Not downloaded. You're playing on the basemap.`;
     action = <button type="button" style={button} onClick={start}>Download{size ? ` ${size}` : ""}</button>;
   } else {
     status = `✓ Downloaded${state.installed?.official ? ` (version ${state.installed.official.version})` : ""}.`;

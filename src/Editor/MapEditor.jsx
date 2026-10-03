@@ -1361,6 +1361,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         basemap={d.basemap}
         hasCustomBackground={Boolean(customBg)}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
+        detailedMapLabel={d.doc?.metadata?.tiledBasemap?.name || ""}
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}

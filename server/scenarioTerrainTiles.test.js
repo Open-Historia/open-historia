@@ -181,7 +181,7 @@ test("an export names the official map its file is, by id and version; a map not
   assert.deepEqual(result.users, [{ id: "relief", name: "Relief World" }], "a scenario naming it by checksum still counts as using it");
 });
 
-test("a scenario naming a detailed map must carry a basic map: one without is refused, and nothing is left behind", () => {
+test("a scenario naming a detailed map must carry a basemap: one without is refused, and nothing is left behind", () => {
   const root = buildDataDir();
   const result = runStore(root, `
     const bundle = store.exportScenarioBundle("painted");
@@ -208,9 +208,9 @@ test("a scenario naming a detailed map must carry a basic map: one without is re
     })();
     ${report(`{ empty, missing, withBasic, update, dirs: fs.readdirSync(path.join(ROOT, "scenarios")).filter((d) => !d.startsWith(".")).sort() }`)}
   `);
-  assert.match(result.empty, /has no basic map/);
-  assert.match(result.missing, /has no basic map/);
+  assert.match(result.empty, /has no basemap/);
+  assert.match(result.missing, /has no basemap/);
   assert.equal(result.withBasic, "imported", "with its painted map it imports");
-  assert.match(result.update, /has no basic map/);
+  assert.match(result.update, /has no basemap/);
   assert.deepEqual(result.dirs, ["no-basic", "painted"], "the refused imports left no scenario behind");
 });

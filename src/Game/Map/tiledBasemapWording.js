@@ -1,7 +1,7 @@
 /*! Open Historia — what the detailed-map offer says © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The words of TiledBasemapOffer.jsx, kept apart so they can be tested. Every
 // offer says how big the download is and that without it the player sees the
-// basic map the scenario carries (every scenario on a detailed map has one).
+// basemap the scenario carries (every scenario on a detailed map has one).
 // `offer` is a `missing` or `update` from tiledBasemapOffer
 // (Map/scenarioTerrain.js); `atInstall` is the hub's last install step.
 import { formatBytes } from "../../runtime/tiledBasemaps.js";
@@ -27,7 +27,7 @@ export const tiledBasemapWording = (offer, { atInstall = false } = {}) => {
   if (offer?.unofficial) {
     return {
       title: "This scenario's detailed map can't be downloaded",
-      body: `${name} isn't on the official Open Historia list, so you're seeing the basic map.`,
+      body: `${name} isn't on the official Open Historia list, so you're seeing the basemap.`,
       accept: null,
       decline: "OK",
     };
@@ -35,7 +35,7 @@ export const tiledBasemapWording = (offer, { atInstall = false } = {}) => {
   if (offer?.withdrawn) {
     return {
       title: "This scenario's detailed map is no longer available",
-      body: `${name} was withdrawn from the official Open Historia list, so you're seeing the basic map.`,
+      body: `${name} was withdrawn from the official Open Historia list, so you're seeing the basemap.`,
       accept: null,
       decline: "OK",
     };
@@ -43,7 +43,7 @@ export const tiledBasemapWording = (offer, { atInstall = false } = {}) => {
   if (offer?.unavailable) {
     return {
       title: "This scenario's detailed map isn't available right now",
-      body: `${name} isn't on the official list, or the list couldn't be reached. You're seeing the basic map. Try again later.`,
+      body: `${name} isn't on the official list, or the list couldn't be reached. You're seeing the basemap. Try again later.`,
       accept: null,
       decline: "OK",
     };
@@ -51,13 +51,13 @@ export const tiledBasemapWording = (offer, { atInstall = false } = {}) => {
   if (atInstall) {
     return {
       title: "This scenario has a detailed map",
-      body: `${name} is a${size ? ` ${size}` : ""} download. Download it now, or play on the basic map that comes with the scenario and download it later from the map. ${SHARED}`,
+      body: `${name} is a${size ? ` ${size}` : ""} download. Download it now, or play on the basemap that comes with the scenario and download it later from the map. ${SHARED}`,
       accept: download,
-      decline: "Use basic map",
+      decline: "Use the basemap",
     };
   }
   return {
-    title: "You're seeing the basic map",
+    title: "You're seeing the basemap",
     body: `Download ${name}${sized} to see the terrain up close. ${SHARED}`,
     accept: download,
     decline: "Not now",

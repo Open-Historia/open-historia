@@ -2,7 +2,7 @@
 // Shown over the map when the scenario names a Tiled Basemap the player does not
 // have, or has an older version of than the official list
 // (docs/adr/0005-tiled-basemaps-stream-to-disk.md, docs/adr/0006-official-basemap-list.md).
-// The map meanwhile shows the scenario's basic map (or the version the player
+// The map meanwhile shows the scenario's basemap (or the version the player
 // has), so nothing waits on this: it is an offer, with its size, progress and a
 // way to cancel. When the download lands, the map switches to it by itself
 // (useCustomBackground listens for it).

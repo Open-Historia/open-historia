@@ -11,7 +11,7 @@
 //   world.background = { kind: "vector", tiled: { id, version, name }, fillOpacity? }
 //   world.background = { kind: "vector", tiled: { hash, name }, fillOpacity? }
 //
-// The vector background is the scenario's basic map, and one on a detailed map
+// The vector background is the scenario's basemap, and one on a detailed map
 // always has one (the editor and the import both insist), so a player without
 // the detailed map always sees a map.
 //

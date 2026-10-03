@@ -50,7 +50,7 @@ test("an installed Tiled Basemap is drawn with the zooms and bounds of its own a
   assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/got-world-v9/archive/{z}/{x}/{y}"]);
 });
 
-test("a map the player does not have leaves the basic map, and offers the newest official version with its size", () => {
+test("a map the player does not have leaves the basemap, and offers the newest official version with its size", () => {
   const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "", official: OFFICIAL });
   assert.equal(terrain, null, "no relief source: the vector background alone");
   assert.deepEqual(missing, { id: "got-world", name: "Game of Thrones world map", version: 10, bytes: 400_000_010 }, "the newest, so later scenarios need nothing more");
@@ -219,7 +219,7 @@ test("a scenario whose minimum version was deleted accepts any newer version sti
   const { missing } = resolveTiledBasemap({ descriptor: made9, setting: "", basemap: null, archiveUrl: "", official: { ...OFFICIAL, versions: [v(8), v(10)] } });
   assert.equal(missing.version, 10);
   const none = resolveTiledBasemap({ descriptor: made9, setting: "", basemap: null, archiveUrl: "", official: { ...OFFICIAL, versions: [v(8)] } });
-  assert.equal(none.missing.unavailable, true, "only older versions left: the basic map");
+  assert.equal(none.missing.unavailable, true, "only older versions left: the basemap");
 });
 
 test("a withdrawn map is no longer offered; a player who has it keeps drawing it, with no update", () => {

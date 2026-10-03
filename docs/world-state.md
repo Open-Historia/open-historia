@@ -51,11 +51,11 @@ An authored starting position â€” the map, the polities and the opening state â€
 _Avoid_: Preset, map, mod
 
 **Basemap**:
-The picture drawn beneath a Scenario's regions: an image, a vector drawing, or detailed terrain as map tiles. It is kept in the library and shared by every Scenario that names it. A Scenario names its Basemap; it never carries a tiled one.
-_Avoid_: Background (as the term for the record), terrain pack, map
+The flat map drawn beneath a Scenario's regions: a built-in Earth map, an uploaded picture, or a painted (vector) drawing. Every Scenario has one, and a custom one travels inside the Scenario. Players see it whenever a Scenario's detailed map is not shown.
+_Avoid_: Basic map, painted map (as separate terms), background (as the term for the record)
 
-**Tiled Basemap**:
-A Basemap stored as an archive of map tiles and read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size.
+**Tiled Basemap** (players see: **detailed map**):
+An optional layer of picture tiles drawn on top of a Scenario's basemap, read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size, kept in the library, and shared by every Scenario that names it. A Scenario names it; it never carries it.
 _Avoid_: Relief, terrain (as the term for the record)
 
 **Official Basemap**:

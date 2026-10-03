@@ -61,6 +61,8 @@ registerSettingsSnapshot("Display", () => [
 registerSettingsSnapshot("Map", () => [
     ["Basemap", getMapSettingValue(MAP_SETTING_KEYS.basemapStyle) || "scenario default"],
     ["Label font", getMapSettingValue(MAP_SETTING_KEYS.labelFont) || "scenario default"],
+    // Off is the stored "painted" choice: only the scenario's basemap is drawn.
+    ["Show detailed maps", onOff(getMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) !== "painted")],
     ["3D Globe", onOff(storedBoolean("Globe", false))],
     ["3D Terrain", onOff(storedBoolean("Terrain", true))],
     ["Hide country labels", onOff(getMapSetting(MAP_SETTING_KEYS.hideCountryLabels))],

@@ -178,8 +178,8 @@ const DetailedMaps = ({ list, loading, download, onDownload, onCancel }) => {
   return (
     <div>
       <div style={dim}>
-        Large terrain maps that stay sharp up close. Each downloads once, and every scenario on it shares it.
-        To share your own, use the ⤴ button on its card in My Basemaps.
+        Large terrain maps, drawn on top of a scenario&apos;s basemap, that stay sharp up close. Each downloads once, and every scenario on it shares it.
+        To share your own, use the ⤴ button on its card in My Maps → Your detailed maps.
       </div>
       {list.error && (
         <div style={{ ...dim, color: "#fecaca" }}>
@@ -261,13 +261,13 @@ const AllowedBasemaps = ({ value, onChange }) => {
   };
   return (
     <div style={{ marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" }}>
-      <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Maps players can switch to</div>
+      <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
       <div style={{ ...dim, padding: "0 0 0.5rem" }}>
-        Players can always use this scenario&apos;s own map. Tick the built-in maps they may also pick in Settings → Map. For a made-up world, untick them all.
+        Players always get this scenario&apos;s own basemap (and its detailed map, if it has one). Tick the built-in basemaps they may also pick in Settings → Map. For a made-up world, untick them all.
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", alignItems: "center" }}>
         <button type="button" style={tabBtn(all)} onClick={() => onChange(null)}>All</button>
-        <button type="button" style={tabBtn(!all && chosen.size === 0)} onClick={() => onChange([])}>None (own map only)</button>
+        <button type="button" style={tabBtn(!all && chosen.size === 0)} onClick={() => onChange([])}>None (own basemap only)</button>
         {ESRI_BASEMAPS.map((b) => (
           <label key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", cursor: "pointer" }}>
             <input type="checkbox" checked={chosen.has(b.id)} onChange={() => toggle(b.id)} />
@@ -356,7 +356,7 @@ const BasemapPicker = ({
 
   if (!open) return null;
 
-  // Outside the editor there is nothing to apply a picture or painted map to:
+  // Outside the editor there is nothing to apply a basemap to:
   // it only joins the library.
   const addToLibrary = async (file) => {
     const bg = await loadBackgroundFile(file);
@@ -368,7 +368,7 @@ const BasemapPicker = ({
   };
 
   // One button for every kind of map: a .pmtiles file of picture tiles is a
-  // detailed map; anything else (a picture, a painted map, a vector-tile
+  // detailed map; anything else (a picture or painted basemap, a vector-tile
   // reference) goes where it always did.
   const handleAdd = async (file) => {
     if (!file) return;
@@ -400,12 +400,12 @@ const BasemapPicker = ({
       const users = await listTiledBasemapUsers(bm.id);
       const size = formatBytes(bm.bytes);
       const message = users.length
-        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their basic map until it's downloaded again. Delete it?`
+        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their basemap until it's downloaded again. Delete it?`
         : `Delete "${bm.name}"${size ? ` and free ${size}` : ""}?`;
       if (!window.confirm(message)) return;
     }
     await deleteBasemapApi(bm.id).catch(() => {});
-    // A game open on a scenario naming it goes back to its painted map.
+    // A game open on a scenario naming it goes back to its basemap.
     if (bm.kind === "tiled") announceTiledBasemap(null);
     refresh();
   };
@@ -429,7 +429,7 @@ const BasemapPicker = ({
         return;
       }
       window.open(officialBasemapSubmissionUrl(bm), "_blank", "noopener");
-      window.alert("Players only download detailed maps from the official Open Historia list. On the GitHub page that opened, add a link where the team can download your .pmtiles file to review it, and who made it, then submit. Once it's added, scenarios you publish with it offer it to players; until then they see the basic map.");
+      window.alert("Players only download detailed maps from the official Open Historia list. On the GitHub page that opened, add a link where the team can download your .pmtiles file to review it, and who made it, then submit. Once it's added, scenarios you publish with it offer it to players; until then they see the basemap.");
       return;
     }
     try {
@@ -488,15 +488,15 @@ const BasemapPicker = ({
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={headerBar}>
-          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
-          <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
+          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Maps</div>
+          <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Maps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
           <div style={{ flex: 1 }} />
           <label
             style={uploadBtn}
-            title="A picture (.png, .jpg), a painted map (.geojson, .kml, .zip…), or a detailed map (.pmtiles of picture tiles, up to 500 MB)"
+            title="A basemap: a picture (.png, .jpg) or a painted map (.geojson, .kml, .zip…). Or a detailed map: a .pmtiles file of picture tiles, up to 500 MB."
           >
-            {busy ? "Adding…" : "⬆ Add your own map"}
+            {busy ? "Adding…" : "⬆ Add basemap or detailed map"}
             <input
               type="file"
               accept={acceptFor(BACKGROUND_ACCEPT)}
@@ -519,7 +519,7 @@ const BasemapPicker = ({
               )}
               {!browse && (
               <div style={{ marginBottom: "1.3rem" }}>
-                <div style={rowTitle}>Built-in maps</div>
+                <div style={rowTitle}>Built-in basemaps</div>
                 <div style={rowScroll}>
                   {EDITOR_BASEMAPS.map((b) => (
                     <BasemapCard
@@ -534,23 +534,44 @@ const BasemapPicker = ({
                 </div>
               </div>
               )}
-              <div>
+              <div style={{ marginBottom: "1.3rem" }}>
                 <div style={rowTitle}>Your basemaps</div>
                 {loading ? (
                   <div style={dim}>Loading…</div>
-                ) : mine.length === 0 ? (
-                  <div style={dim}>No maps of your own yet. Use “⬆ Add your own map” to add a picture, a painted map or a detailed map; it stays here so you can reuse it on any scenario. Detailed maps you download from the Community tab appear here too.</div>
+                ) : !mine.some((bm) => bm.kind !== "tiled") ? (
+                  <div style={dim}>No basemaps of your own yet. Use “⬆ Add basemap or detailed map” to add a picture or a painted map (.png, .jpg, .geojson…); it stays here so you can reuse it on any scenario.</div>
                 ) : (
                   <div style={rowScroll}>
-                    {mine.map((bm) => (
+                    {mine.filter((bm) => bm.kind !== "tiled").map((bm) => (
                       <BasemapCard
                         key={bm.id}
                         title={bm.name}
                         imageUrl={bm.thumbnail}
                         active={!browse && currentCustomId === bm.id}
-                        badge={bm.kind === "tiled"
-                          ? `detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`
-                          : bm.kind === "vector" ? "vector" : undefined}
+                        badge={bm.kind === "vector" ? "painted" : "picture"}
+                        onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
+                        onDelete={() => handleDelete(bm)}
+                        onPublish={() => handlePublish(bm)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={rowTitle}>Your detailed maps</div>
+                {loading ? (
+                  <div style={dim}>Loading…</div>
+                ) : !mine.some((bm) => bm.kind === "tiled") ? (
+                  <div style={dim}>No detailed maps yet. Download one from the Community tab, or add your own .pmtiles file with “⬆ Add basemap or detailed map”. A detailed map is drawn on top of a scenario&apos;s basemap.</div>
+                ) : (
+                  <div style={rowScroll}>
+                    {mine.filter((bm) => bm.kind === "tiled").map((bm) => (
+                      <BasemapCard
+                        key={bm.id}
+                        title={bm.name}
+                        imageUrl={bm.thumbnail}
+                        active={!browse && currentCustomId === bm.id}
+                        badge={`detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`}
                         onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
@@ -563,9 +584,9 @@ const BasemapPicker = ({
           ) : (
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem", flexWrap: "wrap" }}>
-                <div style={{ ...rowTitle, margin: 0 }}>Community basemaps</div>
+                <div style={{ ...rowTitle, margin: 0 }}>Community maps</div>
                 <button type="button" style={tabBtn(communityFilter === "all")} onClick={() => setCommunityFilter("all")}>All</button>
-                <button type="button" style={tabBtn(communityFilter === "painted")} onClick={() => setCommunityFilter("painted")}>Painted maps</button>
+                <button type="button" style={tabBtn(communityFilter === "painted")} onClick={() => setCommunityFilter("painted")}>Basemaps</button>
                 <button type="button" style={tabBtn(communityFilter === "detailed")} onClick={() => setCommunityFilter("detailed")}>Detailed maps</button>
                 <div style={{ flex: 1 }} />
                 <a
@@ -591,12 +612,12 @@ const BasemapPicker = ({
                 </div>
               )}
               {communityFilter !== "detailed" && (<>
-              {communityFilter === "all" && <div style={rowTitle}>Painted maps</div>}
+              {communityFilter === "all" && <div style={rowTitle}>Basemaps</div>}
               {communityError && <div style={{ ...dim, color: "#fecaca" }}>{communityError}</div>}
               {communityLoading ? (
                 <div style={dim}>Loading community basemaps…</div>
               ) : community.length === 0 && !communityError ? (
-                <div style={dim}>No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card.</div>
+                <div style={dim}>No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card in My Maps.</div>
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))", gap: "0.8rem" }}>
                   {community.map((post) => {

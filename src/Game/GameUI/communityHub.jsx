@@ -377,20 +377,20 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
 
 // A scenario on a detailed map never carries it: it names a map on the official
 // list (docs/adr/0006), and players installing it are offered that map. One
-// that names the author's own map, not on the list, plays on its basic map.
+// that names the author's own map, not on the list, plays on its basemap.
 const describeScenarioTiledBasemap = (bundle) => {
   const named = scenarioTiledBasemap(bundle.data?.world?.background);
   if (!named) return "";
   return named.id
     ? " Players installing it are offered its detailed map from the official list, with its size, as part of the install."
-    : " Its detailed map isn't on the official Open Historia list, so players will see the basic map. To get it added, use Publish on the map in the Map Editor's basemap picker: the Open Historia team reviews it and adds it to the list.";
+    : " Its detailed map isn't on the official Open Historia list, so players will see the basemap. To get it added, use ⤴ on it in the Map Editor's Maps window (My Maps → Your detailed maps): the Open Historia team reviews it and adds it to the list.";
 };
 
 // The last step of installing a scenario on an official detailed map: what to
 // offer, or null. A player who has the map (any version) downloads nothing; one
 // with an older version than the scenario was made on is offered the update.
 const installOfferFor = async (bundle) => {
-  if (import.meta.env.VITE_OH_WEB) return null; // the browser version shows the basic map
+  if (import.meta.env.VITE_OH_WEB) return null; // the browser version shows the basemap
   const named = scenarioTiledBasemap(bundle.data?.world?.background);
   if (!named?.id) return null;
   const [installed, list] = await Promise.all([findOfficialBasemap(named.id), fetchOfficialBasemaps()]);
@@ -541,7 +541,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       const details = await importScenarioBundle(bundle);
       // A scenario on a detailed map offers that map's download right here, with
-      // its size and the choice of its basic map, rather than leaving the player
+      // its size and the choice of its basemap, rather than leaving the player
       // to meet it over the map.
       const mapToOffer = await installOfferFor(bundle).catch(() => null);
       // Best-effort: tell the server this import succeeded so it can count it
