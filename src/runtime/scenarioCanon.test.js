@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CANON_MODEL_VERSION,
   enabledReferencePackIds,
+  isFictionalWorld,
   materializeScenarioCanon,
   normalizeCanonContext,
   readScenarioCanon,
@@ -125,4 +126,15 @@ test("legacy divergence-description text is preserved for compatibility even tho
     context.divergence.description,
     "1970-01-01: Event X happens.\n1970-01-02: Event Y follows.\n1970-01-03: Event Z changes the political situation.",
   );
+});
+
+test("only a current-canon world in a fictional universe counts as fictional", () => {
+  const fictional = { canonModelVersion: CANON_MODEL_VERSION, canonContext: { universe: { id: "a-song-of-ice-and-fire", type: "fictional" } } };
+  assert.equal(isFictionalWorld(fictional), true);
+  // Real-world and unlabelled worlds keep real place search.
+  assert.equal(isFictionalWorld({ canonModelVersion: CANON_MODEL_VERSION, canonContext: { universe: { type: "historical" } } }), false);
+  assert.equal(isFictionalWorld({ canonModelVersion: CANON_MODEL_VERSION, canonContext: {} }), false);
+  // A legacy world is never read as fictional, whatever stray fields it carries.
+  assert.equal(isFictionalWorld({ canonContext: { universe: { type: "fictional" } } }), false);
+  assert.equal(isFictionalWorld(undefined), false);
 });

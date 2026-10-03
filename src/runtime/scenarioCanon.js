@@ -126,6 +126,12 @@ export const normalizeCanonContext = (value = {}) => {
 
 export const isCurrentCanonWorld = (world = {}) => Number(world?.canonModelVersion) === CANON_MODEL_VERSION;
 
+// A world with no real places in it: a current-canon scenario set in a fictional
+// universe. Real-world place data (a geocoder, stock city names) has nothing to
+// offer it, only wrong answers.
+export const isFictionalWorld = (world = {}) => isCurrentCanonWorld(world)
+  && normalizeCanonContext(world?.canonContext).universe.type === "fictional";
+
 export const scenarioCanonMode = (world = {}) => isCurrentCanonWorld(world)
   ? CANON_SCHEMA_MODES.CURRENT
   : CANON_SCHEMA_MODES.LEGACY;

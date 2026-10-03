@@ -50,6 +50,18 @@ _Avoid_: Reviewer, pass, reconciler (as the name of the check)
 An authored starting position — the map, the polities and the opening state — that a Game is started from. Never written to during play, so one Scenario can seed many Games.
 _Avoid_: Preset, map, mod
 
+**Basemap**:
+The flat map drawn beneath a Scenario's regions: a built-in Earth map, an uploaded picture, or a painted (vector) drawing. Every Scenario has one, and a custom one travels inside the Scenario. Players see it whenever a Scenario's detailed map is not shown.
+_Avoid_: Basic map, painted map (as separate terms), background (as the term for the record)
+
+**Tiled Basemap** (players see: **detailed map**):
+An optional layer of picture tiles drawn on top of a Scenario's basemap, read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size, kept in the library, and shared by every Scenario that names it. A Scenario names it; it never carries it.
+_Avoid_: Relief, terrain (as the term for the record)
+
+**Official Basemap**:
+A Tiled Basemap on the official list in `Open-Historia/open-historia-basemaps`, the only place one is downloaded from. It has a fixed **map id** and numbered **versions**, each one exact file with its checksum. A Scenario names the map and the lowest version it needs; a player keeps one copy, of any version, and a newer version is offered, never forced.
+_Avoid_: Catalog entry, release (as the term for the map)
+
 **Game**:
 One playthrough of a Scenario: everything the player has done and everything the world has become since it started. The thing a player names, continues, archives and exports.
 _Avoid_: Save, save game, campaign, session (as the term for the record)

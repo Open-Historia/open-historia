@@ -157,8 +157,28 @@ const buildCitiesForGame = (features) => ({
 // to fully replace Earth; vectors carry their GeoJSON. Raster uploads
 // (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
 // reach here. Returns { background: null } when there's nothing.
-const buildBackgroundForGame = (customBackground) => {
+//
+// A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { id, version,
+// name, fillOpacity } for an official map, { hash, name, fillOpacity } for
+// their own) is NAMED on a vector background, never carried (docs/adr/0005,
+// 0006). The vector drawing on screen is its basemap, and a scenario on a
+// detailed map must have one: a player who does not download the detailed map,
+// or whose game cannot show it, still gets a map, never empty sea.
+export const DETAILED_MAP_NEEDS_BASIC_MAP =
+  "This scenario needs a basemap first: it is what players see if they don't download the detailed map.\n\n"
+  + "In Basemap → My Maps, pick one of Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then choose the detailed map again.\n\n"
+  + "(A detailed map that comes with its own basemap uses that one automatically.)";
+export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
+  if (tiledBasemap?.id || tiledBasemap?.hash) {
+    const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
+    const drawn = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) && bg.geojson.features.length > 0;
+    if (!drawn) throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP);
+    return {
+      background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
+      backgroundData: { geojson: bg.geojson },
+    };
+  }
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
   if (bg.kind === "image" && bg.dataUrl) {
     return {
@@ -319,7 +339,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
-  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground);
+  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
@@ -351,6 +371,9 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.
     basemap: doc.metadata?.basemap || null,
+    // Which built-in maps players may switch to in Settings → Map (null = any;
+    // [] = only the scenario's own map). Chosen in the basemap picker.
+    allowedBasemaps: Array.isArray(doc.metadata?.allowedBasemaps) ? doc.metadata.allowedBasemaps : null,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.

@@ -199,7 +199,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/scenarios`, `/api/scenarios/:id`, `/api/scenarios/selected`, `/api/scenarios/:id/export`, `/api/scenarios/import`, `/api/scenarios/:id/import`, `.../assets/:key` | GET/POST/PUT/DELETE | `libraryStore.js` scenarios + bundle import/export |
 | `/api/runtime/json/:key`, `/api/runtime/pmtiles/:key` | GET/PUT/HEAD | per-game runtime state + tiles |
 | `/api/mapeditor/documents…` | GET/POST/PUT/DELETE | `mapEditorStore.js` |
-| `/api/basemaps…`, `/api/flags…` | GET/POST/DELETE | `basemapStore.js`, `flagStore.js` |
+| `/api/basemaps…`, `/api/flags…` | GET/POST/PUT/DELETE | `basemapStore.js`, `tiledBasemaps.js` (Tiled Basemap install jobs and archives, [ADR 0005](adr/0005-tiled-basemaps-stream-to-disk.md)), `officialBasemaps.js` (the official list of detailed maps, [ADR 0006](adr/0006-official-basemap-list.md)), `flagStore.js` |
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
 | `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |

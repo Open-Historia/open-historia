@@ -3,6 +3,7 @@ import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.j
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -138,6 +139,7 @@ export const withSettledClaims = (claimants, settled) => {
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
+  fictionalWorld: isFictionalWorld(state ?? {}),
   customRegions: Boolean(state?.customRegions),
   customGeometry: Boolean(
     state?.customGeometry ??
@@ -146,6 +148,8 @@ const deriveMapState = (state) => ({
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
+  // A string, so an unchanged list keeps its identity: null = any built-in map.
+  allowedBasemaps: Array.isArray(state?.allowedBasemaps) ? state.allowedBasemaps.map(String).join(",") : null,
   ...(() => {
     const folded = foldOwnerTokens(state);
     return {
@@ -172,11 +176,13 @@ const deriveMapState = (state) => ({
 const sameMapState = (prev, next) =>
   Boolean(prev) &&
   prev.worldKnown === next.worldKnown &&
+  prev.fictionalWorld === next.fictionalWorld &&
   prev.customRegions === next.customRegions &&
   prev.customGeometry === next.customGeometry &&
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
   prev.background === next.background &&
+  prev.allowedBasemaps === next.allowedBasemaps &&
   prev.labelFont === next.labelFont &&
   prev.labelHaloColor === next.labelHaloColor &&
   prev.labelTextColor === next.labelTextColor &&
@@ -350,6 +356,7 @@ export function useWorldBackground() {
     return {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
+      allowedBasemaps: current?.allowedBasemaps ?? null,
     };
   });
 
@@ -359,17 +366,18 @@ export function useWorldBackground() {
     const handler = (data) => {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
+      const allowedBasemaps = data?.allowedBasemaps ?? null;
 
       setState((prev) => {
         const backgroundSame =
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap) {
+        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps) {
           return prev;
         }
 
-        return { background, basemap };
+        return { background, basemap, allowedBasemaps };
       });
     };
 

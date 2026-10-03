@@ -23,6 +23,13 @@ const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
 import {
+  createTiledBasemap,
+  findBasemapMetaByHash,
+  getBasemapPayload,
+  incomingArchivePath,
+  setTiledBasemapFallback,
+} from "./basemapStore.js";
+import {
   fetchableHubOrigin,
   hubOriginAfterWrite,
   normalizeHubOrigin,
@@ -440,6 +447,11 @@ const PMTILES_ASSET_FILES = {
   cities: "cities.pmtiles",
   countries: "countries.pmtiles",
   regions: "regions.pmtiles",
+  // The first cut of scenario relief shipped its tiles here, inside the scenario.
+  // Kept only so such a scenario can still be imported: migrateEmbeddedTerrain
+  // moves the archive into the Basemap library at once, and nothing exports or
+  // serves it from here (docs/adr/0005-tiled-basemaps-stream-to-disk.md).
+  terrain: "terrain.pmtiles",
 };
 
 // Custom geometry authored in the map editor. Stored per-scenario (static map
@@ -3431,6 +3443,95 @@ const resolveRuntimeBinaryAsset = (assetKey) => {
   };
 };
 
+// A Tiled Basemap is one a scenario NAMES
+// (world.background.tiled = { hash, name, bytes }), never one it carries. A
+// scenario from the first cut of this feature carried its archive as a
+// `terrain` asset with world.background.terrain; this moves each such archive
+// into the Basemap library, rewrites the scenario's background to name it (its
+// painted vector background stays, as the fallback, and its fill ramp stays its
+// own), and points every game already made from it at the same Basemap.
+// Idempotent: a scenario or game already naming a Tiled Basemap is left alone.
+const carriesEmbeddedArchive = (background) => Boolean(background?.terrain) && !background?.tiled;
+const withTiledBasemapNamed = (background, tiled) => {
+  const { terrain, ...rest } = background || {};
+  return {
+    ...rest,
+    kind: "vector",
+    ...(tiled ? { tiled } : {}),
+    ...(Array.isArray(terrain?.fillOpacity) ? { fillOpacity: terrain.fillOpacity } : {}),
+  };
+};
+const listScenarioIdsOnDisk = () => (fs.existsSync(SCENARIOS_DIR)
+  ? fs.readdirSync(SCENARIOS_DIR, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).map((entry) => entry.name)
+  : []);
+// One pass at a time: the startup pass and an import's pass would otherwise race
+// for the same archive.
+let migrationInFlight = Promise.resolve();
+const migrateEmbeddedTiledArchives = () => {
+  migrationInFlight = migrationInFlight.catch(() => {}).then(runEmbeddedArchiveMigration);
+  return migrationInFlight;
+};
+const runEmbeddedArchiveMigration = async () => {
+  ensureScenarioStore();
+  const migrated = new Map();
+  for (const scenarioId of listScenarioIdsOnDisk()) {
+    const worldPath = getScenarioJsonPath(scenarioId, "world");
+    const world = readJsonFile(worldPath, null);
+    const archive = getScenarioUploadPath(scenarioId, "terrain");
+    if (world?.background?.tiled) migrated.set(scenarioId, world.background);
+    // An unreadable world is left exactly as it is, archive and all.
+    if (!world) continue;
+    if (!carriesEmbeddedArchive(world.background)) {
+      fs.rmSync(archive, { force: true });
+      continue;
+    }
+    let tiled = null;
+    if (fs.existsSync(archive)) {
+      const incoming = incomingArchivePath();
+      try {
+        fs.renameSync(archive, incoming);
+        const name = readJsonFile(getScenarioMetaPath(scenarioId), {})?.name || scenarioId;
+        const meta = await createTiledBasemap({ file: incoming, name });
+        tiled = { hash: meta.contentHash, name: meta.name, bytes: meta.bytes };
+        const painted = readJsonFile(getScenarioUploadPath(scenarioId, "backgroundData"), null);
+        let hasFallback = false;
+        try { hasFallback = Boolean(getBasemapPayload(meta.id)?.geojson); } catch { /* none yet */ }
+        if (!hasFallback && painted?.geojson) setTiledBasemapFallback(meta.id, painted.geojson);
+      } catch (error) {
+        // Not a usable archive: the scenario keeps its painted background alone.
+        console.warn(`[basemaps] the archive scenario ${scenarioId} carried could not become a Tiled Basemap: ${error.message}`);
+      }
+    }
+    const background = withTiledBasemapNamed(world.background, tiled);
+    writeJsonFile(worldPath, { ...world, background });
+    migrated.set(scenarioId, background);
+  }
+  for (const gameId of listGameIdsOnDisk()) {
+    const worldPath = getGameJsonPath(gameId, "world");
+    const world = readJsonFile(worldPath, null);
+    if (!world || !carriesEmbeddedArchive(world.background)) continue;
+    const scenarioId = readJsonFile(getGameMetaPath(gameId), {})?.scenarioId;
+    const fromScenario = migrated.get(scenarioId);
+    const tiled = fromScenario?.tiled && findBasemapMetaByHash(fromScenario.tiled.hash) ? fromScenario.tiled : null;
+    writeJsonFile(worldPath, { ...world, background: withTiledBasemapNamed(world.background, tiled) });
+  }
+};
+
+// The scenarios whose background names a Tiled Basemap, by its official id or
+// by one of its checksums: what deleting it would leave on their painted
+// fallback.
+const listScenariosNamingTiledBasemap = (meta) => {
+  const hashes = new Set([meta?.contentHash, ...(meta?.supersedes || [])].filter(Boolean));
+  const officialId = meta?.official?.id || null;
+  if (!hashes.size && !officialId) return [];
+  return listScenarioIdsOnDisk()
+    .filter((scenarioId) => {
+      const tiled = readJsonFile(getScenarioJsonPath(scenarioId, "world"), null)?.background?.tiled;
+      return Boolean(tiled) && ((officialId && tiled.id === officialId) || hashes.has(tiled.hash));
+    })
+    .map((scenarioId) => ({ id: scenarioId, name: readJsonFile(getScenarioMetaPath(scenarioId), {})?.name || scenarioId }));
+};
+
 const encodeBinaryFile = (sourcePath) => fs.readFileSync(sourcePath).toString("base64");
 
 // A JSON asset travels as JSON. Base64 made every shared map a third bigger for
@@ -3518,6 +3619,20 @@ const buildScenarioBundleAsset = (scenarioId, assetKey) => {
   };
 };
 
+// A shared scenario names an official map by its id and version, so players
+// can download it from the official list (docs/adr/0006). A scenario that still
+// names its map by checksum (made before the map was on the list, or from the
+// author's own file) is exported naming the official map that file is, when it
+// is one; otherwise it stays as it is, and players see its painted map.
+const withOfficialTiledName = (world) => {
+  const tiled = world?.background?.tiled;
+  if (!tiled?.hash || tiled.id) return world;
+  const official = findBasemapMetaByHash(tiled.hash)?.official;
+  if (!official?.id) return world;
+  const { hash: _hash, hubUrl: _hubUrl, ...rest } = tiled;
+  return { ...world, background: { ...world.background, tiled: { ...rest, id: official.id, version: official.version } } };
+};
+
 const exportScenarioBundle = (scenarioId) => {
   const summary = getScenarioSummary(scenarioId);
   const details = getScenarioDetails(scenarioId);
@@ -3552,7 +3667,7 @@ const exportScenarioBundle = (scenarioId) => {
       events: cloneJson(details.data.events),
       game: cloneJson(details.data.game),
       prompts: cloneJson(details.data.prompts),
-      world: cloneJson(details.data.world),
+      world: cloneJson(withOfficialTiledName(details.data.world)),
     },
     exportedAt: new Date().toISOString(),
     mode: "full",
@@ -3573,6 +3688,29 @@ const exportScenarioBundle = (scenarioId) => {
   };
 };
 
+// A scenario on a detailed map must carry a basemap too: a painted vector
+// background with something drawn on it (docs/adr/0006). It is what a player
+// sees before the detailed map downloads, or if they never download it, or on a
+// game that cannot show one; without it they would see empty sea.
+const DETAILED_MAP_NEEDS_BASIC_MAP =
+  "This scenario names a detailed map but has no basemap. A scenario on a detailed map must also carry a basemap, so players who don't download the detailed one still see a map.";
+const bundleBasicMapFeatures = (asset) => {
+  if (asset?.mode !== "embedded") return 0;
+  try {
+    const payload = asset.encoding === "base64" || typeof asset.data === "string"
+      ? JSON.parse(Buffer.from(String(asset.data ?? ""), "base64").toString("utf-8"))
+      : asset.data;
+    return Array.isArray(payload?.geojson?.features) ? payload.geojson.features.length : 0;
+  } catch {
+    return 0;
+  }
+};
+const assertBundleHasBasicMap = (data, assets) => {
+  if (!data?.world?.background?.tiled) return;
+  if (data.world.background.kind === "vector" && bundleBasicMapFeatures(assets?.backgroundData) > 0) return;
+  throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP);
+};
+
 const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   ensureScenarioStore();
 
@@ -3586,6 +3724,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
+  assertBundleHasBasicMap(bundle.data, bundle.assets);
 
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
@@ -3696,6 +3835,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
+  assertBundleHasBasicMap(bundle.data, bundle.assets);
 
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
@@ -4025,4 +4165,6 @@ export {
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
   recoverPendingTurnCommit,
+  migrateEmbeddedTiledArchives,
+  listScenariosNamingTiledBasemap,
 };

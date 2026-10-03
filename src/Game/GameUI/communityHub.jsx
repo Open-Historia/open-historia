@@ -38,6 +38,9 @@ import {
   fetchHubPosts,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
+import { fetchOfficialBasemaps, findOfficialBasemap, findOfficialEntry } from "../../runtime/tiledBasemaps.js";
+import { scenarioTiledBasemap, tiledBasemapOffer } from "../Map/scenarioTerrain.js";
+import TiledBasemapOffer from "../Map/TiledBasemapOffer.jsx";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
@@ -372,6 +375,30 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
   </div>
 );
 
+// A scenario on a detailed map never carries it: it names a map on the official
+// list (docs/adr/0006), and players installing it are offered that map. One
+// that names the author's own map, not on the list, plays on its basemap.
+const describeScenarioTiledBasemap = (bundle) => {
+  const named = scenarioTiledBasemap(bundle.data?.world?.background);
+  if (!named) return "";
+  return named.id
+    ? " Players installing it are offered its detailed map from the official list, with its size, as part of the install."
+    : " Its detailed map isn't on the official Open Historia list, so players will see the basemap. To get it added, use ⤴ on it in the Map Editor's Maps window (My Maps → Your detailed maps): the Open Historia team reviews it and adds it to the list.";
+};
+
+// The last step of installing a scenario on an official detailed map: what to
+// offer, or null. A player who has the map (any version) downloads nothing; one
+// with an older version than the scenario was made on is offered the update.
+const installOfferFor = async (bundle) => {
+  if (import.meta.env.VITE_OH_WEB) return null; // the browser version shows the basemap
+  const named = scenarioTiledBasemap(bundle.data?.world?.background);
+  if (!named?.id) return null;
+  const [installed, list] = await Promise.all([findOfficialBasemap(named.id), fetchOfficialBasemaps()]);
+  const { missing, update } = tiledBasemapOffer({ named, installed, official: findOfficialEntry(list, named.id) });
+  if (missing && !missing.unavailable) return missing;
+  return update?.needed ? update : null;
+};
+
 const CommunityPanel = ({ fullPage = false, onImported }) => {
   const { scenarios } = useLibraryState();
   const touch = useTouchPrimary();
@@ -380,6 +407,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
+  // The last step of installing a scenario on a detailed map the player lacks:
+  // { basemap, details }. The download is offered here, with its size, and the
+  // library moves on to the Scenarios tab only once it is answered (downloaded,
+  // or "Not now"). It sits above both views, so browsing posts meanwhile does
+  // not cancel it (docs/adr/0005).
+  const [missingMap, setMissingMap] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
@@ -507,6 +540,10 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // their changes back to the post (server/hubProvenance.js).
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       const details = await importScenarioBundle(bundle);
+      // A scenario on a detailed map offers that map's download right here, with
+      // its size and the choice of its basemap, rather than leaving the player
+      // to meet it over the map.
+      const mapToOffer = await installOfferFor(bundle).catch(() => null);
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
       // or fails the import — fire and forget.
@@ -525,7 +562,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
       }
-      onImported?.(details);
+      // While an earlier install's map offer is still open (perhaps downloading),
+      // it keeps the page: moving on now would cancel it, and its answer moves on.
+      // This scenario's own map, if any, is then offered over the map instead.
+      if (missingMap) return;
+      if (mapToOffer) setMissingMap({ basemap: mapToOffer, details });
+      else onImported?.(details);
     } catch (nextError) {
       const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
       if (stillRelevant) {
@@ -617,6 +659,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
         `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
       window.open(scenarioUrl, "_blank", "noopener");
+      extra += describeScenarioTiledBasemap(bundle);
       // After the page is open: a browser only lets a click open a window for
       // a moment, and this write is not worth losing the page over.
       if (!scenario.hubPublished?.key) {
@@ -634,10 +677,25 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     }
   };
 
+  const finishInstall = () => {
+    const { details } = missingMap;
+    setMissingMap(null);
+    onImported?.(details);
+  };
+
   return (
     // As the main menu's Community tab (fullPage) the surrounding page owns
     // scrolling; as a floating panel it caps its own height and scrolls itself.
     <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: `calc(${APP_HEIGHT} - 11rem)`, overflowY: "auto", paddingRight: "0.2rem" }) }}>
+      {missingMap && (
+        <TiledBasemapOffer
+          key={`${missingMap.basemap.id}@${missingMap.basemap.version}`}
+          basemap={missingMap.basemap}
+          atInstall
+          onDone={finishInstall}
+          onDismiss={finishInstall}
+        />
+      )}
       {selectedPost ? (
         <ScenarioDetail
           post={selectedPost}

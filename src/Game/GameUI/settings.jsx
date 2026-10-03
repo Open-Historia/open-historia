@@ -1,5 +1,5 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
@@ -70,6 +70,13 @@ import {
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
+import ScenarioDetailedMapSetting from "../Map/ScenarioDetailedMapSetting.jsx";
+import { useWorldBackground } from "../Map/useWorldState.js";
+// The Map Editor's basemap window, opened here to browse, download and manage
+// maps without opening the editor. Loaded on first use: it brings the editor's
+// file readers with it.
+const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -95,7 +102,7 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { allowedBuiltinBasemaps, isAllowedBasemapOverride, isBuiltinBasemapId } from "../../runtime/assets.js";
 import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
@@ -2004,6 +2011,8 @@ const SettingsWorkspace = ({
     updateMapSetting,
     basemapStyle,
     updateBasemapStyle,
+    scenarioTerrain,
+    updateScenarioTerrain,
     labelFont,
     updateLabelFont,
     telemetryOn,
@@ -2020,6 +2029,13 @@ const SettingsWorkspace = ({
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
     const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
+    const [basemapsOpen, setBasemapsOpen] = useState(false);
+    // The built-in maps this scenario lets the player switch to (chosen by its
+    // author in the Map Editor; a made-up world may allow none).
+    const { allowedBasemaps: allowedKey } = useWorldBackground();
+    const allowedBasemaps = !forGame || allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
+    const basemapChoices = allowedBuiltinBasemaps(allowedBasemaps);
+    const shownBasemapStyle = isAllowedBasemapOverride(basemapStyle, allowedBasemaps) ? basemapStyle : "";
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2113,15 +2129,50 @@ const SettingsWorkspace = ({
 
             {activeSection === "map" && (
                 <>
-                <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
+                <SettingsSection title="Basemap" description="The flat map drawn under the countries.">
                     <div style={fieldGroupStyle}>
                         <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-                        <select id="game-basemap-style" data-no-translate value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                        <select
+                            id="game-basemap-style"
+                            data-no-translate
+                            value={shownBasemapStyle}
+                            disabled={basemapChoices.length === 0}
+                            onChange={(event) => updateBasemapStyle(event.target.value)}
+                            style={{ ...inputStyle, cursor: basemapChoices.length ? "pointer" : "default", opacity: basemapChoices.length ? 1 : 0.6 }}
+                        >
                             <option value="" style={{ color: "black" }}>Scenario default</option>
-                            {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+                            {basemapChoices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
                         </select>
-                        <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
+                        <div style={helperStyle}>
+                            {basemapChoices.length === 0
+                                ? "This scenario uses its own basemap only."
+                                : forGame
+                                    ? "Scenario default uses the basemap chosen by the scenario author. Overrides apply immediately."
+                                    : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own basemap."}
+                        </div>
                     </div>
+                </SettingsSection>
+                <SettingsSection title="Detailed maps" description="Large terrain maps drawn on top of a scenario's basemap, sharp when zoomed in.">
+                    <Toggle
+                        label="Show detailed maps"
+                        enabled={scenarioTerrain !== SCENARIO_TERRAIN_PAINTED}
+                        onToggle={() => updateScenarioTerrain(scenarioTerrain === SCENARIO_TERRAIN_PAINTED ? "" : SCENARIO_TERRAIN_PAINTED)}
+                    />
+                    <div style={helperStyle}>On: a scenario&apos;s detailed map is drawn when you have it. Off: only its basemap, which is lighter.</div>
+                    {forGame && <ScenarioDetailedMapSetting labelStyle={labelStyle} helperStyle={helperStyle} fieldGroupStyle={fieldGroupStyle} />}
+                    <div style={fieldGroupStyle}>
+                        <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
+                            Browse and download maps…
+                        </button>
+                        <div style={helperStyle}>Your basemaps and detailed maps, and the community&apos;s. To use one in a scenario, open that scenario in the Map Editor.</div>
+                        {basemapsOpen && (
+                            <Suspense fallback={null}>
+                                <BasemapPicker open browse onClose={() => setBasemapsOpen(false)} />
+                            </Suspense>
+                        )}
+                    </div>
+                </SettingsSection>
+                <SettingsSection title="Labels" description="Which political labels are shown, and in what font.">
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
                         list only suggests common safe ones. Empty = whatever the
@@ -2419,6 +2470,8 @@ const SettingsMenu = ({
     // scenario's own), read live so the picker follows a change made elsewhere.
     const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
     const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) ? storedBasemapStyle : "";
+    // Relief tiles or the painted vector map, for scenarios that ship both.
+    const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
@@ -2442,6 +2495,7 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+    const updateScenarioTerrain = (value) => setMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain, value);
 
     useEffect(() => {
         const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
@@ -2529,6 +2583,8 @@ const SettingsMenu = ({
             updateMapSetting={updateMapSetting}
             basemapStyle={basemapStyle}
             updateBasemapStyle={updateBasemapStyle}
+            scenarioTerrain={scenarioTerrain}
+            updateScenarioTerrain={updateScenarioTerrain}
             labelFont={labelFontShown}
             updateLabelFont={updateLabelFont}
             telemetryOn={telemetryOn}

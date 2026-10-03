@@ -8,17 +8,29 @@
 // whole-world z0 tile), a "Your basemaps" shelf of the user's uploaded basemaps
 // (server-side library, thumbnailed), and a Community tab (filled in Phase 2).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
-import { BACKGROUND_ACCEPT } from "./customBackground.js";
-import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
+import { ESRI_BASEMAPS } from "../runtime/assets.js";
+import { BACKGROUND_ACCEPT, loadBackgroundFile, vectorLayerToGeoJSON } from "./customBackground.js";
+import { addBackgroundToLibrary, listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
+import {
+  announceTiledBasemap,
+  fetchOfficialBasemaps,
+  formatBytes,
+  installOfficialBasemap,
+  listTiledBasemapUsers,
+  officialBasemapSubmissionUrl,
+  setTiledBasemapFallback,
+  uploadTiledBasemap,
+} from "../runtime/tiledBasemaps.js";
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
 const overlay = {
   position: "fixed",
   inset: 0,
-  zIndex: 120,
+  zIndex: 2147483100,
   background: "rgba(8,8,9,0.82)",
   display: "flex",
   alignItems: "center",
@@ -158,6 +170,117 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
   </div>
 );
 
+// Detailed maps (docs/adr/0006), shown in the Community tab beside the hub's
+// basemaps: each with its size and what the player has. A map they have is never
+// downloaded again; a newer version replaces it.
+const DetailedMaps = ({ list, loading, download, onDownload, onCancel }) => {
+  const available = list.basemaps.filter((entry) => entry.versions.length > 0);
+  return (
+    <div>
+      <div style={dim}>
+        Large terrain maps, drawn on top of a scenario&apos;s basemap, that stay sharp up close. Each downloads once, and every scenario on it shares it.
+        To share your own, use the ⤴ button on its card in My Maps → Your detailed maps.
+      </div>
+      {list.error && (
+        <div style={{ ...dim, color: "#fecaca" }}>
+          {available.length ? `Showing the last list this game saw (${list.error}).` : list.error}
+        </div>
+      )}
+      {loading && !available.length ? (
+        <div style={dim}>Loading detailed maps…</div>
+      ) : !available.length ? (
+        !list.error && <div style={dim}>No detailed maps yet.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))", gap: "0.8rem" }}>
+          {available.map((entry) => {
+            const latest = entry.versions[entry.versions.length - 1];
+            const have = entry.installed?.version || 0;
+            const upToDate = have >= latest.version;
+            const size = formatBytes(latest.bytes);
+            const busy = download?.id === entry.id;
+            const label = busy
+              ? `Downloading…${download.percent !== null ? ` ${download.percent}%` : ""}`
+              : upToDate ? `✓ Downloaded (v${have})`
+                : have ? `⬆ Update to v${latest.version} (${size})` : `⬇ Download (${size})`;
+            return (
+              <div key={entry.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
+                <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
+                  {latest.preview ? (
+                    <img
+                      src={latest.preview}
+                      alt=""
+                      loading="lazy"
+                      onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    />
+                  ) : (
+                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
+                  )}
+                  <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
+                    detailed · v{latest.version} · {size}
+                  </span>
+                </div>
+                <div style={{ padding: "0.5rem 0.6rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <div style={{ fontSize: "0.8rem", fontWeight: 700 }}>{entry.name}</div>
+                  {entry.author && <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.5)" }}>by {entry.author}</div>}
+                  {entry.license && <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>{entry.license}</div>}
+                  {have > 0 && !upToDate && latest.notes && (
+                    <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.65)" }}>New in v{latest.version}: {latest.notes}</div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={upToDate || Boolean(download)}
+                    onClick={() => onDownload(entry)}
+                    style={{ ...tabBtn(false), cursor: upToDate || download ? "default" : "pointer", opacity: upToDate ? 0.7 : 1 }}
+                  >
+                    {label}
+                  </button>
+                  {busy && <button type="button" style={tabBtn(false)} onClick={onCancel}>Cancel</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Which of the built-in (real-world) maps players may switch to in Settings →
+// Map while playing this scenario. null = any of them (the default, and every
+// scenario made before this existed); [] = only the scenario's own map, which
+// is what a made-up world wants (runtime/assets.js allowedBasemapIds).
+const AllowedBasemaps = ({ value, onChange }) => {
+  const all = value === null || value === undefined;
+  const chosen = new Set(all ? ESRI_BASEMAPS.map((b) => b.id) : value);
+  const toggle = (id) => {
+    const next = new Set(chosen);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next.size === ESRI_BASEMAPS.length ? null : ESRI_BASEMAPS.map((b) => b.id).filter((x) => next.has(x)));
+  };
+  return (
+    <div style={{ marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" }}>
+      <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
+      <div style={{ ...dim, padding: "0 0 0.5rem" }}>
+        Players always get this scenario&apos;s own basemap (and its detailed map, if it has one). Tick the built-in basemaps they may also pick in Settings → Map. For a made-up world, untick them all.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", alignItems: "center" }}>
+        <button type="button" style={tabBtn(all)} onClick={() => onChange(null)}>All</button>
+        <button type="button" style={tabBtn(!all && chosen.size === 0)} onClick={() => onChange([])}>None (own basemap only)</button>
+        {ESRI_BASEMAPS.map((b) => (
+          <label key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", cursor: "pointer" }}>
+            <input type="checkbox" checked={chosen.has(b.id)} onChange={() => toggle(b.id)} />
+            {b.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// `browse`: opened from Settings, outside the Map Editor. Players can download,
+// add and remove maps, but there is no scenario to apply one to.
 const BasemapPicker = ({
   open,
   onClose,
@@ -166,8 +289,14 @@ const BasemapPicker = ({
   onSelectBuiltin,
   onSelectCustom,
   onUpload,
+  currentVectorGeojson = null,
+  browse = false,
+  allowedBasemaps,
+  onAllowedBasemapsChange,
 }) => {
   const [tab, setTab] = useState("mine"); // mine | community
+  // Community shows the hub's basemaps and the detailed maps, filtered.
+  const [communityFilter, setCommunityFilter] = useState("all"); // all | painted | detailed
   const [mine, setMine] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -176,6 +305,12 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  // Official detailed maps (docs/adr/0006): the list, and the one downloading.
+  const [official, setOfficial] = useState({ basemaps: [] });
+  const [officialLoading, setOfficialLoading] = useState(false);
+  const [officialLoaded, setOfficialLoaded] = useState(false);
+  const [download, setDownload] = useState(null); // { id, percent }
+  const downloadControllerRef = useRef(null);
 
   const refresh = () => {
     setLoading(true);
@@ -202,27 +337,101 @@ const BasemapPicker = ({
     if (open && tab === "community" && !communityLoaded) loadCommunity();
   }, [open, tab, communityLoaded]);
 
+  const loadOfficial = (refresh = false) => {
+    setOfficialLoading(true);
+    fetchOfficialBasemaps({ refresh })
+      .then(setOfficial)
+      .finally(() => {
+        setOfficialLoading(false);
+        setOfficialLoaded(true);
+      });
+  };
+
+  useEffect(() => {
+    if (open && tab === "community" && !officialLoaded) loadOfficial();
+  }, [open, tab, officialLoaded]);
+
+  // Stops a download in flight when the picker goes away.
+  useEffect(() => () => downloadControllerRef.current?.abort(), []);
+
   if (!open) return null;
 
-  const handleUpload = async (file) => {
+  // Outside the editor there is nothing to apply a basemap to:
+  // it only joins the library.
+  const addToLibrary = async (file) => {
+    const bg = await loadBackgroundFile(file);
+    const normalized = bg?.kind === "image" && bg.dataUrl
+      ? { kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect }
+      : bg?.kind === "vector" && bg.layer ? { kind: "vector", geojson: vectorLayerToGeoJSON(bg.layer) } : null;
+    if (!normalized) throw new Error("That file can only be used as a reference inside the Map Editor.");
+    await addBackgroundToLibrary(normalized, file.name.replace(/\.[^.]+$/, "") || "My basemap");
+  };
+
+  // One button for every kind of map: a .pmtiles file of picture tiles is a
+  // detailed map; anything else (a picture or painted basemap, a vector-tile
+  // reference) goes where it always did.
+  const handleAdd = async (file) => {
     if (!file) return;
     setBusy(true);
     try {
-      await onUpload(file);
+      if (/\.pmtiles$/i.test(file.name)) {
+        try {
+          await handleAddTiled(file);
+          return;
+        } catch (e) {
+          // Vector tiles are a drawing reference for the editor, not a detailed map.
+          if (!/vector tiles/i.test(e?.message || "") || browse || !onUpload) throw e;
+        }
+      }
+      if (browse || !onUpload) await addToLibrary(file);
+      else await onUpload(file);
       refresh();
     } catch (e) {
-      window.alert(`Could not add that basemap: ${e?.message || e}`);
+      window.alert(`Could not add that map: ${e?.message || e}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const handleDelete = async (id) => {
-    await deleteBasemapApi(id).catch(() => {});
+  const handleDelete = async (bm) => {
+    // A Tiled Basemap may be named by scenarios: deleting it leaves them on their
+    // painted fallback until it is downloaded again, so say which.
+    if (bm.kind === "tiled") {
+      const users = await listTiledBasemapUsers(bm.id);
+      const size = formatBytes(bm.bytes);
+      const message = users.length
+        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their basemap until it's downloaded again. Delete it?`
+        : `Delete "${bm.name}"${size ? ` and free ${size}` : ""}?`;
+      if (!window.confirm(message)) return;
+    }
+    await deleteBasemapApi(bm.id).catch(() => {});
+    // A game open on a scenario naming it goes back to its basemap.
+    if (bm.kind === "tiled") announceTiledBasemap(null);
+    refresh();
+  };
+
+  // An author's own detailed map: a PMTiles archive of raster tiles, streamed to
+  // the game server (never read here). The vector drawing currently on screen,
+  // if any, becomes its painted fallback.
+  const handleAddTiled = async (file) => {
+    const meta = await uploadTiledBasemap(file, { name: file.name.replace(/\.pmtiles$/i, "") });
+    if (currentVectorGeojson) await setTiledBasemapFallback(meta.id, currentVectorGeojson).catch(() => {});
     refresh();
   };
 
   const handlePublish = async (bm) => {
+    if (bm.kind === "tiled") {
+      // Too large for a hub post, and players only download detailed maps from
+      // the official list: the author asks for it to be added, and the team
+      // reviews it and uploads it (docs/adr/0006).
+      if (bm.official) {
+        window.alert(`"${bm.name}" is already on the official list (version ${bm.official.version}). Scenarios you publish with it offer it to players.`);
+        return;
+      }
+      window.open(officialBasemapSubmissionUrl(bm), "_blank", "noopener");
+      window.alert("Players only download detailed maps from the official Open Historia list. On the GitHub page that opened, add a link where the team can download your .pmtiles file to review it, and who made it, then submit. Once it's added, scenarios you publish with it offer it to players; until then they see the basemap.");
+      return;
+    }
     try {
       const payload = await getBasemapPayload(bm.id);
       const { fileName } = await publishBasemap(bm, payload);
@@ -248,16 +457,46 @@ const BasemapPicker = ({
     }
   };
 
-  return (
+  // Downloads (or updates to) an official map's newest version. Nothing is
+  // downloaded twice: the server keeps one copy per map, replacing the older.
+  const handleOfficialDownload = async (entry) => {
+    if (download) return;
+    const controller = new AbortController();
+    downloadControllerRef.current = controller;
+    setDownload({ id: entry.id, percent: null });
+    try {
+      await installOfficialBasemap({
+        id: entry.id,
+        signal: controller.signal,
+        onProgress: ({ received, total }) => setDownload({ id: entry.id, percent: total ? Math.round((received / total) * 100) : null }),
+      });
+      refresh();
+      loadOfficial();
+    } catch (e) {
+      if (e?.name !== "AbortError") window.alert(`Download failed: ${e?.message || e}`);
+    } finally {
+      downloadControllerRef.current = null;
+      setDownload(null);
+    }
+  };
+
+  // Drawn straight into the page, above everything: opened from Settings it
+  // would otherwise sit inside the settings card (which clips it and covers
+  // its header), and both Settings and the Map Editor are drawn above the
+  // rest of the page, so the window has to be above them too.
+  return createPortal(
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
         <div style={headerBar}>
-          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
-          <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
+          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Maps</div>
+          <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Maps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
           <div style={{ flex: 1 }} />
-          <label style={uploadBtn}>
-            {busy ? "Uploading…" : "⬆ Upload basemap"}
+          <label
+            style={uploadBtn}
+            title="A basemap: a picture (.png, .jpg) or a painted map (.geojson, .kml, .zip…). Or a detailed map: a .pmtiles file of picture tiles, up to 500 MB."
+          >
+            {busy ? "Adding…" : "⬆ Add basemap or detailed map"}
             <input
               type="file"
               accept={acceptFor(BACKGROUND_ACCEPT)}
@@ -265,7 +504,7 @@ const BasemapPicker = ({
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
-                handleUpload(f);
+                handleAdd(f);
               }}
             />
           </label>
@@ -275,8 +514,12 @@ const BasemapPicker = ({
         <div style={bodyBox}>
           {tab === "mine" ? (
             <>
+              {!browse && onAllowedBasemapsChange && (
+                <AllowedBasemaps value={allowedBasemaps} onChange={onAllowedBasemapsChange} />
+              )}
+              {!browse && (
               <div style={{ marginBottom: "1.3rem" }}>
-                <div style={rowTitle}>Built-in maps</div>
+                <div style={rowTitle}>Built-in basemaps</div>
                 <div style={rowScroll}>
                   {EDITOR_BASEMAPS.map((b) => (
                     <BasemapCard
@@ -290,23 +533,47 @@ const BasemapPicker = ({
                   ))}
                 </div>
               </div>
-              <div>
+              )}
+              <div style={{ marginBottom: "1.3rem" }}>
                 <div style={rowTitle}>Your basemaps</div>
                 {loading ? (
                   <div style={dim}>Loading…</div>
-                ) : mine.length === 0 ? (
-                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image (it stays here so you can reuse it on any map).</div>
+                ) : !mine.some((bm) => bm.kind !== "tiled") ? (
+                  <div style={dim}>No basemaps of your own yet. Use “⬆ Add basemap or detailed map” to add a picture or a painted map (.png, .jpg, .geojson…); it stays here so you can reuse it on any scenario.</div>
                 ) : (
                   <div style={rowScroll}>
-                    {mine.map((bm) => (
+                    {mine.filter((bm) => bm.kind !== "tiled").map((bm) => (
                       <BasemapCard
                         key={bm.id}
                         title={bm.name}
                         imageUrl={bm.thumbnail}
-                        active={currentCustomId === bm.id}
-                        badge={bm.kind === "vector" ? "vector" : undefined}
-                        onClick={() => { onSelectCustom(bm); onClose(); }}
-                        onDelete={() => handleDelete(bm.id)}
+                        active={!browse && currentCustomId === bm.id}
+                        badge={bm.kind === "vector" ? "painted" : "picture"}
+                        onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
+                        onDelete={() => handleDelete(bm)}
+                        onPublish={() => handlePublish(bm)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={rowTitle}>Your detailed maps</div>
+                {loading ? (
+                  <div style={dim}>Loading…</div>
+                ) : !mine.some((bm) => bm.kind === "tiled") ? (
+                  <div style={dim}>No detailed maps yet. Download one from the Community tab, or add your own .pmtiles file with “⬆ Add basemap or detailed map”. A detailed map is drawn on top of a scenario&apos;s basemap.</div>
+                ) : (
+                  <div style={rowScroll}>
+                    {mine.filter((bm) => bm.kind === "tiled").map((bm) => (
+                      <BasemapCard
+                        key={bm.id}
+                        title={bm.name}
+                        imageUrl={bm.thumbnail}
+                        active={!browse && currentCustomId === bm.id}
+                        badge={`detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`}
+                        onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
+                        onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
                       />
                     ))}
@@ -316,8 +583,11 @@ const BasemapPicker = ({
             </>
           ) : (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem" }}>
-                <div style={{ ...rowTitle, margin: 0 }}>Community basemaps</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem", flexWrap: "wrap" }}>
+                <div style={{ ...rowTitle, margin: 0 }}>Community maps</div>
+                <button type="button" style={tabBtn(communityFilter === "all")} onClick={() => setCommunityFilter("all")}>All</button>
+                <button type="button" style={tabBtn(communityFilter === "painted")} onClick={() => setCommunityFilter("painted")}>Basemaps</button>
+                <button type="button" style={tabBtn(communityFilter === "detailed")} onClick={() => setCommunityFilter("detailed")}>Detailed maps</button>
                 <div style={{ flex: 1 }} />
                 <a
                   href="https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+is%3Aopen+label%3Abasemap"
@@ -327,13 +597,27 @@ const BasemapPicker = ({
                 >
                   Open hub ↗
                 </a>
-                <button type="button" style={tabBtn(false)} onClick={() => loadCommunity(true)}>↻ Refresh</button>
+                <button type="button" style={tabBtn(false)} onClick={() => { loadCommunity(true); loadOfficial(true); }}>↻ Refresh</button>
               </div>
+              {communityFilter !== "painted" && (
+                <div style={{ marginBottom: "1.3rem" }}>
+                  {communityFilter === "all" && <div style={rowTitle}>Detailed maps</div>}
+                  <DetailedMaps
+                    list={official}
+                    loading={officialLoading}
+                    download={download}
+                    onDownload={handleOfficialDownload}
+                    onCancel={() => downloadControllerRef.current?.abort()}
+                  />
+                </div>
+              )}
+              {communityFilter !== "detailed" && (<>
+              {communityFilter === "all" && <div style={rowTitle}>Basemaps</div>}
               {communityError && <div style={{ ...dim, color: "#fecaca" }}>{communityError}</div>}
               {communityLoading ? (
                 <div style={dim}>Loading community basemaps…</div>
               ) : community.length === 0 && !communityError ? (
-                <div style={dim}>No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card.</div>
+                <div style={dim}>No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card in My Maps.</div>
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))", gap: "0.8rem" }}>
                   {community.map((post) => {
@@ -382,11 +666,13 @@ const BasemapPicker = ({
                   })}
                 </div>
               )}
+              </>)}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 

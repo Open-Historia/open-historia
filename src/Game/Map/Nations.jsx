@@ -1,5 +1,5 @@
 /*! Open Historia — portions (custom-regions tier-2 rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { markPolitiesReady } from "../../runtime/mapReadiness.js";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
@@ -15,6 +15,7 @@ import {
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { getShownRelief, subscribeShownRelief } from "./scenarioTerrain.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
@@ -465,6 +466,17 @@ const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
 const buildPoliticalFillOpacity = (hiddenExpression = null) => [
   "interpolate", ["linear"], ["zoom"],
   ...POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
+    zoom,
+    hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
+  ]),
+];
+
+// The same expression over a scenario's own lighter stops, used only while its
+// relief tiles are on screen (Map/scenarioTerrain.js). Same shape: zoom stays
+// the top-level input, visibility lives in each stop.
+const buildScenarioReliefFillOpacity = (stops, hiddenExpression = null) => [
+  "interpolate", ["linear"], ["zoom"],
+  ...stops.flatMap(([zoom, opacity]) => [
     zoom,
     hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
   ]),
@@ -3117,24 +3129,33 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions]);
 
+  // A scenario's own lighter fill ramp, only while its relief tiles are shown.
+  const shownRelief = useSyncExternalStore(subscribeShownRelief, getShownRelief, getShownRelief);
+  const reliefFillStops = shownRelief?.fillOpacity || null;
+  const politicalFillOpacity = useMemo(
+    () => (reliefFillStops ? buildScenarioReliefFillOpacity(reliefFillStops) : POLITICAL_FILL_OPACITY),
+    [reliefFillStops],
+  );
   const stockRegionsFillPaint = useMemo(
     () => customActive
       ? {
           "fill-color": DETAIL_FILL_COLOR,
-          "fill-opacity": POLITICAL_FILL_OPACITY,
+          "fill-opacity": politicalFillOpacity,
           "fill-antialias": false,
           "fill-outline-color": DETAIL_FILL_COLOR,
         }
       : { "fill-opacity": 0 },
-    [customActive],
+    [customActive, politicalFillOpacity],
   );
   const transitionAwareFillOpacity = useMemo(() => (customFlag
-    ? buildPoliticalFillOpacity([
+    ? (reliefFillStops
+      ? buildScenarioReliefFillOpacity(reliefFillStops, ["boolean", ["feature-state", "ownershipTransitionHidden"], false])
+      : buildPoliticalFillOpacity([
         "boolean",
         ["feature-state", "ownershipTransitionHidden"],
         false,
-      ])
-    : 0), [customFlag]);
+      ]))
+    : 0), [customFlag, reliefFillStops]);
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
 
@@ -3335,7 +3356,7 @@ const WorldMap = ({ isGlobe = false }) => {
             ]}
             paint={{
               "fill-pattern": ["match", ["get", "GID_1"], ...disputedTileStops, disputedTileStops[1]],
-              "fill-opacity": customActive && worldKnown ? DISPUTED_TILE_FILL_OPACITY : 0,
+              "fill-opacity": customActive && worldKnown ? (reliefFillStops ? politicalFillOpacity : DISPUTED_TILE_FILL_OPACITY) : 0,
             }}
           />
         )}

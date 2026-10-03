@@ -53,7 +53,7 @@ import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { buildGameSeed } from "./exportPreset.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP, buildGameSeed } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -236,11 +236,45 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     d.setBasemap(id);
     setCustomBg(null);
     setCustomBgId(null);
-    d.patchMetadata({ customBackground: null });
+    d.patchMetadata({ customBackground: null, tiledBasemap: null });
   };
 
   // Pick one of the user's saved basemaps: fetch its payload and apply it.
   const selectLibraryBasemap = async (bm) => {
+    // A Tiled Basemap is named, not drawn here: the scenario keeps a vector
+    // drawing on screen as its painted fallback (the Basemap's own, else the
+    // one already in use), and the game draws the relief over it.
+    if (bm.kind === "tiled") {
+      let fallback = null;
+      try {
+        fallback = (await getBasemapPayload(bm.id))?.geojson || null;
+      } catch {
+        fallback = null;
+      }
+      const current = normalizeBackground(customBg);
+      const hasBasicMap = (fallback?.features?.length > 0) || (current?.kind === "vector" && current.geojson?.features?.length > 0);
+      if (!hasBasicMap) {
+        window.alert(DETAILED_MAP_NEEDS_BASIC_MAP);
+        return;
+      }
+      if (fallback?.features?.length > 0) {
+        setCustomBg(rebuildPersistedBackground({ kind: "vector", geojson: fallback }, { persisted: false }));
+      }
+      setCustomBgId(bm.id);
+      const previous = d.doc?.metadata?.tiledBasemap;
+      // An official map is named by its id and the version on screen, the
+      // lowest the scenario needs (docs/adr/0006); the author's own map, not on
+      // the official list, by its checksum.
+      d.patchMetadata({
+        tiledBasemap: {
+          ...(bm.official?.id ? { id: bm.official.id, version: bm.official.version } : { hash: bm.contentHash }),
+          name: bm.name,
+          ...(Array.isArray(previous?.fillOpacity) ? { fillOpacity: previous.fillOpacity } : {}),
+        },
+      });
+      return;
+    }
+    d.patchMetadata({ tiledBasemap: null });
     try {
       const payload = await getBasemapPayload(bm.id);
       const saved =
@@ -258,6 +292,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const uploadBasemap = async (file) => {
     if (!file) return;
     const bg = await loadBackgroundFile(file);
+    d.patchMetadata({ tiledBasemap: null });
     setCustomBg(bg); // applies immediately (image / vector / raster)
     const normalized = normalizeBackground(bg);
     if (!normalized) {
@@ -633,10 +668,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.metadata.author = initialMap.author || "";
     // Restore the chosen built-in basemap so re-opening shows it (not the default).
     if (initialMap.basemap) base.metadata.basemap = initialMap.basemap;
+    // And which built-in maps players may switch to, so Apply keeps the choice.
+    if (Array.isArray(initialMap.allowedBasemaps)) base.metadata.allowedBasemaps = initialMap.allowedBasemaps;
     // Carry the restored background in the document metadata so Apply & Play
     // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
     // clearing the scenario's background when the user re-opens and re-applies.
     if (initialMap.background) base.metadata.customBackground = initialMap.background;
+    // And the Tiled Basemap it names, for the same reason (exportPreset.js).
+    if (initialMap.tiledBasemap) base.metadata.tiledBasemap = initialMap.tiledBasemap;
     // Same reasoning as the background above, and it is data loss if missed:
     // buildGameSeed emits flags: null when the document has none, and
     // applyMapToScenario reads that null as "clear the scenario's flags.json".
@@ -1322,6 +1361,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         basemap={d.basemap}
         hasCustomBackground={Boolean(customBg)}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
+        detailedMapLabel={d.doc?.metadata?.tiledBasemap?.name || ""}
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
@@ -1372,6 +1412,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onSelectBuiltin={selectBuiltinBasemap}
         onSelectCustom={selectLibraryBasemap}
         onUpload={uploadBasemap}
+        currentVectorGeojson={normalizeBackground(customBg)?.kind === "vector" ? normalizeBackground(customBg).geojson : null}
+        allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
+        onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
       />
 
       <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />

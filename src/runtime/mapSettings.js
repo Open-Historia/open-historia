@@ -23,6 +23,10 @@ export const MAP_SETTING_KEYS = {
     // read is a reason to change it, and until now the only way to was through
     // the game editor.
     labelFont: "map_label_font",
+    // Empty/unset shows a scenario's relief tiles when it ships them; "painted"
+    // keeps its vector background only (Map/scenarioTerrain.js). Local to this
+    // browser, like basemapStyle.
+    scenarioTerrain: "map_scenario_terrain",
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
@@ -145,6 +149,7 @@ export function getMapSettingValue(key, fallback = "") {
 const VALUE_SETTING_LABELS = {
     [MAP_SETTING_KEYS.basemapStyle]: "Basemap",
     [MAP_SETTING_KEYS.labelFont]: "Label font",
+    [MAP_SETTING_KEYS.scenarioTerrain]: "Scenario terrain",
 };
 
 export function setMapSettingValue(key, value) {

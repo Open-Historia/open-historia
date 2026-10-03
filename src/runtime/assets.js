@@ -64,6 +64,8 @@ const buildAbsoluteUrl = (pathname) => {
   const relativePath = withRuntimeToken(pathname);
   return origin ? new URL(relativePath, origin).toString() : relativePath;
 };
+// For archives served outside the runtime set: a Tiled Basemap's, by id.
+export const runtimeAbsoluteUrl = (pathname) => buildAbsoluteUrl(pathname);
 
 export const JSON_URLS = {
   advisor: "",
@@ -118,6 +120,17 @@ export const DEFAULT_BASEMAP_ID = "ocean";
 const BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
+// Which built-in maps a scenario lets players switch to in Settings → Map
+// (world.allowedBasemaps, chosen in the Map Editor): null or absent = all of
+// them, as before; a list = only those; an empty list = only the scenario's own
+// map, as a made-up world wants. Unknown ids are ignored.
+export const normalizeAllowedBasemaps = (value) => (Array.isArray(value)
+  ? ESRI_BASEMAPS.map((basemap) => basemap.id).filter((id) => value.includes(id))
+  : null);
+export const allowedBuiltinBasemaps = (allowed) => (allowed == null
+  ? ESRI_BASEMAPS
+  : ESRI_BASEMAPS.filter((basemap) => allowed.includes(basemap.id)));
+export const isAllowedBasemapOverride = (id, allowed) => isBuiltinBasemapId(id) && (allowed == null || allowed.includes(id));
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
