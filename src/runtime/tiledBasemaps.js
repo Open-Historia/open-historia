@@ -155,26 +155,27 @@ export const announceTiledBasemap = (meta) => {
   for (const listener of listeners) listener(meta || null);
 };
 
-// Getting a map onto the official list: the author opens a request on the
-// official repository, prefilled with what the reviewers check the file
-// against, and the team uploads it as a release once it is approved.
+// Getting a map onto the official list: the author opens the repository's
+// "Submit a detailed map" form (.github/ISSUE_TEMPLATE/map-request.yml there),
+// with what the game knows about the file filled in by field id, and the team
+// reviews it and uploads it as a release once it is approved.
 export const OFFICIAL_BASEMAPS_REPO_URL = "https://github.com/Open-Historia/open-historia-basemaps";
 export const officialBasemapSubmissionUrl = (meta) => {
-  const body = [
-    "Please add this detailed map to the official list.",
-    "",
-    `- Name: ${meta?.name || ""}`,
-    `- Size: ${formatBytes(meta?.bytes)} (${Number(meta?.bytes) || 0} bytes)`,
-    `- SHA-256: ${meta?.contentHash || ""}`,
-    `- Zooms: ${meta?.minzoom ?? "?"}–${meta?.maxzoom ?? "?"}`,
-    "",
-    "Where the team can download the .pmtiles file to review it (any link):",
-    "",
-    "",
-    "Who made it, and its licence (credit any sources it is drawn from):",
-    "",
-  ].join("\n");
-  return `${OFFICIAL_BASEMAPS_REPO_URL}/issues/new?title=${encodeURIComponent(`[Submit map] ${meta?.name || "Detailed map"}`)}&body=${encodeURIComponent(body)}`;
+  const bytes = Number(meta?.bytes) || 0;
+  const fields = {
+    template: "map-request.yml",
+    title: `[Submit map] ${meta?.name || "Detailed map"}`,
+    kind: meta?.official ? "Update to a map already on the list" : "New map",
+    name: meta?.name || "",
+    ...(meta?.official?.id ? { "map-id": meta.official.id } : {}),
+    size: bytes ? `${bytes} bytes (${formatBytes(bytes)})` : "",
+    sha256: meta?.contentHash || "",
+  };
+  const query = Object.entries(fields)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return `${OFFICIAL_BASEMAPS_REPO_URL}/issues/new?${query}`;
 };
 
 // "Not now" on an optional update, remembered per map and version on this
