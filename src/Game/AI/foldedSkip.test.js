@@ -223,6 +223,23 @@ test("every check after a skip always runs: no switch is read anywhere in the tu
   }
 });
 
+// A scenario's region types can carry rules for moving and placing (an
+// impassable sea, land out of play). They were told to the unit and structure
+// directors only, in the requests those made anyway. A folded skip asks neither
+// director, and moves the units and builds the structures itself.
+test("a folded skip is told the map's own rules for moving and placing, as the directors were", () => {
+  assert.match(functionBody("prepareFoldedSkip"), /regionTypeRules: await regionTypeRulesFor\(bundle\.world\)\.catch\(\(\) => ""\),/);
+  assert.match(functionBody("runJumpSegments"), /foldedRegionTypeRules: normalizeString\(state\.foldedPrep\?\.regionTypeRules\),/);
+  const live = functionBody("buildJumpLiveState");
+  assert.match(live, /const regionTypes = foldedSkip \? regionTypesBlock\(variables\.foldedRegionTypeRules\) : "";\s*\n\s*if \(regionTypes\) blocks\.push\(regionTypes\);/);
+  assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("regionTypesBlock(variables.foldedRegionTypeRules)"), "after the rule that the events place things themselves");
+  // One wording for both readers.
+  const block = functionBody("regionTypesBlock");
+  assert.match(block, /\[Region types\]\\nThe scenario's author gave these kinds of region rules for moving units and placing things\. Keep every move, new unit and structure to them:/);
+  assert.match(block, /return text\s*\n\s*\? /, "a map whose types have no rules adds nothing");
+  assert.match(gameplaySource, /\["unitDirector", "structureDirector"\]\.includes\(taskKey\) && normalizeString\(variables\?\.regionTypeRules\)\) \{\s*\n\s*systemPrompt = `\$\{systemPrompt\}\\n\\n\$\{regionTypesBlock\(variables\.regionTypeRules\)\}`;/);
+});
+
 test("the folded rules reach the prompt only for a folded skip", () => {
   const body = functionBody("buildJumpLiveState");
   assert.match(body, /const foldedSkip = Boolean\(variables\.foldedSkip\);/);

@@ -1451,6 +1451,18 @@ const FOLDED_SKIP_CONSEQUENCES = [
   "Finishing each event is not a reason to write fewer of them: the period still holds the number of events its instruction asks for, and most of the world's events need few ops or none.",
 ].join("\n");
 
+// The scenario's region types that carry rules for moving and placing
+// (runtime/regionTypes.js regionTypeRules), as the block a prompt is given: the
+// unit and structure directors' own requests, and a folded skip's, which moves
+// the units and builds the structures itself. "" for a map whose types have no
+// such rules.
+const regionTypesBlock = (rules) => {
+  const text = normalizeString(rules);
+  return text
+    ? `[Region types]\nThe scenario's author gave these kinds of region rules for moving units and placing things. Keep every move, new unit and structure to them:\n${text}`
+    : "";
+};
+
 // The agents whose reports ride on a folded skip (prepareFoldedSkip): the rules
 // are the spyIntercept template's, the brief under each agent is the one its own
 // request would have carried.
@@ -2166,8 +2178,12 @@ ${brief}`);
 
   // Groups switched off for this game: their lever goes with their rule.
   blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
-  // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES).
+  // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES), and
+  // keep to the map's own rules for where a unit may go and a thing be built,
+  // which only the directors were told.
   if (foldedSkip) blocks.push(FOLDED_SKIP_CONSEQUENCES);
+  const regionTypes = foldedSkip ? regionTypesBlock(variables.foldedRegionTypeRules) : "";
+  if (regionTypes) blocks.push(regionTypes);
   if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
   // And the agents whose reports are due ride on it (prepareFoldedSkip).
   const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
@@ -2508,8 +2524,11 @@ So use the wider picture to choose the sender and the moment — never to give t
   // The scenario's region types with rules for moving and placing (impassable
   // sea, slow mountains, land out of play; runtime/regionTypes.js), inside the
   // directors' own requests. A map without such types adds nothing.
+  // A folded time skip moves the units and builds the structures itself, with
+  // no director asked after it, so there the same block rides in the skip's own
+  // prompt (buildJumpLiveState).
   if (["unitDirector", "structureDirector"].includes(taskKey) && normalizeString(variables?.regionTypeRules)) {
-    systemPrompt = `${systemPrompt}\n\n[Region types]\nThe scenario's author gave these kinds of region rules for moving units and placing things. Keep every move, new unit and structure to them:\n${normalizeString(variables.regionTypeRules)}`;
+    systemPrompt = `${systemPrompt}\n\n${regionTypesBlock(variables.regionTypeRules)}`;
   }
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
@@ -13633,6 +13652,8 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
     board: boardShown,
     boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
     agentJobs,
+    // What the unit and structure directors would have been told (regionTypesBlock).
+    regionTypeRules: await regionTypeRulesFor(bundle.world).catch(() => ""),
   };
 };
 
@@ -13912,6 +13933,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         foldedSkip: true,
         foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
         foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
+        foldedRegionTypeRules: normalizeString(state.foldedPrep?.regionTypeRules),
       };
       // Every provider response this segment causes, so a contract the provider
       // would not take can be told from an answer that was simply no good.
