@@ -105,7 +105,7 @@ import {
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
 import { politicalImpactCompletenessIssues } from "./politicalImpactCompleteness.js";
-import { validateGameMasterRequestedPuppetCompleteness, gameMasterRequestAsksForPuppet } from "./gameMasterRequestCompleteness.js";
+import { validateGameMasterRequestedPuppetCompleteness } from "./gameMasterRequestCompleteness.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
   applyPoliticalActorOperation,
@@ -543,16 +543,6 @@ warUpdates is one string, one record per line, fields separated by ~ (never insi
 
 const buildDiplomaticLedgerDirective = (variables) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
-  // A scenario may switch subordination off entirely (server/gameFeatures.js).
-  // The simulator is then never told the contract exists, which is what stops it
-  // quietly making one country another's puppet: the ledger would refuse the
-  // line anyway, and a model told to emit one it cannot have is a model writing
-  // events the world never records.
-  const puppetStates = isActiveFeatureEnabled("puppetStates");
-  const puppetContract = puppetStates
-    ? `
-puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.`
-    : "";
   const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
   // The world director's context (jump tasks) already carries this slice, built
   // from the same ledger for the same segment; printing it here too sent every
@@ -564,7 +554,8 @@ puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalt
   return `[Relations and Agreements]
 ${state}
 A relation is the lasting political climate between two polities — friendly, cordial, neutral, cautious, strained, hostile or rival. It is a strong prior for how they deal with each other, never a veto: a friendly government can refuse a dangerous demand and a hostile one can cooperate under necessity. Formal agreements, warmth and war are separate facts. Other powers make their own diplomacy with each other, without waiting for ${playerName}, and it goes on the timeline as events.
-relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it; eventNumbersCSV may be blank.${puppetContract}
+relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it; eventNumbersCSV may be blank.
+puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.
 Empty strings when nothing changes.`;
 };
 
@@ -572,13 +563,6 @@ const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
 Treat the canonical bilateral relation score/status as a strong prior for diplomatic tone and willingness to initiate contact. Friendly relations make reassurance, congratulations, candid consultation, alliance follow-up and commercial feelers more plausible; strained or hostile relations make protests, warnings, guarded clarification, counter-balancing or silence more plausible. This is not a hard threshold: current interests and events still decide whether anybody has a real reason to write.`;
 
 const buildPregameBootstrapDirective = (variables) => {
-  // With the system off, round zero may not seed a subordination either: a
-  // scenario cloned with the feature switched off must not start with puppets
-  // the rest of the game cannot see, change or end.
-  const puppetStatesBootstrapKind = isActiveFeatureEnabled("puppetStates")
-    ? `- puppet:open | puppet:covert: polities=[overlord, puppet], category (puppet kind: protectorate | satellite | client - which powers the overlord holds, not how tightly), score (the puppet's loyalty to its overlord, 0-100), detail (how it came about). A polity whose will another directs while it remains a separate country, holding its own territory - a Slovakia under Germany, a Manchukuo under Japan. open if the world knows of it; covert only if it is genuinely secret. One overlord per puppet, and a puppet holds no puppets of its own. Only arrangements standing on the start date.
-`
-    : "";
   const roundOneDate =
     normalizeString(variables?.pregameStartDate) ||
     normalizeString(variables?.dateReadable) ||
@@ -602,7 +586,8 @@ Kinds:
 - storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
 - war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
 - agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
-${puppetStatesBootstrapKind}Never output relation status or event indexes/ids; the engine owns those.
+- puppet:open | puppet:covert: polities=[overlord, puppet], category (puppet kind: protectorate | satellite | client - which powers the overlord holds, not how tightly), score (the puppet's loyalty to its overlord, 0-100), detail (how it came about). A polity whose will another directs while it remains a separate country, holding its own territory - a Slovakia under Germany, a Manchukuo under Japan. open if the world knows of it; covert only if it is genuinely secret. One overlord per puppet, and a puppet holds no puppets of its own. Only arrangements standing on the start date.
+Never output relation status or event indexes/ids; the engine owns those.
 
 ROUND-ZERO AUDIT
 - Every war still live at Round 1 must be represented.
@@ -708,9 +693,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
   }
 
   // Subordinations already standing on the start date (puppet:open / puppet:covert).
-  const puppetUpdates = isActiveFeatureEnabled("puppetStates")
-    ? puppetUpdatesFromCanonical(candidate.canonicalUpdates)
-    : [];
+  const puppetUpdates = puppetUpdatesFromCanonical(candidate.canonicalUpdates);
 
   const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates, puppetUpdates };
   delete expanded.canonicalUpdates;
@@ -1090,7 +1073,6 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     relationUpdates: normalizeArray(payload?.relationUpdates),
     agreementUpdates: normalizeArray(payload?.agreementUpdates),
     puppetUpdates: normalizeArray(payload?.puppetUpdates),
-    puppetStates: isActiveFeatureEnabled("puppetStates"),
     events,
     stopDate,
     round,
@@ -1358,7 +1340,6 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       playerPolity: normalizeString(bundle?.game?.country),
       focusActors,
       maxActors: 8,
-      puppetStates: isActiveFeatureEnabled("puppetStates"),
     }).text;
   }
   if (wants("territorialControlContext")) {
@@ -7542,13 +7523,7 @@ const applySimulationResult = async ({
   // world write from the chat panel would race the turn's. chargeRefusals owns
   // the rest — once per refused demand, recorded in world.chargedRefusals where
   // no chat writer can erase it — and is where it can be tested.
-  // With the system off nothing is collected and nothing is marked charged: a
-  // game that switches back on has not silently spent the refusals it made
-  // while the feature was away.
-  const puppetStates = isActiveFeatureEnabled("puppetStates");
-  const refusalCharge = puppetStates
-    ? chargeRefusals(nextChats, worldWithImpacts.chargedRefusals)
-    : { refusedDemands: [], charged: worldWithImpacts.chargedRefusals };
+  const refusalCharge = chargeRefusals(nextChats, worldWithImpacts.chargedRefusals);
   const refusedDemands = refusalCharge.refusedDemands;
   worldWithImpacts = { ...worldWithImpacts, chargedRefusals: refusalCharge.charged };
 
@@ -7558,7 +7533,6 @@ const applySimulationResult = async ({
     agreementUpdates,
     puppetUpdates,
     refusedDemands,
-    puppetStates,
     regionCatalog: await regionCatalogForPuppets(puppetUpdates, worldWithImpacts),
     events: freshEvents,
     stopDate: nextGame.gameDate,
@@ -7568,9 +7542,7 @@ const applySimulationResult = async ({
   // Agents report on the ledger as this turn left it: an arrangement installed
   // or ended this turn is what an agent inside either party now sees. After the
   // merge, and after espionage has decided which agents are still in place.
-  worldWithImpacts = puppetStates
-    ? revealPuppetsToSpies(diplomaticMerge.world, nextGame.gameDate)
-    : diplomaticMerge.world;
+  worldWithImpacts = revealPuppetsToSpies(diplomaticMerge.world, nextGame.gameDate);
   // Storylines last: they read the wars and relations as this turn left them.
   // A Puppet whose Loyalty has collapsed is handed a hidden Storyline by the
   // engine, not the model — a turn that forgot to open one would mean a decade
@@ -8318,7 +8290,6 @@ const buildTargetLedger = async (bundle, code, world, { statSheet = true } = {})
   return buildTargetLedgerLines(world, code, {
     playerPolity: normalizeString(bundle?.game?.country),
     ownerOf: (regionId) => world.regionOwnershipOverrides?.[regionId] ?? regionOwner.get(regionId) ?? "",
-    puppetStates: isActiveFeatureEnabled("puppetStates"),
     espionage: isActiveFeatureEnabled("espionage"),
     groups: isActiveFeatureEnabled("groups"),
     statSheet,
@@ -9209,7 +9180,6 @@ const runWorldBreadthRepair = async ({
     focusActors: actorNames,
     selectedStorylines: [],
     maxActors: 8,
-    puppetStates: isActiveFeatureEnabled("puppetStates"),
   });
   const recentHistory = compactBreadthRepairHistory(bundle) || "No recent canonical events are available.";
   const currentStorylineTitles = normalizeArray(bundle?.world?.storylines)
@@ -13020,7 +12990,6 @@ export const runPostTurnInstitutionBallots = async ({
 const mintDemandId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null } = {}) => {
-  if (!isActiveFeatureEnabled("puppetStates")) return [];
   const stored = normalizeChats([chat])[0];
   if (!stored || !normalizeString(reply)) return [];
   const [world, game] = await Promise.all([readWorldState({ force: true }), readGameData({ force: true })]);
@@ -13579,7 +13548,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       };
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        { targetDate: segmentTarget, playerFocus: focusContext.focus, puppetStates: isActiveFeatureEnabled("puppetStates") },
+        { targetDate: segmentTarget, playerFocus: focusContext.focus },
         signal,
       );
       console.info(
@@ -13628,7 +13597,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld, {
             playerPolity: normalizeString(bundle.game.country),
             maxActors: 8,
-            puppetStates: isActiveFeatureEnabled("puppetStates"),
           }).text,
         } : {}),
       };
@@ -15508,9 +15476,6 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // asked to install a puppet/satellite/protectorate/client, prose plus a friendly
   // relation or treaty is not a substitute for the canonical world.puppets row.
   // Fail closed so runJsonTask can correct the incomplete plan before Preview.
-  if (gameMasterRequestAsksForPuppet(candidate, request) && !isActiveFeatureEnabled("puppetStates")) {
-    return "[canonical subordination-state] Puppet states are switched off for this game, so the requested puppet/satellite/protectorate/client relationship cannot be created. Turn the feature back on in the scenario or game editor (Features) if you want this change.";
-  }
   const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate, { request });
   if (puppetCompletenessError) return `[canonical subordination-state] ${puppetCompletenessError}`;
 
@@ -15519,9 +15484,6 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // A skip may drop a bad line; the GM may not, because a player who asks for
   // a puppet and silently gets none is the bug this closes.
   const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), normalizedEvents);
-  if (puppetUpdates.length && !isActiveFeatureEnabled("puppetStates")) {
-    return "[canonical subordination-state] Puppet states are switched off for this game, so no country can be made another's protectorate, puppet or client. Turn the feature back on in the scenario or game editor (Features) if you want this change.";
-  }
   if (puppetUpdates.length) {
     const trial = applyPuppetUpdates({
       world,
@@ -15968,18 +15930,13 @@ export const applyGameMasterPreview = async (preview) => {
     // Subordinations ride the same merge as relations and agreements, so a
     // puppet the GM makes is a ledger row like any other: the country panel
     // shows it, the advisor is briefed on it, and a refusal later charges it.
-    // With the system off the GM cannot install one either: the transaction is
-    // validated against the same rule, so this is the belt to that braces.
-    const puppetUpdatesForApply = isActiveFeatureEnabled("puppetStates")
-      ? normalizeArray(transaction.puppetUpdates)
-      : [];
+    const puppetUpdatesForApply = normalizeArray(transaction.puppetUpdates);
     const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length || puppetUpdatesForApply.length
       ? applyDiplomaticUpdates({
           world: nextWorld,
           relationUpdates: relationUpdatesForApply,
           agreementUpdates: agreementUpdatesForApply,
           puppetUpdates: puppetUpdatesForApply,
-          puppetStates: isActiveFeatureEnabled("puppetStates"),
           regionCatalog: await regionCatalogForPuppets(puppetUpdatesForApply, nextWorld),
           events,
           stopDate: bundle.game.gameDate || bundle.game.startDate || "",
@@ -16973,7 +16930,6 @@ export const maybeGeneratePregameHistory = async () => {
       relationUpdates,
       agreementUpdates,
       puppetUpdates,
-      puppetStates: isActiveFeatureEnabled("puppetStates"),
       events: bootstrapEvents,
       stopDate: startDate,
       round: 1,

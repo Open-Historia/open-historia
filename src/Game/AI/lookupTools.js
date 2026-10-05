@@ -19,7 +19,7 @@ import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../r
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
-import { livePuppetsFor, puppetStatesEnabled } from "../../runtime/puppets.js";
+import { livePuppetsFor } from "../../runtime/puppets.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
@@ -872,9 +872,7 @@ const chatThreadBrief = (chat) => {
 // standing truth, loyalty and who has found out included; a viewer what its
 // governments believe still stands (runtime/puppets.js), a loyalty band only as
 // the overlord and never another's covert arrangement it has not uncovered.
-// Nothing at all while the game has puppet states switched off.
 const subordinationsFor = (context, involves) => {
-  if (!puppetStatesEnabled()) return [];
   const world = context.world ?? {};
   if (isSimulationAudience(context.audience)) {
     return array(world.puppets)
@@ -1150,9 +1148,7 @@ export const executeLookup = (context, name, args = {}) => {
         claimsAgainstIt: claimsAgainst.slice(0, 20),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
-        ...(puppetStatesEnabled()
-          ? { subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)) }
-          : {}),
+        subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)),
       };
     }
     case "recent_events": {
@@ -1277,10 +1273,8 @@ export const executeLookup = (context, name, args = {}) => {
         agreements: agreements.slice(0, 12).map(agreementBrief),
         wars: wars.map(warBrief),
         atWar: wars.some((war) => clean(war?.status).toLowerCase() !== "ended"),
-        ...(puppetStatesEnabled()
-          ? { subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
-            || (sameName(row?.overlord, second) && sameName(row?.puppet, first))) }
-          : {}),
+        subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
+          || (sameName(row?.overlord, second) && sameName(row?.puppet, first))),
       };
     }
     case "storylines": {

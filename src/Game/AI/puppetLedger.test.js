@@ -301,6 +301,31 @@ test("the coup Storyline opens just under the threshold the Workshop warns at", 
   assert.deepEqual(at(PUPPET_COUP_LOYALTY), []);
 });
 
+test("a turn that wrote no puppet line still charges a refusal and opens the Storyline it brings on", () => {
+  // The turn's merge (applyDiplomaticUpdates) runs the puppet pass whatever the
+  // turn wrote: a demand refused in a chat is charged there, and the seeder
+  // reads every row already in the ledger, not only this pass's lines. The turn
+  // takes the seeds from the merge (gameplay.js applySimulationResult).
+  const world = {
+    ...baseWorld,
+    puppets: [{ id: "p1", overlord: "USSR", puppet: "Poland", kind: "satellite", loyalty: PUPPET_COUP_LOYALTY, secrecy: "open", status: "active" }],
+  };
+  const merge = applyDiplomaticUpdates({
+    world,
+    relationUpdates: [],
+    agreementUpdates: [],
+    puppetUpdates: [],
+    refusedDemands: [{ overlord: "USSR", puppet: "Poland" }],
+    events: [],
+    stopDate: "1950-01-01",
+    round: 4,
+  });
+  assert.equal(merge.refusedDemandCount, 1);
+  assert.ok(merge.world.puppets[0].loyalty < PUPPET_COUP_LOYALTY, "the refusal took it under the threshold");
+  assert.equal(merge.puppetStorylineSeeds.length, 1);
+  assert.match(merge.puppetStorylineSeeds[0], /^storyline-puppet-poland~active~/);
+});
+
 test("a revolt settles the Storyline that led to it", () => {
   const world = {
     ...baseWorld,

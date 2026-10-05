@@ -370,9 +370,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     const clickHandlerRef = useRef(null);
     const [enqueueClick] = useState(createSerialQueue);
     const isMobile = useIsMobile();
-    // The Puppet States tool exists only while the game has the ledger switched on.
-    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
-    // The Groups tool likewise, while the game has groups switched on.
+    // The Groups tool exists only while the game has groups switched on.
     const groupsOn = useActiveFeatures().groups?.enabled !== false;
 
     const refresh = async () => {
@@ -547,7 +545,6 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
 
                         const entry = TOOLS.find((candidate) => candidate.id === toolId);
                         if (!entry) return null;
-                        if (toolId === "puppets" && !puppetStatesOn) return null;
                         if (toolId === "groups" && !groupsOn) return null;
                         return (
                             <button
@@ -2964,7 +2961,6 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
 const PUPPET_FORM_DEFAULTS = { overlord: "", puppet: "", kind: "satellite", secrecy: "open", loyalty: 50 };
 
 const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy, setStatus }) => {
-    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     const [world, setWorld] = useState(null);
     // null: the list; "": a new arrangement; otherwise the row being edited.
     const [editing, setEditing] = useState(null);
@@ -3075,17 +3071,6 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
         {status}
         </div>
     );
-
-    if (!puppetStatesOn) {
-        return (
-            <>
-            {header(meta.title, meta.subtitle)}
-            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", lineHeight: 1.45 }}>
-                Puppet states are switched off for this game. Turn them back on in the scenario or game editor (Features) to edit them here.
-            </div>
-            </>
-        );
-    }
 
     const loyalty = loyaltyNumber(form.loyalty);
     const rowButton = (row) => (

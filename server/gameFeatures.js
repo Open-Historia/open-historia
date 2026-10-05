@@ -17,12 +17,6 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     settings: Object.freeze([]),
   }),
   Object.freeze({
-    key: "puppetStates",
-    label: "Puppet states",
-    description: "Subordination between two countries: protectorates, puppet states and clients, openly known or covert, the loyalty underneath them, the demands an overlord makes of its own puppet, and the risings that follow a collapse. Off: no country can be made another's puppet by the simulator, the Game Master or a scenario's own start date, the simulator and every leader are never told the system exists, no demands can be made or answered, and nothing about subordination is shown on the map, in a country's panel or to the advisor. A game switched back on finds its ledger as it left it.",
-    settings: Object.freeze([]),
-  }),
-  Object.freeze({
     key: "groups",
     label: "Groups",
     description: "Actors that are not countries, such as insurgencies, cartels, militias, cults or an outbreak, each controlling an area of regions that stay their countries'. Off: the simulator is not given the groups or their areas, anything it writes about groups is left out, and no group's area is shown on the map or on a region's card. A game switched back on finds its groups as it left them.",

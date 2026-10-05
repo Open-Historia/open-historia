@@ -2,7 +2,6 @@
 
 import { getPoliticalProfileKey } from "./politicalActors.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays } from "./gameDates.js";
-import { puppetStatesEnabled } from "./puppets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -351,9 +350,8 @@ const unheldTerritorySignals = ({ world, months, updatedAt, signalsByPolity, pol
 
 // An open puppet feels its overlord's direction as a sovereignty question, the
 // more so the less loyal it is. A covert arrangement is not public, so it moves
-// no public opinion, and none of this runs while Puppet states is switched off.
+// no public opinion.
 const puppetSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
-  if (!puppetStatesEnabled()) return;
   for (const row of asArray(world?.puppets)) {
     if (clean(row?.status).toLowerCase() !== "active" || clean(row?.secrecy).toLowerCase() === "covert") continue;
     const polityKey = polityKeyFor(row?.puppet);

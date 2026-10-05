@@ -64,9 +64,9 @@ export const buildIdleDiplomacyPoliticalDecisionSet = (
 
   // Direct subordination is high-salience political context for the player, but
   // candidate selection must use the player's knowledge rather than canonical
-  // omniscience. The shared resolver hides undiscovered covert relationships and
-  // the feature-off state, while still making the player's own overlord/puppets
-  // impossible to lose behind generic relations or fallback actors.
+  // omniscience. The shared resolver hides undiscovered covert relationships,
+  // while still making the player's own overlord/puppets impossible to lose
+  // behind generic relations or fallback actors.
   for (const row of livePuppetsFor(world, player)) {
     if (row.role === "overlord") add(row.puppet);
     else if (row.role === "puppet") add(row.overlord);

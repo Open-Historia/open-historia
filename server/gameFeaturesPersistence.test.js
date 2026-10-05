@@ -21,7 +21,6 @@ import { OWNER_SCHEMA } from "./ownerMigration.js";
 // named in them, so the director rides along at its defaults.
 const WORLD_DIRECTION_DEFAULTS = { enabled: true, eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: "", territoryTempo: 0 };
 const PLAYER_FOCUS_DEFAULTS = { enabled: true, level: "balanced" };
-const PUPPET_STATES_DEFAULTS = { enabled: true };
 const GROUPS_DEFAULTS = { enabled: true };
 
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
@@ -86,7 +85,7 @@ test("a scenario stores a complete configuration and a game only its overrides",
       untouchedName: scenario.name,
     }`)}
   `);
-  assert.deepEqual(result.scenario, { espionage: { enabled: false }, idleDiplomacy: { enabled: true, averageMinutes: 30 }, puppetStates: PUPPET_STATES_DEFAULTS, groups: GROUPS_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
+  assert.deepEqual(result.scenario, { espionage: { enabled: false }, idleDiplomacy: { enabled: true, averageMinutes: 30 }, groups: GROUPS_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
   assert.deepEqual(result.game, { idleDiplomacy: { enabled: false } });
   assert.deepEqual(result.gameScenario, result.scenario);
   assert.deepEqual(result.catalog, result.game);
@@ -107,7 +106,7 @@ test("a save that does not mention features keeps them, and a fresh install read
       game: store.getGameDetails("campaign").game.features,
     }`)}
   `);
-  assert.deepEqual(result.before, { espionage: { enabled: true }, idleDiplomacy: { enabled: true, averageMinutes: 8 }, puppetStates: PUPPET_STATES_DEFAULTS, groups: GROUPS_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
+  assert.deepEqual(result.before, { espionage: { enabled: true }, idleDiplomacy: { enabled: true, averageMinutes: 8 }, groups: GROUPS_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
   assert.equal(result.scenario.espionage.enabled, false);
   assert.deepEqual(result.game, { espionage: { enabled: true } });
 });
