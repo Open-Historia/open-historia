@@ -49,6 +49,80 @@ test("a mimicked tool call missing its outer bracket still yields the arguments"
   assert.equal(args.clearActions, true);
 });
 
+// A player's log (a small local model behind koboldcpp): after its lookup
+// rounds the model "answered … without calling the output function" and wrote
+// the call out as text, in the OpenAI wire's own shape. The Projects board
+// rejected it, "$ must be object; received array", and held a turn whose
+// events were already written. The envelope below is the one in that log.
+const wireCall = (args, name = TOOL) => `[
+{
+"id": "call_001",
+"type": "function",
+"function": {
+"name": ${JSON.stringify(name)},
+"arguments": ${args}
+}
+}
+]`;
+
+test("an answer written as the wire's own tool call yields the arguments", () => {
+  const raw = wireCall(`{
+"events": [
+{
+"date": "2014-04-25",
+"title": "Putin Travels to Army Bases for Reforms",
+"description": "Vladimir Putin departed for multiple army garrisons.",
+"playerRelated": true,
+"impacts": { "actionIds": ["order-0-muufk1ha-2mpuvlu"] }
+}
+],
+"stopDate": "2014-05-25",
+"summary": "The period saw the implementation of military reforms."
+}`);
+  const parsed = extractJsonPayload(raw);
+  assert.ok(Array.isArray(parsed), "the text itself parses to the array the schema refused");
+  const args = unwrapMimickedToolCall(parsed, TOOL);
+  assert.equal(args.stopDate, "2014-05-25");
+  assert.equal(args.events.length, 1);
+  assert.deepEqual(args.events[0].impacts.actionIds, ["order-0-muufk1ha-2mpuvlu"]);
+});
+
+test("the wire's call is unwrapped whether its arguments are an object or the JSON string the wire carries", () => {
+  const payload = { stopDate: "2014-05-25", events: [{ title: "Путин начал инспекцию военных баз" }] };
+  const asString = wireCall(JSON.stringify(JSON.stringify(payload)));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asString), TOOL), payload);
+  const asObject = wireCall(JSON.stringify(payload));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asObject), TOOL), payload);
+  // Not in an array, and without the id and type a model may leave out.
+  const bare = { function: { name: TOOL, arguments: payload } };
+  assert.deepEqual(unwrapMimickedToolCall(bare, TOOL), payload);
+  assert.deepEqual(unwrapMimickedToolCall({ index: 0, id: "call_1", type: "function", function: { name: TOOL, arguments: payload } }, TOOL), payload);
+});
+
+test("a wire call to another function is not the answer", () => {
+  // A lookup the model wrote out instead of making: there is no payload in it.
+  const lookup = extractJsonPayload(wireCall('{"owner": "Russian Federation", "limit": 100}', "list_regions"));
+  assert.equal(unwrapMimickedToolCall(lookup, TOOL), lookup);
+});
+
+test("only a wire call is unwrapped: a payload with a field named function is left alone", () => {
+  const payload = { stopDate: "2014-05-25", events: [] };
+  // With no tool to check the name against, the call has to be nothing but a call.
+  assert.deepEqual(unwrapMimickedToolCall([{ id: "call_001", type: "function", function: { name: "anything", arguments: payload } }], null), payload);
+  const withMore = { id: "call_001", type: "function", function: { name: "anything", arguments: payload, note: "extra" } };
+  assert.equal(unwrapMimickedToolCall(withMore, null), withMore);
+  // Fields the wire does not have beside `function`: a payload of its own.
+  const record = { function: { name: TOOL, arguments: payload }, summary: "A quarter passes." };
+  assert.equal(unwrapMimickedToolCall(record, TOOL), record);
+  const otherType = { id: "call_001", type: "custom", function: { name: TOOL, arguments: payload } };
+  assert.equal(unwrapMimickedToolCall(otherType, TOOL), otherType);
+  // Arguments that are no object leave the answer as it was, for the schema to refuse.
+  for (const args of ["not json", [payload], 7, null]) {
+    const call = { id: "call_001", type: "function", function: { name: TOOL, arguments: args } };
+    assert.equal(unwrapMimickedToolCall(call, TOOL), call);
+  }
+});
+
 test("a brace inside a string is not counted as structure", () => {
   const parsed = extractJsonPayload('Here you go: {"summary":"the {plan} is set","events":[{"title":"a [b] c"}]} done.');
   assert.equal(parsed.summary, "the {plan} is set");
