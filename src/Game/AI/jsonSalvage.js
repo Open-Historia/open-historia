@@ -24,8 +24,155 @@ const lenientJsonParse = (value) => {
   const repaired = value
     .replace(/[“”]/g, '"')
     .replace(/,\s*([}\]])/g, "$1");
-  return maybeJsonParse(repaired) ?? maybeJsonParse(escapeInnerQuotes(repaired));
+  return maybeJsonParse(repaired)
+    ?? maybeJsonParse(escapeInnerQuotes(repaired))
+    ?? maybeJsonParse(repairLooseJson(repaired))
+    ?? maybeJsonParse(escapeInnerQuotes(repairLooseJson(repaired)));
 };
+
+// An answer written as a JavaScript object rather than as JSON: keys with no
+// quotes, strings in single quotes, a comment, a comma before a closing brace.
+//
+// It is what a model reaches for when the contract it was shown is not JSON
+// either. The first real time skip asked of Gemini as JSON text (2026-10-05,
+// gemini-3.5-flash-lite, the contract as an outline in the prompt) wrote its
+// top level and its events as JSON and then, three levels down, this:
+//     "unitOps": [ { op: "spawn", unit: { name: "Northern Vanguard Task Force", ...
+// The whole answer stopped parsing over the missing quotes, and the skip cost a
+// second request to be told what the first one had already said. The mime type
+// application/json does not hold that model to JSON's syntax; only a response
+// schema does, and the skip's contract does not fit in one (schemaOutline.js).
+//
+// Rewritten to JSON, string by string so nothing inside a string is touched:
+//   a bare word in key position (after `{` or a `,` in an object, before `:`)
+//   gets its quotes; a 'single-quoted' string becomes a "double-quoted" one;
+//   // and /* */ comments go; a comma before `}` or `]` goes; and so does a `?`
+//   between a key and its `:`, the outline's mark for an optional field copied
+//   into the answer with the key.
+// Nothing is invented and no value is reinterpreted: text that was not such an
+// object comes back changed in none of those ways and still does not parse.
+// Like every repair here it is tried only after a strict parse failed.
+const WORD_START = /[A-Za-z_$]/;
+const WORD_CHAR = /[A-Za-z0-9_$]/;
+const BLANK = /\s/;
+
+export const repairLooseJson = (text) => {
+  const source = String(text ?? "");
+  const length = source.length;
+  const out = [];
+  const stack = [];
+  // Whether a word met here would be a key: just inside an object, or after a
+  // comma in one.
+  let keyPosition = false;
+  let at = 0;
+  const dropTrailingComma = () => {
+    let end = out.length - 1;
+    while (end >= 0 && BLANK.test(out[end])) end -= 1;
+    if (end >= 0 && out[end] === ",") out.splice(end, 1);
+  };
+  while (at < length) {
+    const char = source[at];
+    if (char === '"') {
+      let end = at + 1;
+      let escaped = false;
+      while (end < length) {
+        const inner = source[end];
+        if (escaped) escaped = false;
+        else if (inner === "\\") escaped = true;
+        else if (inner === '"') break;
+        end += 1;
+      }
+      out.push(source.slice(at, Math.min(end + 1, length)));
+      at = end + 1;
+      keyPosition = false;
+      continue;
+    }
+    if (char === "'") {
+      let end = at + 1;
+      let value = "";
+      while (end < length && source[end] !== "'") {
+        if (source[end] === "\\" && end + 1 < length) {
+          value += source[end + 1] === "'" ? "'" : source[end] + source[end + 1];
+          end += 2;
+          continue;
+        }
+        value += source[end] === '"' ? "\\\"" : source[end];
+        end += 1;
+      }
+      out.push(`"${value}"`);
+      at = end + 1;
+      keyPosition = false;
+      continue;
+    }
+    if (char === "/" && source[at + 1] === "/") {
+      while (at < length && source[at] !== "\n") at += 1;
+      continue;
+    }
+    if (char === "/" && source[at + 1] === "*") {
+      const end = source.indexOf("*/", at + 2);
+      at = end === -1 ? length : end + 2;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      stack.push(char);
+      keyPosition = char === "{";
+      out.push(char);
+      at += 1;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      dropTrailingComma();
+      stack.pop();
+      keyPosition = false;
+      out.push(char);
+      at += 1;
+      continue;
+    }
+    if (char === ",") {
+      keyPosition = stack[stack.length - 1] === "{";
+      out.push(char);
+      at += 1;
+      continue;
+    }
+    if (char === ":") {
+      keyPosition = false;
+      out.push(char);
+      at += 1;
+      continue;
+    }
+    // `"note"?: "..."`, or `note?: "..."`: nothing else puts a ? before a colon
+    // outside a string.
+    if (char === "?") {
+      let after = at + 1;
+      while (after < length && BLANK.test(source[after])) after += 1;
+      if (source[after] === ":") {
+        at += 1;
+        continue;
+      }
+    }
+    if (keyPosition && WORD_START.test(char)) {
+      let end = at + 1;
+      while (end < length && WORD_CHAR.test(source[end])) end += 1;
+      let after = end;
+      if (source[after] === "?") after += 1;
+      while (after < length && BLANK.test(source[after])) after += 1;
+      if (source[after] === ":") {
+        out.push(`"${source.slice(at, end)}"`);
+        at = end;
+        keyPosition = false;
+        continue;
+      }
+    }
+    out.push(char);
+    at += 1;
+  }
+  return out.join("");
+};
+
+// One value out of a text that is JSON or nearly: strict, then every repair
+// above. Null when none of them makes it parse. For a caller that already has
+// exactly the text of one value (streamedEvents.js, one finished event).
+export const parseLooseJson = (text) => lenientJsonParse(String(text ?? ""));
 
 // A quote copied into a string without its backslash. The board prompt titles
 // entries `Operation "Name"`, and a model copying that into its answer wrote

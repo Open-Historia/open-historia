@@ -359,3 +359,89 @@ test("the Workshop-free pipeline: a new formation nothing places is raised in it
     assert.ok(body.includes("entry.spawn && entry.owner") && body.includes("resolvePlacement(entry.owner, gazetteer"), "a spawn with nowhere to go is raised at home");
     assert.ok(body.includes("rather than left off the map"), "and the receipt says where it went");
 });
+
+// --- an address: a spot, and what it is in ---
+//
+// "Fort Drum, New York". A real skip opened a depot there and lost it: no map
+// carries every base, and the phrase as a whole named nothing.
+
+test("a spot the map does not have is put in the place the address says it is in", () => {
+    const spot = place("Fort Nowhere, Westmark North");
+    assert.equal(spot.error, undefined);
+    assert.equal(spot.regionId, "wm-n");
+    const deeper = place("Fort Nowhere, Midburg, Westmark");
+    assert.deepEqual([deeper.lng, deeper.lat], [32, 51], "the innermost place the map knows: the town, not the whole country");
+    const country = place("Fort Nowhere, Eastland");
+    assert.ok(["el-n", "el-s"].includes(country.regionId), String(country.regionId));
+});
+
+test("a spot the map has is the spot itself, when it is where the address says", () => {
+    const spot = place("Midburg, Westmark North");
+    assert.deepEqual([spot.lng, spot.lat], [32, 51]);
+    assert.deepEqual([place("Midburg, Westmark").lng, place("Midburg, Westmark").lat], [32, 51], "inside the country too");
+});
+
+test("a namesake somewhere else is not the spot: the address wins", () => {
+    // The map's only Midburg is in Westmark. "Midburg, Eastland" is some other Midburg.
+    const spot = place("Midburg, Eastland");
+    assert.equal(spot.error, undefined);
+    assert.ok(["el-n", "el-s"].includes(spot.regionId), `${spot.regionId} is not in Eastland`);
+});
+
+test("when the map knows nothing after the comma, the spot is taken only at home", () => {
+    // No "Nowhereshire" on this map, so nothing says which Midburg is meant.
+    const home = resolvePlacement("Midburg, Nowhereshire", gazetteer, { owner: "Westmark" });
+    assert.deepEqual([home.lng, home.lat], [32, 51], "it is in the owner's own land");
+    const abroad = resolvePlacement("Midburg, Nowhereshire", gazetteer, { owner: "Eastland" });
+    assert.match(abroad.error, /is called "Midburg, Nowhereshire"/, "a namesake abroad is refused, and the receipt says what was written");
+    const structure = resolvePlacement("Midburg, Nowhereshire", gazetteer, { home: "Eastland" });
+    assert.match(structure.error, /Midburg, Nowhereshire/, "a structure's owner is given as `home`");
+    const nobody = resolvePlacement("Midburg, Nowhereshire", gazetteer);
+    assert.deepEqual([nobody.lng, nobody.lat], [32, 51], "with nobody to test it against, it is taken");
+});
+
+// --- a side of a country, with no country named ---
+
+test("the northern border, with nobody named, is the north of whoever is placing the thing", () => {
+    const unit = resolvePlacement("northern border", gazetteer, { seedText: "Exercise Force", owner: "Westmark" });
+    assert.equal(unit.error, undefined);
+    assert.equal(unit.regionId, "wm-n", "Westmark's northern region");
+    const depot = resolvePlacement("along the eastern frontier", gazetteer, { seedText: "Depot", home: "Westmark" });
+    assert.ok(["wm-n", "wm-s"].includes(depot.regionId) && depot.lng > 32, `${depot.regionId} ${depot.lng}: a structure's owner is its home`);
+    const south = resolvePlacement("our southern provinces", gazetteer, { owner: "Eastland" });
+    assert.equal(south.regionId, "el-s");
+    // Nobody's: there is no side to put it on, so it is not read that way at all.
+    assert.equal(readPlacement("northern border").some((reading) => reading.kind === "part" && reading.name !== "border"), false);
+    assert.match(resolvePlacement("northern border", gazetteer).error, /northern border/);
+});
+
+test("a named place still wins over the side of the owner's own land", () => {
+    // "Eastland North" is a region; its owner's north is only tried after it.
+    const named = resolvePlacement("Eastland North", gazetteer, { owner: "Westmark" });
+    assert.equal(named.regionId, "el-n");
+    const border = resolvePlacement("the border with Eastland", gazetteer, { owner: "Westmark" });
+    assert.ok(border.lng > 33, "a border WITH someone is still the side facing them");
+});
+
+test("an address after a word of grammar is still an address", () => {
+    const near = place("near Fort Nowhere, Eastland South");
+    assert.equal(near.error, undefined);
+    assert.equal(near.regionId, "el-s");
+    const at = place("at Fort Nowhere, Midburg, Westmark");
+    assert.deepEqual([at.lng, at.lat], [32, 51]);
+});
+
+test("an address is the last reading: grammar after a comma still means what it meant", () => {
+    const north = place("Westmark North, north");
+    assert.equal(north.regionId, "wm-n");
+    assert.ok(north.lat > 51, `${north.lat} is not in the north of it`);
+    assert.match(place("Fort Nowhere, Elsewhere").error, /is called "Fort Nowhere, Elsewhere"/, "nothing on the map either side of the comma");
+    assert.match(place("Fort Nowhere").error, /is called "Fort Nowhere"/, "no comma, no address");
+});
+
+test("the placing pass tells the reader whose thing it is", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(body.includes("home: normalizeString(marker.ownerCode ?? op.ownerCode)"), "a structure's owner");
+    assert.ok(body.includes("home: entry.owner || entry.home"), "a unit's owner, or the structure's");
+});

@@ -200,6 +200,8 @@ Tests use the **built-in Node test runner** (`node --test`) with `node:assert/st
 | `server/security.test.js` | Path containment, the CSRF/origin guard, HTTP range parsing, the hub host allowlist (`server/security.js`). |
 | `server/ownerMigration.test.js` | The owner-code → owner-name resolver, with fixtures transcribed from real shipped scenario data (`server/ownerMigration.js`). |
 | `src/Game/AI/turnReview.test.js` | The after-skip review prompt and the answer taken apart (`turnReview.js`). |
+| `src/Game/AI/foldedSkip.test.js` | The one-request time skip: when a refusal is the contract's fault, a board op applied once, a report to its own agent, and the wiring read from `gameplay.js` (`foldedSkip.js`). |
+| `src/Game/AI/schemaOutline.test.js` | A schema written out as the shape of an answer, and that a Gemini skip is asked for with it and no schema (`schemaOutline.js`). |
 | `src/Game/AI/repairCall.test.js` | The world-repair call's time limits (`repairCall.js`, which imports `idleDeadline.js`). |
 | `src/runtime/gameState.unitMotion.test.js` | How far a unit moves in a turn (`gameState.js` + `unitMotion.js`). |
 
