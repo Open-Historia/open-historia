@@ -49,6 +49,86 @@ test("a mimicked tool call missing its outer bracket still yields the arguments"
   assert.equal(args.clearActions, true);
 });
 
+// A player's koboldcpp log (2026-10-05): asked for a tool call, the model wrote
+// the call as its text in the shape it has on the OpenAI wire. The turn fell
+// back ("answered after 3 lookup rounds without calling the output function"),
+// and the Projects board was held on "$ must be object; received array".
+// The start of one of those replies, as logged.
+const WIRE_CALL_REPLY = `[
+{
+"id": "call_001",
+"type": "function",
+"function": {
+"name": "submit_jump_result",
+"arguments": {
+"events": [
+{
+"date": "2014-03-26",
+"title": "Путин начал инспекцию военных баз по линии реформ",
+"description": "Президент Владимир Путин начал серию визитов на ключевые армейские гарнизоны.",
+"importance": "major",
+"kind": "player",
+"tags": ["Military", "Politics"],
+"notable": true,
+"playerRelated": true,
+"warId": "",
+"combatants": []
+}
+],
+"stopDate": "2014-03-26",
+"summary": "Инспекции начались."
+}
+}
+}
+]`;
+
+test("a tool call written in the OpenAI wire shape yields its arguments", () => {
+  const args = unwrapMimickedToolCall(extractJsonPayload(WIRE_CALL_REPLY), TOOL);
+  assert.equal(args.stopDate, "2014-03-26");
+  assert.equal(args.events.length, 1);
+  assert.equal(args.events[0].title, "Путин начал инспекцию военных баз по линии реформ");
+});
+
+test("the wire shape is opened with its arguments as a JSON string, and outside an array", () => {
+  const payload = { events: [{ title: "One" }], stopDate: "2032-11-02" };
+  // What the wire itself carries: `arguments` is a string of JSON.
+  const asString = [{ id: "call_1", type: "function", function: { name: TOOL, arguments: JSON.stringify(payload) } }];
+  assert.deepEqual(unwrapMimickedToolCall(asString, TOOL), payload);
+  const bare = { id: "call_1", type: "function", index: 0, function: { name: TOOL, arguments: payload } };
+  assert.deepEqual(unwrapMimickedToolCall(bare, TOOL), payload);
+  // `parameters`, as the flat mimicry spells it, is read here too.
+  assert.deepEqual(unwrapMimickedToolCall({ type: "function", function: { name: TOOL, parameters: payload } }, TOOL), payload);
+  // A task with no registered tool has no name to check: the envelope alone decides.
+  assert.deepEqual(unwrapMimickedToolCall(asString, null), payload);
+  assert.deepEqual(unwrapMimickedToolCall({ function: { arguments: payload } }, TOOL), payload);
+});
+
+test("a wire-shaped call that is not the answer is left as it was", () => {
+  // A lookup the model wrote out instead of making: not the output function.
+  const lookup = [{ id: "call_1", type: "function", function: { name: "list_regions", arguments: { owner: "Russian Federation" } } }];
+  assert.equal(unwrapMimickedToolCall(lookup, TOOL), lookup);
+  // Arguments that are not an object, or not JSON, are not a payload.
+  const broken = { type: "function", function: { name: TOOL, arguments: '{"events":[' } };
+  assert.equal(unwrapMimickedToolCall(broken, TOOL), broken);
+  const scalar = { type: "function", function: { name: TOOL, arguments: 3 } };
+  assert.equal(unwrapMimickedToolCall(scalar, TOOL), scalar);
+  // Two calls are two answers; neither is chosen.
+  const two = [lookup[0], { type: "function", function: { name: TOOL, arguments: {} } }];
+  assert.equal(unwrapMimickedToolCall(two, TOOL), two);
+});
+
+test("a real payload with a field called function is not mistaken for the wire envelope", () => {
+  // Something beside the envelope's own keys: this is content, not a wrapper.
+  const payload = { function: { name: TOOL, arguments: { events: [] } }, events: [{ title: "Kept" }], summary: "A real answer." };
+  assert.equal(unwrapMimickedToolCall(payload, TOOL), payload);
+  // `type` says what the envelope holds, and only "function" is a call.
+  const other = { type: "report", function: { name: TOOL, arguments: { events: [] } } };
+  assert.equal(unwrapMimickedToolCall(other, TOOL), other);
+  // With no tool name to check, the inner object must be an envelope and nothing else.
+  const loose = { type: "function", function: { name: "whatever", arguments: { a: 1 }, events: [] } };
+  assert.equal(unwrapMimickedToolCall(loose, null), loose);
+});
+
 test("a brace inside a string is not counted as structure", () => {
   const parsed = extractJsonPayload('Here you go: {"summary":"the {plan} is set","events":[{"title":"a [b] c"}]} done.');
   assert.equal(parsed.summary, "the {plan} is set");

@@ -168,12 +168,34 @@ const balancedJsonCandidates = (text) => {
 // wrapping breaks strict JSON parsing, fails to parse at all) and the whole
 // turn is discarded to the canned fallback. Unwrap it back to the actual
 // arguments object so the real content underneath still gets applied.
+//
+// The same call is also written the way it travels on the OpenAI wire, with the
+// envelope one level further out:
+// `{ "id": "call_001", "type": "function", "function": { "name": …, "arguments": … } }`
+// — what a `tool_calls` array holds, and usually written as that array of one.
+// Small local models asked for a tool call write exactly this as their text,
+// with `arguments` as an object as often as the JSON string the wire carries.
+// A player's koboldcpp runs lost turns to it ("answered after 3 lookup rounds
+// without calling the output function") and a Projects board ("$ must be
+// object; received array"). Only an object that is NOTHING BUT that outer
+// envelope is opened: a real payload may have a field called `function`.
+const WIRE_TOOL_CALL_KEYS = new Set(["id", "type", "function", "index"]);
+
+const openWireToolCall = (value) => {
+  const call = value.function;
+  if (!call || typeof call !== "object" || Array.isArray(call)) return value;
+  if (value.type !== undefined && normalizeString(value.type).toLowerCase() !== "function") return value;
+  if (Object.keys(value).some((key) => !WIRE_TOOL_CALL_KEYS.has(key))) return value;
+  return call;
+};
+
 export const unwrapMimickedToolCall = (value, toolName) => {
   let current = value;
   for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
     current = current[0];
   }
   if (!current || typeof current !== "object" || Array.isArray(current)) return value;
+  current = openWireToolCall(current);
   const name = normalizeString(current.name);
   if (toolName && name && name !== toolName) return value;
   // getGameplayTool returns null for tasks with no registered tool, so a name
