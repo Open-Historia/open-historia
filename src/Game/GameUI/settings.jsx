@@ -96,7 +96,6 @@ import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtim
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
-import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -2019,7 +2018,6 @@ const SettingsWorkspace = ({
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
-    const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2214,25 +2212,6 @@ const SettingsWorkspace = ({
                 >
                     <TaskPicks />
                 </SettingsSection>
-                {forGame && (
-                <SettingsSection
-                title="Political World A/B Lab"
-                description="Run the same frozen diplomacy, Council, vote or event-generation task with Political World context on/off — or push one actor through HAWK/DOVE sensitivity variants. The lab never applies either candidate to the campaign."
-                right={(
-                    <button
-                    type="button"
-                    onClick={() => setPoliticalWorldLabOpen(true)}
-                    style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "8px", color: "var(--oh-grey-text)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
-                    >
-                    Open A/B Lab
-                    </button>
-                )}
-                >
-                    <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.55 }}>
-                    Pins every arm to one exact fallback-list entry, counterbalances run order, saves raw prompts/responses and proves the non-Political prompt hash matches before you interpret the result. Blind review is available to reduce confirmation bias.
-                    </div>
-                </SettingsSection>
-                )}
                 <SettingsSection
                 title="Telemetry"
                 description="What the AI debug console can show about every call."
@@ -2296,7 +2275,6 @@ const SettingsWorkspace = ({
                     <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
                 </div>
             </div>
-            {politicalWorldLabOpen && <PoliticalWorldABLab onClose={() => setPoliticalWorldLabOpen(false)} />}
         </div>,
         document.body,
     );
