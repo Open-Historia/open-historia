@@ -264,9 +264,29 @@ const parseEventNumbers = (value) =>
     .map((entry) => entry - 1)
     .slice(0, 16);
 
+// A record is fields joined by "~", and the shortest one — an id and what
+// happens to it — has a "~" in it. A line with none is not a record the model
+// got wrong; it is prose where the records go: "No changes.", a Markdown
+// heading. It used to be read as a war whose id was the whole line and whose
+// operation was blank. A player's skip (2026-10-05) answered warUpdates with
+// "### Обновления войн:" and a sentence saying no war began or ended, and the
+// ledger refused the answer over two wars that were never there: a strict
+// attempt is asked again for that, a whole second request, and the salvage
+// pass reported both lines to the next prompt as dropped war records.
+const isWarUpdateProse = (text) => !text.includes(WAR_UPDATE_SEPARATOR);
+
+// The lines of a compact warUpdates answer that decodeWarUpdates passes over
+// as prose, for the one caller that says so (gameplay.js validateSegmentLedgers).
+export const warUpdateProseLines = (value) => {
+  const lines = Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string")
+    : String(value ?? "").split(/\r?\n/);
+  return lines.map(normalizeString).filter((line) => line && isWarUpdateProse(line));
+};
+
 const parseWarUpdateRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  if (!text || isWarUpdateProse(text)) return null;
 
   // id~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
   const fields = [];

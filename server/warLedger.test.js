@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
   applyWarUpdates,
@@ -19,6 +20,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "../src/Game/AI/nativeWarLedger.js";
 
 const event = (id, title, extra = {}) => ({
@@ -308,4 +310,91 @@ test("a unit called a Combat Wing or a battle group is a formation, not a battle
     title: "Ecuadorian and Colombian troops locked in combat near Ipiales",
     description: "",
   }), true, "real combat still reads as combat");
+});
+
+// A player's diagnostics log (beta 0.0.66, 2026-10-05, a game played in
+// Russian): a month's skip answered warUpdates with a heading and a sentence
+// saying no war had begun, ended or changed. Each line was read as a war whose
+// id was the whole line and whose operation was blank: "Unsupported warUpdates
+// operation "" for ### Обновления войн:." and, on the salvage pass, "dropped 2
+// war record(s) (### Обновления войн:, Нет изменений. …)", which went on into
+// the next prompt. The two lines, as the log's droppedWarIds gives them.
+const PROSE_WAR_UPDATES = [
+  "### Обновления войн:",
+  "Нет изменений. В этом периоде ни одна война не началась, не закончилась и не изменилась — на карте нет активных конфликтов. ### Конец обновлений. **ВАЖНО:** Отвечай ТОЛЬКО валидным JSON объектом без каких-либо объяснений, комментариев или предисловий. Не добавляй текст перед или после JSON.",
+];
+
+const quietMonth = () => [
+  event("e1", "Отряд кораблей Черноморского флота выходит на патрулирование", { date: "2014-09-12" }),
+  event("e2", "Правительство утверждает бюджет на 2015 год", { date: "2014-09-25", kind: "domestic" }),
+];
+
+test("prose where the war records go is not a record: nothing is rejected and nothing is dropped", () => {
+  const warUpdates = PROSE_WAR_UPDATES.join("\n");
+  assert.deepEqual(decodeWarUpdates(warUpdates), []);
+  assert.deepEqual(decodeWarUpdates(PROSE_WAR_UPDATES), [], "and as an array of lines");
+  assert.deepEqual(warUpdateProseLines(warUpdates), PROSE_WAR_UPDATES, "the lines passed over can still be said");
+
+  // The strict pass: no complaint, so no second request for the whole skip.
+  const strict = { events: quietMonth(), warUpdates };
+  normalizeWorldWarEventLinks(strict);
+  assert.equal(validateWarLedgerPayload(strict, { world }), "");
+
+  // The salvage pass: the repair has no record to drop, so the receipt it
+  // feeds has no "id" to repeat to the model.
+  const salvaged = { events: quietMonth(), warUpdates };
+  assert.deepEqual(
+    repairWarLedgerPayload(salvaged, { world }),
+    { stamped: 0, anchored: 0, droppedIds: [], strippedEvents: 0, residual: "" },
+  );
+  assert.deepEqual(salvaged.warUpdates, []);
+});
+
+test("the usual ways of saying nothing changed are prose too", () => {
+  for (const text of ["none", "No changes.", "N/A", "нет", "- no war updates this period -", "（无）"]) {
+    assert.deepEqual(decodeWarUpdates(text), [], text);
+    assert.equal(validateWarLedgerPayload({ events: quietMonth(), warUpdates: text }, { world }), "", text);
+  }
+  assert.deepEqual(warUpdateProseLines(""), []);
+  assert.deepEqual(warUpdateProseLines(null), []);
+});
+
+test("prose beside real records costs only itself: the records are read, bound and judged as before", () => {
+  const candidate = {
+    events: [event("e1", "Ruritania declares war on Borduria", { warId: "rur-bor" })],
+    warUpdates: ["### War updates:", record("rur-bor", "start", "Ruritania", "Borduria", "1"), "End of updates."].join("\n"),
+  };
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => update.id), ["rur-bor"]);
+  normalizeWorldWarEventLinks(candidate);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+
+  // A record the ledger cannot apply is still dropped by name, and only it.
+  const failing = {
+    events: [event("e1", "Ruritania declares war on Borduria")],
+    warUpdates: [PROSE_WAR_UPDATES[0], record("rur-bor", "start", "Ruritania", "", "1"), PROSE_WAR_UPDATES[1]].join("\n"),
+  };
+  assert.deepEqual(repairWarLedgerPayload(failing, { world }).droppedIds, ["rur-bor"]);
+});
+
+test("a line that is a record with a bad operation is still refused by name", () => {
+  const refused = (warUpdates) => validateWarLedgerPayload({ events: quietMonth(), warUpdates }, { world });
+  assert.equal(refused(record("rur-bor", "declare", "Ruritania", "Borduria", "1")), 'Unsupported warUpdates operation "declare" for rur-bor.');
+  assert.equal(refused(record("rur-bor", "", "Ruritania", "Borduria", "1")), 'Unsupported warUpdates operation "" for rur-bor.');
+  // One separator is enough to be a record: an id and what happens to it.
+  assert.equal(refused("rur-bor~begin"), 'Unsupported warUpdates operation "begin" for rur-bor.');
+  assert.deepEqual(warUpdateProseLines("rur-bor~begin"), []);
+});
+
+test("the prose lines go to the log, and the receipt is written from the repair's dropped ids alone", () => {
+  // gameplay.js cannot be imported without the whole app; its wiring is read as
+  // source. The receipt is the model's next prompt, so what reaches it matters.
+  const source = fs.readFileSync(new URL("../src/Game/AI/gameplay.js", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("const validateSegmentLedgers = "), source.indexOf("// One segment's storyline records"));
+  assert.ok(body.length > 0, "validateSegmentLedgers was not found in gameplay.js");
+  const said = body.slice(body.indexOf("warUpdateProseLines(candidate?.warUpdates)"), body.indexOf("reconcileCombatWarState(candidate"));
+  assert.match(said, /console\.info\(/, "the lines passed over are said in the log");
+  assert.doesNotMatch(said, /noteReceipt\(/, "and never in the receipt");
+  const warNotes = [...body.matchAll(/noteReceipt\(\s*receipt,\s*"dropped",\s*`War ledger: ([\s\S]*?)\);/g)].map((match) => match[1]);
+  assert.equal(warNotes.length, 1);
+  assert.match(warNotes[0], /repair\.droppedIds\.join\(", "\)/);
 });

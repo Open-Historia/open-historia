@@ -275,6 +275,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -859,6 +860,18 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
     }
   });
+
+  // Prose where the war records go ("No changes.", a Markdown heading) is not a
+  // record and is not judged as one (nativeWarLedger.js). Said here, once, for
+  // the Logging file only: the receipt is the model's next prompt, and nothing
+  // was lost that it needs telling about.
+  const warProse = warUpdateProseLines(candidate?.warUpdates);
+  if (warProse.length) {
+    console.info(
+      `[ai] war ledger: ${warProse.length} line(s) of warUpdates are prose, not records, and were passed over: `
+      + warProse.map((line) => `"${line.length > 80 ? `${line.slice(0, 79)}…` : line}"`).join(", "),
+    );
+  }
 
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
