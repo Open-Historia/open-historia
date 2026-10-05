@@ -35,6 +35,7 @@ export const buildTargetLedgerLines = (world, target, {
     ownerOf = null,
     puppetStates = true,
     espionage = true,
+    groups = true,
     statSheet = true,
 } = {}) => {
     const name = text(target);
@@ -118,15 +119,16 @@ export const buildTargetLedgerLines = (world, target, {
         if (puppets.length) lines.push(`Directs: ${puppets.join("; ")}.`);
     }
 
-    // The groups holding ground inside its borders.
+    // The groups holding ground inside its borders, while the game has groups
+    // (server/gameFeatures.js).
     const holder = typeof ownerOf === "function"
         ? ownerOf
         : (regionId) => world.regionOwnershipOverrides?.[regionId] ?? "";
-    const groups = Object.entries(groupRegions(world.groupAreas))
+    const groupsHolding = !groups ? [] : Object.entries(groupRegions(world.groupAreas))
         .map(([group, regionIds]) => [group, regionIds.filter((regionId) => same(holder(regionId)))])
         .filter(([, regionIds]) => regionIds.length > 0)
         .map(([group, regionIds]) => `${text(world.groups?.[group]?.name) || group} (${regionIds.length} region${regionIds.length === 1 ? "" : "s"})`);
-    if (groups.length) lines.push(`Groups controlling part of its land: ${groups.join("; ")}.`);
+    if (groupsHolding.length) lines.push(`Groups controlling part of its land: ${groupsHolding.join("; ")}.`);
 
     const reputation = Number(world.internationalReputation?.[name]);
     if (Number.isFinite(reputation)) lines.push(`International reputation: ${Math.round(reputation)}/100.`);

@@ -25,6 +25,8 @@ const IDB_STUB = `
 export const STORES = {
   scenarios: "scenarios", games: "games", mapeditorDocs: "mapeditorDocs", basemapMeta: "basemapMeta",
   basemapPayload: "basemapPayload", flags: "flags", kv: "kv", scenarioMeta: "scenarioMeta", gameMeta: "gameMeta",
+  covers: "covers", snapshots: "snapshots", snapshotIndex: "snapshotIndex",
+  trash: "trash", trashMeta: "trashMeta",
 };
 const db = globalThis.__ohWebStoreTestDb;
 const table = (name) => { if (!db.has(name)) db.set(name, new Map()); return db.get(name); };
@@ -36,6 +38,21 @@ export const idbPut = async (store, value) => { table(store).set(store === "kv" 
 export const idbPutPair = async (storeA, valueA, storeB, valueB) => { await idbPut(storeA, valueA); await idbPut(storeB, valueB); };
 export const idbDelete = async (store, key) => { table(store).delete(key); };
 export const idbDeletePair = async (storeA, storeB, key) => { table(storeA).delete(key); table(storeB).delete(key); };
+export const idbGetMany = async (store, keys) => Promise.all(keys.map((key) => idbGet(store, key)));
+export const idbTransaction = async (stores, fn) => fn({
+  get: (store, key) => idbGet(store, key),
+  getAllKeys: (store) => idbGetAllKeys(store),
+  put: (store, value) => idbPut(store, value),
+  delete: (store, key) => idbDelete(store, key),
+});
+export const idbMovePair = async (fromRecords, fromIndex, key, toRecords, toIndex, build) => idbTransaction([], async (tx) => {
+  const record = copy(table(fromRecords).get(key));
+  if (record === undefined) return null;
+  const [nextRecord, nextIndex] = await build(record, tx);
+  table(fromRecords).delete(key); table(fromIndex).delete(key);
+  await idbPut(toRecords, nextRecord); await idbPut(toIndex, nextIndex);
+  return copy(nextIndex);
+});
 export const kvGet = async (key, fallback = null) => { const record = table("kv").get(key); return record ? copy(record.value) : fallback; };
 export const kvPut = (key, value) => idbPut("kv", { key, value });
 export const kvUpdate = async (key, updater, fallback = null) => {
@@ -564,7 +581,9 @@ test("restore points an earlier import stranded in record.json are found, and mo
   ok(await runtime("PUT", "snapshots", [SNAPSHOT, next]));
   const after = db.get("games").get(id);
   assert.equal("snapshots" in after.json, false);
-  assert.deepEqual(after.snapshots.map((entry) => entry.id), ["snap-1", "snap-2"]);
+  assert.equal("snapshots" in after, false, "restore points live in their own store now");
+  assert.deepEqual(db.get("snapshotIndex").get(id).entries.map((entry) => entry.id), ["snap-1", "snap-2"]);
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT, next]);
 });
 
 test("making a game active from inside a runtime write does not wait on itself", async () => {
@@ -577,4 +596,449 @@ test("making a game active from inside a runtime write does not wait on itself",
   assert.equal(after.games.length, 1);
   assert.equal(after.activeGame.playCount, 1);
   assert.deepEqual(ok(await runtime("GET", "flags")), { Testland: "made.png" });
+});
+
+// A time skip that finished while another game was open is kept with its own
+// game (src/Game/AI/parkedTurn.js), written while that game is NOT the active one.
+test("a kept turn is stored with its own game while another is open, and goes when removed", async () => {
+  await reset();
+  const kept = await newGame("Where the skip ran");
+  const other = await newGame("Opened meanwhile");
+  assert.equal((await library()).activeGameId, other);
+
+  assert.equal(ok(await games("GET", `${kept}/parked-turn`)), null, "none until one is kept");
+  const record = { version: 1, campaignId: kept, round: 3, turn: { baseGame: { round: 3 } } };
+  ok(await games("PUT", `${kept}/parked-turn`, record));
+  assert.deepEqual(ok(await games("GET", `${kept}/parked-turn`)), record);
+  assert.equal(ok(await games("GET", `${other}/parked-turn`)), null, "the open game is not given it");
+  assert.equal("parkedTurn" in db.get("games").get(kept), false, "not in the record every runtime read clones");
+
+  const exported = ok(await games("GET", `${kept}/export`));
+  assert.equal(JSON.stringify(exported).includes("parked"), false, "an export does not carry it");
+
+  ok(await games("DELETE", `${kept}/parked-turn`));
+  assert.equal(ok(await games("GET", `${kept}/parked-turn`)), null);
+});
+
+test("a kept turn is refused for another game or a game that is not there, and goes with its game", async () => {
+  await reset();
+  const kept = await newGame("Kept here");
+  const other = await newGame("Elsewhere");
+  const refused = await games("PUT", `${other}/parked-turn`, { version: 1, campaignId: kept });
+  assert.equal(refused.status, 400);
+  assert.equal((await games("PUT", "no-such-game/parked-turn", { version: 1, campaignId: "no-such-game" })).status, 400);
+  assert.equal((await games("GET", "no-such-game/parked-turn")).status, 404);
+
+  ok(await games("PUT", `${kept}/parked-turn`, { version: 1, campaignId: kept }));
+  ok(await games("DELETE", kept));
+  assert.equal(db.get("kv").has(`parked-turn:${kept}`), false, "deleting the game deletes its kept turn");
+});
+
+// --- Covers and restore points in stores of their own (idb.js version 5) ---
+const coverBytes = (n) => new Uint8Array([n, n, n, n]);
+const coverOf = async (handler, id) => {
+  const response = await handler({ method: "GET", segments: [id, "assets", "cover"], query: new URLSearchParams() });
+  return response.status === 200 ? [...new Uint8Array(await response.arrayBuffer())] : null;
+};
+const uploadGameCover = async (id, bytes) => {
+  const response = await store.handleGames({ method: "PUT", segments: [id, "assets", "cover"], rawBody: bytes, contentType: "image/png" });
+  assert.equal(response.status, 200, await response.clone().text());
+};
+const restorePoint = (n) => ({ ...SNAPSHOT, id: `snap-${n}`, round: n, capturedAt: `2026-09-2${n}T00:00:00.000Z` });
+
+test("a game's cover lives in its own store; the record and its catalog row keep a marker", async () => {
+  await reset();
+  const id = await newGame("Covered");
+  await uploadGameCover(id, coverBytes(5));
+  assert.deepEqual(db.get("games").get(id).cover, { contentType: "image/png", byteLength: 4, key: `game:${id}` });
+  assert.equal(db.get("gameMeta").get(id).cover.bytes, undefined, "listing the library copies no cover bytes");
+  assert.deepEqual([...db.get("covers").get(`game:${id}`).bytes], [5, 5, 5, 5]);
+  assert.deepEqual(await coverOf(store.handleGames, id), [5, 5, 5, 5]);
+  assert.match((await library()).games.find((game) => game.id === id).ownCoverImageUrl, /^blob:/);
+
+  // A copy of the game gets a cover of its own, not a pointer at this one.
+  const copy = ok(await games("POST", "", { name: "Covered copy", seedGameId: id })).game.id;
+  assert.deepEqual([...db.get("covers").get(`game:${copy}`).bytes], [5, 5, 5, 5]);
+  ok(await games("DELETE", `${id}/assets/cover`));
+  assert.equal(db.get("covers").has(`game:${id}`), false);
+  assert.equal(await coverOf(store.handleGames, id), null);
+  assert.deepEqual(await coverOf(store.handleGames, copy), [5, 5, 5, 5]);
+  ok(await games("DELETE", copy));
+  assert.equal(db.get("covers").has(`game:${copy}`), false, "a deleted game's cover goes with it");
+});
+
+test("a scenario's cover is copied with the scenario, exported, and deleted with it", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "", { name: "Pictured" })).scenario.id;
+  await upload(id, "cover", coverBytes(7), "image/png");
+  assert.equal(db.get("scenarios").get(id).cover.bytes, undefined);
+  const copy = ok(await scenarios("POST", "", { name: "Pictured copy", seedScenarioId: id })).scenario.id;
+  assert.deepEqual(await coverOf(store.handleScenarios, copy), [7, 7, 7, 7]);
+  const bundle = ok(await scenarios("GET", `${copy}/export`));
+  assert.equal(bundle.assets.cover.mode, "embedded");
+  assert.equal(bundle.assets.cover.data, Buffer.from(coverBytes(7)).toString("base64"));
+  const reimported = ok(await scenarios("POST", "import", bundle)).scenario.id;
+  assert.deepEqual(await coverOf(store.handleScenarios, reimported), [7, 7, 7, 7], "the round trip keeps the cover");
+  ok(await scenarios("DELETE", copy));
+  assert.equal(db.get("covers").has(`scenario:${copy}`), false);
+  assert.ok(db.get("covers").has(`scenario:${id}`), "the original keeps its own");
+  ok(await scenarios("DELETE", `${id}/assets/cover`));
+  assert.equal(db.get("covers").has(`scenario:${id}`), false);
+  // A 404, as on the desktop: the client reads a 404 asset as none, a 500 as a failure.
+  assert.equal((await scenarios("GET", `${id}/assets/cover`)).status, 404);
+});
+
+test("restore points are rows of their own: a turn writes the one it adds", async () => {
+  await reset();
+  const id = await newGame("Long campaign");
+  ok(await runtime("PUT", "snapshots", [restorePoint(2), restorePoint(1)]));
+  assert.equal("snapshots" in db.get("games").get(id), false, "loading the game loads no restore points");
+  assert.deepEqual([...db.get("snapshots").keys()].sort(), [`${id}/snap-1`, `${id}/snap-2`]);
+
+  // Marks a stored row: a write that rewrote it would drop the mark.
+  db.get("snapshots").get(`${id}/snap-2`).snapshot.untouched = true;
+  ok(await runtime("PUT", "snapshots", [restorePoint(3), restorePoint(2)]));
+  assert.equal(db.get("snapshots").get(`${id}/snap-2`).snapshot.untouched, true, "the stored one was not written again");
+  assert.equal(db.get("snapshots").has(`${id}/snap-1`), false, "the one that fell off the end is gone");
+  assert.deepEqual(ok(await runtime("GET", "snapshotsIndex")).entries.map((entry) => entry.id), ["snap-3", "snap-2"]);
+  assert.deepEqual(ok(await runtime("GET", "snapshots")).map((entry) => entry.id), ["snap-3", "snap-2"]);
+
+  ok(await games("DELETE", id));
+  assert.equal([...db.get("snapshots").keys()].some((key) => key.startsWith(`${id}/`)), false, "a deleted game's restore points go with it");
+  assert.equal(db.get("snapshotIndex").has(id), false);
+});
+
+// A game the way the store kept it before version 5: cover bytes on the record
+// and its catalog row, restore points inline.
+const makeLegacy = (id) => {
+  const cover = { contentType: "image/png", bytes: coverBytes(9) };
+  const record = db.get("games").get(id);
+  record.cover = cover;
+  record.snapshots = [SNAPSHOT];
+  const row = db.get("gameMeta").get(id);
+  row.cover = cover;
+  row.assetStatus = { cover: true };
+  delete row.inlineRestorePoints;
+  for (const name of ["covers", "snapshots", "snapshotIndex"]) db.get(name)?.clear();
+};
+
+test("a save from before the new stores reads as it is, and is moved once", async () => {
+  await reset();
+  const id = await newGame("Old save");
+  makeLegacy(id);
+  const scenarioId = ok(await scenarios("POST", "", { name: "Old map" })).scenario.id;
+  const legacyScenarioCover = { contentType: "image/png", bytes: coverBytes(3) };
+  db.get("scenarios").get(scenarioId).cover = legacyScenarioCover;
+  db.get("scenarioMeta").get(scenarioId).cover = legacyScenarioCover;
+  db.get("scenarioMeta").get(scenarioId).assetStatus.cover = true;
+
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
+  assert.equal(ok(await runtime("GET", "snapshotsIndex")).entries.length, 1);
+  assert.deepEqual(await coverOf(store.handleGames, id), [9, 9, 9, 9]);
+  assert.deepEqual(await coverOf(store.handleScenarios, scenarioId), [3, 3, 3, 3]);
+  assert.match((await library()).games.find((game) => game.id === id).ownCoverImageUrl, /^blob:/);
+
+  getLog.length = 0;
+  await store.migrateStoreLayout();
+  assert.equal(getLog.includes("scenarios"), false, "a scenario's cover moves from its row, without loading the scenario");
+  assert.deepEqual([...db.get("covers").get(`scenario:${scenarioId}`).bytes], [3, 3, 3, 3]);
+  assert.equal(db.get("scenarioMeta").get(scenarioId).cover.bytes, undefined);
+  const moved = db.get("games").get(id);
+  assert.equal("snapshots" in moved, false);
+  assert.equal(moved.cover.bytes, undefined);
+  assert.equal(db.get("gameMeta").get(id).cover.bytes, undefined);
+  assert.deepEqual([...db.get("covers").get(`game:${id}`).bytes], [9, 9, 9, 9]);
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT], "nothing lost");
+  assert.deepEqual(await coverOf(store.handleGames, id), [9, 9, 9, 9]);
+  assert.deepEqual(await coverOf(store.handleScenarios, scenarioId), [3, 3, 3, 3]);
+  assert.match((await library()).scenarios.find((scenario) => scenario.id === scenarioId).coverImageUrl, /^blob:/);
+
+  getLog.length = 0;
+  await store.migrateStoreLayout();
+  assert.deepEqual(getLog, [], "done once");
+});
+
+test("one restore point is read by its id, from its own row or an older save's list", async () => {
+  await reset();
+  const id = await newGame("Revealing");
+  ok(await runtime("PUT", "snapshots", [restorePoint(2), restorePoint(1)]));
+  const one = (snapshotId) => call(store.handleRuntimeSnapshot, "GET", `snapshots/${snapshotId}`);
+  getLog.length = 0;
+  assert.deepEqual(ok(await one("snap-1")), restorePoint(1));
+  assert.deepEqual(getLog.filter((name) => name === "snapshots"), ["snapshots"], "that one row, not the others");
+  assert.equal((await one("snap-9")).status, 404);
+
+  makeLegacy(id);
+  assert.deepEqual(ok(await one("snap-1")), SNAPSHOT, "an older save's inline list is read too");
+});
+
+test("a save from before the new stores is moved by its own next write too", async () => {
+  await reset();
+  const id = await newGame("Old save, played");
+  makeLegacy(id);
+  ok(await runtime("PUT", "game", { country: "Testland", gameDate: "2016-03-01" }));
+  assert.equal("snapshots" in db.get("games").get(id), false);
+  assert.deepEqual(db.get("snapshotIndex").get(id).entries.map((entry) => entry.id), ["snap-1"]);
+  assert.deepEqual([...db.get("covers").get(`game:${id}`).bytes], [9, 9, 9, 9]);
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
+});
+
+// ---- Recently deleted -------------------------------------------------------
+// Deleting a game or scenario used to remove its records outright, while the
+// desktop keeps it in .trash. It now moves into the trash store for a week, the
+// last five at most.
+const trash = (method, path, query = "") => store.handleTrash({ method, segments: path.split("/").filter(Boolean), query: new URLSearchParams(query) })
+  .then(async (response) => ({ status: response.status, data: JSON.parse(await response.text()) }));
+
+test("a deleted game is listed, and restored under its id with its events", async () => {
+  await reset();
+  const id = await newGame("The Saga");
+  ok(await runtime("PUT", "events", [{ id: "e1" }, { id: "e2" }]));
+  ok(await games("DELETE", id));
+  assert.equal((await library()).games.some((game) => game.id === id), false);
+
+  const listed = ok(await trash("GET", ""));
+  assert.equal(listed.keepDays, 7);
+  assert.equal(listed.keepCount, 5);
+  assert.equal(listed.entries.length, 1);
+  const [entry] = listed.entries;
+  assert.equal(entry.kind, "game");
+  assert.equal(entry.id, id);
+  assert.equal(entry.name, "The Saga");
+  assert.equal(entry.scenarioId, "default");
+  assert.ok(!Number.isNaN(Date.parse(entry.deletedAt)));
+
+  const restored = ok(await trash("POST", `${encodeURIComponent(entry.entry)}/restore`));
+  assert.deepEqual({ id: restored.id, kind: restored.kind }, { id, kind: "game" });
+  const game = restored.library.games.find((row) => row.id === id);
+  assert.equal(game.name, "The Saga");
+  assert.equal(game.eventCount, 2);
+  assert.equal(ok(await trash("GET", "")).entries.length, 0);
+});
+
+test("a scenario restored after its id was reused comes back beside it, not over it", async () => {
+  await reset();
+  const first = ok(await scenarios("POST", "", { id: "vinland", name: "Vinland" })).scenario.id;
+  ok(await scenarios("DELETE", first));
+  ok(await scenarios("POST", "", { id: "vinland", name: "New Vinland" }));
+  const [entry] = ok(await trash("GET", "")).entries;
+  const restored = ok(await trash("POST", `${encodeURIComponent(entry.entry)}/restore`));
+  assert.equal(restored.id, "vinland-2");
+  const names = Object.fromEntries(restored.library.scenarios.map((scenario) => [scenario.id, scenario.name]));
+  assert.equal(names.vinland, "New Vinland");
+  assert.equal(names["vinland-2"], "Vinland");
+  assert.equal(ok(await scenarios("GET", "vinland-2")).scenario.name, "Vinland");
+});
+
+test("the trash keeps the last five, and nothing older than a week", async () => {
+  await reset();
+  const ids = [];
+  for (let n = 1; n <= 6; n += 1) {
+    ids.push(await newGame(`Game ${n}`));
+    ok(await games("DELETE", ids.at(-1)));
+    // One millisecond apart at least, so the order is the order of deletion.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  let entries = ok(await trash("GET", "")).entries;
+  assert.deepEqual(entries.map((entry) => entry.id), ids.slice(1).reverse(), "the first one deleted went first");
+  assert.equal(db.get("trash").size, 5, "its record went with it");
+
+  const oldest = db.get("trashMeta").get(entries.at(-1).entry);
+  oldest.deletedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  entries = ok(await trash("GET", "")).entries;
+  assert.equal(entries.length, 4);
+  assert.equal(db.get("trash").has(oldest.id), false);
+});
+
+test("emptying the games shelf leaves the deleted scenarios", async () => {
+  await reset();
+  ok(await games("DELETE", await newGame("Gone")));
+  ok(await scenarios("DELETE", ok(await scenarios("POST", "", { name: "Also Gone" })).scenario.id));
+  assert.deepEqual(ok(await trash("DELETE", "", "kind=game")), { removed: 1 });
+  const entries = ok(await trash("GET", "")).entries;
+  assert.deepEqual(entries.map((entry) => entry.kind), ["scenario"]);
+  assert.deepEqual(ok(await trash("DELETE", "")), { removed: 1 });
+  assert.equal(db.get("trash").size, 0);
+
+  const missing = await trash("POST", "game-nothing-1/restore");
+  assert.equal(missing.status, 400);
+  assert.match(missing.data.error, /Not in the trash/);
+});
+
+// ---- A community basemap that could not be downloaded -------------------------
+const COMMUNITY_REF = { mode: "communityRef", via: "image", hash: "abc", url: "https://github.com/user-attachments/assets/basemap.png", fileName: "background.json" };
+const HUB_ORIGIN = { postId: 7, bundleUrl: "https://github.com/user-attachments/files/1/hub-map.zip" };
+const bundleMissingBasemap = (name) => {
+  const bundle = scenarioBundle(name);
+  bundle.data.world.background = { kind: "image", extent: [-180, -85, 180, 85] };
+  bundle.assets.backgroundData = { ...COMMUNITY_REF, missingReason: "Download failed (HTTP 502)." };
+  bundle.hubOrigin = HUB_ORIGIN;
+  return bundle;
+};
+
+test("a basemap that could not be downloaded is kept as its reference, exported as one, and put in place later", async () => {
+  await reset();
+  const imported = ok(await scenarios("POST", "import", bundleMissingBasemap("Hub Map")));
+  const id = imported.scenario.id;
+  assert.equal(imported.assetStatus.backgroundData, false);
+  const listed = (await library()).scenarios.find((scenario) => scenario.id === id);
+  assert.deepEqual(listed.missingBasemap, {
+    reference: COMMUNITY_REF,
+    background: { kind: "image", extent: [-180, -85, 180, 85] },
+    reason: "Download failed (HTTP 502).",
+  });
+
+  const exported = ok(await scenarios("GET", `${id}/export`));
+  assert.deepEqual(exported.assets.backgroundData, COMMUNITY_REF, "the next import tries the download too");
+
+  const restored = ok(await scenarios("PUT", `${id}/basemap`, { payload: { dataUrl: "data:image/png;base64,T0xE" } }));
+  assert.equal(restored.assetStatus.backgroundData, true);
+  assert.equal(restored.scenario.missingBasemap, undefined);
+  assert.equal(restored.scenario.hubOrigin.editedAt, undefined, "not an edit: the copy still follows its post");
+  assert.deepEqual(restored.data.world.background, { kind: "image", extent: [-180, -85, 180, 85] });
+  assert.deepEqual(await scenarioAsset(id, "backgroundData"), { dataUrl: "data:image/png;base64,T0xE" });
+  assert.equal((await scenarios("PUT", `${id}/basemap`, { payload: { dataUrl: "data:image/png;base64,T0xE" } })).status, 400, "only while one is missing");
+});
+
+test("an Update records the new version's missing basemap, and one that brings it clears the record", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", { ...scenarioBundle("Hub Map"), hubOrigin: HUB_ORIGIN })).scenario.id;
+  const failed = ok(await scenarios("PUT", `${id}/import`, bundleMissingBasemap("Hub Map v2")));
+  assert.equal(failed.scenario.missingBasemap.reference.url, COMMUNITY_REF.url);
+  assert.deepEqual(await scenarioAsset(id, "backgroundData"), BACKGROUND, "the basemap it had is kept meanwhile");
+
+  const fixed = ok(await scenarios("PUT", `${id}/import`, { ...scenarioBundle("Hub Map v3"), hubOrigin: HUB_ORIGIN }));
+  assert.equal(fixed.scenario.missingBasemap, undefined);
+});
+
+test("a basemap the player sets themselves replaces the one still missing", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", bundleMissingBasemap("Hub Map"))).scenario.id;
+  const uploaded = ok(await store.handleScenarios({
+    method: "PUT", segments: [id, "assets", "backgroundData"], query: new URLSearchParams(),
+    rawBody: new TextEncoder().encode(JSON.stringify(BACKGROUND)), contentType: "application/json",
+  }).then((response) => response.json().then((data) => ({ status: response.status, data }))));
+  assert.equal(uploaded.scenario.missingBasemap, undefined, "the late download would overwrite their choice");
+});
+
+test("a malformed missing-basemap record is dropped, not kept", async () => {
+  await reset();
+  const bundle = bundleMissingBasemap("Hub Map");
+  bundle.assets.backgroundData = { mode: "communityRef", url: "javascript:alert(1)" };
+  const imported = ok(await scenarios("POST", "import", bundle));
+  assert.equal(imported.scenario.missingBasemap, undefined);
+});
+
+// ---- Recently deleted, with covers and restore points in their own stores ----
+// A deleted record's cover and a game's restore points leave their stores
+// inside its trash entry, and its kept turn beside it: none of it may be left
+// under an id a new game or scenario can take, a restore brings it all back
+// under the id it restores to, and emptying the trash leaves nothing behind.
+const entryOf = async (id) => ok(await trash("GET", "")).entries.find((entry) => entry.id === id);
+const rowsUnder = (id) => ({
+  cover: db.get("covers")?.has(`game:${id}`) ?? false,
+  restorePoints: [...(db.get("snapshots")?.keys() ?? [])].filter((key) => key.startsWith(`${id}/`)),
+  index: db.get("snapshotIndex")?.has(id) ?? false,
+  keptTurn: db.get("kv")?.has(`parked-turn:${id}`) ?? false,
+});
+const NOTHING = { cover: false, restorePoints: [], index: false, keptTurn: false };
+
+test("a deleted game takes its cover, restore points and kept turn into the trash, and a restore brings them back", async () => {
+  await reset();
+  const id = await newGame("Saga with a past");
+  await uploadGameCover(id, coverBytes(4));
+  ok(await runtime("PUT", "snapshots", [restorePoint(2), restorePoint(1)]));
+  const keptTurn = { version: 1, campaignId: id, round: 2 };
+  ok(await games("PUT", `${id}/parked-turn`, keptTurn));
+
+  ok(await games("DELETE", id));
+  assert.deepEqual(rowsUnder(id), NOTHING, "nothing is left under its id");
+
+  ok(await trash("POST", `${encodeURIComponent((await entryOf(id)).entry)}/restore`));
+  const record = db.get("games").get(id);
+  assert.deepEqual(record.cover, { contentType: "image/png", byteLength: 4, key: `game:${id}` });
+  assert.equal("snapshots" in record, false, "the record is lean again");
+  assert.equal(db.get("gameMeta").get(id).cover.bytes, undefined);
+  assert.equal(db.get("gameMeta").get(id).inlineRestorePoints, false);
+  assert.deepEqual(await coverOf(store.handleGames, id), [4, 4, 4, 4]);
+  assert.deepEqual(ok(await games("GET", `${id}/parked-turn`)), keptTurn);
+  ok(await games("PUT", "active", { gameId: id }));
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [restorePoint(2), restorePoint(1)]);
+  assert.deepEqual(ok(await runtime("GET", "snapshotsIndex")).entries.map((entry) => entry.id), ["snap-2", "snap-1"]);
+  assert.equal(db.get("trash").size, 0);
+});
+
+test("a game restored beside a new one with its id takes its cover and restore points under its new id", async () => {
+  await reset();
+  const id = await newGame("Twice", { id: "twice" });
+  await uploadGameCover(id, coverBytes(6));
+  ok(await runtime("PUT", "snapshots", [restorePoint(1)]));
+  ok(await games("PUT", `${id}/parked-turn`, { version: 1, campaignId: id }));
+  ok(await games("DELETE", id));
+
+  assert.equal(await newGame("Twice again", { id: "twice" }), id, "the id is free while the first is in the trash");
+  assert.equal(await coverOf(store.handleGames, id), null, "the new game is given none of the old one's");
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), []);
+  assert.equal(ok(await games("GET", `${id}/parked-turn`)), null);
+
+  const restored = ok(await trash("POST", `${encodeURIComponent((await entryOf(id)).entry)}/restore`));
+  assert.equal(restored.id, `${id}-2`);
+  assert.deepEqual(await coverOf(store.handleGames, restored.id), [6, 6, 6, 6]);
+  assert.deepEqual(db.get("snapshotIndex").get(restored.id).entries.map((entry) => entry.id), ["snap-1"]);
+  assert.deepEqual(rowsUnder(restored.id).restorePoints, [`${restored.id}/snap-1`]);
+  assert.deepEqual(rowsUnder(id), NOTHING, "the new game keeps its own, which is nothing");
+  assert.equal(ok(await games("GET", `${restored.id}/parked-turn`)), null, "a kept turn is not moved to another id");
+});
+
+test("a deleted scenario takes its cover into the trash, and a restore brings it back", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "", { name: "Framed" })).scenario.id;
+  await upload(id, "cover", coverBytes(8), "image/png");
+  ok(await scenarios("DELETE", id));
+  assert.equal(db.get("covers").has(`scenario:${id}`), false);
+
+  ok(await trash("POST", `${encodeURIComponent((await entryOf(id)).entry)}/restore`));
+  assert.deepEqual(db.get("scenarios").get(id).cover, { contentType: "image/png", byteLength: 4, key: `scenario:${id}` });
+  assert.equal(db.get("scenarioMeta").get(id).cover.bytes, undefined);
+  assert.deepEqual(await coverOf(store.handleScenarios, id), [8, 8, 8, 8]);
+  assert.match((await library()).scenarios.find((scenario) => scenario.id === id).coverImageUrl, /^blob:/);
+});
+
+test("a save from before the new stores goes into the trash whole, and comes back into them", async () => {
+  await reset();
+  const id = await newGame("Old and deleted");
+  makeLegacy(id);
+  ok(await games("DELETE", id));
+  assert.deepEqual(rowsUnder(id), NOTHING);
+
+  ok(await trash("POST", `${encodeURIComponent((await entryOf(id)).entry)}/restore`));
+  const record = db.get("games").get(id);
+  assert.equal("snapshots" in record, false);
+  assert.deepEqual(record.cover, { contentType: "image/png", byteLength: 4, key: `game:${id}` });
+  assert.deepEqual([...db.get("covers").get(`game:${id}`).bytes], [9, 9, 9, 9]);
+  assert.deepEqual(db.get("snapshotIndex").get(id).entries.map((entry) => entry.id), ["snap-1"]);
+  assert.equal(db.get("gameMeta").get(id).inlineRestorePoints, false, "nothing left for migrateStoreLayout to move");
+});
+
+test("emptying the trash, or an entry outliving it, leaves nothing of a deleted game behind", async () => {
+  await reset();
+  const emptied = await newGame("Emptied");
+  const expired = await newGame("Expired");
+  for (const id of [emptied, expired]) {
+    await uploadGameCover(id, coverBytes(1));
+    ok(await games("PUT", `${id}/snapshots`, [restorePoint(1)]));
+    ok(await games("PUT", `${id}/parked-turn`, { version: 1, campaignId: id }));
+    assert.deepEqual(rowsUnder(id), { cover: true, restorePoints: [`${id}/snap-1`], index: true, keptTurn: true });
+  }
+  ok(await games("DELETE", expired));
+  db.get("trashMeta").get((await entryOf(expired)).entry).deletedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  assert.equal(await entryOf(expired), undefined, "past the week");
+  ok(await games("DELETE", emptied));
+  assert.deepEqual(ok(await trash("DELETE", "")), { removed: 1 });
+
+  assert.equal(db.get("trash").size, 0);
+  assert.equal(db.get("trashMeta").size, 0);
+  for (const id of [emptied, expired]) assert.deepEqual(rowsUnder(id), NOTHING);
+  assert.deepEqual([...db.get("covers").keys()], []);
+  assert.deepEqual([...db.get("snapshots").keys()], []);
 });

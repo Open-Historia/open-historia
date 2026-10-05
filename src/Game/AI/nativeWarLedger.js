@@ -1214,12 +1214,42 @@ export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", ro
   return { world: { ...nextWorld, wars }, wars, appliedIds };
 };
 
-export const buildCanonicalWarContext = (world) => {
-  const current = normalizedWars(world).filter((war) => war.status !== "ended");
+// A war that ended lately stays in view for two rounds, so the model knows the
+// fighting stopped and why a peace is holding: at most five, newest first, one
+// short line each. `updatedRound` is the round its end was written in.
+const RECENTLY_ENDED_ROUNDS = 2;
+const MAX_RECENTLY_ENDED = 5;
+
+const recentlyEndedWars = (wars, round) => {
+  const current = Math.trunc(Number(round) || 0);
+  if (current <= 0) return [];
+  return wars
+    .filter((war) => war.status === "ended" && war.updatedRound > current - RECENTLY_ENDED_ROUNDS)
+    .sort((a, b) =>
+      b.updatedRound - a.updatedRound ||
+      compareGameDates(b.endedDate || "", a.endedDate || "") ||
+      a.id.localeCompare(b.id))
+    .slice(0, MAX_RECENTLY_ENDED);
+};
+
+// `round` is the game's current round; without it no ended war is listed.
+export const buildCanonicalWarContext = (world, { round = 0 } = {}) => {
+  const wars = normalizedWars(world);
+  const current = wars.filter((war) => war.status !== "ended");
+  const ended = recentlyEndedWars(wars, round);
+  const endedLines = ended.length
+    ? [
+      "",
+      "Recently ended (no one is fighting these; a war that flares again needs a new start record):",
+      ...ended.map((war) =>
+        `- ${war.id} | ENDED ${war.endedDate || "unknown"} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")}`),
+    ]
+    : [];
   if (!current.length) {
     return [
       "No active or ceasefire canonical wars are recorded.",
       "Until a war is opened in this ledger, nobody is fighting a battlefield campaign.",
+      ...endedLines,
     ].join("\n");
   }
   return [
@@ -1227,6 +1257,7 @@ export const buildCanonicalWarContext = (world) => {
       `- ${war.id} | ${war.status.toUpperCase()} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")} | started ${war.startedDate || "unknown"}` +
       (war.note ? ` | latest: ${war.note}` : ""),
     ),
+    ...endedLines,
     "",
     "This ledger is authoritative belligerency. A storyline, alliance, mobilization, historical expectation, or tense relationship does NOT itself create a war.",
   ].join("\n");

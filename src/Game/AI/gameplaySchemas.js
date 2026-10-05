@@ -3000,6 +3000,25 @@ export const withIntelligenceRating = (tool) => {
   };
 };
 
+// Groups switched off for a game (server/gameFeatures.js): the same tool with
+// groupOps taken out of every impacts object, so the model is never offered the
+// field. Only the tool shown to the model changes; the payload is validated
+// against the full schema, and validateGeneratedWorldChanges (gameplay.js)
+// leaves out any groupOps a model writes anyway.
+const dropGroupOps = (schema) => {
+  if (Array.isArray(schema)) return schema.map(dropGroupOps);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => [
+    key,
+    key === "properties" && value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value)
+        .filter(([field]) => field !== "groupOps")
+        .map(([field, entry]) => [field, dropGroupOps(entry)]))
+      : dropGroupOps(value),
+  ]));
+};
+export const withoutGroupOps = (tool) => (tool?.schema ? { ...tool, schema: dropGroupOps(tool.schema) } : tool);
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,

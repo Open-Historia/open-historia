@@ -15,11 +15,15 @@ import {
   captureRevealCarry,
   describeEventMapChanges,
   eventDisclosureKey,
+  findTurnIndexOfEvent,
   findTurnSnapshot,
   liveEventCard,
   resolveRevealCarry,
   revealNeedsStaging,
+  shownTurnIndex,
   turnRecordId,
+  warTimelineEventId,
+  warTimelineEventOpensWar,
 } from "./turnReveal.js";
 
 // ---- streamed cards ----------------------------------------------------------
@@ -111,6 +115,67 @@ test("a turn seen whole needs no restore point read", () => {
   assert.equal(revealNeedsStaging(record, 3), false, "fully revealed: the world as it is");
   assert.equal(revealNeedsStaging({ events: [] }, 1), false);
   assert.equal(revealNeedsStaging(null, 1), false);
+});
+
+// ---- rereading the kept turns --------------------------------------------------
+
+test("the turn picker shows the chosen kept turn while the newest turn is the same one", () => {
+  const choice = { latestId: "t9", index: 3 };
+  assert.equal(shownTurnIndex(choice, "t9", 12), 3);
+  assert.equal(shownTurnIndex(choice, "t10", 13), 0, "a new turn landing puts the panel back on it");
+  assert.equal(shownTurnIndex(null, "t9", 12), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 0 }, "t9", 12), 0);
+});
+
+test("the chosen turn is clamped to the turns still kept", () => {
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 11 }, "t9", 4), 3, "the list got shorter under it");
+  assert.equal(shownTurnIndex({ latestId: "t9", index: 5 }, "t9", 0), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: -2 }, "t9", 12), 0);
+  assert.equal(shownTurnIndex({ latestId: "t9", index: "x" }, "t9", 12), 0);
+});
+
+const keptTurns = [
+  { eventIds: ["e5", "e6"] },
+  { eventIds: ["e3", "e4"] },
+  { eventIds: [] },
+  { eventIds: ["e1"] },
+];
+
+test("an event is found on the kept turn that holds it", () => {
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e6"), 0);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e3"), 1);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e1"), 3);
+  assert.equal(findTurnIndexOfEvent(keptTurns, "e0"), -1, "aged out of the kept turns");
+  assert.equal(findTurnIndexOfEvent(keptTurns, ""), -1);
+  assert.equal(findTurnIndexOfEvent(null, "e1"), -1);
+  assert.equal(findTurnIndexOfEvent([null, { eventIds: "e1" }], "e1"), -1);
+});
+
+test("a war links to its first event the Events panel still keeps", () => {
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e1", "e4", "e6"] }, keptTurns), "e1", "its opening event");
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e0", "e4", "e6"] }, keptTurns), "e4", "the opening turn aged out");
+  assert.equal(warTimelineEventId({ sourceEventIds: ["e0"] }, keptTurns), "", "nothing left to show");
+  assert.equal(warTimelineEventId({}, keptTurns), "");
+  assert.equal(warTimelineEventId(null, keptTurns), "");
+});
+
+// The ledger keeps a war's newest 24 event ids, so on a long war the first id
+// kept is a mid-war event: the link must not call it the war's beginning.
+test("a war's first kept event is its opening only on the turn the war began in", () => {
+  const turns = [
+    { round: 9, eventIds: ["e30", "e31"] },
+    { round: 8, eventIds: ["e20", "e21"] },
+    { round: 7, eventIds: ["e10"] },
+  ];
+  const opening = { createdRound: 7, sourceEventIds: ["e10", "e20", "e30"] };
+  assert.equal(warTimelineEventOpensWar(opening, turns, "e10"), true);
+  const trimmed = { createdRound: 7, sourceEventIds: ["e21", "e30", "e31"] };
+  assert.equal(warTimelineEventId(trimmed, turns), "e21");
+  assert.equal(warTimelineEventOpensWar(trimmed, turns, "e21"), false, "its opening events were trimmed away");
+  assert.equal(warTimelineEventOpensWar(opening, turns, "e20"), false, "not its first event");
+  assert.equal(warTimelineEventOpensWar({ sourceEventIds: ["e21"] }, turns, "e21"), true, "an old record without createdRound");
+  assert.equal(warTimelineEventOpensWar(opening, turns, ""), false);
+  assert.equal(warTimelineEventOpensWar({ createdRound: 7, sourceEventIds: ["e0"] }, turns, "e0"), false, "not kept");
 });
 
 // ---- carrying the reveal -------------------------------------------------------

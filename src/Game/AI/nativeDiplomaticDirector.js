@@ -15,6 +15,7 @@ import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/pu
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
+import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -1026,9 +1027,15 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
 // the top of the next turn. The strict pass, and the GM preview, still reject.
 //
 // Returns one line per dropped row, for the receipt. The candidate is rewritten
-// in place, in whichever form it arrived (compact lines or objects).
-export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
+// in place, in whichever form it arrived (compact lines or objects). A
+// `playerNotes` array, when given, gets the player's sentence for each line at
+// the same index (runtime/receiptPlayerNotes.js).
+export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes = null } = {}) => {
   const notes = [];
+  const drop = (text, key, params = {}) => {
+    notes.push(text);
+    playerNotes?.push(receiptPlayerNote(key, params));
+  };
   if (!candidate || typeof candidate !== "object") return notes;
 
   const relationsWereString = typeof candidate.relationUpdates === "string";
@@ -1038,11 +1045,17 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     const a = canonicalDiplomaticPolity(update.a, world);
     const b = canonicalDiplomaticPolity(update.b, world);
     let why = "";
-    if (!a || !b) why = `"${!a ? update.a : update.b}" is not a polity on this map`;
-    else if (lower(a) === lower(b)) why = "both sides are the same polity";
+    let key = "relationIncomplete";
+    if (!a || !b) { why = `"${!a ? update.a : update.b}" is not a polity on this map`; key = "relationUnknownCountry"; }
+    else if (lower(a) === lower(b)) { why = "both sides are the same polity"; key = "relationSameCountry"; }
     else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
     else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
-    if (why) { notes.push(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`); continue; }
+    // A side the model left blank has no name to show the player.
+    if (key === "relationUnknownCountry" && (!clean(update.a) || !clean(update.b))) key = "relationUnnamed";
+    if (why) {
+      drop(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`, key, { a: update.a, b: update.b, name: !a ? update.a : update.b });
+      continue;
+    }
     keptRelations.push(update);
   }
   if (keptRelations.length !== relations.length) {
@@ -1064,7 +1077,8 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     candidate.agreementUpdates = lifecycle.agreementUpdates;
   }
   for (const update of unknownIds.droppedUpdates) {
-    notes.push(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`);
+    drop(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`,
+      "agreementMissing", { name: clean(update.title) || clean(update.id) });
   }
 
   const agreementsWereString = typeof candidate.agreementUpdates === "string";
@@ -1075,15 +1089,19 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     const id = clean(update?.id);
     const op = clean(update?.op);
     let why = "";
+    let key = "agreementIncomplete";
     if (!id) why = "it names no agreement";
     else if (!["start", "update", "suspend", "resume", "end", "expire"].includes(op)) why = `"${op}" is not an agreement operation`;
     else if (op === "start") {
       const prior = existing.get(id);
-      if (prior && !["ended", "expired"].includes(prior.status)) why = "it already exists - update, suspend, resume or end it instead";
-      else if (canonicalizeParties(update.parties, world).length < 2) why = "fewer than two of its parties are polities on this map";
-      else if (!clean(update.title)) why = "it has no title";
-    } else if (!existing.has(id)) why = `no agreement "${id}" exists to ${op}`;
-    if (why) { notes.push(`Agreement ${id || "(no id)"} ${op || ""} was dropped: ${why}.`.replace(/\s+/g, " ")); continue; }
+      if (prior && !["ended", "expired"].includes(prior.status)) { why = "it already exists - update, suspend, resume or end it instead"; key = "agreementAlreadyInForce"; }
+      else if (canonicalizeParties(update.parties, world).length < 2) { why = "fewer than two of its parties are polities on this map"; key = "agreementTooFewParties"; }
+      else if (!clean(update.title)) { why = "it has no title"; key = "agreementUntitled"; }
+    } else if (!existing.has(id)) { why = `no agreement "${id}" exists to ${op}`; key = "agreementMissing"; }
+    if (why) {
+      drop(`Agreement ${id || "(no id)"} ${op || ""} was dropped: ${why}.`.replace(/\s+/g, " "), key, { name: clean(update?.title) || id });
+      continue;
+    }
     keptAgreements.push(update);
   }
   if (keptAgreements.length !== agreements.length) {

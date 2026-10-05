@@ -301,3 +301,12 @@ export const describePlayerGroupForPrompt = (world, playerName, { regionName = (
 
 // What a time skip is told on top: how the player's group gains and loses ground.
 export const PLAYER_GROUP_JUMP_RULE = "Its orders act through that area: ground it gains is a groupOps take naming it, ground it loses a release. The world may push it back as a consequence, but never dissolve or rename it.";
+
+// Groups switched off for a game (server/gameFeatures.js): a prompt without the
+// lines that teach groupOps, so the model is never told the system exists. Each
+// such rule is one line (the time skip's lever, the Game Master's rule 5A and
+// its field shape), so the line is what goes.
+export const withoutGroupOpsLines = (text) => String(text ?? "")
+  .split("\n")
+  .filter((line) => !line.includes("groupOps"))
+  .join("\n");

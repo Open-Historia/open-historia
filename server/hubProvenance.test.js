@@ -25,11 +25,13 @@ import {
   hubOriginAfterWrite,
   importedGameScenarioId,
   isBlockedContributor,
+  missingBasemapOfBundle,
   normalizeHubKey,
   normalizeHubLogin,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeMissingBasemap,
   openHubSuggestions,
   scenarioCopyOfHubFile,
   withContributorBlocked,
@@ -241,4 +243,22 @@ test("the web store writes provenance through the same rules", () => {
   const models = readFileSync(path.join(SERVER_DIR, "..", "src", "runtime", "web", "models.js"), "utf-8");
   assert.match(models, /hubPublished: normalizeHubPublished\(raw\?\.hubPublished\)/);
   assert.match(models, /hubReviews: normalizeHubReviews\(raw\?\.hubReviews\)/);
+});
+
+test("a missing community basemap is kept as its reference, and nothing else is", () => {
+  const reference = { mode: "communityRef", via: "image", hash: "abc", url: "https://github.com/user-attachments/assets/b.png", fileName: "background.json" };
+  const bundle = {
+    data: { world: { background: { kind: "image", extent: [0, 0, 1, 1] } } },
+    assets: { backgroundData: { ...reference, missingReason: "Download failed (HTTP 502).", stray: "x" } },
+  };
+  assert.deepEqual(missingBasemapOfBundle(bundle), {
+    reference,
+    background: { kind: "image", extent: [0, 0, 1, 1] },
+    reason: "Download failed (HTTP 502).",
+  });
+  assert.equal(missingBasemapOfBundle({ assets: { backgroundData: { mode: "embedded", data: "e30=" } } }), null, "a basemap in the bundle is not missing");
+  assert.equal(missingBasemapOfBundle({}), null);
+  assert.equal(normalizeMissingBasemap({ reference: { mode: "communityRef", url: "http://example.com/b.png" } }), null, "https only");
+  assert.equal(normalizeMissingBasemap({ reference: { mode: "embedded", url: reference.url } }), null);
+  assert.deepEqual(normalizeMissingBasemap({ reference: { mode: "communityRef", url: reference.url }, background: [1] }), { reference: { mode: "communityRef", url: reference.url } });
 });

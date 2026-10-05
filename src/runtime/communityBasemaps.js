@@ -433,45 +433,57 @@ export const dedupeScenarioBundleBackground = async (bundle) => {
 export const resolveScenarioBundleBackground = async (bundle) => {
   const asset = bundle?.assets?.backgroundData;
   if (!asset || asset.mode !== "communityRef" || !asset.url) return bundle;
-  let reason = "";
   try {
-    let payload = null;
-    // Drive the fetch by how it was referenced, not by kind: an old .basemap.json
-    // bundle has kind "image" yet must be parsed as JSON, not fetched as an image.
-    const viaImage = asset.via ? asset.via === "image" : asset.kind === "image";
-    if (viaImage) {
-      payload = { dataUrl: await fetchHubImage(asset.url) };
-    } else {
-      // A referenced data file: old .basemap.json bundle, a raw .geojson, or a
-      // vector published as a .zip — read exactly the way install reads it.
-      ({ payload } = await readBasemapDataFile(asset.url));
-    }
-    if (payload && (payload.dataUrl || payload.geojson)) {
-      bundle.assets.backgroundData = {
-        mode: "embedded",
-        data: utf8ToBase64(JSON.stringify(payload)),
-        fileName: "background.json",
-        contentType: "application/json",
-      };
-      return bundle;
-    }
-    reason = "The shared basemap has no image or map in it.";
+    const payload = await fetchReferencedBasemap(asset);
+    bundle.assets.backgroundData = {
+      mode: "embedded",
+      data: utf8ToBase64(JSON.stringify(payload)),
+      fileName: "background.json",
+      contentType: "application/json",
+    };
   } catch (error) {
-    reason = String(error?.message || "").trim() || "The download failed.";
+    // Import without the background rather than failing the whole scenario.
+    bundle.assets.backgroundData = { ...asset, missingReason: basemapFailureReason(error) };
   }
-  // Import without the background rather than failing the whole scenario.
-  bundle.assets.backgroundData = { ...asset, missingReason: reason };
   return bundle;
 };
 
+// The basemap a community reference points at, as background.json holds it
+// ({ dataUrl } for an image, { geojson } for a vector map). Throws, with a
+// reason the player can read, when it cannot be had. Import resolves a
+// bundle's reference with it, and opening a scenario whose basemap could not
+// be downloaded then tries it again (missingBasemap.js).
+export const fetchReferencedBasemap = async (asset) => {
+  let payload = null;
+  // Drive the fetch by how it was referenced, not by kind: an old .basemap.json
+  // bundle has kind "image" yet must be parsed as JSON, not fetched as an image.
+  const viaImage = asset?.via ? asset.via === "image" : asset?.kind === "image";
+  if (viaImage) {
+    payload = { dataUrl: await fetchHubImage(asset.url) };
+  } else {
+    // A referenced data file: old .basemap.json bundle, a raw .geojson, or a
+    // vector published as a .zip — read exactly the way install reads it.
+    ({ payload } = await readBasemapDataFile(asset.url));
+  }
+  if (payload && (payload.dataUrl || payload.geojson)) return payload;
+  throw new Error("The shared basemap has no image or map in it.");
+};
+
+// A failure as a whole sentence, full stop and all, so the messages that
+// quote it read it as a sentence of its own and a language pack that has the
+// sentence translates it.
+export const basemapFailureReason = (error) => {
+  const reason = String(error?.message || "").trim() || "The download failed.";
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
+};
+
 // Why a bundle's community basemap is still only a reference after
-// resolveScenarioBundleBackground, or null when there is nothing missing. The
-// reason is an error message, without its closing full stop so it reads
-// inside brackets.
+// resolveScenarioBundleBackground, or null when there is nothing missing: one
+// whole sentence, with its full stop.
 export const unresolvedBundleBackground = (bundle) => {
   const asset = bundle?.assets?.backgroundData;
   if (asset?.mode !== "communityRef") return null;
-  return String(asset.missingReason || "The shared basemap could not be found.").replace(/\.\s*$/, "");
+  return basemapFailureReason({ message: asset.missingReason || "The shared basemap could not be found." });
 };
 
 // ---- Scenario zip bundle (image travels as a real file, not base64) -------

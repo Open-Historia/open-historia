@@ -394,7 +394,9 @@ const territoryLossSignals = ({ world, months, updatedAt, signalsByPolity, held 
 // This is a DERIVATION boundary only. It reads canonical world ledgers/stats and
 // emits already-structured pressure signals for existing Political Actors. It
 // never creates actors, edits Stats/war/diplomatic state, or emits timeline news.
-export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt = "" } = {}) => {
+// `groups` false while groups are switched off for the game
+// (server/gameFeatures.js): their areas press on no one, as puppets do not.
+export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt = "", groups = true } = {}) => {
   const elapsed = Math.max(0, Number(months) || 0);
   const signalsByPolity = {};
   if (elapsed <= 0 || !world?.politicalActors?.byPolity) return signalsByPolity;
@@ -404,7 +406,7 @@ export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt 
   statsSignals(context);
   relationSignals(context);
   warSignals(context);
-  groupControlSignals(context);
+  if (groups) groupControlSignals(context);
   unheldTerritorySignals(context);
   puppetSignals(context);
   territoryLossSignals(context);

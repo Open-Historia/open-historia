@@ -1,5 +1,5 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { JSON_URLS, getPrimedScenarioRegionCatalog, loadTurnRestorePoint, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueEventStrings } from "./translator.js";
@@ -4784,12 +4784,9 @@ export const viewAsSeen = async ({ world, events, chats, game } = {}, { unseen =
     .filter(Boolean);
   let seenWorld = null;
   try {
-    // The shared archive, not a copy of all twelve turns: only the one world
-    // staged from is copied, since applying events to it may change it.
-    const snapshots = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: false, clone: false });
-    const toDate = turn.toDate || turn.date;
-    const snap = normalizeArray(snapshots).find((entry) => entry?.state?.world
-      && entry.fromDate === turn.fromDate && entry.toDate === toDate);
+    // The one restore point the turn started from, shared, not the archive of
+    // twelve: only its world is copied, since applying events to it may change it.
+    const snap = await loadTurnRestorePoint({ fromDate: turn.fromDate, toDate: turn.toDate || turn.date });
     if (snap) {
       const staged = applyEventImpactsToWorld({
         colors: {},

@@ -20,7 +20,7 @@ test("desktop library chrome stays grouped and uses named icon actions", () => {
 });
 
 test("library shelves use responsive desktop grids with section descriptions and dividers", () => {
-  assert.match(source, /const MenuRow = \(\{ children, description, emptyText, icon, title \}\) =>/);
+  assert.match(source, /const MenuRow = \(\{ action, children, description, emptyText, icon, title \}\) =>/);
   assert.match(source, /gridTemplateColumns: "repeat\(auto-fill, minmax\(min\(100%, 18\.75rem\), 20rem\)\)"/);
   assert.match(source, /justifyContent: "start"/);
   assert.match(source, /linear-gradient\(90deg, rgba\(255,255,255,0\.12\), rgba\(255,255,255,0\.02\)\)/);

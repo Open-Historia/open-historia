@@ -80,3 +80,25 @@ test("exact-date verification reads a text-mode answer instead of leaving the po
   assert.deepEqual(result.confirmedPolities, ["A"]);
   assert.deepEqual(result.unresolvedPolities, []);
 });
+
+test("the executor stages results without scheduling follow-up jobs; the worklist decides what runs next", async () => {
+  const executor = createPoliticalWorldV2Executor({ inputs, callModel: async () => { throw new Error("no call expected"); } });
+  const checkpoint = checkpointWithEntry();
+  const applied = await executor.applyJobResult({
+    checkpoint,
+    job: { id: "t", type: "temporal-sentinel", stage: "verification", targets: ["A"], payload: {} },
+    result: { challenges: { A: { temporalCorrectionEstablished: true } }, missingActorTargets: ["B"] },
+  });
+  assert.deepEqual(Object.keys(applied), ["stagedWorld"]);
+  assert.deepEqual(applied.stagedWorld, checkpoint.stagedWorld);
+});
+
+test("the per-polity membership jobs the worklist never schedules are gone", async () => {
+  const executor = createPoliticalWorldV2Executor({ inputs, callModel: async () => { throw new Error("no call expected"); } });
+  for (const type of ["membership-resolution", "membership-surface"]) {
+    await assert.rejects(
+      executor.executeJob({ id: type, type, stage: "institutions", targets: ["A"], payload: {} }, checkpointWithEntry(), { consumeModelCall: async () => {} }),
+      /Unsupported Political World v2 job type/,
+    );
+  }
+});

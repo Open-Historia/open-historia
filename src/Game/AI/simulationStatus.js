@@ -90,8 +90,10 @@ export const setPendingProjectsJump = (value, campaignId) => {
 
 // A finished turn whose campaign was not open when it was ready to be written
 // (gameplay.js finishTimelineJump): { campaignId, applyArgs }, the arguments of
-// the apply that was refused. Applied when that campaign is next opened
-// (gameplay.js applyParkedTurn, called by time.jsx).
+// the apply that was refused. Also stored with its campaign (AI/parkedTurn.js),
+// and taken back in from there after a restart (gameplay.js loadParkedTurn).
+// Offered when that campaign is next opened, and applied or discarded by the
+// player (gameplay.js applyParkedTurn and discardKeptTurn, called by time.jsx).
 export const getParkedTurn = () => heldHere(parkedTurns);
 export const parkFinishedTurn = (value) => {
   if (value?.applyArgs && typeof value.applyArgs === "object") parkedTurns.set(campaignOfHold(value), value);
@@ -102,6 +104,10 @@ export const takeParkedTurn = () => {
   if (parked) parkedTurns.delete(campaignOfHold(parked));
   return parked;
 };
+
+// Said in the Timeline when a kept turn is dropped because its campaign has
+// moved on since the skip read it (gameplay.js loadParkedTurn, applyParkedTurn).
+export const PARKED_TURN_STALE_NOTE = "The time skip that finished while another campaign was open was discarded, because this campaign has moved on since that skip began. Run the skip again.";
 
 
 export const setChatGenerationInFlight = (inFlight) => {

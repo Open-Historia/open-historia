@@ -56,7 +56,8 @@ CLAUDE.md
 *.sln
 *.sw?
 
-# Content-node runtime store (hash-named blobs, populated by scripts/populate-node.mjs)
+# Content-node store left in old checkouts by the removed in-repo node stub
+# (hash-named blobs; the node itself is Open-Historia/open-historia-node)
 /node-content/
 
 # Offline root signing PRIVATE key — never commit

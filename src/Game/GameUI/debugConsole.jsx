@@ -19,6 +19,7 @@ import {
     downloadFile,
     exportTelemetryCsv,
     getAiRecords,
+    releaseAiRecords,
     requestCount,
     setGenerationRating,
 } from "../AI/telemetry.js";
@@ -501,6 +502,8 @@ export const DebugConsole = ({ open, onClose }) => {
         return () => {
             cancelled = true;
             window.removeEventListener(GENERATION_COMPLETE_EVENT, handler);
+            // The stored history was read for this visit only.
+            releaseAiRecords();
         };
     }, [open, refresh]);
 
