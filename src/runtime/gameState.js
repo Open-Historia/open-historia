@@ -175,7 +175,8 @@ export const WORLD_DEFAULTS = {
   // incoming world, so a field declared only here never survives a round trip.
   idlePulseTick: 0,
   // The round the Projects board was last checked against a turn's events (the
-  // board job of the turn review, or the board's own request). 0 = never. It is
+  // time skip's own board ops, the turn review's board job, or the board's own
+  // request). 0 = never. It is
   // what lets a skip decide, without asking anyone, whether the calendar is due
   // another look (projects.js boardPassReasons). Listed in the normalizeWorldState
   // return too, for the reason given above.

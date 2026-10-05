@@ -9,6 +9,8 @@ import {
   ANSWER_SENTINEL,
   ANSWER_SENTINEL_DIRECTIVE,
   extractJsonPayload,
+  parseLooseJson,
+  repairLooseJson,
   stripBeforeSentinel,
   unwrapMimickedToolCall,
 } from "./jsonSalvage.js";
@@ -182,4 +184,80 @@ test("extractJsonArray: strict first, then the repairs, then the first balanced 
   assert.equal(extractJsonArray('{"a":1}'), null, "an object alone is not an array");
   assert.equal(extractJsonArray("no json here"), null);
   assert.equal(extractJsonArray(""), null);
+});
+
+// ---------------------------------------------------------------------------
+// An answer written as a JavaScript object rather than as JSON.
+//
+// The first real time skip asked of Gemini as JSON text wrote its events as
+// JSON and its unit ops, three levels down, with no quotes on their keys. The
+// whole answer stopped parsing, and the skip cost a second request.
+
+test("the answer a real skip wrote, bare keys three levels down, is read", () => {
+  const written = `{
+  "events": [
+    {
+      "date": "2016-01-05",
+      "title": "United States Army Initiates Exercise Northern Vanguard",
+      "impacts": {
+        "actionIds": ["probe-order-1"],
+        "unitOps": [
+          {
+            op: "spawn",
+            unit: {
+              name: "Northern Vanguard Task Force",
+              type: "armor",
+              strength: 100,
+              at: "Fort Drum, New York"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "stopDate": "2016-01-31"
+}`;
+  assert.throws(() => JSON.parse(written), "it is not JSON as written");
+  const read = extractJsonPayload(written);
+  assert.equal(read.events[0].impacts.unitOps[0].op, "spawn");
+  assert.deepEqual(read.events[0].impacts.unitOps[0].unit, { name: "Northern Vanguard Task Force", type: "armor", strength: 100, at: "Fort Drum, New York" });
+  assert.equal(read.stopDate, "2016-01-31");
+  assert.deepEqual(parseLooseJson(written), read);
+});
+
+test("bare keys, single quotes, comments, trailing commas and a copied ? are each repaired", () => {
+  assert.deepEqual(parseLooseJson('{a: 1, b_2: "x", $c: [true, null]}'), { a: 1, b_2: "x", $c: [true, null] });
+  assert.deepEqual(parseLooseJson("{'name': 'O\\'Brien', 'quote': 'he said \"no\"'}"), { name: "O'Brien", quote: 'he said "no"' });
+  assert.deepEqual(parseLooseJson('{"a": 1, // the first\n "b": 2 /* and the second */}'), { a: 1, b: 2 });
+  assert.deepEqual(parseLooseJson('{"a": [1, 2,], "b": {"c": 3,},}'), { a: [1, 2], b: { c: 3 } });
+  assert.deepEqual(parseLooseJson('{"note"?: "kept", regionName?: "Terespol", "ok" ? : true}'), { note: "kept", regionName: "Terespol", ok: true });
+  assert.deepEqual(parseLooseJson('[{op: "move", unitId: "u-1"}, {op: "remove", unitId: "u-2"}]'), [{ op: "move", unitId: "u-1" }, { op: "remove", unitId: "u-2" }]);
+});
+
+test("nothing inside a string is touched", () => {
+  const text = '{note: "op: spawn, unit: {name: x} // not a comment", "path": "C:/a/*b*/c", q: "is it? : yes", \'s\': "it\'s"}';
+  assert.deepEqual(parseLooseJson(text), {
+    note: "op: spawn, unit: {name: x} // not a comment",
+    path: "C:/a/*b*/c",
+    q: "is it? : yes",
+    s: "it's",
+  });
+});
+
+test("a bare word that is not a key is left alone, so what was not an object still does not parse", () => {
+  assert.equal(repairLooseJson('{"a": tru, "b": 1}'), '{"a": tru, "b": 1}', "a value is never quoted for the model");
+  assert.equal(parseLooseJson('{"a": tru, "b": 1}'), null);
+  assert.equal(repairLooseJson("[north, south]"), "[north, south]", "words in a list are not keys");
+  assert.equal(parseLooseJson("Here is the plan: move the army."), null);
+  assert.equal(parseLooseJson(""), null);
+});
+
+test("well-formed JSON is never rewritten: the repair is only tried after a strict parse fails", () => {
+  const text = '{"a":"x: y","b":[1,2],"c":{"d":"it\'s // fine"}}';
+  assert.deepEqual(parseLooseJson(text), JSON.parse(text));
+  assert.equal(repairLooseJson(text), text, "and would have come back as it was");
+});
+
+test("an answer cut off mid-object is still not an answer", () => {
+  assert.equal(parseLooseJson('{events: [{title: "A war", impacts: {unitOps: [{op: "move"'), null, "a shortened turn is never applied as the whole one");
 });

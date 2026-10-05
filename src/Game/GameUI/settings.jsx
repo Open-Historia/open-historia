@@ -38,7 +38,7 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
-import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
+import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
@@ -1103,15 +1103,11 @@ const ReasoningSection = () => {
 // The request budget (AI/requestBudget.js): what today has cost, and the
 // switches that decide what a time skip and an idle minute may spend. Its own
 // storage and its own change event, so it sits outside mapSettings.
-const REVIEW_SECTION_LABELS = {
-    units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
-    territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
-    structures: ["Put new structures on the map", "Bases, shipyards, data centres and ground stations appear where the events built them."],
-    timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
-    board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
-    spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],
-};
-
+//
+// No switch for each check after a skip any more (units, occupied land,
+// structures, repeats, the Projects board, the agents' reports): they are part
+// of the skip's own request now, and always on (gameplay.js, "The folded time
+// skip").
 const useRequestDay = () => {
     const [day, setDay] = useState(() => requestDay());
     useEffect(() => {
@@ -1155,7 +1151,6 @@ const RequestBudgetSection = () => {
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
-    const [sections, setSections] = useState(() => Object.fromEntries(REVIEW_SECTIONS.map((section) => [section, requestSettings.reviewSection(section)])));
 
     const apply = (message, write) => {
         write();
@@ -1217,8 +1212,8 @@ const RequestBudgetSection = () => {
             />
             <div style={settingsHelper}>
                 {saving
-                    ? <>On (default): a time skip is one request, two when there is something to check afterwards, and never more than <span data-no-translate>{cost.max}</span>. The model is handed the names it needs instead of looking them up, a small mistake in its answer is cut out rather than asked for again, and the checks below go out together.</>
-                    : <>Off: the most thorough turns, for a key with no daily limit. Every check after a skip makes its own request, the model may look things up (up to three extra requests per task), and a flawed answer is sent back to be redone. A busy skip can use twenty requests or more.</>}
+                    ? <>On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your agents&apos; reports come back in the same answer. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip never uses more than <span data-no-translate>{cost.max}</span>.</>
+                    : <>Off: the most thorough turns, for a key with no daily limit. After every skip the units, the occupied land, the structures, the repeats, the Projects board and your agents&apos; reports are each checked by a request of their own. The model may look things up (up to three extra requests per task), and a flawed answer is sent back to be redone. A busy skip can use twenty requests or more, and while the model may look things up a Gemini skip&apos;s events arrive together at the end instead of one at a time.</>}
             </div>
 
             <div style={fieldGroupStyle}>
@@ -1247,13 +1242,14 @@ const RequestBudgetSection = () => {
                 apply(`Background AI turned ${next ? "on" : "off"}.`, () => requestSettings.setBackgroundAi(next));
             }}
             />
-            <div style={settingsHelper}>
+            {/* The section ends on whichever of these two is last. */}
+            <div style={{ ...settingsHelper, ...(background ? null : { marginBottom: 0 }) }}>
                 {background
                     ? <>On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.</>
                     : <>Off: the game only calls the model when you do something.</>}
             </div>
             {background && (
-                <div style={fieldGroupStyle}>
+                <div style={{ ...fieldGroupStyle, marginBottom: 0 }}>
                     <label style={labelStyle} htmlFor="ai-background-daily-cap">Background requests a day, at most</label>
                     <input
                     id="ai-background-daily-cap"
@@ -1270,27 +1266,6 @@ const RequestBudgetSection = () => {
                     <div style={helperStyle}>It also stops by itself once less than a tenth of your day is left.</div>
                 </div>
             )}
-
-            <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", fontWeight: 800, margin: "0.4rem 0 0.2rem" }}>Checks after a time skip</div>
-            <div style={{ ...helperStyle, marginBottom: "0.7rem" }}>
-                {saving
-                    ? "All of these share ONE request, and only when the skip gave them something to look at. Turning one off never saves a request unless it was the only one with work to do; it does make that request smaller."
-                    : "With Save AI requests off, each of these is its own request after every skip and these switches are not used."}
-            </div>
-            {REVIEW_SECTIONS.map((section, index) => (
-                <React.Fragment key={section}>
-                    <Toggle
-                    label={REVIEW_SECTION_LABELS[section][0]}
-                    enabled={sections[section]}
-                    onToggle={() => {
-                        const next = !sections[section];
-                        setSections((current) => ({ ...current, [section]: next }));
-                        apply(`After-skip check "${REVIEW_SECTION_LABELS[section][0]}" turned ${next ? "on" : "off"}.`, () => requestSettings.setReviewSection(section, next));
-                    }}
-                    />
-                    <div style={{ ...settingsHelper, ...(index === REVIEW_SECTIONS.length - 1 ? { marginBottom: 0 } : {}) }}>{REVIEW_SECTION_LABELS[section][1]}</div>
-                </React.Fragment>
-            ))}
         </SettingsSection>
     );
 };

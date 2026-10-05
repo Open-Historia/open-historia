@@ -333,8 +333,8 @@ const Main = ({
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
   // every twenty minutes per deployed agent. Agents also report after time
-  // skips on a calendar (agentReports.js: with the turn review, or one request
-  // each through refreshSpyIntercepts when saving is off); this is what makes
+  // skips (agentReports.js: in the skip's own answer, or on a calendar, one
+  // request each through refreshSpyIntercepts, when saving is off); this is what makes
   // them tick while the player is simply playing, and it is why there is no
   // Gather button — an agent is a trickle of intelligence, not a thing to farm.
   // Not in the main menu or the Workshop: each report is an AI request, spent

@@ -145,8 +145,10 @@ import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from
 import { buildTargetLedgerLines } from "./targetDossier.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
+  AGENT_REPORTS_FIELD,
   decodeGameMasterTransportPayload,
   decodePregameHistoryTransportPayload,
+  foldJumpTool,
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
@@ -168,7 +170,6 @@ import {
   createJumpBudget,
   jumpRequestCap,
   requestLedger,
-  requestSettings,
   savingRequests,
 } from "./requestBudget.js";
 import { describeSchemaRemoval, salvageBySchema } from "./schemaSalvage.js";
@@ -193,7 +194,8 @@ import {
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
-import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport } from "./agentReports.js";
+import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
+import { assignAgentReports, boardOpsOf, liftBoardOps, providerRefusedContract, withoutBoardOps } from "./foldedSkip.js";
 import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
@@ -1424,6 +1426,53 @@ const JUMP_LEVERS = [
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
 
+// ---- The folded skip's own rules -------------------------------------------------
+// While requests are being saved a skip is ONE request (requestBudget.js): no
+// second request reconciles its events with the units, the fronts, the
+// structures or the board afterwards, so the simulator is told to finish each
+// event itself. These are the rules the separate checks carried (the unit,
+// territory and structure directors' templates, the curator's, in
+// defaultPrompts.json), said once, in the simulator's own terms. Built at call
+// time, like the levers above: a campaign's frozen templates never see an edit
+// to defaultPrompts.json, and with saving off the checks still run as requests
+// of their own, where this block would be untrue.
+const FOLDED_SKIP_CONSEQUENCES = [
+  "[Every Event Carries Its Consequences]",
+  "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
+  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. Armies moving nearby change no control, and an unresolved clash names no winner.",
+  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its id, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units.",
+  "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
+  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in actionIds.",
+  "• The board. An event that moved one of the player's projects or operations carries its projectOps, as [Projects & Operations] says.",
+  "An event whose text changes nothing material carries no ops, and that is correct: never invent one to fill a field. But an event that says a town fell, a fleet sailed or a base opened, with nothing in its impacts, leaves the player looking at a map that contradicts the story.",
+  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome.",
+  // Measured against the live API (2026-10-05): asked to finish each event,
+  // the model wrote six and seven events for a month that called for ten.
+  "Finishing each event is not a reason to write fewer of them: the period still holds the number of events its instruction asks for, and most of the world's events need few ops or none.",
+].join("\n");
+
+// The agents whose reports ride on a folded skip (prepareFoldedSkip): the rules
+// are the spyIntercept template's, the brief under each agent is the one its own
+// request would have carried.
+const buildFoldedAgentReportsBlock = (jobs, playerName) => {
+  const list = normalizeArray(jobs);
+  if (!list.length) return "";
+  const player = normalizeString(playerName) || "the player's polity";
+  return [
+    "[Agents' Reports]",
+    `${player}'s service has agents in place whose reports are due. After the events, file one entry in ${AGENT_REPORTS_FIELD} for each agent listed here, and for no one else: `
+      + "what that agent intercepted of its target's PRIVATE diplomatic traffic with OTHER polities during this period, consistent with the events you have just written. "
+      + "Treat the records in this prompt as ground truth and write what the target actually said in private to its counterparts: intentions, terms, threats, promises, doubts, never public statements or press lines. "
+      + `Each report gives \`agent\`, copied exactly from this list, and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
+      + `a short subject, and 2 to 6 alternating messages in the leaders' own voices. Where ${player} is discussed, show what the target really thinks of it.`,
+    ...list.map((job) => [
+      `${job.key}: the agent inside ${job.name}.`,
+      job.disinformation,
+      job.brief,
+    ].filter(Boolean).join("\n")),
+  ].join("\n\n");
+};
+
 // "Limit AI generation" (OFF by default) — the whole policy, in one place rather
 // than a number per call site.
 //
@@ -1824,7 +1873,10 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path });
+      // `home`: whose structure it is, for an address the map cannot check
+      // (placement.js resolveAddress). Not `owner`, which would also read a
+      // border phrase as a unit's own side of it.
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, home: normalizeString(marker.ownerCode ?? op.ownerCode) });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -1847,7 +1899,7 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     // operation that gives only an id it is the whole answer. It used to be
     // ignored, so such an operation was dropped for having no coordinates: the
     // exact move a model reaches for after being told its `at` was not on the map.
-    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner }) : null;
+    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home }) : null;
     const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
       ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
       : null;
@@ -2080,7 +2132,13 @@ The engine carries these orders out every turn — a move continues toward its d
 ${pending}`);
   }
 
-  const board = buildJumpProjectsDirective(variables.projectsSummary);
+  // A folded skip keeps the board itself (projectsDirective.js); otherwise the
+  // board is context, and its own pass moves it.
+  const foldedSkip = Boolean(variables.foldedSkip);
+  const board = buildJumpProjectsDirective(variables.projectsSummary, {
+    folded: foldedSkip,
+    doubted: normalizeString(variables.foldedBoardDoubts),
+  });
   if (board) blocks.push(board);
 
   if (isActiveFeatureEnabled("espionage")) {
@@ -2108,7 +2166,12 @@ ${brief}`);
 
   // Groups switched off for this game: their lever goes with their rule.
   blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
+  // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES).
+  if (foldedSkip) blocks.push(FOLDED_SKIP_CONSEQUENCES);
   if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
+  // And the agents whose reports are due ride on it (prepareFoldedSkip).
+  const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
+  if (agentReports) blocks.push(agentReports);
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
   // orders (playerFocus.js): each order's id is what an event cites in actionIds.
@@ -2713,6 +2776,12 @@ const runJsonTask = async (taskKey, {
   // the already-wide submit_chat_actions declaration, while native validation
   // still checks the exact same CHAT_ACTIONS_SCHEMA after parsing.
   toolOverride = undefined,
+  // The task's own output function, reshaped for this call: a folded time skip
+  // adds the board and the agents' reports to the contract it is sent
+  // (gameplaySchemas.js foldJumpTool). Applied to the tool the task would have
+  // been sent, so a scenario's stat keys are already in it; the answer is still
+  // validated by the task's schema, which accepts both contracts.
+  toolTransform = null,
   // The request budget (requestBudget.js). `budget` is the time skip this task
   // belongs to and `spender` who it is within it: each attempt asks the budget
   // first, and a refusal ends the task the way a failure would (its fallback, or
@@ -2809,9 +2878,11 @@ const runJsonTask = async (taskKey, {
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
   // withIntelligenceRating).
-  const defaultTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
+  const ratedTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
     ? withIntelligenceRating(taskTool)
     : taskTool;
+  // Reshaped for this call when asked (toolTransform above).
+  const defaultTool = typeof toolTransform === "function" ? toolTransform(ratedTool) : ratedTool;
   const tool = toolOverride !== undefined ? toolOverride : defaultTool;
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
@@ -3022,7 +3093,8 @@ const runJsonTask = async (taskKey, {
       sawResponseBody = true;
       logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} answered.`, {
         responseChars: rawText.length,
-        viaToolCall: Boolean(response?.toolInput),
+        viaToolCall: Boolean(response?.toolInput) && !response?.answeredAsText,
+        ...(response?.answeredAsText ? { viaJsonText: true } : {}),
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
@@ -3367,8 +3439,9 @@ const runJsonTask = async (taskKey, {
         // A model that answered with a tool call is told to call it again; one
         // that answered in prose (local models without tool support) is told to
         // answer in raw JSON — telling it to call a tool it cannot see wastes
-        // the one retry this task gets.
-        const retryInstruction = response?.toolInput
+        // the one retry this task gets. A Gemini skip asked for as JSON text
+        // (main.jsx callGemini) was shown no tool either.
+        const retryInstruction = response?.toolInput && !response?.answeredAsText
           ? `Call ${tool?.name || "the required tool"} again with corrected input.`
           : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
         history.push({
@@ -8158,8 +8231,9 @@ const applySimulationResult = async ({
 
   // Spies report on the world the turn just produced. Awaited so the reports are
   // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // While requests are being saved the reports came with the turn review, in its
-  // one request, and are only filed here; a turn with no review (a resolved
+  // While requests are being saved the reports came in the time skip's own
+  // answer (foldedTurnReview; or with the turn review, when a provider refused
+  // that skip) and are only filed here; a turn with neither (a resolved
   // interactive event, a game-master command) waits for the next skip's. With
   // saving off, after a time skip only, each agent due a report makes its own
   // request (refreshSpyIntercepts).
@@ -11073,15 +11147,23 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
       : "No additional hidden political signal was collected this period. Base any assessment only on the private traffic and supplied campaign evidence, or omit politicalAssessment if that would be speculation.",
   ].join("\n");
 
+  // The agent's own material: what a time skip that carries the reports itself
+  // puts under the agent's name (buildFoldedAgentReportsBlock). The era is the
+  // skip's own prompt there, and the task line is the block's.
+  const brief = [
+    `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+    politicalAssessmentOrder,
+    orders,
+  ].filter(Boolean).join("\n\n");
   return {
     name,
     variables,
+    disinformation,
+    brief,
     userMessage: [
       `Report what the spy in ${name} intercepted this period.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
-      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
-      politicalAssessmentOrder,
-      orders,
+      brief,
     ].filter(Boolean).join("\n\n"),
   };
 };
@@ -13472,6 +13554,178 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
   recentEvents: normalizeArray(bundle?.events),
 });
 
+// ---- The folded time skip -------------------------------------------------------
+//
+// While requests are being saved (the default) a skip is ONE request. Until
+// 2026-10 it was two on most turns: the skip, and a "turn review" that read its
+// events back and asked for the units they moved, the fronts, the structures,
+// the repeats, the Projects board and the agents' reports (runTurnReview). The
+// review existed because the simulator narrated a town falling and wrote no op
+// for it. The answer to that is a prompt that says so, not a second request to
+// catch it: now each event carries every consequence itself
+// (FOLDED_SKIP_CONSEQUENCES), the board among them (projectsDirective.js), and
+// the agents' reports ride at the end of the same answer. That is also what lets
+// a skip be shown event by event as it is written: an event that arrives is
+// finished, map and all.
+//
+// What the review's parts became:
+//   units, territory, structures   the event's own unitOps, regionControlOps,
+//                                  regionTransfers and markerOps;
+//   queued-order outcomes          the event's own actionIds;
+//   repeats and filler             the rule against writing them, and the
+//                                  native gates that never needed a model
+//                                  (a word-for-word repeat, the integrity
+//                                  screen);
+//   the Projects board             impacts.projectOps, lifted off the events
+//                                  and applied by the board's own machinery
+//                                  (foldedTurnReview);
+//   the agents' reports            the answer's agentReports.
+//
+// With saving off the checks are still requests of their own, every one of them
+// always (the switches that turned them off one by one are gone), and the skip
+// is sent the contract it always was.
+//
+// The folded contract is larger than the one it replaces, and a provider can
+// refuse a function declaration for its size alone (geminiSchema.js). So a
+// folded request that a provider refuses outright is asked again the old way,
+// with the review after it, and the rest of the session's skips are asked that
+// way from the start. A player loses nothing but the saving.
+let foldedSkipRefused = false;
+
+// What a folded skip carries besides its events, gathered once before its first
+// request: the doubted board entries a fresh agent can now settle, and the
+// agents whose reports ride on it, each with the brief its own request would
+// have carried. Nothing here costs a request.
+const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
+  const world = normalizeWorldState(bundle.world);
+  const playerCountry = normalizeString(bundle.game?.country);
+  // The skip keeps the board exactly when it is shown one: an empty board has
+  // no directive (projectsDirective.js), and then nothing asks for board ops.
+  const boardShown = Boolean(buildJumpProjectsDirective(variables?.projectsSummary, { folded: true }));
+  const board = boardShown ? normalizeArray(bundle.world?.projects) : [];
+  const espionage = isActiveFeatureEnabled("espionage");
+  const filed = board.length || espionage
+    ? normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})))
+    : {};
+  const doubted = board.length
+    ? doubtedAwaitingFreshSource(normalizeSpies(bundle.world?.spies), board, { playerPolity: playerCountry, intercepts: filed })
+    : [];
+  const agents = espionage
+    ? agentsReportingWithSkip({
+      agents: activeSpies(world, playerCountry),
+      filed,
+      round: (Number(bundle.game?.round) || 1) + 1,
+      originDate: normalizeString(originDate),
+    })
+    : [];
+  const agentJobs = [];
+  for (const [index, spy] of agents.entries()) {
+    try {
+      // No template variables: the skip's own prompt is the agent's context.
+      const prepared = await prepareSpyReport(bundle, spy, { sharedVariables: {} });
+      agentJobs.push({ key: `agent_${index + 1}`, spy, name: prepared.name, disinformation: prepared.disinformation, brief: prepared.brief });
+    } catch (error) {
+      // One agent's brief failing costs that agent this skip's report.
+      console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
+    }
+  }
+  return {
+    board: boardShown,
+    boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
+    agentJobs,
+  };
+};
+
+// The review a folded skip needs no request for (see "The folded time skip"):
+// the same record runTurnReview returns, filled from the skip's own answer, so
+// everything downstream reads it as it always read a review.
+//
+// The board's ops are LIFTED OFF the events here and handed to the board's own
+// machinery (reviewedProjectOps, boardPassCarriers, applyBoardCarriers), which
+// applies them once, in date order, after espionage has had its say, and judges
+// a major event that rests only on a board entry by whether the board really
+// moved. Left on the events they would be applied a first time with the rest of
+// the impacts. Each op names its event by position in the list the board pass
+// is told it was "shown": the candidates, then the events the integrity screen
+// kept off the timeline, which is the numbering remapBoardOps expects.
+//
+// Every other part is deliberately absent. An absent part is each director's
+// ordinary "no analysis": the events stand as the simulator wrote them.
+const foldedTurnReview = ({ context, merged, state }) => {
+  const { bundle } = context;
+  const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
+  const rawEvents = normalizeArray(merged.events);
+  const rawHidden = normalizeArray(state.hiddenEvents);
+  const eventOps = rawEvents.map(boardOpsOf);
+  const hiddenOps = rawHidden.map(boardOpsOf);
+  merged.events = rawEvents.map(withoutBoardOps);
+  state.hiddenEvents = rawHidden.map(withoutBoardOps);
+  // A canned turn carries nothing of the model's: the board is not looked at.
+  if (normalizeString(state.generation?.source) === "fallback") return review;
+
+  const priorEvents = normalizeEvents(bundle.events);
+  // The candidates as reviewCandidateEvents builds them, each still knowing
+  // which written event it came from.
+  const shaped = merged.events.map((entry, index) =>
+    normalizeGeneratedEvent({ ...entry, source: entry?.source || state.generation?.source || "ai" }, index));
+  const written = new Map();
+  shaped.forEach((event, index) => { if (event) written.set(event, eventOps[index]); });
+  const candidates = dedupeGeneratedEvents(priorEvents, shaped.filter(Boolean));
+  const shapedHidden = state.hiddenEvents.map((entry, index) => normalizeGeneratedEvent(entry, index));
+  shapedHidden.forEach((event, index) => { if (event) written.set(event, hiddenOps[index]); });
+  const shown = [...candidates, ...shapedHidden.filter(Boolean)];
+
+  if (state.foldedPrep?.board) {
+    const lifted = liftBoardOps(shown, (event) => written.get(event));
+    const salvaged = salvageBySchema(
+      normalizeGameplayPayload("projects", { projectOps: lifted }),
+      (candidate) => validateGameplayPayload("projects", candidate),
+    );
+    if (salvaged.valid) {
+      review.parts.board = salvaged.value;
+      review.boardShownEvents = shown;
+      if (salvaged.removed.length) {
+        logDebugEvent("turn", `Folded skip: ${salvaged.removed.length} malformed board op(s) left out.`, salvaged.removed.map(describeSchemaRemoval), { verbose: true });
+      }
+    } else {
+      logDebugEvent("turn", `Folded skip: the board ops were rejected (${salvaged.error}); the board does not move this turn.`, undefined, { problem: true });
+    }
+  }
+
+  const jobs = normalizeArray(state.foldedPrep?.agentJobs);
+  // Each report to the agent it is for (foldedSkip.js assignAgentReports).
+  const assigned = assignAgentReports(jobs, state.foldedAgentAnswer, { sameName: (left, right) => regionKey(left) === regionKey(right) });
+  if (assigned.length) {
+    const round = (Number(bundle.game?.round) || 1) + 1;
+    const stopDate = normalizeString(merged.stopDate) || context.targetDate;
+    // The world the agents report from is the one this skip wrote.
+    const agentBundle = {
+      ...bundle,
+      events: normalizeEvents([...priorEvents, ...candidates]),
+      game: { ...bundle.game, gameDate: stopDate, round },
+    };
+    for (const { job, report } of assigned) {
+      const salvaged = salvageBySchema(
+        normalizeGameplayPayload("spyIntercept", report),
+        (candidate) => validateGameplayPayload("spyIntercept", candidate),
+      );
+      if (!salvaged.valid) {
+        logDebugEvent("turn", `Folded skip: the report from the agent in ${job.name} was rejected (${salvaged.error}); that agent reports next skip.`, undefined, { problem: true });
+        continue;
+      }
+      review.parts[job.key] = salvaged.value;
+      review.agentReports.push({ key: job.key, spy: job.spy, bundle: agentBundle });
+    }
+  }
+  logDebugEvent("turn", "Folded skip: its events carried their own consequences; no review request was made.", {
+    boardOps: normalizeArray(review.parts.board?.projectOps).length,
+    boardKept: Boolean(review.parts.board),
+    agentReports: review.agentReports.length,
+    agentsAsked: jobs.length,
+  }, { verbose: true });
+  return review;
+};
+
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
   const evaluation = context?.evaluation && typeof context.evaluation === "object" ? context.evaluation : null;
   const {
@@ -13530,6 +13784,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // moves on when the skip lands — and again after a rollback, because the skip
   // that heard them no longer happened. Empty when nobody touched the world.
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
+
+  // Whether this skip is the folded one (see "The folded time skip" above).
+  // Decided once, when the skip starts, and kept through a held segment's retry:
+  // the segments already in hand were written under it. The lab's A/B runs are
+  // never folded, since they compare the skip's own contract.
+  if (state.folded === undefined) state.folded = Boolean(state.requests?.saving) && !evaluation && !foldedSkipRefused;
+  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables });
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
   let segmentIndex = state.nextSegment;
@@ -13643,10 +13904,29 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       let segmentDraft = null;
       const segmentComplaints = [];
 
-      const { generation: segmentGeneration, payload, removed: removedFromSegment } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+      // A folded skip's own additions (see "The folded time skip" above). The
+      // agents report once, at the end of the last segment, when every event
+      // they have to agree with is written.
+      const agentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
+      const foldedVariables = {
+        foldedSkip: true,
+        foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
+        foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
+      };
+      // Every provider response this segment causes, so a contract the provider
+      // would not take can be told from an answer that was simply no good.
+      const spend = jumpTaskOptions(state.requests, "jump");
+      const statuses = [];
+
+      const askSegment = (folded) => runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
         lookups: buildTaskLookups(segmentBundle),
         // The skip itself always runs; asking again is what the budget weighs.
-        ...jumpTaskOptions(state.requests, "jump"),
+        ...spend,
+        onRequest: (status) => {
+          statuses.push(Number(status));
+          spend.onRequest?.(status);
+        },
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0 }) } : {}),
         ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
         ...(evaluationSegmentCapture ? { capture: evaluationSegmentCapture.task || (evaluationSegmentCapture.task = {}) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
@@ -13806,8 +14086,54 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           onAccepted: (draft) => { segmentDraft = draft; },
           onRejected: (complaint) => { segmentComplaints.push(complaint); },
         }),
-        variables: segmentVariables,
+        variables: folded ? { ...segmentVariables, ...foldedVariables } : segmentVariables,
       });
+
+      let answer = null;
+      if (state.folded) {
+        let refused = false;
+        let refusal = null;
+        try {
+          answer = await askSegment(true);
+          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses);
+        } catch (error) {
+          // A request too large for every model the player has is the same
+          // case: the folded one is the larger of the two.
+          const tooBig = error?.providerFailure?.kind === "tooBig";
+          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses))) throw error;
+          refused = true;
+          refusal = error;
+        }
+        if (refused) {
+          // Asked again the way a skip always was, the checks a request of their
+          // own after it (finishTimelineJump). Nothing of the refused attempt
+          // is kept: it never produced an answer.
+          const reason = normalizeString(refusal?.message) || normalizeString(answer?.generation?.fallbackReason) || "the provider refused the request";
+          console.warn(`[ai] the folded time skip was refused (${reason}) — asking again with its checks as a request of their own.`);
+          logDebugEvent("warn", "[turn] The folded time skip was refused; asked again with its checks as a request of their own.", {
+            reason,
+            statuses: [...statuses],
+            segmentIndex,
+          });
+          state.folded = false;
+          segmentDraft = null;
+          segmentComplaints.length = 0;
+          statuses.length = 0;
+          answer = await askSegment(false);
+          // It was the contract: the same skip went through without it. The
+          // rest of the session's skips start the old way.
+          if (answer.generation?.source !== "fallback") foldedSkipRefused = true;
+        }
+      } else {
+        answer = await askSegment(false);
+      }
+      const { generation: segmentGeneration, payload, removed: removedFromSegment } = answer;
+      // The agents' reports leave the payload here (foldedTurnReview files
+      // them); nothing between this and the write reads the field.
+      if (payload && typeof payload === "object" && AGENT_REPORTS_FIELD in payload) {
+        if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
+        delete payload[AGENT_REPORTS_FIELD];
+      }
 
       // Only now is the answer taken, so only now does its draft count.
       if (segmentGeneration?.source !== "fallback") {
@@ -13969,10 +14295,18 @@ const reportJumpRequests = (requests) => {
 
 // ---- The turn review -------------------------------------------------------------
 //
-// The checks a skip gets after it is written — units, territory, timeline, the
-// Projects board, the agents' reports — as ONE request instead of one each
-// (turnReview.js says how several jobs share a prompt safely). Only while requests
-// are being saved; otherwise each check makes its own request, as before.
+// The checks a skip gets after it is written — units, territory, structures,
+// timeline, the Projects board, the agents' reports — as ONE request instead of
+// one each (turnReview.js says how several jobs share a prompt safely).
+//
+// No longer what a skip normally does. While requests are being saved a skip is
+// folded: its events carry their own consequences and nothing is asked after it
+// (see "The folded time skip"). This is what is left for the one case where
+// that cannot be: a provider that refused the folded request, whose skip was
+// asked again the way it always was and is checked here. With saving off each
+// check makes its own request, as before. Every check always runs: the six
+// switches that turned them off one by one are gone (2026-10), since a check
+// left off only ever meant a map that did not match the story.
 //
 // Nothing here decides what a check DOES. Each job is built from the input its
 // own native director would have sent (buildUnitDirectorInput and the rest), its
@@ -13986,8 +14320,8 @@ const reportJumpRequests = (requests) => {
 //   board              an event concerns an entry, or the calendar is due (boardPassReasons);
 //   agents             a report has gone AGENT_REPORT_EVERY_ROUNDS rounds unrefreshed.
 // No reason from any of them means no request: the skip cost one. When there IS
-// a reason, every enabled check with something to look at rides along — it is
-// the same request either way.
+// a reason, every check with something to look at rides along — it is the same
+// request either way.
 const UNIT_DIRECTOR_INSTRUCTION =
   "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. "
   // Said here as well as in the rules: a live run wrote "HMS Dauntless
@@ -14151,7 +14485,6 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  const wants = (section) => requestSettings.reviewSection(section);
   const round = (Number(bundle.game?.round) || 1) + 1;
   const stopDate = normalizeString(merged.stopDate) || context.targetDate;
   const playerCountry = normalizeString(bundle.game?.country);
@@ -14166,7 +14499,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   };
 
   // --- units ---
-  const unitInput = wants("units") ? buildUnitDirectorInput({ events: merged.events, world: bundle.world }) : null;
+  const unitInput = buildUnitDirectorInput({ events: merged.events, world: bundle.world });
   // Read once for both directors, and only when one of them has a job.
   let typeRules = null;
   const typeRulesOnce = async () => (typeRules ??= await regionTypeRulesFor(bundle.world));
@@ -14177,9 +14510,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // --- territory ---
-  const territoryInput = wants("territory")
-    ? await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) })
-    : null;
+  const territoryInput = await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) });
   if (territoryInput) {
     reasons.push(`${territoryInput.candidates.length} event(s) may change who holds land`);
     await addJob({ key: "territory", taskKey: "territoryDirector", title: "occupied and disputed land", instruction: TERRITORY_DIRECTOR_INSTRUCTION },
@@ -14187,9 +14518,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // --- structures ---
-  const structureInput = wants("structures")
-    ? buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry })
-    : null;
+  const structureInput = buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry });
   if (structureInput) {
     reasons.push(`${structureInput.candidates.length} event(s) may have built something`);
     await addJob({ key: "structures", taskKey: "structureDirector", title: "new structures", instruction: STRUCTURE_DIRECTOR_INSTRUCTION },
@@ -14198,7 +14527,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
 
   // --- timeline ---
   const priorEvents = normalizeEvents(bundle.events);
-  const curatorInput = wants("timeline") ? buildCuratorInput({ events: candidates, priorEvents, mode }) : null;
+  const curatorInput = buildCuratorInput({ events: candidates, priorEvents, mode });
   const worthJudging = curatorInput ? candidatesWorthJudging({ events: candidates, priorEvents, mode }) : [];
   if (worthJudging.length) reasons.push(`${worthJudging.length} event(s) may repeat the record or be filler`);
 
@@ -14219,7 +14548,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   review.actionOutcomePlan = actionOutcomePlan;
   if (actionOutcomePlan) reasons.push(`${actionOutcomePlan.pendingActions.length} queued order(s) need exact outcome attribution`);
 
-  const boardHasWork = wants("board") && board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
+  const boardHasWork = board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
   let pendingDoubts = [];
   if (boardHasWork) {
     const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
@@ -14240,7 +14569,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // --- agents ---
-  const agents = wants("spies") && isActiveFeatureEnabled("espionage")
+  const agents = isActiveFeatureEnabled("espionage")
     ? activeSpies(normalizeWorldState(bundle.world), playerCountry)
     : [];
   if (agents.length) {
@@ -14512,12 +14841,28 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
 
-  // While requests are being saved, every check below is answered by ONE request
-  // made here (runTurnReview) — or by none, when nothing needs checking. Each
-  // director then runs exactly as it always has, with its part of that answer in
-  // place of the request it would have made. `review` is null when saving is off,
-  // and each check makes its own request as before.
-  const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+  // While requests are being saved the skip was ONE request and its events
+  // carried their own consequences (see "The folded time skip"): the review is
+  // read off the skip's own answer, with no request. Each director below then
+  // runs exactly as it always has, on a review that holds no part for it, which
+  // is its ordinary "nothing to add". Only a skip whose folded request the
+  // provider refused still asks for a review here (runTurnReview). `review` is
+  // null when saving is off, and each check makes its own request as before.
+  const folded = Boolean(state.folded && state.requests?.saving);
+  if (!folded) {
+    // Not this skip's to write: the board is moved by its own pass, and an op
+    // left on an event would be applied a second time by the event itself.
+    const before = [...normalizeArray(merged.events), ...normalizeArray(state.hiddenEvents)];
+    merged.events = normalizeArray(merged.events).map(withoutBoardOps);
+    state.hiddenEvents = normalizeArray(state.hiddenEvents).map(withoutBoardOps);
+    const after = [...merged.events, ...state.hiddenEvents];
+    if (before.some((event, index) => event !== after[index])) {
+      noteReceipt(state.receipt, "dropped", "impacts.projectOps is not part of this answer: the Projects board is moved by its own pass after the events. The ops you wrote there were left out.");
+    }
+  }
+  const review = state.requests?.saving
+    ? (folded ? foldedTurnReview({ context, merged, state }) : await runTurnReview({ context, merged, signal, state }))
+    : null;
 
   // A current order whose outcome event omitted actionIds gets one bounded
   // semantic association pass. Saving mode piggybacks on the combined review;
@@ -14623,19 +14968,17 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       signal,
       analyzeBatch: review
         ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
-        : requestSettings.reviewSection("structures")
-          ? async (input) => {
-            const answer = await runJsonTask("structureDirector", {
-              lookups: buildTaskLookups(bundle),
-              fallback: structureDirectorUnavailable,
-              signal,
-              userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
-              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }, await regionTypeRulesFor(bundle.world)),
-              ...jumpTaskOptions(state.requests, "review"),
-            });
-            return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
-          }
-          : null,
+        : async (input) => {
+          const answer = await runJsonTask("structureDirector", {
+            lookups: buildTaskLookups(bundle),
+            fallback: structureDirectorUnavailable,
+            signal,
+            userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
+            variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }, await regionTypeRulesFor(bundle.world)),
+            ...jumpTaskOptions(state.requests, "review"),
+          });
+          return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
+        },
     });
     builtEvents = built.events;
     structureLinks = built.links;

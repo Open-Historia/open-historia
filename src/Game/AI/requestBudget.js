@@ -42,10 +42,11 @@ export const REQUEST_BUDGET_KEYS = Object.freeze({
     ledger: "ai_request_ledger",
 });
 
-// The checks one request after a time skip can carry (afterJumpReview in
-// gameplay.js). Each is ON unless the player turned it off.
-export const REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "timeline", "board", "spies"]);
-export const reviewSectionKey = (section) => `ai_review_${section}`;
+// There were six more, `ai_review_units` and its siblings: a switch for each
+// check a time skip got after it was written. They are gone (2026-10). The
+// checks are part of the skip itself now (gameplay.js, "The folded time skip"),
+// so there is nothing left to switch, and a check left off only ever meant a
+// map that did not match the story. A key a player once set is never read.
 
 // --- Where settings are kept ---
 //
@@ -110,16 +111,12 @@ export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
     backgroundDailyCap: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap), {
         min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP,
     }),
-    reviewSection: (section) => REVIEW_SECTIONS.includes(section)
-        && readItem(storage, reviewSectionKey(section)) !== "0",
     setSaveRequests: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.saveRequests, on ? "1" : "0"),
     setBackgroundAi: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundAi, on ? "1" : "0"),
     setDailyLimit: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.dailyLimit,
         String(wholeNumber(value, { min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT }))),
     setBackgroundDailyCap: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap,
         String(wholeNumber(value, { min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP }))),
-    setReviewSection: (section, on) => REVIEW_SECTIONS.includes(section)
-        && writeItem(storage, reviewSectionKey(section), on ? "1" : "0"),
 });
 
 // --- The ledger ---
@@ -257,14 +254,16 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 // --- One time skip ---
 //
 // Who may spend, in order, while requests are being saved: "jump" (the time
-// skip itself), "jumpRetry" (asked again, only when the first answer could not
-// be used at all), "review" (units, territory, structures, timeline, board and
-// agents, in one request), "history" (folding old events into the history document, when
-// due), "repair" (a second search when the skip came back thin) and
-// "institutionBallots" (unresolved NPC formal ballots after the new turn is
-// canonical). The skip itself always runs. Everything after it asks first, and
-// a "no" is never an error: the checks fail open, the agents report next turn,
-// the history is folded on a later skip.
+// skip itself, which carries its own consequences, the Projects board and the
+// agents' reports), "jumpRetry" (asked again, only when the first answer could
+// not be used at all), "geography" (a place the events name that exact matching
+// could not find), "history" (folding old events into the history document,
+// when due), "repair" (a storyline the skip left stale) and "institutionBallots"
+// (unresolved NPC formal ballots after the new turn is canonical). "review" is
+// the checks as one request after the skip, which is asked only when a provider
+// refused the skip that carries them (gameplay.js runTurnReview). The skip
+// itself always runs. Everything after it asks first, and a "no" is never an
+// error: the checks fail open, the history is folded on a later skip.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
