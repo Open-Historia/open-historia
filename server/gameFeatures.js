@@ -22,6 +22,16 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     description: "Actors that are not countries, such as insurgencies, cartels, militias, cults or an outbreak, each controlling an area of regions that stay their countries'. Off: the simulator is not given the groups or their areas, anything it writes about groups is left out, and no group's area is shown on the map or on a region's card. A game switched back on finds its groups as it left them.",
     settings: Object.freeze([]),
   }),
+  // Listen in (src/runtime/listenIn.js): the phone a region's card and a
+  // country's panel open. It asks the model only when the player opens a feed
+  // that is not already kept for that place and day, so it costs nothing while
+  // nobody presses it.
+  Object.freeze({
+    key: "listenIn",
+    label: "Listen in",
+    description: "A Listen in button on a region's card and in a country's panel opens a phone showing what ordinary people there are posting: the events of the day as they reach a kitchen table, and a few posts about nothing in particular. Each new feed is one AI request, made only when the player opens or refreshes one; a feed already read that day is kept. Off: the button is not shown and no feed is written.",
+    settings: Object.freeze([]),
+  }),
   Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",

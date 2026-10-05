@@ -412,7 +412,10 @@ import {
   getPoliticalProfileKey,
   normalizePoliticalActorRecord,
 } from "../../runtime/politicalActors.js";
-import { normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
+import { buildPublicPoliticalView, normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
+import { listenInFeedLanguage, listenInPlace, normalizeListenInPosts, normalizeListenInTrends } from "../../runtime/listenIn.js";
+import { getStoredLanguage, languageDisplayName } from "../../runtime/i18n.js";
+import { describeListenInPlace, listenInPlaceLabel, listenInRequest } from "./listenInContext.js";
 import { buildRealHistoryDirective } from "./futureHistoryBoundary.js";
 import {
   eventsFromLegacyChat,
@@ -2125,6 +2128,11 @@ ${brief}`);
   return blocks.filter(Boolean).join("\n\n");
 };
 
+// The tasks that simulate nothing, so no difficulty applies to them: Listen in
+// writes what people are saying, and a harder game does not make them say it
+// differently.
+const TASKS_WITHOUT_DIFFICULTY = new Set(["listenIn"]);
+
 // The tasks that speak for, to or about the player's side.
 const PLAYER_GROUP_TASKS = new Set([
   "actions", "chatActions", "descriptionToAction", "interactiveCreation", "interactiveExecutor",
@@ -2193,7 +2201,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
 
   // The chosen difficulty steers every simulation task (see runtime/difficulty.js);
   // a time skip has it in its live records.
-  if (!jumpTask) {
+  if (!jumpTask && !TASKS_WITHOUT_DIFFICULTY.has(taskKey)) {
     try {
       const game = await readGameData();
       systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScopeForTask(taskKey))}`;
@@ -10892,6 +10900,112 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
   ], { taskKey: "countryBriefing" });
   return String(raw || "").trim();
+};
+
+// ---- Listen in --------------------------------------------------------------
+// What ordinary people in one place are posting (runtime/listenIn.js), for the
+// phone a region's card and a country's panel open (GameUI/ListenInPhone.jsx).
+// ONE request, made because the player opened or refreshed a feed. No lookup
+// functions, since every round of them is another request: the place's facts
+// are worked out here and handed over in the prompt (listenInContext.js).
+// Nothing is written to the world; the caller keeps the answer on the device
+// (runtime/listenInStore.js).
+
+// The country as its own people know it: its public politics, the economy on
+// its stat sheet, the arrangements that are OPEN, the groups on its land, and
+// how it stands with the country the player leads.
+const listenInCountryFacts = ({ world, polityKey, playerPolity, groups }) => {
+  const identityIndex = buildPolityIdentityIndex(world);
+  const canonical = (value) => canonicalCampaignPolity(value, world, identityIndex);
+  const name = canonical(polityKey);
+  if (!name) return null;
+  const record = world.polityOverrides?.[name] ?? null;
+  const player = canonical(playerPolity);
+  const isPlayer = Boolean(player) && player === name;
+  const relation = !player || isPlayer
+    ? null
+    : normalizeArray(world.relations).find((entry) => {
+      const a = canonical(entry?.a);
+      const b = canonical(entry?.b);
+      return (a === name && b === player) || (b === name && a === player);
+    });
+  const open = normalizeArray(world.puppets).filter((row) => row?.status === "active" && row?.secrecy === "open");
+  return {
+    name: normalizeString(record?.name) || name,
+    aliases: normalizeArray(record?.aliases),
+    note: normalizeString(record?.note),
+    politics: buildPublicPoliticalView(world, name),
+    economy: normalizeString(buildCompactEconomicContext(world.countryStats?.[name])),
+    isPlayer,
+    relationWithPlayer: relation ? { player: normalizeString(playerPolity), status: relationStatusForScore(relation.score) } : null,
+    overlords: open.filter((row) => canonical(row.puppet) === name).map((row) => ({ name: row.overlord, kind: row.kind })),
+    puppets: open.filter((row) => canonical(row.overlord) === name).map((row) => ({ name: row.puppet, kind: row.kind })),
+    groups,
+  };
+};
+
+export const generateListenInFeed = async ({ place, language: askedLanguage, signal } = {}) => {
+  const target = listenInPlace(place);
+  if (!target) throw new Error("There is no place to listen in on.");
+  if (!isActiveFeatureEnabled("listenIn")) throw new Error("Listen in is switched off for this game.");
+  // Stamped before the read: the caller keeps the feed under this campaign and
+  // this game day, whatever the player has opened by the time it comes back.
+  const campaignId = activeCampaignId();
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const variables = await buildTemplateVariables(bundle, { taskKey: "listenIn" });
+  const groupsOn = isActiveFeatureEnabled("groups");
+  const groupAreas = groupsOn ? world.groupAreas ?? {} : {};
+  // The map, indexed the way the lookup functions read it — built only for a
+  // region's feed, or when a group holds ground somewhere.
+  const context = target.scope === "region" || Object.keys(groupAreas).length
+    ? await lazyLookupContext(bundle)().catch(() => null)
+    : null;
+  const answer = context && target.scope === "region" ? executeLookup(context, "region_info", { regionId: target.regionId }) : null;
+  const region = answer && !answer.error ? answer : null;
+  // The country is whoever holds the region today, as the map has it, not as
+  // the card that was clicked remembered it.
+  const polityKey = normalizeString(region?.owner && region.owner !== "unowned" ? region.owner : target.polityKey);
+  const holder = context?.resolveOwner?.(polityKey) || polityKey;
+  const groups = holder
+    ? [...new Set(Object.entries(groupAreas)
+      .filter(([regionId]) => context?.byId?.get(regionId)?.owner === holder)
+      .map(([, group]) => normalizeString(world.groups?.[group]?.name) || group))]
+    : [];
+  const country = polityKey
+    ? listenInCountryFacts({ world, polityKey, playerPolity: bundle.game?.country, groups })
+    : null;
+  const shown = { ...target, polity: country?.name || target.polity };
+  // The phone keeps a feed under the language it asked in, so it names it and
+  // the two cannot disagree; a caller that names none gets the player's own.
+  const uiLanguage = getStoredLanguage();
+  const language = normalizeString(askedLanguage) || listenInFeedLanguage({
+    uiLanguage,
+    uiLanguageName: languageDisplayName(uiLanguage),
+    saveLanguage: bundle.world?.language || bundle.game?.language,
+  });
+  const { payload } = await runJsonTask("listenIn", {
+    signal,
+    userMessage: listenInRequest(shown),
+    variables: {
+      ...variables,
+      listenInPlace: listenInPlaceLabel(shown),
+      listenInPlaceDetails: describeListenInPlace({ place: shown, region, country, groupsOn }),
+      listenInLanguage: language,
+    },
+    // One usable post is still a feed; none is a failed request.
+    validatePayload: (candidate) => (normalizeListenInPosts(candidate?.posts).length
+      ? ""
+      : "posts must hold at least one post with an author and a text."),
+  });
+  return {
+    campaignId,
+    gameDate: normalizeString(bundle.game?.gameDate),
+    round: Number(bundle.game?.round) || 0,
+    language,
+    posts: normalizeListenInPosts(payload?.posts),
+    trends: normalizeListenInTrends(payload?.trends),
+  };
 };
 
 // What a planted spy brings back from one target: that polity's private

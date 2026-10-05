@@ -18,6 +18,7 @@ import {
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
 const groups = featureDefaults().groups;
+const listenIn = featureDefaults().listenIn;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -40,6 +41,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
     groups,
+    listenIn,
     worldDirection,
     playerFocus,
   });
@@ -48,6 +50,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
     groups,
+    listenIn,
     worldDirection,
     playerFocus,
   });

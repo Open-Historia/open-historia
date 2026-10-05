@@ -8,6 +8,7 @@ import {
 import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
+import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -2973,6 +2974,46 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   additionalProperties: false,
 };
 
+// Listen in (runtime/listenIn.js): what ordinary people in one place are posting,
+// for the phone a region's card and a country's panel open. Everything but the
+// author and the text is optional, and the list carries no count to fail: an
+// answer two posts long, or twenty, still shows (runtime/listenIn.js keeps what
+// a feed holds), where a bound here would cost the player the whole request.
+const LISTEN_IN_SCHEMA = {
+  type: "object",
+  description: "The posts ordinary people in one place are writing today, and what the place is talking about.",
+  properties: {
+    posts: {
+      type: "array",
+      description: "Ten to twelve posts, newest first.",
+      items: {
+        type: "object",
+        properties: {
+          author: nonEmptyTextSchema("The name the poster goes by: a full name, a first name or a nickname, as people of this place and time are called."),
+          handle: textSchema("Their account name, with no @ and no spaces (mariakowal88). Blank in a world that has no such thing."),
+          about: textSchema("Who they are in a few words, as a profile line would put it: night-shift nurse, Lviv."),
+          text: nonEmptyTextSchema("The post itself, in the poster's own voice: one to three short sentences."),
+          filler: { type: "boolean", description: "true for a post that has nothing to do with the events of the day: a lost cat, a recipe, last night's match." },
+          minutesAgo: { type: "number", minimum: 0, description: "How long ago it was posted, in minutes: 0 for just now, none older than three days (4320)." },
+          likes: { type: "number", minimum: 0, description: "Whole number. Small for a local account; one or two posts may have caught fire." },
+          reposts: { type: "number", minimum: 0, description: "Whole number, usually well below the likes." },
+          replies: { type: "number", minimum: 0, description: "Whole number." },
+        },
+        required: ["author", "text"],
+        additionalProperties: false,
+      },
+    },
+    trends: {
+      type: "array",
+      description: "Three to five things this place is talking about today, a few words each, as a trending list names them.",
+      maxItems: LISTEN_IN_MAX_TRENDS,
+      items: nonEmptyTextSchema("One trend: a few words or a tag."),
+    },
+  },
+  required: ["posts"],
+  additionalProperties: false,
+};
+
 // A first reading of a polity with neither a stat sheet nor a rated service asks
 // for both in ONE request (gameplay.js ensureCountryAssessed): the stat-sheet
 // tool, standard or scenario-defined, with the intelligence assessment's own
@@ -3022,6 +3063,7 @@ export const withoutGroupOps = (tool) => (tool?.schema ? { ...tool, schema: drop
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
+  listenIn: LISTEN_IN_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
@@ -3187,9 +3229,16 @@ export const INTELLIGENCE_ASSESSMENT_TOOL = makeTool(
   INTELLIGENCE_ASSESSMENT_SCHEMA,
 );
 
+export const LISTEN_IN_TOOL = makeTool(
+  "submit_listen_in_feed",
+  "Submit the posts ordinary people in the place are writing today, and what the place is talking about.",
+  LISTEN_IN_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
+  listenIn: LISTEN_IN_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
@@ -3846,6 +3895,65 @@ const normalizeChatActionsShape = (value) => {
 
   return candidate;
 };
+// A feed written a little differently is still a feed. The usual variations —
+// the list under another name or bare, a post's fields under the names a real
+// feed uses, a count as text, a field the schema does not have — are rewritten
+// to the schema's shape here, so none of them costs the player a second request
+// or a post. What the phone shows is cleaned again by runtime/listenIn.js.
+const LISTEN_IN_POST_FIELDS = Object.freeze({
+  author: ["author", "name", "displayName", "display_name", "user"],
+  handle: ["handle", "username", "userName", "account", "screenName"],
+  about: ["about", "bio", "profile", "description"],
+  text: ["text", "content", "body", "message", "post"],
+});
+const LISTEN_IN_POST_COUNTS = Object.freeze({
+  minutesAgo: ["minutesAgo", "minutes_ago", "minutes"],
+  likes: ["likes", "likeCount", "hearts"],
+  reposts: ["reposts", "shares", "retweets", "repostCount"],
+  replies: ["replies", "comments", "replyCount"],
+});
+const listenInCount = (value) => {
+  const number = typeof value === "string" ? Number(value.replace(/[\s,]/g, "")) : Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+};
+const normalizeListenInPostShape = (value) => {
+  if (!isPlainRecord(value)) return value;
+  const post = {};
+  for (const [field, names] of Object.entries(LISTEN_IN_POST_FIELDS)) {
+    const found = firstDefinedKey(value, names);
+    if (found !== undefined && found !== null) post[field] = String(found).trim();
+  }
+  if (typeof post.handle === "string") post.handle = post.handle.replace(/^@+/, "");
+  for (const [field, names] of Object.entries(LISTEN_IN_POST_COUNTS)) {
+    const found = firstDefinedKey(value, names);
+    if (found !== undefined && found !== null) post[field] = listenInCount(found);
+  }
+  if (post.minutesAgo === undefined && value.hoursAgo !== undefined) post.minutesAgo = listenInCount(Number(value.hoursAgo) * 60);
+  const filler = firstDefinedKey(value, ["filler", "offTopic", "off_topic"]);
+  if (filler !== undefined) post.filler = filler === true || String(filler).trim().toLowerCase() === "true";
+  return post;
+};
+const normalizeListenInShape = (value) => {
+  let source = value;
+  if (isPlainRecord(value)) {
+    for (const wrapper of ["result", "output", "payload", "data", "feed"]) {
+      if (isPlainRecord(value[wrapper]) && firstDefinedKey(value[wrapper], ["posts", "feed", "tweets"]) !== undefined) {
+        source = value[wrapper];
+        break;
+      }
+    }
+  }
+  const list = Array.isArray(source) ? source : firstDefinedKey(source, ["posts", "feed", "tweets", "items"]);
+  if (!Array.isArray(list)) return value;
+  const trends = isPlainRecord(source) ? firstDefinedKey(source, ["trends", "trending", "topics"]) : undefined;
+  return {
+    posts: list.map(normalizeListenInPostShape),
+    ...(Array.isArray(trends)
+      ? { trends: trends.map((entry) => String(entry ?? "").trim()).filter(Boolean).slice(0, LISTEN_IN_MAX_TRENDS) }
+      : {}),
+  };
+};
+
 const normalizeCountryStatSheetShape = (value) => {
   if (!isPlainRecord(value)) return value;
   const version = Number(value.statsSchemaVersion);
@@ -3858,6 +3966,7 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
+  if (taskKey === "listenIn") return normalizeListenInShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   if (!isPlainRecord(value)) return value;
 
