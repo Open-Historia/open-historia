@@ -9,10 +9,13 @@ import COUNTRY_NAME_REGISTRY from "../generated/countryNames.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
 import {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  pickHubProvenance,
 } from "../../../server/hubProvenance.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
@@ -205,14 +208,18 @@ export const readStoredImageContentType = (value) =>
     : null;
 
 // Hub provenance: the post a scenario was downloaded from (the exact bundle URL
-// imported, and whether it was edited since), the player's own post, and the
-// suggestions reviewed. Shared with the desktop store, so the two never differ.
+// imported, and whether it was edited since), the player's own post, what the
+// player unlinked the scenario from for good, and the suggestions reviewed.
+// Shared with the desktop store, so the two never differ.
 export {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  pickHubProvenance,
 };
 
 export const normalizePlayCount = (raw) => {
@@ -237,6 +244,7 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
+    hubUnlinked: normalizeHubUnlinked(raw?.hubUnlinked),
     id: scenarioId,
     name,
     playCount: normalizePlayCount(raw?.playCount),

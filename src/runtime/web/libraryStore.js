@@ -24,7 +24,7 @@ import {
   readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId, normalizePlayCount,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
   normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
-  fetchableHubOrigin, hubOriginAfterWrite, normalizeHubPublished, normalizeHubReviews,
+  fetchableHubOrigin, hubLinksAfterWrite, hubOriginForUpdate, normalizeHubReviews, pickHubProvenance,
   GAME_BUNDLE_SCHEMA, ACCEPTED_GAME_BUNDLE_SCHEMAS, GAME_BUNDLE_DATA_KEYS,
   OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS,
 } from "./models.js";
@@ -147,11 +147,12 @@ const writeScenarioMeta = (record, updates = {}, { touch = true } = {}) => {
     // A write that carries hubOrigin sets or clears it (import/Update stamp it
     // last; Unlink clears it); any other meta write is a local modification,
     // which keeps the link but marks it edited, so the copy stops offering hub
-    // updates yet can still suggest its changes back (server/hubProvenance.js).
-    hubOrigin: hubOriginAfterWrite(current.hubOrigin, updates, { touch }),
-    hubPublished: Object.prototype.hasOwnProperty.call(updates, "hubPublished")
-      ? normalizeHubPublished(updates.hubPublished)
-      : current.hubPublished,
+    // updates yet can still suggest its changes back. A write that carries
+    // hubPublished replaces the record of the player's own posts, or clears it
+    // (Unlink). Either Unlink is for good: what it unlinked goes into
+    // hubUnlinked, and no later write puts it back (server/hubProvenance.js
+    // hubLinksAfterWrite, the one rule for this store and the desktop store).
+    ...hubLinksAfterWrite(current, updates, { touch }),
     hubReviews: Object.prototype.hasOwnProperty.call(updates, "hubReviews")
       ? normalizeHubReviews(updates.hubReviews)
       : current.hubReviews,
@@ -1062,15 +1063,24 @@ const createScenario = async (body = {}) => {
   return getScenarioDetails(id);
 };
 
-// The hub bookkeeping a scenario write may carry (server/hubProvenance.js), and
-// what counts as an edit next to it; the server twin draws the same line.
-const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
+// The hub bookkeeping a scenario write may carry is picked by
+// server/hubProvenance.js (pickHubProvenance), for this store and the desktop
+// store alike: hubOrigin only as null, which unlinks (a write that tries to
+// link is refused), hubPublished and hubReviews. These keys are what counts as
+// an edit next to it; the server twin draws the same line.
 const SCENARIO_EDIT_KEYS = [...META_KEYS, "game", "gamePatch", "prompts", "promptsPatch", "storage", "world", "worldPatch"];
-const pickHubProvenance = (body) => Object.fromEntries(
-  HUB_PROVENANCE_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(body ?? {}, key)).map((key) => [key, body[key]]),
-);
 
-const updateScenario = async (id, body = {}) => {
+// One of these writes to a scenario at a time. The desktop store answers a
+// request before it takes the next; here a write is a read, a change and a put
+// with awaits between them, so two at once each began from the same record and
+// the later put took back what the earlier one had done. An Unlink has to
+// stand: a check for suggestions that lands with it must find the scenario
+// unlinked, not write the post back. (A chain per scenario, serializeByKey: the
+// owner migration inside has its own, and nothing in here writes the same
+// scenario through this function again.)
+const updateScenario = (id, body = {}) => serializeByKey(`scenario-write:${id}`, () => updateScenarioNow(id, body));
+
+const updateScenarioNow = async (id, body = {}) => {
   const record = await getScenario(id);
   if (!record) throw new Error(`Scenario not found: ${id}`);
   // A write that only records hub bookkeeping is not an edit: no updatedAt, and
@@ -1515,14 +1525,24 @@ const importScenarioBundle = async (bundle) => {
 // content with a fresh bundle, keeping the local id (games reference scenarios
 // by id) and createdAt. Every uploadable asset the new bundle doesn't carry is
 // cleared so a dropped basemap or cover doesn't linger; the new hubOrigin is
-// stamped last (server twin: updateScenarioFromBundle).
-const updateScenarioFromBundle = async (scenarioId, bundle) => {
+// stamped last. It renews the link the scenario has and never makes one: a
+// scenario that is not a copy of the bundle's post is refused before anything
+// is written (server twin: updateScenarioFromBundle).
+//
+// It takes the scenario's turn for all of its writes (see updateScenario): an
+// Unlink pressed while a post's file is being put in place waits for it, or
+// came first and has the Update refused, as on the desktop, where each is one
+// request. Hence updateScenarioNow inside, which does not ask for the turn.
+const updateScenarioFromBundle = (scenarioId, bundle) =>
+  serializeByKey(`scenario-write:${scenarioId}`, () => updateScenarioFromBundleNow(scenarioId, bundle));
+
+const updateScenarioFromBundleNow = async (scenarioId, bundle) => {
   if (!bundle || typeof bundle !== "object" || !isScenarioBundleSchema(bundle.schema)) throw new Error("Unsupported scenario bundle.");
   const existing = await getScenario(scenarioId);
   if (!existing) throw new Error(`Scenario not found: ${scenarioId}`);
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data ?? {};
-  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
+  const hubOrigin = hubOriginForUpdate(readScenarioMeta(scenarioId, existing.meta ?? {}).hubOrigin, bundle.hubOrigin);
 
   const metaPatch = {};
   for (const key of ["accentColor", "name", "subtitle", "description", "eyebrow", "heroTitle", "heroSubtitle"]) {
@@ -1547,7 +1567,7 @@ const updateScenarioFromBundle = async (scenarioId, bundle) => {
   writeScenarioMeta(existing, metaPatch);
   await putScenario(existing);
 
-  await updateScenario(scenarioId, {
+  await updateScenarioNow(scenarioId, {
     game: data.game ?? {}, prompts: data.prompts ?? {}, world,
     storage: { actions: data.actions ?? [], advisor: data.advisor ?? [], chat: data.chat ?? [], events: data.events ?? [] },
   });
