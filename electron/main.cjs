@@ -86,9 +86,12 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
   : path.join(USER_ROOT, "public", "assets");
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
-// "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
-// every file exactly where DATA_DIR and ASSETS_DIR already expect it — no
-// changes to the fetcher, and one place that decides the layout.
+// "server/data/stock/..."). The server reads them from these two folders, and
+// the fetcher inherits both variables and writes "public/assets/..." into
+// ASSETS_DIR and "server/data/..." into DATA_DIR (assetTarget() below is the
+// same rule, for the setup check). Resolving them against USER_ROOT instead
+// sent a packaged beta's download into its own folder while its server read
+// the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
 
@@ -306,6 +309,16 @@ let setupWindow = null;
 
 // --- map data ---------------------------------------------------------------
 
+// Where a manifest path lives on disk: the rule scripts/fetch-map-assets.mjs
+// applies with the OH_ASSETS_DIR / OH_DATA_DIR set above, so the setup check
+// looks where the download writes and the server reads.
+const assetTarget = (assetPath) => {
+  const rel = String(assetPath).replace(/\\/g, "/");
+  if (rel.startsWith("public/assets/")) return path.join(ASSETS_DIR, rel.slice("public/assets/".length));
+  if (rel.startsWith("server/data/")) return path.join(DATA_DIR, rel.slice("server/data/".length));
+  return path.join(USER_ROOT, rel);
+};
+
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
 // second launch goes straight into the game.
@@ -326,7 +339,7 @@ const relocateLegacyStockMap = () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
     const stock = (manifest.assets ?? []).find((asset) => asset.path === "server/data/stock/regions.geojson");
     if (!stock) return;
-    const target = path.join(USER_ROOT, stock.path);
+    const target = assetTarget(stock.path);
     const legacy = path.join(USER_ROOT, "server", "data", "scenarios", "default", "regions.geojson");
     if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
     // A file of another size is a map the player put there, not ours to move.
@@ -347,7 +360,7 @@ const missingAssets = () => {
   }
   return (manifest.assets ?? []).filter((asset) => {
     try {
-      return fs.statSync(path.join(USER_ROOT, asset.path)).size !== asset.bytes;
+      return fs.statSync(assetTarget(asset.path)).size !== asset.bytes;
     } catch {
       return true;
     }
