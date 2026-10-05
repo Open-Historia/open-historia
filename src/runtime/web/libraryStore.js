@@ -1932,7 +1932,10 @@ const loadDefaultSeed = () => (_defaultSeedPromise ??= import("./generated/defau
 const defaultScenarioSeedRecord = async () => {
   const DEFAULT_SEED = await loadDefaultSeed();
   const record = emptyScenarioRecord(DEFAULT_SCENARIO_ID);
-  record.meta = { ...DEFAULT_SCENARIO_META, ...(DEFAULT_SEED.meta ?? {}), countryNameOverrides: {}, createdAt: nowIso(), updatedAt: nowIso() };
+  // One clock read for both stamps: equal stamps are how an untouched built-in
+  // is told from one the player edited (builtInWasEdited).
+  const now = nowIso();
+  record.meta = { ...DEFAULT_SCENARIO_META, ...(DEFAULT_SEED.meta ?? {}), countryNameOverrides: {}, createdAt: now, updatedAt: now };
   record.json = {
     actions: cloneJson(DEFAULT_SEED.data?.actions ?? []), advisor: cloneJson(DEFAULT_SEED.data?.advisor ?? []),
     chat: cloneJson(DEFAULT_SEED.data?.chat ?? []), events: cloneJson(DEFAULT_SEED.data?.events ?? []),
@@ -1959,6 +1962,17 @@ const builtInRevisionOf = (world) => {
   return Number.isInteger(value) && value > 0 ? value : 1;
 };
 
+// Whether the player edited the built-in scenario: a meta write of theirs moves
+// updatedAt (writeScenarioMeta). The seed used to take its two stamps from two
+// clock reads, so an untouched built-in can carry stamps a few milliseconds
+// apart, and nobody edits a scenario within a second of the boot that made it.
+const SEED_STAMP_SLACK_MS = 1000;
+const builtInWasEdited = (meta) => {
+  if (meta?.updatedAt === meta?.createdAt) return false;
+  const gap = Date.parse(meta?.updatedAt) - Date.parse(meta?.createdAt);
+  return !(gap >= 0 && gap <= SEED_STAMP_SLACK_MS);
+};
+
 // The seed carries newer content on the same map (its countries renamed, say).
 // Mirrors the server's refreshBuiltInContent: every campaign keeps its own world,
 // colours, flags and tags and reads only the geometry from the built-in, which a
@@ -1975,7 +1989,7 @@ const gameIdsOnScenario = async (scenarioId) =>
 
 const refreshBuiltInContent = async (current) => {
   const gameIds = await gameIdsOnScenario(DEFAULT_SCENARIO_ID);
-  if (current.meta?.updatedAt !== current.meta?.createdAt) {
+  if (builtInWasEdited(current.meta)) {
     const forkId = await ensureUniqueId("modern-day-edited", "scenario");
     const name = current.meta?.name || DEFAULT_SCENARIO_META.name;
     const now = nowIso();
@@ -2028,7 +2042,7 @@ const syncBuiltInScenarioFromSeed = async () => {
   }
 
   const gameIds = await gameIdsOnScenario(DEFAULT_SCENARIO_ID);
-  const touched = current.meta?.updatedAt !== current.meta?.createdAt;
+  const touched = builtInWasEdited(current.meta);
   if (gameIds.length || touched) {
     const forkId = await ensureUniqueId("modern-day-classic", "scenario");
     const name = current.meta?.name || DEFAULT_SCENARIO_META.name;

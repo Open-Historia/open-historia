@@ -348,6 +348,40 @@ test("a revision of the built-in scenario reaches its games one at a time", asyn
   assert.equal(db.get("scenarios").get("default").json.world.builtInRevision, 2);
 });
 
+test("the built-in scenario is seeded with one stamp, and one seeded with two is still untouched", async () => {
+  await reset();
+  const seeded = db.get("scenarios").get("default");
+  assert.equal(seeded.meta.updatedAt, seeded.meta.createdAt);
+
+  // An install seeded by a build that read the clock twice, a moment apart.
+  const id = await newGame("On an older seed");
+  const stored = db.get("scenarios").get("default");
+  stored.meta = { ...stored.meta, updatedAt: new Date(Date.parse(stored.meta.createdAt) + 2).toISOString() };
+  stored.json.world = { ...stored.json.world, builtInRevision: 1 };
+  stored.flags = { Testland: "seed.png" };
+  delete db.get("games").get(id).flags;
+
+  await store.ensureSeeded();
+  assert.deepEqual([...db.get("scenarios").keys()], ["default"], "no edited copy is made of a built-in nobody edited");
+  assert.deepEqual(db.get("games").get(id).flags, { Testland: "seed.png" });
+  assert.equal(db.get("scenarios").get("default").json.world.builtInRevision, 2);
+});
+
+test("a built-in scenario the player edited is kept as their copy when a revision arrives", async () => {
+  await reset();
+  const id = await newGame("On my edits");
+  const stored = db.get("scenarios").get("default");
+  stored.meta = { ...stored.meta, name: "My Modern Day", updatedAt: new Date(Date.parse(stored.meta.createdAt) + 60 * 1000).toISOString() };
+  stored.json.world = { ...stored.json.world, builtInRevision: 1 };
+
+  await store.ensureSeeded();
+  const copy = [...db.get("scenarios").keys()].find((key) => key !== "default");
+  assert.ok(copy, "the edited built-in is kept beside the new one");
+  assert.equal(db.get("scenarios").get(copy).meta.name, "My Modern Day (your edited copy)");
+  assert.equal(db.get("games").get(id).meta.scenarioId, copy, "its campaign moves to the copy");
+  assert.equal(db.get("scenarios").get("default").json.world.builtInRevision, 2);
+});
+
 test("archiving a game shelves it and hands the active slot to the last one played", async () => {
   await reset();
   const older = await newGame("Older");
