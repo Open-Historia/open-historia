@@ -11,7 +11,7 @@
 // diplomatic facts; any one AI request sees only the relevant slice.
 
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
-import { MAX_PUPPETS, PUPPET_KINDS } from "../../runtime/puppets.js";
+import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
@@ -160,6 +160,9 @@ const normalizeRelationStatus = (_value, score = 0) => {
   if (numeric > -90) return "hostile";
   return "rival";
 };
+// The band a relation's score puts it in, for readers outside the director
+// (targetDossier.js).
+export const relationStatusForScore = (score) => normalizeRelationStatus("", score);
 
 // Band order and midpoints, for comparing a DECLARED status against the band
 // the score implies.
@@ -324,7 +327,7 @@ const decodeRelationLine = (line, index) => {
   };
 };
 
-export const decodeRelationUpdates = (value) => {
+export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodeRelationLine(entry, index);
@@ -342,13 +345,13 @@ export const decodeRelationUpdates = (value) => {
         eventIds: unique(entry.eventIds, 24),
         summary: clean(entry.summary),
       };
-    }).filter(Boolean).slice(0, MAX_RELATION_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodeRelationLine(line, index))
     .filter((entry) => entry.a || entry.b || entry.summary)
-    .slice(0, MAX_RELATION_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
 const decodeAgreementLine = (line, index) => {
@@ -374,7 +377,7 @@ const decodeAgreementLine = (line, index) => {
   };
 };
 
-export const decodeAgreementUpdates = (value) => {
+export const decodeAgreementUpdates = (value, { limit = MAX_AGREEMENT_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodeAgreementLine(entry, index);
@@ -389,13 +392,13 @@ export const decodeAgreementUpdates = (value) => {
         title: clean(entry.title),
         terms: clean(entry.terms),
       };
-    }).filter(Boolean).slice(0, MAX_AGREEMENT_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodeAgreementLine(line, index))
     .filter((entry) => entry.id && entry.op)
-    .slice(0, MAX_AGREEMENT_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
 const bindEventIds = (updates, events) => {
@@ -415,11 +418,11 @@ const bindEventIds = (updates, events) => {
   });
 };
 
-export const bindRelationUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodeRelationUpdates(updates), events);
+export const bindRelationUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodeRelationUpdates(updates, { limit }), events);
 
-export const bindAgreementUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodeAgreementUpdates(updates), events);
+export const bindAgreementUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodeAgreementUpdates(updates, { limit }), events);
 
 const linkedEvents = (update, events) => {
   const byId = new Map(normalizeEvents(events).map((event) => [clean(event.id), event]));
@@ -952,13 +955,14 @@ const LIFECYCLE_OPS_BY_STATUS = {
 // `start` in the same response creates is not unknown to the model and is left
 // for validation as before; it must never be re-aimed at an older instrument.
 const normalizeUnknownAgreementLifecycle = (candidate, world) => {
-  if (!candidate || typeof candidate !== "object") return { rewritten: 0, dropped: 0 };
+  if (!candidate || typeof candidate !== "object") return { rewritten: 0, dropped: 0, droppedUpdates: [] };
 
   const wasString = typeof candidate?.agreementUpdates === "string";
   const updates = decodeAgreementUpdates(candidate?.agreementUpdates);
   const existing = agreementMapFromWorld(world);
   const startedHere = new Set(updates.filter((update) => update.op === "start").map((update) => clean(update.id)));
   const output = [];
+  const droppedUpdates = [];
   let rewritten = 0;
   let dropped = 0;
 
@@ -995,6 +999,7 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
     }
 
     dropped += 1;
+    droppedUpdates.push(update);
     console.warn(
       `[OH diplomacy lifecycle repair] dropped ${update.op} for unknown agreement ${id}: ` +
       (matches.length > 1
@@ -1005,7 +1010,7 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
   }
 
   candidate.agreementUpdates = wasString ? encodeAgreementUpdates(output) : output;
-  return { rewritten, dropped };
+  return { rewritten, dropped, droppedUpdates };
 };
 
 // A malformed ledger row on the SALVAGE pass: dropped, and said, instead of
@@ -1042,6 +1047,24 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
   }
   if (keptRelations.length !== relations.length) {
     candidate.relationUpdates = relationsWereString ? encodeRelationUpdates(keptRelations) : keptRelations;
+  }
+
+  // The validator's lifecycle repairs first, exactly as on the strict pass: a
+  // start re-signing a suspended pact becomes resume, one restating an active
+  // pact with new terms becomes update, and an end aimed at an invented id is
+  // re-aimed at the one recorded pact it fits. Salvage runs before the
+  // validator, so dropping these rows first threw the repairs' work away: the
+  // pact the story ended stayed active. Only what they cannot place goes below.
+  // They work on a copy, adopted only when they changed something, so a clean
+  // answer is left exactly as it arrived.
+  const lifecycle = { agreementUpdates: candidate.agreementUpdates };
+  const duplicateStarts = normalizeDuplicateAgreementStarts(lifecycle, world);
+  const unknownIds = normalizeUnknownAgreementLifecycle(lifecycle, world);
+  if (duplicateStarts.repaired || duplicateStarts.dropped || unknownIds.rewritten || unknownIds.dropped) {
+    candidate.agreementUpdates = lifecycle.agreementUpdates;
+  }
+  for (const update of unknownIds.droppedUpdates) {
+    notes.push(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`);
   }
 
   const agreementsWereString = typeof candidate.agreementUpdates === "string";
@@ -1196,10 +1219,10 @@ export const validateDiplomaticLedgerPayload = (
   return "";
 };
 
-export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false } = {}) => {
+export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = relationMapFromWorld(nextWorld);
-  const decoded = bindRelationUpdatesToEvents(updates, events);
+  const decoded = bindRelationUpdatesToEvents(updates, events, { limit });
   const applied = [];
 
   for (const update of decoded) {
@@ -1251,10 +1274,10 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
   return { world: { ...nextWorld, relations }, relations, appliedIds: applied };
 };
 
-export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false } = {}) => {
+export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = agreementMapFromWorld(nextWorld);
-  const decoded = bindAgreementUpdatesToEvents(updates, events);
+  const decoded = bindAgreementUpdatesToEvents(updates, events, { limit });
   const applied = [];
 
   for (const update of decoded) {
@@ -1409,8 +1432,8 @@ const SUPPRESSED_COUP_LOYALTY_GAIN = 25;
 
 // Below this, resentment is a situation rather than a mood, and the world
 // director is given something to ripen. Not a trigger: the Storyline decides
-// WHEN, and may decide never.
-const COUP_STORYLINE_LOYALTY = 35;
+// WHEN, and may decide never. Shared with the Workshop (runtime/puppets.js).
+const COUP_STORYLINE_LOYALTY = PUPPET_COUP_LOYALTY;
 
 // Swallowing a client costs standing, and costs more the more openly it was a
 // client — the world watched a country disappear. Deterministic rather than left
@@ -1439,7 +1462,7 @@ const decodePuppetLine = (line, index) => {
   };
 };
 
-export const decodePuppetUpdates = (value) => {
+export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodePuppetLine(entry, index);
@@ -1457,17 +1480,17 @@ export const decodePuppetUpdates = (value) => {
         eventIds: unique(entry.eventIds, 24),
         note: clean(entry.note),
       };
-    }).filter(Boolean).slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodePuppetLine(line, index))
     .filter((entry) => entry.op || entry.overlord || entry.puppet)
-    .slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
-export const bindPuppetUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodePuppetUpdates(updates), events);
+export const bindPuppetUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodePuppetUpdates(updates, { limit }), events);
 
 const livePuppetRow = (rows, overlord, puppet) => rows.find((row) =>
   row.status === "active" && lower(row.overlord) === lower(overlord) && lower(row.puppet) === lower(puppet));
@@ -1550,11 +1573,12 @@ export const applyPuppetUpdates = ({
   allowUnboundBaseline = false,
   refusedDemands = [],
   regionCatalog = [],
+  limit,
 } = {}) => {
   let nextWorld = normalizeWorldState(world);
   const holdsLand = landedPolityCheck(nextWorld, regionCatalog);
   let rows = array(nextWorld.puppets).map((row) => ({ ...row }));
-  const decoded = bindPuppetUpdatesToEvents(updates, events);
+  const decoded = bindPuppetUpdatesToEvents(updates, events, { limit });
   const applied = [];
   const settledStorylines = new Set();
   // What was NOT applied, and why. A skip can shrug a bad line off, but the GM
@@ -1872,6 +1896,10 @@ export const applyDiplomaticUpdates = ({
   // runtime/gameFeatures.js so this module stays testable without the browser
   // runtime, exactly as the rest of the director is.
   puppetStates = true,
+  // How many records of each kind to read. A single model answer is held to
+  // the per-answer caps (the default); a merged turn passes Infinity, since
+  // every segment's answer was already held to them.
+  limit,
 } = {}) => {
   const relationMerge = applyRelationUpdates({
     world,
@@ -1880,6 +1908,7 @@ export const applyDiplomaticUpdates = ({
     stopDate,
     round,
     allowUnboundBaseline,
+    limit,
   });
   const agreementMerge = applyAgreementUpdates({
     world: relationMerge.world,
@@ -1888,6 +1917,7 @@ export const applyDiplomaticUpdates = ({
     stopDate,
     round,
     allowUnboundBaseline,
+    limit,
   });
   // Puppets merge LAST, so a revolt's fallout lands on the relation and the
   // agreements this same pass has already written rather than under them.
@@ -1907,6 +1937,7 @@ export const applyDiplomaticUpdates = ({
         stopDate,
         round,
         allowUnboundBaseline,
+        limit,
       })
     : {
         world: agreementMerge.world,
@@ -2057,17 +2088,21 @@ export const buildBoundedDiplomaticContext = (
     })
     .slice(0, MAX_CONTEXT_AGREEMENTS);
 
-  // Subordinations among the attention actors, as the TRUTH — loyalty, secrecy
-  // and who else has found out. This context reaches the jump, the idle
+  // Every standing subordination up to MAX_CONTEXT_PUPPETS, the attention
+  // actors' first, as the TRUTH — loyalty, secrecy and who else has found out.
+  // Not only the attention actors': a covert Puppet left out of the slice is a
+  // country the simulator narrates as independent. This context reaches the
+  // jump, the idle
   // diplomacy pass and next-speaker, all of which reason about the whole world.
   // It does NOT reach a leader or a group turn, and must not: a leader speaks as
   // one country and is briefed on what that country knows instead
   // (runtime/puppets.js puppetBriefingFor). An earlier comment here said the chat
   // task read this block; it never did, and believing so hid that a covert
   // Puppet in conversation did not know it was one.
+  const inAttention = (row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet));
   const puppets = (puppetStates ? array(world.puppets) : [])
     .filter((row) => row.status === "active")
-    .filter((row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet)))
+    .sort((a, b) => Number(inAttention(b)) - Number(inAttention(a)))
     .slice(0, MAX_CONTEXT_PUPPETS);
 
   const text = [

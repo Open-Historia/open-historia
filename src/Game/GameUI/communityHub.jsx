@@ -15,6 +15,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import {
   exportScenarioBundle,
   importScenarioBundle,
+  saveScenario,
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
@@ -23,23 +24,28 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
-  embedScenarioBundleImage,
-  embedScenarioBundleVector,
-  resolveScenarioBundleBackground,
   splitScenarioBundleImage,
+  unresolvedBundleBackground,
 } from "../../runtime/communityBasemaps.js";
-import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
-import { unzipBundle, zipBundle } from "../../runtime/bundleZip.js";
+import { splitBundleFiles } from "../../runtime/bundleFiles.js";
+import { zipBundle } from "../../runtime/bundleZip.js";
 import { sha256Hex } from "../../runtime/basemapLibrary.js";
 import { listFlags } from "../../runtime/flagLibrary.js";
+import {
+  HUB_NEW_POST_URL,
+  HUB_URL,
+  SCENARIO_KEY_LINE,
+  downloadHubBundle,
+  fetchHubPosts,
+  hubCopiesByPostId,
+  hubCopyStatus,
+} from "../../runtime/hubPosts.js";
+import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
 
-// The one and only hub. Not configurable by design.
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_ISSUES = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
-const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Reading the hub (the post list, a post's bundle, a post's comments) lives in
+// src/runtime/hubPosts.js, so the library can use it without this tab. The
+// two functions other modules have always imported from here stay exported.
+export { downloadHubBundle, fetchHubPosts };
 
 // How many of a scenario's custom flags are the author's OWN — i.e. worth
 // advertising to the hub. A flag installed from the Community tab is already
@@ -69,160 +75,6 @@ const countPublishableFlags = async (flagsData) => {
   const hashes = await Promise.all(values.map((value) => sha256Hex(value).catch(() => null)));
   return hashes.filter((hash) => !hash || !communityHashes.has(hash)).length;
 };
-
-// First GitHub-hosted .json (release asset, attachment or raw) link in an issue
-// body = the bundle. Release links come first in official posts so imports go
-// through the download-counted URL; the raw mirror below it serves old clients.
-const BUNDLE_LINK_PATTERN =
-  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
-
-// First image in the issue body — markdown ![alt](url) or GitHub's own
-// <img src="..."> attachment markup (issue bodies mix both depending on how
-// the image was pasted). Used as the card/detail-view cover; posts with no
-// image simply get coverImageUrl: null (existing text-only card, no error).
-const COVER_IMAGE_PATTERN =
-  /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
-
-let hubCache = { at: 0, posts: null };
-
-
-// Self-hosted import counts (keyed by hub issue number), read back through the
-// server proxy from our own counter Worker. Unlike GitHub's release download
-// counts, this covers EVERY scenario — including attachment posts — and is
-// deduped per person. Empty object if the counter isn't configured/reachable.
-const fetchImportCounts = async () => {
-  try {
-    const response = await fetch("/api/hub/import-counts");
-    if (!response.ok) return {};
-    const data = await response.json();
-    return data && typeof data === "object" ? data : {};
-  } catch {
-    return {};
-  }
-};
-
-// Official = posted by someone with real access to the hub repo, as reported
-// by GitHub itself (author_association). Titles and body text can't fake this.
-const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-const parsePost = (issue, importsById) => {
-  const body = String(issue.body ?? "");
-  const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
-  // The issue-form body is a series of "### <label>\n<value>" sections. Show only
-  // the author's Description prose: strip the attached-file link and never surface
-  // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
-  // metadata, not copy. Falls back to the whole body for old, non-form posts.
-  const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
-  const description = (descSection ? descSection[1] : body)
-    .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
-    .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
-    .replace(/^Flags-Count:.*$/gim, "")             // flag-pack tag (see communityFlags.js)
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")            // images
-    .replace(/<img[^>]*>/gi, "")
-    .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
-    .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
-    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
-    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
-    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
-    .replace(/\s+/g, " ")
-    .trim();
-  const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
-  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
-  // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
-  // It is deduped per person (an account, or an IP hash) and covers every scenario —
-  // release assets and attachment posts alike. We deliberately do NOT fall back to
-  // GitHub's release download count: that counts every file download, including
-  // repeat downloads by the same person and non-import curiosity clicks, so it both
-  // over-counts and disagrees between posts. One accurate source for all.
-  const installs = importsById?.[String(issue.number)]?.count ?? null;
-  return {
-    id: issue.number,
-    title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
-    author: issue.user?.login ?? "unknown",
-    avatarUrl: issue.user?.avatar_url ?? null,
-    url: issue.html_url,
-    createdAt: issue.created_at,
-    // The "pinned" label can only be applied by hub collaborators: GitHub
-    // silently drops labels set by anyone without push access (API, issue
-    // forms and URL params alike), so authors can't pin their own posts.
-    pinned: (issue.labels ?? []).some((label) => (label.name ?? label) === "pinned"),
-    // Verified against GitHub's author_association — only posts actually made
-    // by the hub owner or a repo collaborator count. Writing "official" in a
-    // title does nothing.
-    official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
-    upvotes: issue.reactions?.["+1"] ?? 0,
-    comments: issue.comments ?? 0,
-    description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
-    bundleUrl,
-    installs,
-    coverImageUrl,
-  };
-};
-
-// Exported so the translator can pre-translate the Community tab's posts.
-export const fetchHubPosts = async ({ force = false } = {}) => {
-  if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
-    return hubCache.posts;
-  }
-  const [response, importsById] = await Promise.all([
-    fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
-    fetchImportCounts(),
-  ]);
-  if (!response.ok) {
-    throw new Error(
-      response.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the Scenario Hub (HTTP ${response.status}).`,
-    );
-  }
-  const issues = await response.json();
-  const posts = (Array.isArray(issues) ? issues : [])
-    .filter((issue) => !issue.pull_request)
-    .map((issue) => parsePost(issue, importsById))
-    // The parser already decides whether a post has an importable scenario
-    // bundle. Do not surface malformed or misfiled "scenario" issues whose
-    // Import button would otherwise be disabled.
-    .filter((post) => Boolean(post.bundleUrl));
-  hubCache = { at: Date.now(), posts };
-  return posts;
-};
-
-// Download + assemble a hub post's scenario bundle, ready for import: fetches
-// through the server's allowlisted /api/hub/file proxy, unpacks a .zip (re-
-// embedding the basemap that rides alongside scenario.json), and inlines a
-// referenced community basemap. Shared by the Community tab's Import button and
-// the Scenarios tab's Update button (which lazy-loads this module).
-export const downloadHubBundle = async (bundleUrl) => {
-  const response = await fetch(`/api/hub/file?url=${encodeURIComponent(bundleUrl)}`);
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
-  }
-  // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-  // basemap file + preview); everything else is a plain JSON bundle. The basemap
-  // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
-  let bundle;
-  if (/\.zip(\?|$)/i.test(bundleUrl)) {
-    const zip = await unzipBundle(await response.arrayBuffer());
-    const scenarioText = await zip.text("scenario.json");
-    if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-    bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-    const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-    } else {
-      const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-      if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-    }
-  } else {
-    bundle = await response.json();
-  }
-  // A shared scenario may reference a community basemap instead of embedding
-  // it — fetch and inline it before importing so the map isn't blank.
-  await resolveScenarioBundleBackground(bundle);
-  return bundle;
-};
-
 
 // Never wider than the phone it is on: at 320 px a 19rem card pushed the
 // search results sideways off the screen.
@@ -322,7 +174,43 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
   </div>
 );
 
-const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile }) => (
+// What the library already holds of a post (hubCopyStatus), as a small pill.
+const LIBRARY_BADGES = {
+  current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
+  update: { label: "Update available", title: "Your copy is older than this post. Update it from the Scenarios tab." },
+  edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
+};
+
+const LibraryBadge = ({ status }) => {
+  const badge = LIBRARY_BADGES[status];
+  if (!badge) return null;
+  const update = status === "update";
+  return (
+    <span
+      title={badge.title}
+      style={{
+        alignSelf: "flex-start",
+        background: update ? "rgba(39,166,99,0.16)" : "rgba(255,255,255,0.08)",
+        border: `1px solid ${update ? "rgba(39,166,99,0.45)" : "rgba(255,255,255,0.18)"}`,
+        borderRadius: "999px",
+        color: update ? "#bbf7d0" : "#e4e4e7",
+        fontSize: "0.68rem",
+        fontWeight: 700,
+        padding: "0.12rem 0.5rem",
+      }}
+    >
+      {badge.label}
+    </span>
+  );
+};
+
+// The Import button's words. A post the library already holds asks first:
+// "Import again", then "Import a second copy" (armed) — another copy is a
+// second scenario with its own map files, which is rarely what was meant.
+const importLabel = (busy, status, armed) =>
+  busy ? "Importing…" : !status ? "Import" : armed ? "Import a second copy" : "Import again";
+
+const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status, armed }) => (
   <div
     style={{ ...cardSurface, cursor: "pointer" }}
     onClick={() => onSelect(post)}
@@ -359,6 +247,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile }) => (
         </div>
       </div>
     </div>
+    <LibraryBadge status={status} />
     <div style={{ color: "rgba(244,244,246,0.72)", flex: 1, fontSize: "0.8rem", lineHeight: 1.5 }}>
       {post.description || "No description."}
     </div>
@@ -387,7 +276,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile }) => (
         className="oh-tap-row"
         disabled={!post.bundleUrl || busy}
         onClick={(event) => { event.stopPropagation(); onImport(post); }}
-        title={post.bundleUrl ? "Import into your Scenarios" : "This post has no scenario file attached"}
+        title={!post.bundleUrl ? "This post has no scenario file attached" : !status ? "Import into your Scenarios" : armed ? "Click again to import another copy" : "This scenario is already in your library"}
         style={touchFit({
           ...pillButton,
           minHeight: "1.8rem",
@@ -397,13 +286,13 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile }) => (
           cursor: post.bundleUrl && !busy ? "pointer" : "default",
         }, touch)}
       >
-        {busy ? "Importing…" : "Import"}
+        {importLabel(busy, status, armed)}
       </button>
     </div>
   </div>
 );
 
-const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile }) => (
+const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile, libraryOf, armedId }) => (
   <div style={{ marginBottom: "1.15rem" }}>
     <div style={rowTitleStyle}>{title}</div>
     {posts.length === 0 ? (
@@ -413,13 +302,13 @@ const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layo
     ) : layout === "grid" ? (
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", paddingBottom: "0.35rem" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} />
         ))}
       </div>
     ) : (
       <div style={{ display: "flex", gap: "0.8rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} />
         ))}
       </div>
     )}
@@ -445,7 +334,9 @@ const StatusBanner = ({ notice, error }) => (
   </>
 );
 
-const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) => (
+// With a copy already in the library the page plays that copy, and importing
+// another is the two-step side button; otherwise it imports, then plays.
+const ScenarioDetail = ({ post, busy, onImport, onPlay, onBack, notice, error, touch, library, armed }) => (
   <div style={{ color: "#fff" }}>
     <button
       type="button"
@@ -471,6 +362,11 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
     <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.8rem", marginBottom: "0.9rem" }}>
       by {post.author} · {new Date(post.createdAt).toLocaleDateString()}
     </div>
+    {library.status && (
+      <div style={{ marginBottom: "0.9rem" }}>
+        <LibraryBadge status={library.status} />
+      </div>
+    )}
 
     <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.1rem", marginBottom: "0.55rem" }}>
       {post.installs != null && <span style={detailStat}>⬇ {post.installs} imported</span>}
@@ -481,33 +377,72 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
       Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>
 
-    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
-      {post.description || "No description."}
+    {/* The whole description, in the author's own lines (hubPosts.js);
+        the card shows the one-line cut. */}
+    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem", overflowWrap: "anywhere", whiteSpace: "pre-line" }}>
+      {post.fullDescription || post.description || "No description."}
     </p>
 
     {/* Wraps on a phone, where the two side by side are wider than the screen. */}
     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
-      <button
-        type="button"
-        className="oh-tap-row"
-        disabled={!post.bundleUrl || busy}
-        onClick={() => onImport(post)}
-        style={{
-          alignItems: "center",
-          background: post.bundleUrl ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.08)",
-          border: "none",
-          borderRadius: "10px",
-          color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
-          cursor: post.bundleUrl && !busy ? "pointer" : "default",
-          display: "flex",
-          fontSize: "1rem",
-          fontWeight: 700,
-          justifyContent: "center",
-          padding: "0.8rem 1.6rem",
-        }}
-      >
-        {busy ? "Importing…" : "▶ Import & Play"}
-      </button>
+      {library.copy && onPlay ? (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={busy}
+          onClick={() => onPlay(library.copy)}
+          title={`Start a new game from “${library.copy.name}” in your Scenarios tab`}
+          style={{
+            alignItems: "center",
+            background: "rgba(255,255,255,0.1)",
+            border: "none",
+            borderRadius: "10px",
+            color: "#fff",
+            cursor: busy ? "default" : "pointer",
+            display: "flex",
+            fontSize: "1rem",
+            fontWeight: 700,
+            justifyContent: "center",
+            padding: "0.8rem 1.6rem",
+          }}
+        >
+          ▶ Play your copy
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={!post.bundleUrl || busy}
+          onClick={() => onImport(post, { play: true })}
+          style={{
+            alignItems: "center",
+            background: post.bundleUrl ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.08)",
+            border: "none",
+            borderRadius: "10px",
+            color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
+            cursor: post.bundleUrl && !busy ? "pointer" : "default",
+            display: "flex",
+            fontSize: "1rem",
+            fontWeight: 700,
+            justifyContent: "center",
+            padding: "0.8rem 1.6rem",
+          }}
+        >
+          {busy ? "Importing…" : "▶ Import & Play"}
+        </button>
+      )}
+      {library.copy && onPlay && (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={!post.bundleUrl || busy}
+          onClick={() => onImport(post)}
+          title={armed ? "Click again to import another copy" : "This scenario is already in your library"}
+          style={touchFit({ ...pillButton, cursor: post.bundleUrl && !busy ? "pointer" : "default" }, touch)}
+        >
+          {importLabel(busy, library.status, armed)}
+        </button>
+      )}
       <a href={post.url} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, textDecoration: "none" }, touch)}>
         👍 Like / 💬 Comment ↗
       </a>
@@ -515,7 +450,10 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
   </div>
 );
 
-const CommunityPanel = ({ fullPage = false, onImported }) => {
+// onPlay(scenario) opens the library's country picker for a scenario already
+// in the library: "Import & Play" imports and then plays, and a post the
+// library holds plays that copy.
+const CommunityPanel = ({ fullPage = false, onPlay }) => {
   const { scenarios } = useLibraryState();
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -525,6 +463,12 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [notice, setNotice] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
+  // The post whose Import button was clicked once while the library already
+  // held a copy: the second click imports another (importLabel).
+  const [armedId, setArmedId] = useState(null);
+  // The prefilled hub post a publish made, kept as a link: the export takes long
+  // enough that a browser may block the page it tries to open by itself.
+  const [publishPostUrl, setPublishPostUrl] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
   // description. No extra network calls; the hub API is only ever hit by load().
   const [searchQuery, setSearchQuery] = useState("");
@@ -542,7 +486,15 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const clearBanners = () => {
     setNotice(null);
     setError(null);
+    setArmedId(null);
+    setPublishPostUrl(null);
   };
+
+  // What the library already holds of each post: every import is stamped with
+  // hubOrigin.postId, so a card can say "In your library" or "Update
+  // available" (runtime/hubPosts.js, shared with the Scenarios tab).
+  const copiesByPost = useMemo(() => hubCopiesByPostId(scenarios), [scenarios]);
+  const libraryOf = (post) => hubCopyStatus(copiesByPost.get(Number(post?.id)), post);
 
   // A notice/error from one post (e.g. "Imported X") must not leak into a
   // different post's detail view when the selection changes.
@@ -633,17 +585,22 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     return { pinned, byInstalls, byLikes, byRecent };
   }, [filteredPosts]);
 
-  const handleImport = async (post) => {
+  const handleImport = async (post, { play = false } = {}) => {
     if (!post.bundleUrl || busyId) return;
+    if (libraryOf(post).status && armedId !== post.id) {
+      setArmedId(post.id);
+      return;
+    }
     setBusyId(post.id);
     clearBanners();
     try {
       const bundle = await downloadHubBundle(post.bundleUrl);
       // Provenance: which post and which exact bundle file this copy came from.
       // The library's Scenarios tab compares this against the post's CURRENT
-      // bundle URL to offer an Update button — and drops it the moment the
-      // scenario is modified locally (see writeScenarioMeta).
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
+      // bundle URL to offer an Update button while the copy is unedited; once
+      // the player edits it the link stays, marked edited, so they can suggest
+      // their changes back to the post (server/hubProvenance.js).
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       const details = await importScenarioBundle(bundle);
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
@@ -662,8 +619,14 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
             `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
+        const missingBasemap = unresolvedBundleBackground(bundle);
+        if (missingBasemap) {
+          setError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+        }
       }
-      onImported?.(details);
+      // "Import & Play" goes on to the country picker, which opens over the
+      // menu — unless the player has already moved on to another post.
+      if (play && details?.scenario && selectedPostRef.current?.id === post.id) onPlay?.(details.scenario);
     } catch (nextError) {
       const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
       if (stillRelevant) {
@@ -678,7 +641,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   // where the author drags the downloaded bundle into the description.
   const handlePublish = async (scenario) => {
     setPublishPickerOpen(false);
-    setError(null);
+    clearBanners();
     try {
       const bundle = await exportScenarioBundle(scenario.id);
       // If this scenario's custom basemap is already on the community hub,
@@ -741,17 +704,38 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // installable flag pack without downloading every bundle first. Harmless if
       // the scenario form has no such field — GitHub ignores unknown prefills.
       const customFlagCount = await countPublishableFlags(bundle.assets?.flags?.data);
+      // The scenario's publish key, written into the post: finding it there is
+      // how this install later learns which post is its player's own, and so
+      // which posts' comments to read for suggested changes. The same key for
+      // every post made of this scenario; the scenario keeps it.
+      const publishKey = scenario.hubPublished?.key || newPublishKey();
       const technicalLines = [
         ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),
         ...(customFlagCount > 0 ? [`Flags-Count: ${customFlagCount}`] : []),
+        `${SCENARIO_KEY_LINE}: ${publishKey}`,
       ];
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
-        (technicalLines.length ? `&technical=${encodeURIComponent(technicalLines.join("\n"))}` : "");
+        `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
+      // A browser lets a click open a window only for a moment, and the export
+      // above can outlast it (web, Android), so the page may be blocked, and
+      // with noopener window.open says nothing either way. Try anyway (the
+      // desktop app always opens it), and keep the post as a link the player
+      // can click (publishPostUrl).
       window.open(scenarioUrl, "_blank", "noopener");
+      setPublishPostUrl(scenarioUrl);
+      // After the page is open: this write is not worth losing the page over.
+      if (!scenario.hubPublished?.key) {
+        saveScenario(scenario.id, {
+          hubPublished: { ...(scenario.hubPublished ?? {}), key: publishKey, publishedAt: new Date().toISOString() },
+        }).catch((nextError) => console.warn("[hub] could not record the publish key:", nextError));
+      }
       setNotice(
         `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
-          `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
+          (hasCover
+            ? "On the GitHub post page, drag both files into the Description box, then submit."
+            : "On the GitHub post page, drag that file into the Description box, then submit.") +
+          " If that page did not open, use the Open the GitHub post button." +
           `${hasCover ? " The cover image becomes the card's preview in the hub." : ""}${extra}`,
       );
     } catch (nextError) {
@@ -768,6 +752,9 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           post={selectedPost}
           busy={busyId === selectedPost.id}
           onImport={handleImport}
+          onPlay={onPlay}
+          library={libraryOf(selectedPost)}
+          armed={armedId === selectedPost.id}
           onBack={backToGrid}
           notice={notice}
           error={error}
@@ -826,6 +813,11 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           )}
 
           <StatusBanner notice={notice} error={error} />
+          {publishPostUrl && (
+            <a href={publishPostUrl} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, marginBottom: "0.9rem", textDecoration: "none" }, touch)}>
+              Open the GitHub post ↗
+            </a>
+          )}
 
           {!posts && !error && (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
@@ -845,6 +837,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                 layout="grid"
                 touch={touch}
                 isMobile={isMobile}
+                libraryOf={libraryOf}
+                armedId={armedId}
               />
             ) : (
               <>
@@ -859,11 +853,13 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                     onSelect={selectPost}
                     touch={touch}
                     isMobile={isMobile}
+                    libraryOf={libraryOf}
+                    armedId={armedId}
                   />
                 )}
-                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
-                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
-                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />              </>
+                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />
+                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />
+                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />              </>
             )
           )}
         </>

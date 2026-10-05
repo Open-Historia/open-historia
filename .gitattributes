@@ -3,9 +3,26 @@
 *.sh text eol=lf
 *.command text eol=lf
 
+# Signed documents: the detached .sig covers the exact LF bytes that were signed,
+# and the site serves public/ verbatim. A CRLF checkout (core.autocrlf on
+# Windows, where the site is built) would serve bytes the signature does not
+# cover, and every client would reject the manifest as bad-signature.
+public/content-manifest.json text eol=lf
+public/node-directory.json text eol=lf
+
+# The built-in flags (scripts/fetch-flags.mjs): stored exactly as flagcdn.com serves
+# them, so a checkout on any platform ships the same bytes.
+public/flags/** -text
+
 # NOTE: the large world-map binaries (*.pmtiles, regions-seed.geojson,
 # cities-seed.json, the default scenario's regions.geojson) used to be tracked in
 # Git LFS. They are no longer in the repo at all - they are hosted as GitHub
 # Release assets and downloaded by scripts/fetch-map-assets.mjs, because LFS's
 # free bandwidth (1 GB/mo, org-wide) could not cover player installs. Do not
 # re-add them to LFS. See scripts/map-assets.json.
+
+# Every default prompt passage any version has shipped
+# (scripts/prompts/record-shipped-guidance.mjs): one fingerprint per line, only
+# ever added to. Merging alpha into beta or beta into main keeps both sides'
+# lines instead of conflicting, so no branch forgets the other's old defaults.
+src/Game/AI/shippedGuidance.js merge=union

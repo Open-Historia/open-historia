@@ -51,7 +51,10 @@ import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBound
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
+import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
+import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
+import { resolvePastedIds } from "./regionClipboard.js";
 import {
   unionGeoms,
   translatedClone,
@@ -573,9 +576,13 @@ const OlMap = ({
     groupOutlineTimerRef.current = window.setTimeout(() => rebuildGroupOutlinesRef.current?.(), 350);
   };
 
-  const notifyRegions = () => {
+  // `loaded`: the regions were replaced because a map was opened, not edited,
+  // so nothing in them is unsaved (MapEditor's onRegionsChanged). A seed that
+  // lands seconds after the Workshop opened used to mark the map dirty and
+  // autosave the whole world as a new document.
+  const notifyRegions = ({ loaded = false } = {}) => {
     const n = regionSourceRef.current?.getFeatures().length ?? 0;
-    onRegionsChangedRef.current?.(n);
+    onRegionsChangedRef.current?.(n, { loaded });
     scheduleGroupOutlines();
   };
 
@@ -829,6 +836,8 @@ const OlMap = ({
     borderAssistSourceRef.current = borderAssistSource;
     borderAssistLayerRef.current = borderAssistLayer;
     mapRef.current = map;
+    // "features" is every point marker: cities and map features alike.
+    const toggleableLayers = { regions: regionLayer, labels: labelLayer, features: pointLayer, units: unitLayer, groups: groupOutlineLayer };
     requestAnimationFrame(() => map.updateSize());
     if (typeof window !== "undefined") window.__editorMap = map;
 
@@ -889,14 +898,17 @@ const OlMap = ({
       );
       if (tool === "delete") {
         // Deleting works on units and cities too — a point hit wins over the region under it.
+        // The document removes them and hands back the undo step (documentUndo.js).
         const unitHit = unitAtPixel(evt.pixel);
         if (unitHit) {
-          onUnitRemoveRef.current?.(unitHit.getId());
+          const cmd = onUnitRemoveRef.current?.(unitHit.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         const point = pointAtPixel(evt.pixel);
         if (point) {
-          onFeatureRemoveRef.current?.(point.getId());
+          const cmd = onFeatureRemoveRef.current?.(point.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         deleteFeature(hit);
@@ -957,23 +969,16 @@ const OlMap = ({
           if (f && f !== hit) { neighbor = f; break; }
         }
         if (!neighbor) return;
-        const oldGeom = hit.getGeometry().clone();
-        try {
-          hit.setGeometry(unionGeoms([hit.getGeometry(), neighbor.getGeometry()]));
-        } catch (e) {
-          console.warn("[editor] dissolve failed:", e);
+        const cmd = mergeRegionFeatures(regionSource, [hit, neighbor]);
+        if (!cmd) {
+          window.alert("The border between these two regions could not be removed. Select both, repair them in the Topology panel, then try again.");
           return;
         }
-        regionSource.removeFeature(neighbor);
         regionLayer.changed();
         labelLayer.changed();
         onSelectionRef.current?.([hit.getId()]);
         notifyRegions();
-        const mergedGeom = hit.getGeometry().clone();
-        pushCmd({
-          undo: () => { hit.setGeometry(oldGeom.clone()); regionSource.addFeature(neighbor); },
-          redo: () => { hit.setGeometry(mergedGeom.clone()); regionSource.removeFeature(neighbor); },
-        });
+        pushCmd(cmd);
         return;
       }
       const hitId = hit ? hit.getId() : null;
@@ -1111,10 +1116,29 @@ const OlMap = ({
     const onResize = () => map.updateSize();
     window.addEventListener("resize", onResize);
 
+    // Every map load (open, New, generate, import, reseed) starts afresh: the
+    // undo steps held the old map's regions, and a world seed still
+    // downloading for the old map must not land on the new one. A seed checks
+    // on arrival that no load has started since it was asked for.
+    let loadToken = 0;
+    const clearHistory = () => {
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      emitHistory();
+    };
+    const startLoad = () => {
+      clearHistory();
+      loadToken += 1;
+      return loadToken;
+    };
+
     let alive = true;
     if (seedKind === "import-world") {
+      // A map opened or started before the world arrives wins: the seed used
+      // to be added on top of it.
+      const token = loadToken;
       loadSeedFeatures().then((features) => {
-        if (!alive || !regionSourceRef.current) return;
+        if (!alive || !regionSourceRef.current || token !== loadToken) return;
         regionSourceRef.current.addFeatures(features);
         onRegionCount?.(regionSourceRef.current.getFeatures().length);
       });
@@ -1722,18 +1746,26 @@ const OlMap = ({
         }
         map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
       },
+      // `patch.claimants` may be a function of the region's own list, so one
+      // edit over a selection with differing claims keeps each region's rest.
       setRegionAttrs: (ids, patch) => {
         const undos = [];
         for (const id of ids) {
           const f = regionSource.getFeatureById(id);
           if (!f) continue;
           const before = {};
+          let claimants;
           if ("owner" in patch) { before.owner = f.get("owner") || null; f.set("owner", patch.owner || null); }
           if ("typeId" in patch) { before.typeId = f.get("typeId"); f.set("typeId", patch.typeId); }
           if ("name" in patch) { before.name = f.get("name"); f.set("name", patch.name); }
-          if ("claimants" in patch) { before.claimants = f.get("claimants") || null; f.set("claimants", patch.claimants?.length ? patch.claimants : null); }
+          if ("claimants" in patch) {
+            before.claimants = f.get("claimants") || null;
+            claimants = typeof patch.claimants === "function" ? patch.claimants(before.claimants || []) : patch.claimants;
+            claimants = claimants?.length ? claimants : null;
+            f.set("claimants", claimants);
+          }
           if ("group" in patch) { before.group = f.get("group") || null; f.set("group", patch.group || null); }
-          undos.push([f, before]);
+          undos.push([f, before, claimants]);
         }
         regionLayer.changed();
         labelLayer.changed();
@@ -1742,11 +1774,11 @@ const OlMap = ({
           const after = { ...patch };
           pushCmd({
             undo: () => undos.forEach(([f, b]) => Object.keys(b).forEach((k) => f.set(k, b[k]))),
-            redo: () => undos.forEach(([f]) => {
+            redo: () => undos.forEach(([f, , claimants]) => {
               if ("owner" in after) f.set("owner", after.owner || null);
               if ("typeId" in after) f.set("typeId", after.typeId);
               if ("name" in after) f.set("name", after.name);
-              if ("claimants" in after) f.set("claimants", after.claimants?.length ? after.claimants : null);
+              if ("claimants" in after) f.set("claimants", claimants);
               if ("group" in after) f.set("group", after.group || null);
             }),
           });
@@ -1842,32 +1874,16 @@ const OlMap = ({
       mergeRegions: (ids) => {
         const feats = ids.map((id) => regionSource.getFeatureById(id)).filter(Boolean);
         if (feats.length < 2) return;
-        const target = feats[0];
-        const oldGeom = target.getGeometry().clone();
-        const removed = feats.slice(1);
-        let mergedGeom;
-        try {
-          mergedGeom = unionGeoms(feats.map((f) => f.getGeometry()));
-          target.setGeometry(mergedGeom);
-        } catch (e) {
-          console.warn("[editor] merge failed:", e);
+        const cmd = mergeRegionFeatures(regionSource, feats);
+        if (!cmd) {
+          window.alert("These regions could not be merged. Repair them in the Topology panel, then try again.");
           return;
         }
-        removed.forEach((f) => regionSource.removeFeature(f));
         regionLayer.changed();
         labelLayer.changed();
-        onSelectionRef.current?.([target.getId()]);
+        onSelectionRef.current?.([feats[0].getId()]);
         notifyRegions();
-        pushCmd({
-          undo: () => {
-            target.setGeometry(oldGeom.clone());
-            removed.forEach((f) => regionSource.addFeature(f));
-          },
-          redo: () => {
-            target.setGeometry(mergedGeom.clone());
-            removed.forEach((f) => regionSource.removeFeature(f));
-          },
-        });
+        pushCmd(cmd);
       },
       copyRegions: (ids) => {
         const res = map.getView().getResolution() || 1;
@@ -1981,13 +1997,14 @@ const OlMap = ({
           }
         }
 
-        const taken = new Set(regionSource.getFeatures().map((f) => String(f.getId())));
+        const ids = resolvePastedIds(
+          pasted.map((f) => f.getId() ?? f.get("id") ?? null),
+          regionSource.getFeatures().map((f) => f.getId()),
+          () => newId(),
+        );
         const added = [];
-        for (const f of pasted) {
-          const wanted = f.getId() != null ? String(f.getId()) : f.get("id") != null ? String(f.get("id")) : null;
-          let id = wanted && !taken.has(wanted) ? wanted : newId();
-          while (taken.has(id)) id = newId();
-          taken.add(id);
+        pasted.forEach((f, index) => {
+          const id = ids[index];
           f.setId(id);
           f.set("id", id);
           if (f.get("typeId") == null) f.set("typeId", defaultTypeIdRef.current || "land");
@@ -1996,7 +2013,7 @@ const OlMap = ({
           f.set("edited", true);
           regionSource.addFeature(f);
           added.push(f);
-        }
+        });
 
         const entries = [...carved.values()];
         const restore = (entry) => {
@@ -2036,6 +2053,85 @@ const OlMap = ({
           trimmed: entries.filter((entry) => !entry.removed).length,
           removed: entries.filter((entry) => entry.removed).length,
         };
+      },
+      // Put regions exactly as given, by id, as ONE undo step: each `upsert`
+      // feature (GeoJSON, WGS84, its id in properties.id) replaces the shape of
+      // the region with its id — and, with `withAttributes`, its owner, name,
+      // type, claims and group too — or joins the map under that id; each id in
+      // `remove` leaves it. Unlike a paste nothing is carved: this is how a
+      // reviewed border change lands (the suggestion's whole cluster of
+      // neighbouring regions at once, so its borders meet as they were drawn).
+      applyRegionPatch: ({ upsert = [], remove = [], withAttributes = false } = {}) => {
+        const format = new GeoJSON();
+        const steps = [];
+        for (const raw of Array.isArray(upsert) ? upsert : []) {
+          const id = raw?.properties?.id ?? raw?.id;
+          if (id === undefined || id === null || !raw?.geometry) continue;
+          const key = String(id);
+          let geometry;
+          try {
+            geometry = format.readGeometry(raw.geometry, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+          } catch (e) {
+            console.warn("[editor] a suggested region could not be read:", key, e);
+            continue;
+          }
+          if (!/Polygon$/.test(geometry.getType())) continue;
+          const props = raw.properties || {};
+          const attrs = {
+            owner: props.owner || null,
+            name: props.name || "Region",
+            typeId: props.typeId || defaultTypeIdRef.current || "land",
+            claimants: Array.isArray(props.claimants) && props.claimants.length ? props.claimants : null,
+            group: props.group || null,
+            gid0: props.gid0 || "",
+          };
+          const existing = regionSource.getFeatureById(key);
+          if (existing) {
+            const before = { geometry: existing.getGeometry().clone(), edited: existing.get("edited"), attrs: {} };
+            if (withAttributes) for (const field of Object.keys(attrs)) before.attrs[field] = existing.get(field) ?? null;
+            steps.push({
+              undo: () => {
+                existing.setGeometry(before.geometry.clone());
+                if (before.edited) existing.set("edited", before.edited); else existing.unset("edited");
+                for (const [field, value] of Object.entries(before.attrs)) existing.set(field, value);
+              },
+              redo: () => {
+                existing.setGeometry(geometry.clone());
+                existing.set("edited", true);
+                if (withAttributes) for (const [field, value] of Object.entries(attrs)) existing.set(field, value);
+              },
+            });
+          } else {
+            const feature = new Feature({ geometry: geometry.clone() });
+            feature.setId(key);
+            feature.setProperties({ ...attrs, id: key, edited: true });
+            steps.push({
+              undo: () => regionSource.removeFeature(feature),
+              redo: () => regionSource.addFeature(feature),
+            });
+          }
+        }
+        for (const id of Array.isArray(remove) ? remove : []) {
+          const feature = regionSource.getFeatureById(String(id));
+          if (!feature) continue;
+          steps.push({
+            undo: () => regionSource.addFeature(feature),
+            redo: () => regionSource.removeFeature(feature),
+          });
+        }
+        if (!steps.length) return { changed: 0 };
+        const refresh = () => {
+          regionLayer.changed();
+          labelLayer.changed();
+          notifyRegions();
+        };
+        steps.forEach((step) => step.redo());
+        refresh();
+        pushCmd({
+          undo: () => { [...steps].reverse().forEach((step) => step.undo()); refresh(); },
+          redo: () => { steps.forEach((step) => step.redo()); refresh(); },
+        });
+        return { changed: steps.length };
       },
       getRegionSummary: (id) => {
         const f = regionSource.getFeatureById(id);
@@ -2099,19 +2195,25 @@ const OlMap = ({
         return ids;
       },
       // A group renamed (to a name) or erased (to null) across the whole map, as
-      // ONE undo step. Returns how many regions it touched.
-      retagGroup: (from, to = null) => {
+      // ONE undo step. `record` is the document's side ({ redo, undo }:
+      // documentUndo.js), run now and with every undo and redo, so the group's
+      // registry entry follows its regions. Returns how many regions it touched.
+      retagGroup: (from, to = null, record = null) => {
         const key = String(from || "").trim();
         if (!key) return 0;
         const touched = regionSource.getFeatures().filter((f) => String(f.get("group") || "").trim() === key);
-        if (!touched.length) return 0;
+        if (!touched.length && !record) return 0;
         const apply = (value) => {
           touched.forEach((f) => f.set("group", value || null));
           regionLayer.changed();
           notifyRegions();
         };
         apply(to);
-        pushCmd({ undo: () => apply(key), redo: () => apply(to) });
+        record?.redo();
+        pushCmd({
+          undo: () => { apply(key); record?.undo(); },
+          redo: () => { apply(to); record?.redo(); },
+        });
         return touched.length;
       },
       selectOwner: (ownerKey, { zoom = false } = {}) => {
@@ -2141,14 +2243,16 @@ const OlMap = ({
           .map((f) => ({ id: f.getId(), name: String(f.get("name") || "").trim(), typeId: f.get("typeId") || "land" }))
           .sort((a, b) => (a.name || String(a.id)).localeCompare(b.name || String(b.id)));
       },
-      queryRegions: (text, limit = 200) => {
+      // `polities` (the document's records) lets a search find a region by
+      // its owner's display name or aliases, not only by the owner key.
+      queryRegions: (text, limit = 200, { polities } = {}) => {
         const q = (text || "").trim().toLowerCase();
+        const owners = ownersMatchingQuery(polities, q);
         const out = [];
         for (const f of regionSource.getFeatures()) {
           if (q) {
             // `country` is gone from region props — owner IS the country name now.
-            const hay = `${f.getId()} ${f.get("name") || ""} ${f.get("owner") || ""}`.toLowerCase();
-            if (!hay.includes(q)) continue;
+            if (!regionMatchesQuery({ id: f.getId(), name: f.get("name"), owner: f.get("owner") }, q, owners)) continue;
           }
           out.push(summarize(f));
           if (out.length >= limit) break;
@@ -2163,11 +2267,12 @@ const OlMap = ({
         }
         return m;
       },
+      // The Layers panel's toggles. It reads the state back when it opens, so
+      // a layer hidden earlier does not show as on.
       setLayerVisibility: (key, visible) => {
-        if (key === "regions") regionLayer.setVisible(visible);
-        else if (key === "labels") labelLayer.setVisible(visible);
-        else if (key === "features") pointLayer.setVisible(visible);
+        toggleableLayers[key]?.setVisible(visible);
       },
+      getLayerVisibility: (key) => toggleableLayers[key]?.getVisible() ?? true,
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
@@ -2186,13 +2291,15 @@ const OlMap = ({
         const north = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.north)));
         const south = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.south)));
         if (![west, east, north, south].every(Number.isFinite) || east <= west || north <= south) return false;
-        const sw = fromLonLat([west, south]);
-        const ne = fromLonLat([east, north]);
+        // In lon/lat, not Web Mercator: the importer (provinceRasterWorker.js
+        // mapRing) spaces the image's rows evenly in latitude, so the preview
+        // has to as well or the overlay sits up to twenty degrees off the
+        // provinces it will produce. OpenLayers reprojects it onto the map.
         const layer = importPreviewLayerRef.current;
         layer.setSource(new ImageStatic({
           url,
-          imageExtent: [sw[0], sw[1], ne[0], ne[1]],
-          projection: "EPSG:3857",
+          imageExtent: [west, south, east, north],
+          projection: "EPSG:4326",
         }));
         layer.setOpacity(Math.max(0.05, Math.min(0.95, Number(opacity) || 0.46)));
         layer.setVisible(true);
@@ -2281,9 +2388,7 @@ const OlMap = ({
         }
         onSelectionRef.current?.([]);
         selectedIdsRef.current = new Set();
-        undoStackRef.current = [];
-        redoStackRef.current = [];
-        emitHistory();
+        startLoad();
 
         regionSource.clear();
         savedRegionHashes.clear();
@@ -2356,12 +2461,13 @@ const OlMap = ({
       // Forget what the last save wrote, so the next one carries the whole map.
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
+      // Reads the whole map before it touches the one on screen, so a map that
+      // cannot be read throws with the current one still there (openDoc).
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
         const fmt = new GeoJSON();
-        regionSource.clear();
-        savedRegionHashes.clear();
+        let feats = [];
         if (fc && Array.isArray(fc.features)) {
-          const feats = fmt.readFeatures(fc, {
+          feats = fmt.readFeatures(fc, {
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857",
           });
@@ -2380,27 +2486,40 @@ const OlMap = ({
             }
             stampClaims(f);
           }
-          regionSource.addFeatures(feats);
         }
+        startLoad();
+        regionSource.clear();
+        savedRegionHashes.clear();
+        if (feats.length) regionSource.addFeatures(feats);
         regionLayer.changed();
         labelLayer.changed();
-        notifyRegions();
+        notifyRegions({ loaded: true });
       },
+      // Both reseeds resolve once the world is on the map, so the Workshop can
+      // wait for it (MapEditor's hydration keeps Save disabled until then): true
+      // when it landed, false when a newer load had replaced it first.
       reseedWorld: () => {
-        loadSeedFeatures().then((feats) => {
+        const token = startLoad();
+        return loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return false;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
+          return true;
         });
       },
       // Seed the modern world, then stamp a scenario's ownership overrides on
       // top — how a scenario WITHOUT custom geometry opens in the editor (its
       // tier-1 map is exactly "stock world + these overrides").
       reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
-        loadSeedFeatures().then((feats) => {
+        const token = startLoad();
+        return loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return false;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           const stampClaims = claimStamper(claimOverrides);
@@ -2412,7 +2531,8 @@ const OlMap = ({
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
+          return true;
         });
       },
       undo: () => doUndo(),
@@ -2445,13 +2565,6 @@ const OlMap = ({
     const source = regionSourceRef.current;
     const layer = regionLayerRef.current;
     if (!map || !source) return;
-
-    // Split the region under a drawn line into two (or more) pieces; the largest
-    // piece keeps the original id/attributes, the rest become new regions.
-    // Split every region the freehand path FULLY crosses, following the exact
-    // cursor path. A region is only cut where the path enters through one border
-    // and exits through another; the path's dangling start/end inside a region is
-    // ignored, so no half-border is ever left partway through a region.
 
     // Lasso: select every region whose interior falls inside the drawn shape.
     const selectWithinPolygon = (poly) => {
@@ -2731,17 +2844,18 @@ const OlMap = ({
         });
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
-    } else if (activeTool === "modify") {
-      // Manual override mode. If the author selected regions first, expose ONLY
-      // those vertices instead of the entire 3,500-region world. Snapping still
+    } else if (activeTool === "modify" && (selectionIds || []).some((id) => source.getFeatureById(id))) {
+      // Manual override mode, on the selected regions only — never the entire
+      // 3,500-region world, whose handles on every border bury the one being
+      // fixed. With nothing selected the tool does nothing and the banner
+      // asks for a selection, as the Shared border tool does. Snapping still
       // sees every region, so a human can deliberately align a corrected border
       // to its neighbour without being buried in unrelated handles.
       const selectedFeatures = (selectionIds || [])
         .map((id) => source.getFeatureById(id))
         .filter(Boolean);
-      const selectedCollection = selectedFeatures.length ? new Collection(selectedFeatures) : null;
       const modify = new Modify({
-        ...(selectedCollection ? { features: selectedCollection } : { source }),
+        features: new Collection(selectedFeatures),
         pixelTolerance: 18,
         style: manualVertexStyle,
       });
@@ -2908,8 +3022,16 @@ const OlMap = ({
         });
       }
     } else if (activeTool === "move") {
+      // A moved region is reshaped as far as the stock tiles know, so it is
+      // marked edited, and the move is one undo step (shapeEdits.js).
       const translate = new Translate({ layers: [layer], hitTolerance: 2 });
-      translate.on("translateend", notifyRegions);
+      const move = trackMove();
+      translate.on("translatestart", (e) => move.start(e.features.getArray(), e.startCoordinate));
+      translate.on("translateend", (e) => {
+        const cmd = move.end(e.features.getArray(), e.coordinate);
+        if (cmd) pushCmd(cmd);
+        notifyRegions();
+      });
       added.push(translate);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the

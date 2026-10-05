@@ -149,3 +149,38 @@ test("known opening: a process frame only the analyst sees", async () => {
     const dropped = result.dropped.find((row) => row.title === "Observatory opens on Mount Elbrus");
     assert.equal(dropped?.route, "NATIVE_PROCESS_FILLER");
 });
+
+test("the player's Cancel during the analyst's request reaches the skip; any other failure keeps everything", async () => {
+    const controller = new AbortController();
+    await assert.rejects(
+        curateGeneratedEventsWithHidden({
+            events: MIXED, priorEvents: PRIOR, mode: "jump", signal: controller.signal,
+            analyzeBatch: async () => {
+                controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+                throw controller.signal.reason;
+            },
+        }),
+        (error) => error?.name === "AbortError",
+    );
+    const kept = await curateWith(async () => { throw new Error("model unavailable"); });
+    assert.equal(kept.events.length, MIXED.length);
+});
+
+test("the curator makes no request when no event is worth a judgment", async () => {
+    let asked = 0;
+    const counting = (analyst) => async (input) => { asked += 1; return analyst(input); };
+    // Every event has a hard consequence: kept whatever the analyst would say.
+    const consequential = [
+        event("Artillery exchanges continue near Donetsk airport", "Batteries trade fire around Donetsk airport.", { warId: "war-1" }),
+        event("Finance ministers convene in Astana", "Delegations meet to review customs procedures.", { impacts: { regionTransfers: [{ regionId: "r1", fromCode: "A", toCode: "B" }] } }),
+        event("Icebreaker launched at Murmansk", "The nuclear icebreaker Sibir slides down the ways.", { impacts: { unitOps: [{ op: "strength", unitId: "u1", strength: 300 }] } }),
+    ];
+    const quiet = await curateGeneratedEventsWithHidden({
+        events: consequential, priorEvents: PRIOR, mode: "jump", analyzeBatch: counting(harshAnalyst()),
+    });
+    assert.equal(asked, 0);
+    assert.equal(quiet.events.length, consequential.length);
+    // One event it could remove is enough to ask.
+    await curateWith(counting(harshAnalyst()));
+    assert.equal(asked, 1);
+});

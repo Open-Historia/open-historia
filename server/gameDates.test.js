@@ -11,10 +11,12 @@ import {
   addGameDays,
   addGameMonths,
   compareGameDates,
+  compareGameDatesNewestFirst,
   diffGameDays,
   formatGameDateReadable,
   gameDateDaysInMonth,
   gameDateYear,
+  isCanonicalGameDate,
   isGameDate,
   normalizeGameDate,
   parseGameDate,
@@ -76,6 +78,11 @@ test("differences and comparisons follow the calendar, not the text", () => {
   assert.deepEqual(["Undated", "2016-01-01", "-0218-03-01"].sort(compareGameDates), ["-0218-03-01", "2016-01-01", "Undated"], "non-dates sort last");
 });
 
+test("newest first runs the calendar backwards and still puts the undated last", () => {
+  const order = ["Undated", "-0218-12-20", "", "-0217-01-15", "2016-01-01"].sort(compareGameDatesNewestFirst);
+  assert.deepEqual(order, ["2016-01-01", "-0217-01-15", "-0218-12-20", "Undated", ""]);
+});
+
 test("calendar months and years step over the missing year zero", () => {
   assert.equal(addGameMonths("-0001-11-15", 3), "0001-02-15");
   assert.equal(addGameMonths("2016-01-31", 1), "2016-02-29", "the day clamps into the month");
@@ -92,4 +99,13 @@ test("reads as a date a person would write, with BC spelled out", () => {
   assert.equal(formatGameDateReadable("2016-01-31", "MMM D, YYYY"), "Jan 31, 2016");
   assert.equal(formatGameDateReadable("0044-03-15", "MMMM Do, YYYY"), "March 15th, 44");
   assert.equal(formatGameDateReadable("1200 BCE"), "", "prose dates are left to the caller");
+});
+
+test("a canonical game date is the stored spelling, BC included", () => {
+  assert.equal(isCanonicalGameDate("-0218-03-01"), true);
+  assert.equal(isCanonicalGameDate("2014-04-21"), true);
+  assert.equal(isCanonicalGameDate("-218-03-01"), false, "unpadded");
+  assert.equal(isCanonicalGameDate("0218-03-01 BC"), false, "era word");
+  assert.equal(isCanonicalGameDate("2014-02-30"), false, "no such day");
+  assert.equal(isCanonicalGameDate(""), false);
 });

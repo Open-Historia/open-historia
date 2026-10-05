@@ -3,7 +3,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPuppetUpdates, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import { applyDiplomaticUpdates, applyPuppetUpdates, bindPuppetUpdatesToEvents, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import { mergeSegmentPayloads } from "./jumpSegments.js";
+import { PUPPET_COUP_LOYALTY } from "../../runtime/puppets.js";
+import { PUPPET_COUP_LOYALTY as WORKSHOP_COUP_LOYALTY } from "../../Editor/scenarioPuppets.js";
 
 // A subordination rides the same compact-line transport as wars, relations and
 // agreements: the model never writes the ledger, it emits lines that must
@@ -288,6 +291,16 @@ test("a contented Puppet gets no Storyline", () => {
   assert.deepEqual(apply(world, "loyalty~USSR~Poland~~80~~1~Calm").storylineSeeds, []);
 });
 
+test("the coup Storyline opens just under the threshold the Workshop warns at", () => {
+  assert.equal(WORKSHOP_COUP_LOYALTY, PUPPET_COUP_LOYALTY);
+  const at = (loyalty) => apply({
+    ...baseWorld,
+    puppets: [{ id: "p1", overlord: "USSR", puppet: "Poland", kind: "satellite", loyalty, secrecy: "open", status: "active" }],
+  }, `loyalty~USSR~Poland~~${loyalty}~~1~Unrest`).storylineSeeds;
+  assert.equal(at(PUPPET_COUP_LOYALTY - 1).length, 1);
+  assert.deepEqual(at(PUPPET_COUP_LOYALTY), []);
+});
+
 test("a revolt settles the Storyline that led to it", () => {
   const world = {
     ...baseWorld,
@@ -535,4 +548,33 @@ test("an occupied country is still a country: lawful sovereignty counts as land"
 test("with no region list to consult, land is not checked", () => {
   const { appliedIds } = applyOnMap(annexedWorld, "install~United Kingdom~Ireland~protectorate~50~open~1~Unknown map", []);
   assert.equal(appliedIds.length, 1);
+});
+
+// THE BUG. A skip narrated a government installed in Warsaw and wrote a valid
+// install line, and no puppet ever appeared: the segment merge every skip goes
+// through carried wars, relations, agreements and storylines, not puppets. This
+// is a skip's path from the model's line to the ledger, one step per stage the
+// game runs (gameplay.js validateSegmentLedgers binds, the merge joins, the
+// apply writes).
+test("a skip's install line reaches world.puppets through the segment merge", () => {
+  const segmentEvents = events();
+  const segment = {
+    events: segmentEvents,
+    puppetUpdates: bindPuppetUpdatesToEvents(decodePuppetUpdates("install~USSR~Poland~satellite~40~open~1~Provisional government seated"), segmentEvents),
+  };
+  const merged = mergeSegmentPayloads([segment], { targetDate: "1945-06-30" });
+  const { world, appliedPuppetIds } = applyDiplomaticUpdates({
+    world: baseWorld,
+    relationUpdates: merged.relationUpdates,
+    agreementUpdates: merged.agreementUpdates,
+    puppetUpdates: merged.puppetUpdates,
+    events: merged.events,
+    stopDate: merged.stopDate,
+    round: 1,
+  });
+  assert.equal(appliedPuppetIds.length, 1);
+  assert.equal(world.puppets.length, 1);
+  assert.equal(world.puppets[0].overlord, "USSR");
+  assert.equal(world.puppets[0].puppet, "Poland");
+  assert.deepEqual(world.puppets[0].sourceEventIds, ["e1"]);
 });

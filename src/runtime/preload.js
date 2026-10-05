@@ -3,6 +3,7 @@ import {
   PMTILES_ARCHIVES,
   TERRAIN_TILE_TEMPLATE,
   buildTileUrl,
+  deleteRuntimeJsonByPrefix,
   esriTileTemplate,
   loadCountryNames,
   readJson,
@@ -11,7 +12,7 @@ import {
   warmPmtilesArchive,
   warmRemoteResources,
 } from "./assets.js";
-import { warmCountryLabelCollections } from "./countryLabels.js";
+import { warmsWholeMapArchives } from "./deviceProfile.js";
 import { logDebugEvent } from "./debugLog.js";
 
 export const STARTUP_TIME_BUDGET_MS = 30_000;
@@ -152,7 +153,8 @@ const STARTUP_TASKS = [
     weight: 26,
     deps: [],
     background: true,
-    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal }),
+    // Not in a phone's browser: range reads there (deviceProfile.js warmsWholeMapArchives).
+    run: ({ signal }) => (warmsWholeMapArchives() ? warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal }) : null),
   },
   {
     id: "country-index",
@@ -167,14 +169,6 @@ const STARTUP_TASKS = [
     // file — see wholeFileSource.js.)
     deps: [],
     run: () => loadCountryNames(),
-  },
-  {
-    id: "country-labels",
-    label: "Building country labels",
-    weight: 14,
-    // Same z0-only read as country-index — see the note there.
-    deps: [],
-    run: () => warmCountryLabelCollections(),
   },
   {
     id: "cities",
@@ -203,7 +197,8 @@ const STARTUP_TASKS = [
     weight: 24,
     deps: [],
     background: true,
-    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal }),
+    // Not in a phone's browser: range reads there (deviceProfile.js warmsWholeMapArchives).
+    run: ({ signal }) => (warmsWholeMapArchives() ? warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal }) : null),
   },
 ];
 
@@ -250,10 +245,6 @@ export const createInitialStartupState = () => ({
   total: GATING_TASKS.length,
 });
 
-// Held at module scope so a background warm that outlives runStartupPreload stays
-// reachable — and its rejection stays handled — after the caller has moved on.
-let backgroundWarms = [];
-
 export const runStartupPreload = async ({
   onProgress,
   timeBudgetMs = STARTUP_TIME_BUDGET_MS,
@@ -291,6 +282,13 @@ export const runStartupPreload = async ({
   };
 
   publish("Preparing the world");
+
+  // The stock modern-country label atlas ("country-labels-v3-…") was built
+  // here on every launch and cached per language and owner set, though no
+  // served world ever draws it (every world is a custom one). The task is gone;
+  // this clears what earlier versions left in Cache Storage. Off the startup
+  // path, and a no-op once they are gone.
+  void deleteRuntimeJsonByPrefix("country-labels-").catch(() => {});
 
   // One controller for the whole gating set rather than one per task: with tasks
   // running concurrently there is no "remaining budget for this step" left to
@@ -346,13 +344,13 @@ export const runStartupPreload = async ({
     return promise;
   };
 
-  // Launched alongside the gating set, then deliberately not awaited.
-  backgroundWarms = STARTUP_TASKS.filter((task) => task.background).map((task) =>
+  // Launched alongside the gating set, then deliberately not awaited; a
+  // failure is logged here, after the caller has moved on.
+  for (const task of STARTUP_TASKS.filter((entry) => entry.background)) {
     runTask(task).catch((error) => {
       console.warn(`Background preload task "${task.id}" failed:`, error);
-      return null;
-    }),
-  );
+    });
+  }
 
   await Promise.all(
     GATING_TASKS.map((task) =>
@@ -404,8 +402,3 @@ export const runStartupPreload = async ({
     timedOut,
   };
 };
-
-// The archives still warming after the startup screen dismissed. Awaiting this is
-// optional — the map renders from range reads meanwhile — but a caller that
-// genuinely needs a whole archive resident (a bulk export, say) can.
-export const whenBackgroundWarmsSettle = () => Promise.allSettled(backgroundWarms);

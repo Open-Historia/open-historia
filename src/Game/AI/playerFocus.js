@@ -334,7 +334,7 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
   const lines = [
     heading,
     `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — but never more than the ${items.length} thing${items.length === 1 ? "" : "s"} listed below gives reason for. `
-      + `The share is a ceiling on attention, not a quota: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
+      + `The share is a minimum only as far as the items below allow, not a quota to fill: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
     lines.push("", `ORDERS — every one gets an outcome this period (success, partial success, delay or failure), in an event that lists its id in actionIds. One event may answer several orders when they are genuinely the same thing.`);

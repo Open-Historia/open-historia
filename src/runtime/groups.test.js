@@ -16,6 +16,7 @@ import {
   defaultGroupColor,
   describeGroupsForPrompt,
   findGroupKey,
+  groupsOnTerritory,
   normalizeGroupAreas,
   normalizeGroupColor,
   normalizeGroupOp,
@@ -96,6 +97,22 @@ test("create, take, update, rename, release and dissolve do what they say", () =
   assert.deepEqual(Object.keys(state.groups), ["The Grey Tide"], "erased, and only that group");
 });
 
+test("a group can take back a former name, but never another group's", () => {
+  let state = applyGroupOps({}, [
+    { op: "create", name: "Righteous Armies", regionIds: ["r1"] },
+    { op: "create", name: "Cartel", regionIds: ["r2"] },
+  ]);
+  state = applyGroupOps(state, [{ op: "update", name: "Righteous Armies", newName: "Northern Resistance" }]);
+  state = applyGroupOps(state, [{ op: "update", name: "Northern Resistance", newName: "Righteous Armies" }]);
+  assert.deepEqual(Object.keys(state.groups).sort(), ["Cartel", "Righteous Armies"]);
+  assert.deepEqual(state.groups["Righteous Armies"].formerNames, ["Northern Resistance"], "the name taken back is no longer a former one");
+  assert.equal(state.groupAreas.r1, "Righteous Armies");
+
+  state = applyGroupOps(state, [{ op: "update", name: "Righteous Armies", newName: "Cartel" }]);
+  assert.deepEqual(Object.keys(state.groups).sort(), ["Cartel", "Righteous Armies"], "two groups are never merged by a rename");
+  assert.equal(state.groupAreas.r2, "Cartel");
+});
+
 test("the model is taken at its word where the intent is plain, and nowhere else", () => {
   const state = applyGroupOps({}, [
     { op: "take", name: "Militia", regionIds: ["r1"] },
@@ -107,6 +124,14 @@ test("the model is taken at its word where the intent is plain, and nowhere else
 
   const many = applyGroupOps({}, Array.from({ length: MAX_GROUPS + 5 }, (_, index) => ({ op: "create", name: `Group ${index}` })));
   assert.equal(Object.keys(many.groups).length, MAX_GROUPS);
+  const refused = many.changes.filter((change) => change.op === "refused");
+  assert.equal(refused.length, 5, "every create past the cap is reported, not dropped in silence");
+  assert.deepEqual(refused[0], { op: "refused", name: `Group ${MAX_GROUPS}`, reason: "limit" });
+
+  const full = applyGroupOps(many, [{ op: "take", name: "Latecomers", regionIds: ["r9"] }]);
+  assert.equal(findGroupKey(full.groups, "Latecomers"), "", "a take that would found a group past the cap founds nothing");
+  assert.deepEqual(full.groupAreas, {});
+  assert.deepEqual(full.changes, [{ op: "refused", name: "Latecomers", reason: "limit" }]);
 });
 
 test("the prompt names each group exactly, says what it is, and where it controls", () => {
@@ -167,8 +192,44 @@ test("the jump and the Game Master can write groupOps, and the jump schema stays
   const bad = validateGameplayPayload("jumpForward", { ...jump, events: [{ ...jump.events[0], impacts: { groupOps: [{ op: "annex", name: "X" }] } }] });
   assert.equal(bad.valid, false, "the op is an enum");
 
+  // The prompt asks for a description on create; the jump schema's compaction
+  // once stripped the field itself, so every described create failed the turn.
+  const described = validateGameplayPayload("jumpForward", { ...jump, events: [{ ...jump.events[0], impacts: { groupOps: [
+    { op: "create", name: "Cartel del Norte", description: "A drug cartel that runs the northern highway towns.", regionIds: ["Nuevo León"] },
+    { op: "update", name: "Cartel del Norte", description: "Now also taxes the border crossings." },
+  ] } }] });
+  assert.equal(described.valid, true, described.error);
+
   const jumpSchema = GAMEPLAY_TOOLS.jumpForward?.parameters ?? GAMEPLAY_TOOLS.jumpForward;
   assert.ok(JSON.stringify(jumpSchema).includes("groupOps"));
   assert.ok(JSON.stringify(GAME_MASTER_SCHEMA).includes("groupOps") || JSON.stringify(GAME_MASTER_SCHEMA).includes("eventsJson"),
     "the GM carries events (and so their impacts) in its transaction");
+});
+
+test("a country's Politics view lists the groups on its regions, most first", () => {
+  const world = {
+    groups: { Cartel: { description: "Runs the border towns." }, Militia: {}, Exiles: {} },
+    groupAreas: { m1: "Cartel", m2: "Cartel", m3: "Militia", g1: "Militia", g2: "Exiles" },
+  };
+  const owners = { m1: "Mexico", m2: "Mexico", m3: "Mexico", g1: "Guatemala", g2: "Guatemala" };
+  const rows = groupsOnTerritory(world, "Mexico", { ownerOf: (id) => owners[id] });
+  assert.deepEqual(rows.map((row) => [row.name, row.regionIds]), [["Cartel", ["m1", "m2"]], ["Militia", ["m3"]]],
+    "only the regions Mexico owns count; a group elsewhere is not listed");
+  assert.equal(rows[0].description, "Runs the border towns.");
+  assert.ok(rows[0].color, "the group's own colour for its swatch");
+  assert.deepEqual(groupsOnTerritory(world, "Belize", { ownerOf: (id) => owners[id] }), []);
+  assert.deepEqual(groupsOnTerritory(world, "mexico", { ownerOf: (id) => owners[id] }), [],
+    "owner names are exact: another spelling is another polity");
+});
+
+test("a polity that is a group sees its own area first, even an empty one", () => {
+  const world = {
+    polityOverrides: { "Cartel del Norte": { name: "Cartel del Norte" } },
+    groups: { "Cartel del Norte": {}, Horde: {} },
+    groupAreas: { r1: "Cartel del Norte", r2: "Horde" },
+  };
+  const rows = groupsOnTerritory(world, "Cartel del Norte", { ownerOf: () => "Mexico" });
+  assert.deepEqual(rows.map((row) => [row.name, row.own, row.regionIds]), [["Cartel del Norte", true, ["r1"]]]);
+  const empty = groupsOnTerritory({ ...world, groupAreas: {} }, "Cartel del Norte");
+  assert.deepEqual(empty.map((row) => [row.name, row.regionIds]), [["Cartel del Norte", []]]);
 });

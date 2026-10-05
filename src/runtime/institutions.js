@@ -2,6 +2,7 @@
 
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { formatGameDate, gameDateDayNumber, gameDateDaysInMonth, parseGameDate } from "./gameDates.js";
 
 export const INSTITUTIONS_SCHEMA_VERSION = 1;
 export const INSTITUTION_LEDGER_VERSION = 1;
@@ -34,19 +35,26 @@ const unique = (values, limit = 128) => {
   return out;
 };
 
-const DATEISH_RE = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;
-const comparableDate = (value, edge = "start") => {
+// An institution date as its calendar parts, BC included (runtime/gameDates.js):
+// a full game date, or a bare year or year-month (a founding is often known
+// only to the year), padded to its first day, or its last for an end edge.
+const DATEISH_RE = /^(-?\d{4,6})(?:-(\d{2}))?$/;
+const dateishParts = (value, edge = "start") => {
   const text = clean(value);
+  const exact = parseGameDate(text);
+  if (exact) return exact;
   const match = text.match(DATEISH_RE);
   if (!match) return null;
   const year = Number(match[1]);
   const month = match[2] ? Number(match[2]) : (edge === "end" ? 12 : 1);
-  if (!Number.isInteger(year) || year < 1 || month < 1 || month > 12) return null;
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const day = match[3] ? Number(match[3]) : (edge === "end" ? monthDays[month - 1] : 1);
-  if (day < 1 || day > monthDays[month - 1]) return null;
-  return year * 10000 + month * 100 + day;
+  if (!Number.isInteger(year) || year === 0 || month < 1 || month > 12) return null;
+  return { year, month, day: edge === "end" ? gameDateDaysInMonth(year, month) : 1 };
+};
+// A day number that orders by the calendar, or null. Zero is a date
+// (1970-01-01): test for null, never for truth.
+const comparableDate = (value, edge = "start") => {
+  const parts = dateishParts(value, edge);
+  return parts ? gameDateDayNumber(formatGameDate(parts)) : null;
 };
 
 export const institutionIdentityTokens = (value = {}) => [
@@ -126,7 +134,7 @@ const membershipContinuityWindows = (institution = {}) => normalizeInstitutionPr
     startKey: comparableDate(entry.foundedDate, "start"),
     endKey: comparableDate(entry.dissolvedDate, "end"),
   }))
-  .filter((entry) => entry.startKey)
+  .filter((entry) => entry.startKey !== null)
   .sort((a, b) => a.startKey - b.startKey);
 
 export const validateInstitutionTemporalBaseline = ({
@@ -152,7 +160,7 @@ export const validateInstitutionTemporalBaseline = ({
   const scenarioKey = comparableDate(scenarioDate, "start");
   const foundedDate = clean(institution.foundedDate);
   const dissolvedDate = clean(institution.dissolvedDate);
-  if (!scenarioKey) return { valid: true, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "" };
+  if (scenarioKey === null) return { valid: true, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "" };
 
   const foundedKey = comparableDate(foundedDate, "start");
   const dissolvedKey = comparableDate(dissolvedDate, "end");
@@ -171,28 +179,28 @@ export const validateInstitutionTemporalBaseline = ({
   // Generated institutions must describe their own temporal truth. Optional
   // scenario/reference data or the generated catalog may also describe generic
   // predecessor lineage; no named institution is special-cased here.
-  if (!foundedKey) {
+  if (foundedKey === null) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "generated institution is missing a usable foundedDate" };
   }
   if (scenarioKey < foundedKey) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `institution was not founded until ${foundedDate}` };
   }
-  if (dissolvedKey && scenarioKey >= dissolvedKey) {
+  if (dissolvedKey !== null && scenarioKey >= dissolvedKey) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `institution was already dissolved by ${dissolvedDate}` };
   }
-  if (membershipDate && !memberKey) {
+  if (membershipDate && memberKey === null) {
     return preserveMembershipWithUnknownDate("the supplied accession date is not a usable scenario date")
       || { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `membership date ${membershipDate} is not a usable historical date` };
   }
-  if (memberKey && memberKey > scenarioKey) {
+  if (memberKey !== null && memberKey > scenarioKey) {
     return preserveMembershipWithUnknownDate(`the supplied accession date is after scenario date ${scenarioDate}`)
       || { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `membership does not begin until ${membershipDate}` };
   }
-  if (memberKey && memberKey < foundedKey) {
+  if (memberKey !== null && memberKey < foundedKey) {
     const continuity = membershipContinuityWindows(institution);
     const matchingWindow = continuity.find((entry) => (
       memberKey >= entry.startKey
-      && (!entry.endKey || memberKey < entry.endKey)
+      && (entry.endKey === null || memberKey < entry.endKey)
     ));
     if (matchingWindow) {
       return {
@@ -211,8 +219,8 @@ export const validateInstitutionTemporalBaseline = ({
     const earliest = continuity[0] || null;
     if (
       earliest
-      && clean(membershipDate).slice(0, 4)
-      && clean(membershipDate).slice(0, 4) === clean(earliest.foundedDate).slice(0, 4)
+      && dateishParts(membershipDate)?.year !== undefined
+      && dateishParts(membershipDate)?.year === dateishParts(earliest.foundedDate)?.year
     ) {
       return {
         valid: true,
@@ -808,6 +816,15 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
     const ballot = normalizeProposalBallot(rawBallot, rawPolity, world, identityIndex);
     if (ballot) ballots[ballot.polity] = ballot;
   }
+  const askedSource = value?.voting?.asked && typeof value.voting.asked === "object" && !Array.isArray(value.voting.asked)
+    ? value.voting.asked
+    : {};
+  const asked = {};
+  for (const [rawPolity, rawCount] of Object.entries(askedSource)) {
+    const polity = canonicalPolity(rawPolity, world, identityIndex);
+    const count = Math.trunc(Number(rawCount));
+    if (polity && count > 0) asked[polity] = Math.min(99, count);
+  }
   const voting = value.voting && typeof value.voting === "object" && !Array.isArray(value.voting)
     ? {
       openedDate: clean(value.voting.openedDate),
@@ -815,6 +832,9 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
       rule: normalizeInstitutionVotingRule(value.voting.rule, world, identityIndex),
       eligibleVoters: unique(value.voting.eligibleVoters, 256).map((polity) => canonicalPolity(polity, world, identityIndex)).filter(Boolean),
       ballots,
+      // How many post-turn ballot passes asked each government that still has
+      // not voted (institutionBallotAskCount).
+      ...(Object.keys(asked).length ? { asked } : {}),
       outcome: value.voting.outcome && typeof value.voting.outcome === "object" && !Array.isArray(value.voting.outcome)
         ? clone(value.voting.outcome)
         : null,
@@ -847,6 +867,18 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
   };
 };
 
+// A government asked this many times by the post-turn ballot pass without
+// voting is asked no more: its seat no longer holds the ballot open, and no
+// further request is spent on it.
+export const INSTITUTION_BALLOT_MAX_ASKS = 2;
+
+export const institutionBallotAskCount = (proposal = {}, polity = "") => {
+  const wanted = lower(polity);
+  if (!wanted) return 0;
+  const entry = Object.entries(proposal?.voting?.asked || {}).find(([key]) => lower(key) === wanted);
+  return Math.max(0, Math.trunc(Number(entry?.[1]) || 0));
+};
+
 export const normalizeInstitutionProposals = (value = {}, world = {}, identityIndex = null) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const out = {};
@@ -855,20 +887,6 @@ export const normalizeInstitutionProposals = (value = {}, world = {}, identityIn
     if (proposal) out[proposal.id] = proposal;
   }
   return out;
-};
-
-const normalizeInstitutionGovernanceActivity = (value = {}) => {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const round = Number(source.lastAgendaRound);
-  const empty = Number(source.consecutiveEmptyAgendaChecks);
-  const outcome = lower(source.lastAgendaOutcome);
-  return {
-    lastAgendaDate: clean(source.lastAgendaDate).slice(0, 40),
-    lastAgendaRound: Number.isFinite(round) ? Math.max(0, Math.trunc(round)) : 0,
-    lastAgendaOutcome: ["proposal", "amendment", "advanced", "none"].includes(outcome) ? outcome : "",
-    consecutiveEmptyAgendaChecks: Number.isFinite(empty) ? Math.max(0, Math.min(12, Math.trunc(empty))) : 0,
-    sourceEventIds: unique(source.sourceEventIds, 24),
-  };
 };
 
 const normalizeMember = (value, world, identityIndex = null) => {
@@ -945,7 +963,6 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
     proposals: normalizeInstitutionProposals(value.proposals || value.resolutions || {}, world, identityIndex),
     lifecycleCases: normalizeInstitutionLifecycleCases(value.lifecycleCases || value.membershipCases || {}, world, identityIndex),
     membershipHistory: normalizeInstitutionMembershipHistory(value.membershipHistory || value.lifecycleHistory || [], world, identityIndex),
-    governanceActivity: normalizeInstitutionGovernanceActivity(value.governanceActivity || value.agendaActivity || {}),
     lastUpdatedDate: clean(value.lastUpdatedDate),
     note: clean(value.note).slice(0, 1000),
     sourceEventIds: unique(value.sourceEventIds, 24),
@@ -979,43 +996,6 @@ export const institutionLifecycleCases = (institution = {}) => Object.values(ins
 
 export const institutionPendingLifecycleCases = (institution = {}) => institutionLifecycleCases(institution)
   .filter((entry) => ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)));
-
-export const institutionMembershipHistoryForPolity = (institution = {}, polityInput = "") => {
-  const wanted = lower(polityInput);
-  if (!wanted) return [];
-  return array(institution?.membershipHistory).filter((entry) => lower(entry?.polity) === wanted);
-};
-
-export const institutionLifecycleCaseForPolity = (institution = {}, polityInput = "", { pendingOnly = false } = {}) => {
-  const wanted = lower(polityInput);
-  if (!wanted) return [];
-  return institutionLifecycleCases(institution).filter((entry) => (
-    lower(entry?.polity) === wanted
-    && (!pendingOnly || ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)))
-  ));
-};
-
-
-export const recordInstitutionAgendaCheck = ({
-  world: worldLike = {}, institutionId = "", date = "", round = 0, outcome = "none", sourceEventIds = [],
-} = {}) => {
-  const world = clone(worldLike || {});
-  const institutions = normalizeInstitutions(world.institutions, world);
-  const id = canonicalInstitutionIdentity({ id: institutionId }).id;
-  const institution = institutions.byId[id];
-  if (!institution) return { world: { ...world, institutions }, institution: null, error: `Unknown institution ${clean(institutionId) || "<blank>"}.` };
-  const previous = normalizeInstitutionGovernanceActivity(institution.governanceActivity);
-  const nextOutcome = ["proposal", "amendment", "advanced"].includes(lower(outcome)) ? lower(outcome) : "none";
-  institution.governanceActivity = normalizeInstitutionGovernanceActivity({
-    lastAgendaDate: clean(date) || previous.lastAgendaDate,
-    lastAgendaRound: Number.isFinite(Number(round)) ? Number(round) : previous.lastAgendaRound,
-    lastAgendaOutcome: nextOutcome,
-    consecutiveEmptyAgendaChecks: nextOutcome === "none" ? previous.consecutiveEmptyAgendaChecks + 1 : 0,
-    sourceEventIds: unique(sourceEventIds, 24),
-  });
-  institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
-  return { world: { ...world, institutions }, institution: institutions.byId[id], error: "" };
-};
 
 export const resolveInstitutionRecord = (world = {}, institutionInput = "") => {
   const institutions = world?.institutions && typeof world.institutions === "object" ? world.institutions : {};
@@ -1064,32 +1044,11 @@ export const institutionChannelParticipants = (world = {}, institutionInput = ""
   return out;
 };
 
-const parseCsv = (value) => clean(value).split(",").map(clean).filter(Boolean);
-const parseEventNumbers = (value) => parseCsv(value)
-  .map((entry) => Number(entry))
-  .filter((entry) => Number.isInteger(entry) && entry > 0)
-  .map((entry) => entry - 1);
-
-export const decodeInstitutionUpdates = (value) => {
-  if (Array.isArray(value)) return value.filter((entry) => entry && typeof entry === "object").map(clone);
-  const text = clean(value);
-  if (!text) return [];
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, op, polity, status, role, eventNumbers, name, kind, note] = line.split("~");
-    return {
-      id: clean(id),
-      op: lower(op),
-      polity: clean(polity),
-      status: lower(status),
-      role: lower(role),
-      eventIndexes: parseEventNumbers(eventNumbers),
-      eventIds: [],
-      name: clean(name),
-      kind: lower(kind).replace(/[\s-]+/g, "_"),
-      note: clean(note),
-    };
-  });
-};
+// Institution updates arrive as structured objects (the Round-Zero baselines);
+// only a well-formed object is kept.
+export const decodeInstitutionUpdates = (value) => array(value)
+  .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+  .map(clone);
 
 export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
   const events = array(eventsInput);
@@ -1103,133 +1062,6 @@ export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
     ], 24);
     return { ...update, eventIds };
   });
-};
-
-const institutionEventText = (event = {}) => clean(`${event?.title || ""} ${event?.description || ""}`);
-const textToken = (value) => clean(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-const containsSemanticToken = (text, value) => {
-  const token = textToken(value);
-  if (!token) return false;
-  return textToken(text).includes(token);
-};
-const CREATE_EVENT_RE = /\b(?:establish(?:es|ed|ing)?|create(?:s|d|ing)?|form(?:s|ed|ing)?|found(?:s|ed|ing)?|constitut(?:e|es|ed|ing)|charter(?:s|ed|ing)?|launch(?:es|ed|ing)?)\b/i;
-const JOIN_EVENT_RE = /\b(?:join(?:s|ed|ing)?|admit(?:s|ted|ting)?|accession|accede(?:s|d)?|becomes?\s+(?:a\s+)?member|enters?\s+(?:the\s+)?(?:alliance|union|organization|organisation|council|bloc|pact))\b/i;
-const LEAVE_EVENT_RE = /\b(?:withdraw(?:s|n|al)?|leave(?:s|ft|ing)?|exit(?:s|ed|ing)?|resign(?:s|ed|ing)?\s+(?:from\s+)?(?:membership|the\s+organization|the\s+organisation|the\s+alliance|the\s+union))\b/i;
-const SUSPEND_EVENT_RE = /\bsuspend(?:s|ed|ing|sion)?\b/i;
-const RESTORE_EVENT_RE = /\b(?:restore(?:s|d|ing)?|reinstate(?:s|d|ing)?|readmit(?:s|ted|ting)?)\b/i;
-const ROLE_EVENT_RE = /\b(?:elect(?:s|ed|ing)?|appoint(?:s|ed|ing)?|select(?:s|ed|ing)?|name(?:s|d|ing)?|chair(?:s|ed|ing)?|lead(?:s|ing)?|leadership)\b/i;
-const DISSOLVE_EVENT_RE = /\b(?:dissolv(?:e|es|ed|ing)|disband(?:s|ed|ing)?|abolish(?:es|ed|ing)?|wind(?:s|ing)?\s+up|terminate(?:s|d|ing)?)\b/i;
-
-const operationEventPattern = (op) => ({
-  create: CREATE_EVENT_RE,
-  join: JOIN_EVENT_RE,
-  leave: LEAVE_EVENT_RE,
-  suspend: SUSPEND_EVENT_RE,
-  restore: RESTORE_EVENT_RE,
-  role: ROLE_EVENT_RE,
-  dissolve: DISSOLVE_EVENT_RE,
-}[lower(op)] || null);
-
-const eventMentionsInstitution = (event, update) => {
-  const text = institutionEventText(event);
-  return [update?.name, update?.shortName, update?.id]
-    .map((value) => clean(value).replace(/[-_]+/g, " "))
-    .filter(Boolean)
-    .some((value) => containsSemanticToken(text, value));
-};
-
-const eventMentionsPolity = (event, polity, world) => {
-  const canonical = canonicalPolity(polity, world);
-  if (!canonical) return false;
-  const actorTokens = array(event?.actors).map((value) => canonicalPolity(value, world)).filter(Boolean);
-  if (actorTokens.some((value) => lower(value) === lower(canonical))) return true;
-  const identity = world?.polityOverrides?.[canonical] || {};
-  const aliases = unique([canonical, identity?.name, identity?.code, ...array(identity?.aliases)], 24);
-  const text = institutionEventText(event);
-  return aliases.some((alias) => containsSemanticToken(text, alias));
-};
-
-// Live world generation may omit an event number even when the semantic event
-// makes the institution lifecycle cause completely unambiguous. Native code owns
-// that foreign-key binding. This helper only fills a missing link when there is
-// exactly one strong semantic match; it never guesses among multiple events.
-// Founding-member joins may inherit the uniquely bound creation event when that
-// event names the polity as an actor/participant in the founding.
-export const bindInstitutionUpdatesToCausalEvents = (candidate, { world = {} } = {}) => {
-  if (!candidate || typeof candidate !== "object") return { bound: 0, ambiguous: 0, unresolved: 0 };
-  const events = array(candidate.events);
-  let updates = bindInstitutionUpdatesToEvents(candidate.institutionUpdates, events);
-  let bound = 0;
-  let ambiguous = 0;
-  let unresolved = 0;
-
-  const createEventIdsByInstitution = new Map();
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) !== "create") continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    if (!id) continue;
-    if (array(update?.eventIds).length) {
-      createEventIdsByInstitution.set(id, array(update.eventIds));
-      continue;
-    }
-    const matches = events.filter((event) =>
-      clean(event?.id) &&
-      eventMentionsInstitution(event, update) &&
-      CREATE_EVENT_RE.test(institutionEventText(event))
-    );
-    if (matches.length === 1) {
-      const eventId = clean(matches[0].id);
-      updates[index] = { ...update, eventIds: [eventId] };
-      createEventIdsByInstitution.set(id, [eventId]);
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) === "create" || array(update?.eventIds).length) continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    const pattern = operationEventPattern(update?.op);
-    if (!id || !pattern) {
-      unresolved += 1;
-      continue;
-    }
-
-    let matches = events.filter((event) => {
-      const text = institutionEventText(event);
-      return clean(event?.id) && eventMentionsInstitution(event, update) && pattern.test(text)
-        && (!clean(update?.polity) || eventMentionsPolity(event, update.polity, world));
-    });
-
-    // A newly created institution's founding members are often expressed by the
-    // same semantic founding event instead of separate "joins" prose. Reuse that
-    // exact creation cause only when the joining polity is actually a named actor
-    // or participant in the founding event.
-    if (!matches.length && lower(update?.op) === "join") {
-      const createIds = createEventIdsByInstitution.get(id) || [];
-      if (createIds.length === 1) {
-        const foundingEvent = events.find((event) => clean(event?.id) === createIds[0]);
-        if (foundingEvent && eventMentionsPolity(foundingEvent, update.polity, world)) matches = [foundingEvent];
-      }
-    }
-
-    if (matches.length === 1) {
-      updates[index] = { ...update, eventIds: [clean(matches[0].id)] };
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  candidate.institutionUpdates = updates;
-  return { bound, ambiguous, unresolved };
 };
 
 export const validateInstitutionUpdates = (updatesInput, {
@@ -1265,7 +1097,7 @@ export const validateInstitutionUpdates = (updatesInput, {
     if (enforceTemporalBaseline && op === "join" && clean(update.sinceDate)) {
       const joined = comparableDate(update.sinceDate, "start");
       const baseline = comparableDate(baselineDate, "start");
-      if (!joined || (baseline && joined > baseline)) {
+      if (joined === null || (baseline !== null && joined > baseline)) {
         return `$.institutionUpdates record ${index + 1} has membership date ${clean(update.sinceDate) || "<blank>"} after/invalid for baseline ${clean(baselineDate)}.`;
       }
     }
@@ -1553,15 +1385,45 @@ export const applyInstitutionUpdates = ({
   return { world: { ...world, institutions }, institutions, appliedIds, error: "" };
 };
 
+// A polity that no longer exists leaves every institution: its seat and any
+// leadership, its place on an open ballot it had not yet voted in (a ballot it
+// cast still counts), and every open case it opened or was the subject of,
+// with that case's ballot. The history says why its seat went.
 export const removePolityFromInstitutions = (institutionsInput, polityInput, world = {}, date = "") => {
   const institutions = normalizeInstitutions(institutionsInput, world);
   const polity = canonicalPolity(polityInput, world);
   if (!polity) return institutions;
-  for (const [id, institution] of Object.entries(institutions.byId)) {
-    const members = array(institution.members).filter((member) => lower(member.polity) !== lower(polity));
-    const leaders = array(institution.leaders).filter((leader) => lower(leader) !== lower(polity));
-    if (members.length === institution.members.length && leaders.length === institution.leaders.length) continue;
-    institutions.byId[id] = { ...institution, members, leaders, lastUpdatedDate: clean(date) || institution.lastUpdatedDate || "" };
+  const isPolity = (value) => lower(value) === lower(polity);
+  const when = clean(date);
+  for (const [id, current] of Object.entries(institutions.byId)) {
+    const institution = clone(current);
+    let changed = false;
+    if (array(institution.members).some((member) => isPolity(member.polity)) || array(institution.leaders).some(isPolity)) {
+      institution.members = array(institution.members).filter((member) => !isPolity(member.polity));
+      institution.leaders = array(institution.leaders).filter((leader) => !isPolity(leader));
+      appendInstitutionMembershipHistory(institution, { action: "dissolved", polity, actor: polity, date: when }, world);
+      changed = true;
+    }
+    for (const proposal of Object.values(institution.proposals || {})) {
+      if (lower(proposal.status) !== "voting" || !proposal.voting) continue;
+      if (!array(proposal.voting.eligibleVoters).some(isPolity)) continue;
+      if (Object.values(proposal.voting.ballots || {}).some((ballot) => isPolity(ballot?.polity))) continue;
+      proposal.voting.eligibleVoters = proposal.voting.eligibleVoters.filter((voter) => !isPolity(voter));
+      changed = true;
+    }
+    for (const entry of Object.values(institution.lifecycleCases || {})) {
+      if (!["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))) continue;
+      if (!isPolity(entry.polity) && !isPolity(entry.initiatedBy)) continue;
+      institution.lifecycleCases[entry.id] = { ...entry, status: "withdrawn", resolvedDate: when, updatedDate: when };
+      const proposal = institution.proposals?.[entry.proposalId];
+      if (proposal && ["draft", "debate", "amendment", "formalized", "voting"].includes(lower(proposal.status))) {
+        institution.proposals[proposal.id] = { ...proposal, status: "withdrawn", lastUpdatedDate: when || proposal.lastUpdatedDate || "" };
+      }
+      changed = true;
+    }
+    if (!changed) continue;
+    institution.lastUpdatedDate = when || institution.lastUpdatedDate || "";
+    institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
   }
   return institutions;
 };
@@ -1631,41 +1493,4 @@ export const institutionStrategicPriority = (institution) => {
             : kind === "consultative_group" ? 45
               : 30;
   return Math.max(byId, byKind);
-};
-
-const canonicalBadgeRoot = (institution) => {
-  const identity = canonicalInstitutionIdentity(institution || {});
-  // Never leak storage/provider ids into the header. Known institutions receive
-  // a curated short key; alternate-history institutions may opt in with an
-  // explicit badgeKey and otherwise remain visible in the Diplomacy panel only.
-  return slug(institution?.badgeKey || identity.badgeKey);
-};
-
-export const institutionMembershipBadge = (institution, member) => {
-  const root = canonicalBadgeRoot(institution);
-  if (!root || !member) return "";
-  const status = lower(member.status || "member");
-  if (status === "member") return `${root}-member`;
-  if (status === "candidate") return `${root}-candidate`;
-  if (status === "associate") return `${root}-associate`;
-  if (status === "participant") return `${root}-participant`;
-  if (status === "observer") return `${root}-observer`;
-  if (status === "suspended") return `${root}-suspended`;
-  return "";
-};
-
-export const buildInstitutionContext = (world, focusPolities = [], { maxInstitutions = 14 } = {}) => {
-  const focus = new Set(array(focusPolities).map((polity) => lower(canonicalPolity(polity, world))).filter(Boolean));
-  const institutions = normalizeInstitutions(world?.institutions, world);
-  const rows = Object.values(institutions.byId)
-    .filter((institution) => institution.status !== "dissolved")
-    .filter((institution) => !focus.size || array(institution.members).some((member) => focus.has(lower(member.polity))))
-    .sort((a, b) => institutionStrategicPriority(b) - institutionStrategicPriority(a))
-    .slice(0, Math.max(1, maxInstitutions));
-  return rows.map((institution) => {
-    const members = array(institution.members)
-      .filter((member) => !focus.size || focus.has(lower(member.polity)))
-      .map((member) => `${member.polity} (${member.status}${member.role !== "member" ? `, ${member.role}` : ""})`);
-    return `- ${institution.name} [${institution.id}; ${institution.kind}]${members.length ? `: ${members.join(", ")}` : ""}`;
-  }).join("\n");
 };

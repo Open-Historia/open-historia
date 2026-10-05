@@ -14,9 +14,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
+import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
 import {
   TERRITORY_BASIS_DESCRIPTION,
-  TERRITORY_BASIS_DIRECTIVE,
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
 
@@ -77,13 +77,20 @@ test("the schema offers exactly the vocabulary, on the transfer and on the contr
   assert.ok(!controlVariant.required.includes("basis"), "basis must stay optional");
 });
 
+// The jump template's [The Map] states the rule (it was a directive appended at
+// call time until 2026-09-26).
 test("the jump is told, in words, every value the schema offers it", () => {
+  for (const task of ["jumpForward", "autoJumpForward"]) {
+    const map = defaultPrompts.tasks[task].slice(defaultPrompts.tasks[task].indexOf("[The Map]"));
+    for (const basis of TERRITORY_BASIS_ENUM) {
+      assert.ok(map.includes(basis), `${task}: the map rules never mention "${basis}"`);
+    }
+    // And what the engine DOES with the answer, which is the part that makes a
+    // model answer honestly rather than to please.
+    assert.match(map, /a claim is recorded as that polity's claim/);
+    assert.match(map, /change nothing on the map/);
+  }
   for (const basis of TERRITORY_BASIS_ENUM) {
-    assert.ok(TERRITORY_BASIS_DIRECTIVE.includes(`${basis}`), `the directive never mentions "${basis}"`);
     assert.ok(TERRITORY_BASIS_DESCRIPTION.includes(basis), `the schema description never mentions "${basis}"`);
   }
-  // And what the engine DOES with the answer, which is the part that makes a
-  // model answer honestly rather than to please.
-  assert.match(TERRITORY_BASIS_DIRECTIVE, /recorded as that polity's claim/);
-  assert.match(TERRITORY_BASIS_DIRECTIVE, /changes nothing on the map/);
 });

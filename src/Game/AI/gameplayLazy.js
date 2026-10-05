@@ -52,7 +52,10 @@ export const simulateTimelineJump = hostOnly(async (...args) => (await gameplay(
 export const simulateAutoJump = hostOnly(async (...args) => (await gameplay()).simulateAutoJump(...args));
 export const retryPendingJumpSegment = hostOnly(async (...args) => (await gameplay()).retryPendingJumpSegment(...args));
 export const retryPendingProjectsJump = hostOnly(async (...args) => (await gameplay()).retryPendingProjectsJump(...args));
+export const applyParkedTurn = hostOnly(async (...args) => (await gameplay()).applyParkedTurn(...args));
 export const maybeGeneratePregameHistory = hostOnly(async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args));
+// A scenario's own pre-history, written in the Workshop: not the game being played.
+export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
 export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
@@ -93,4 +96,6 @@ export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay
 export const ensureIntelligenceRated = hostOnly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
 export const generateCountryStatSheet = hostOnly(async (...args) => (await gameplay()).generateCountryStatSheet(...args));
+// Settles with that reading's sheet (or null), or at once with null when none is running.
+export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
 export const generateCountryStats = hostOnly(async (...args) => (await gameplay()).generateCountryStats(...args));

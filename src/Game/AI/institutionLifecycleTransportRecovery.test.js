@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { isLifecycleNegotiationChat } from "./chatFold.js";
 
 const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 
@@ -14,7 +15,10 @@ test("lifecycle membership chat turns keep schema validation but bypass Gemini's
 
 test("background idle diplomacy cannot impersonate a canonical lifecycle response", () => {
   assert.match(source, /openChats = normalizeChats\(bundle\.chats\)\.filter/);
-  assert.match(source, /chat\?\.lifecycleInstitutionId && normalizeArray\(chat\?\.lifecycleCaseIds\)\.length/);
+  // What makes a chat a lifecycle negotiation (chatFold.js).
+  assert.equal(isLifecycleNegotiationChat({ lifecycleInstitutionId: "nato", lifecycleCaseIds: ["case-1"] }), true);
+  assert.equal(isLifecycleNegotiationChat({ lifecycleInstitutionId: "nato", lifecycleCaseIds: [] }), false);
+  assert.equal(isLifecycleNegotiationChat({ lifecycleCaseIds: ["case-1"] }), false);
   assert.match(source, /collidesWithLifecycleNegotiation/);
   assert.match(source, /!isLifecycleNegotiationChat\(chat\)/);
   assert.match(source, /dropped — lifecycle negotiations only accept native lifecycle decisions/);

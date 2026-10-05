@@ -70,10 +70,11 @@ test("bounded domain failures defer targets without silently reopening them on o
   assert.match(panel, /Retry Deferred Targets/);
 });
 
+// Behaviour (a failed provider call pauses; an unusable answer counts an
+// attempt) is covered by simpleRunner.test.js.
 test("provider/executor throws pause the deterministic session instead of penalizing polity attempts", () => {
   assert.match(runner, /current\.pauseReason = providerPauseReason\(error\)/);
   assert.match(runner, /return current;/);
-  assert.doesNotMatch(runner, /catch \(error\)[\s\S]{0,500}bumpAttempts\(current, task\.type/);
 });
 
 test("v2 owns retries at the checkpoint boundary so one work item can spend only one provider call", () => {
@@ -100,11 +101,11 @@ test("PWV2 party coverage is a political-actor Canonical Gate invariant without 
   assert.doesNotMatch(executor, /missingCoalitionEntities/);
 });
 
+// Behaviour: simpleWorklist.test.js and simpleRunner.test.js check that the
+// live worklist's verification task carries the challenged paths to the prompt.
 test("v2 temporal sentinel forwards challenged semantic paths into the existing exact-date adjudicator", () => {
-  const executor = fs.readFileSync(new URL("./executor.js", import.meta.url), "utf8");
-  assert.match(executor, /challengedFacts/);
-  assert.match(executor, /CHALLENGED GENERATED TEMPORAL PATHS/);
-  assert.match(executor, /type: "historical-verification"/);
+  assert.match(worklist, /historicalChallengeReviewContext\(challengeMap\?\.\[polity\]\)/);
+  assert.match(worklist, /type: "historical-verification"/);
   assert.doesNotMatch(worklist, /semantic-verification/);
 });
 

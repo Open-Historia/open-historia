@@ -200,3 +200,38 @@ test("a message the log already has, by id or by speaker and words, is not added
     assert.deepEqual(same, normalizeChatEvents(log));
     assert.deepEqual(withUnloggedMessages([], [{ speaker: "France", text: "hi" }]), [], "no log, nothing to fold into");
 });
+
+test("a line said again word for word, with its own id, is kept: the player said it twice", () => {
+    const log = [
+        { id: "c", kind: "chat_created", title: "Demands" },
+        { id: "j1", kind: "member_joined", member: "Prussia" },
+        { id: "msg-1", kind: "message", by: "Bavaria", role: "user", text: "We refuse this demand." },
+        { id: "m2", kind: "message", by: "Prussia", role: "leader", text: "Then reconsider." },
+    ];
+    const messages = [
+        ...projectChatThread(log).messages,
+        { id: "msg-2", role: "user", speaker: "Bavaria", text: "We refuse this demand.", time: "1866-06-01" },
+    ];
+    const folded = withUnloggedMessages(log, messages, { threadId: "chat-4" });
+    assert.deepEqual(projectChatThread(folded).messages.map((message) => message.id), ["msg-1", "m2", "msg-2"]);
+    assert.deepEqual(withUnloggedMessages(folded, projectChatThread(folded).messages, { threadId: "chat-4" }), folded, "and read again, it is there once");
+});
+
+test("a copy of the thread under other ids is matched line for line, and only a line it adds is new", () => {
+    // A legacy thread read twice gets fresh ids each time; the log came from one
+    // read, the panel's messages from the other.
+    const log = [
+        { id: "c", kind: "chat_created", title: "Talks" },
+        { id: "j1", kind: "member_joined", member: "France" },
+        { id: "b1", kind: "message", by: "Bavaria", role: "user", text: "Agreed." },
+        { id: "b2", kind: "message", by: "France", role: "leader", text: "Good." },
+    ];
+    const copy = [
+        { id: "a1", role: "user", speaker: "Bavaria", text: "Agreed." },
+        { id: "a2", role: "leader", speaker: "France", text: "Good." },
+        { id: "a3", role: "user", speaker: "Bavaria", text: "Agreed." },
+    ];
+    const folded = withUnloggedMessages(log, copy);
+    assert.deepEqual(projectChatThread(folded).messages.map((message) => message.id), ["b1", "b2", "a3"],
+        "the copy's first two lines are the logged ones; its second Agreed. is new");
+});

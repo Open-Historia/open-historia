@@ -5,17 +5,22 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
+import { regionInfoFor } from "./regionInfo.js";
+import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -30,14 +35,10 @@ export const setRegionClickInterceptor = (fn) => {
 };
 
 // Stable browser event for passive consumers of a committed normal region
-// selection. Unlike the legacy module-global observer below, this survives
-// lazy chunk / HMR module boundaries and allows multiple listeners without
-// changing the click-consumption contract.
+// selection (the Stats tab re-targets on it). It survives lazy chunk / HMR
+// module boundaries and allows multiple listeners without changing the
+// click-consumption contract: it never consumes the click, popups still open.
 export const REGION_SELECTED_EVENT = "oh:region-selected";
-
-// Legacy passive tap retained for compatibility with any synchronous consumers.
-// Never consumes the click — popups still open.
-let _clickObserver = null;
 
 // WHO IS PLAYING, and why it is read here rather than per click. What the card
 // may say about a subordination depends on the viewer, and a COVERT one is
@@ -52,10 +53,6 @@ const rememberPlayerCountry = (readGame) => readGame()
         return _playerCountry;
     })
     .catch(() => _playerCountry);
-
-export const setRegionClickObserver = (fn) => {
-    _clickObserver = typeof fn === "function" ? fn : null;
-};
 
 const cleanSelectionValue = (value) => String(value ?? "").trim();
 
@@ -139,15 +136,13 @@ const commitRegionSelection = (props) => {
             window.dispatchEvent(new CustomEvent(REGION_SELECTED_EVENT, { detail: props }));
         } catch { /* passive listeners must never break clicks */ }
     }
-    try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
 
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
-    const isSame =
-    _currentSelection &&
-    _currentSelection.COUNTRY === COUNTRY &&
-    _currentSelection.NAME_1 === NAME_1;
+    // By the region's id where both have one (mapCards.js): a drawn map's
+    // regions often share a name and no country.
+    const isSame = isSameRegionSelection(_currentSelection, props);
 
     // Clicking the region already shown closes its card. Clicking a DIFFERENT
     // one shows that region: it used to only close the open card, so every
@@ -196,7 +191,7 @@ const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
 
 // Flags are resolved through the shared stable-lineage flag service below.
 
-const IconBtn = ({ children, title, onClick }) => {
+const IconBtn = ({ children, title, onClick, expanded }) => {
     const [hovered, setHovered] = React.useState(false);
 
     return (
@@ -205,6 +200,7 @@ const IconBtn = ({ children, title, onClick }) => {
         className="oh-tap"
         title={title}
         aria-label={title}
+        aria-expanded={expanded}
         onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -227,6 +223,22 @@ const IconBtn = ({ children, title, onClick }) => {
         >
         {children}
         </button>
+    );
+};
+
+// Copies a name through the shared helper, which falls back where
+// navigator.clipboard is missing (LAN play over http, the Android app), and
+// says for a moment whether it worked: a tick, or a cross and "Copy failed".
+const CopyNameBtn = ({ text, title }) => {
+    const [result, setResult] = React.useState(""); // "" | copied | failed
+    const copy = async () => {
+        setResult((await copyToClipboard(text)) ? "copied" : "failed");
+        setTimeout(() => setResult(""), 1500);
+    };
+    return (
+        <IconBtn title={result === "copied" ? "Copied" : result === "failed" ? "Copy failed" : title} onClick={copy}>
+        {result === "copied" ? "\u2713" : result === "failed" ? "\u2715" : "\u29C9"}
+        </IconBtn>
     );
 };
 
@@ -291,9 +303,10 @@ const RegionPopup = () => {
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
     const [selection, setSelection] = useState(null);
-    const [screenPos, setScreenPos] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
+    // The Region info section (regionInfo.js), shut again for each region.
+    const [showRegionInfo, setShowRegionInfo] = useState(false);
     const [flagState, setFlagState] = useState(() => createFlagState());
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
@@ -411,6 +424,7 @@ const RegionPopup = () => {
     _setSelection = (value) => {
         _currentSelection = value;
         setDismissing(false);
+        setShowRegionInfo(false);
         setFlagState(value ? createFlagState("loading") : createFlagState());
         setFlagImageFailed(false);
         setSelection(value);
@@ -474,14 +488,17 @@ const RegionPopup = () => {
 
     _dismiss = () => setDismissing(true);
 
-    const handleAnimationEnd = (e) => {
-        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
-
+    const finishDismiss = () => {
         _currentSelection = null;
         setSelection(null);
         setFlagState(createFlagState());
         setFlagImageFailed(false);
         setDismissing(false);
+    };
+
+    const handleAnimationEnd = (e) => {
+        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
+        finishDismiss();
     };
 
     useEffect(() => {
@@ -506,58 +523,16 @@ const RegionPopup = () => {
         );
     }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
+    // A phone's sheet follows no point on the map, so nothing is tracked
+    // (mapCards.js).
+    const screenPos = useCardScreenPos(map, selection?.lngLat, Boolean(selection) && !asSheet);
+
+    // A card that is not on screen has no fade-out to play, and the fade's end
+    // is what clears the selection: without this a dismiss left it selected.
     useEffect(() => {
-        // A phone's sheet follows no point on the map, so nothing is tracked.
-        if (!map || !selection || asSheet) {
-            setScreenPos(null);
-            return;
-        }
-
-        const update = () => {
-            const center = map.getCenter();
-            const toRad = (deg) => (deg * Math.PI) / 180;
-            const lat1 = toRad(center.lat);
-            const lat2 = toRad(selection.lngLat.lat);
-            const dLng = toRad(selection.lngLat.lng - center.lng);
-            const cosAngle =
-            Math.sin(lat1) * Math.sin(lat2) +
-            Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLng);
-
-            if (cosAngle < 0) {
-                setScreenPos(null);
-                return;
-            }
-
-            const point = map.project(selection.lngLat);
-            setScreenPos((prev) => {
-                if (
-                    prev &&
-                    Math.abs(prev.x - point.x) < 0.5 &&
-                    Math.abs(prev.y - point.y) < 0.5
-                ) {
-                    return prev;
-                }
-
-                return { x: point.x, y: point.y };
-            });
-        };
-
-        let frameId = 0;
-        const scheduleUpdate = () => {
-            if (frameId) return;
-            frameId = requestAnimationFrame(() => {
-                frameId = 0;
-                update();
-            });
-        };
-
-        update();
-        map.on("move", scheduleUpdate);
-        return () => {
-            if (frameId) cancelAnimationFrame(frameId);
-            map.off("move", scheduleUpdate);
-        };
-    }, [map, selection, asSheet]);
+        if (dismissing && !asSheet && !screenPos) finishDismiss();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dismissing, asSheet, screenPos]);
 
     // On a phone the card and a bottom panel would share one spot at the
     // bottom of the screen, the card underneath: it tells the HUD it opened,
@@ -590,18 +565,10 @@ const RegionPopup = () => {
             .filter((value) => value && value !== controllerCode),
     )];
     const isUnclaimed = controllerCode === "";
-    const controllingGroup = regionId ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null : null;
-    const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
-    const isContested = claimants.length > 0;
-    const controlStatus = isOccupied && isContested
-        ? "Occupied / contested"
-        : isOccupied
-            ? "Occupied"
-            : isContested
-                ? "Contested"
-                : isUnclaimed
-                    ? "Unclaimed"
-                    : "Administered";
+    // Not shown while groups are switched off for this game (server/gameFeatures.js).
+    const controllingGroup = regionId && isActiveFeatureEnabled("groups")
+        ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null
+        : null;
     const displayPolity = (code) => {
         if (!code) return "Unclaimed Territory";
         const identity = resolvePolityIdentity(code, worldState, {
@@ -613,6 +580,14 @@ const RegionPopup = () => {
         const key = identity.resolved || code;
         return worldState?.polityOverrides?.[key]?.name || key || "Unclaimed Territory";
     };
+    // Shown for a region that is occupied or claimed, unowned land included
+    // (mapCards.js).
+    const { isOccupied, status: controlStatus } = regionControlStatus({
+        controllerCode,
+        sovereignCode,
+        claimants,
+        displayName: displayPolity,
+    });
     // header stays on the current administrator/controller. legal title goes below.
     const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
     // The same summary the country panel shows (runtime/puppets.js), and for an
@@ -633,6 +608,17 @@ const RegionPopup = () => {
     // 216 px and broke the country's name mid-word.
     const POPUP_WIDTH = isTouch ? 300 : 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
+    // Only while the section is open: the cities and neighbours, from what the
+    // map holds in memory (regionInfo.js), for no read and no request.
+    const regionInfo = showRegionInfo
+        ? regionInfoFor({
+            regionId,
+            catalog: getPrimedScenarioRegionCatalog(),
+            cities: getWorldPlaceIndex().cities,
+            cityRenames: worldState?.cityRenames,
+            ownerOf: (id, entry) => territoryState.regionOwnershipOverrides?.[id] ?? entry?.country ?? "",
+        })
+        : null;
 
     return createPortal(
         <div
@@ -669,7 +655,7 @@ const RegionPopup = () => {
         <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(41,41,45,0.6)" }}>
         {showFlagImage ? (
             <img
-            src={flagState.imageUrl}
+            src={bundledFlagUrl(flagState.imageUrl)}
             alt={displayCountry}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}
@@ -738,7 +724,7 @@ const RegionPopup = () => {
         </div>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
         {!isUnclaimed && <IconBtn title="Open diplomatic chat" onClick={handleOpenChat}>{"\uD83D\uDCAC"}</IconBtn>}
-        <IconBtn title="Copy name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
+        <CopyNameBtn title="Copy name" text={displayCountry} />
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
@@ -773,19 +759,61 @@ const RegionPopup = () => {
         {NAME_1}
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <IconBtn title="Copy region name" onClick={() => navigator.clipboard?.writeText(NAME_1)}>{"\u29C9"}</IconBtn>
-        <IconBtn title="Region info">{"\u24D8"}</IconBtn>
+        <CopyNameBtn title="Copy region name" text={NAME_1} />
+        <IconBtn title="Region info" expanded={showRegionInfo} onClick={() => setShowRegionInfo((open) => !open)}>{"\u24D8"}</IconBtn>
         </div>
         </div>
 
-        {!isUnclaimed && (isOccupied || isContested) && (
+        {showRegionInfo && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            {regionInfo && (regionInfo.cities.length > 0 || regionInfo.neighbours.length > 0) ? (
+                <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
+                {regionInfo.cities.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Cities</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.cities
+                        .map((city) => (city.population > 0 ? `${city.name} (${city.population.toLocaleString()})` : city.name))
+                        .join(", ")}
+                    </span>
+                    </>
+                )}
+                {regionInfo.neighbours.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Neighbours</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.neighbours.map((group) => (
+                        <span key={group.owner || "unowned"} style={{ display: "block" }}>
+                        <span style={{ color: "rgba(255,255,255,0.55)" }}>{displayPolity(group.owner)}</span>
+                        {" \u00B7 "}
+                        {group.regions.join(", ")}
+                        </span>
+                    ))}
+                    </span>
+                    </>
+                )}
+                </div>
+            ) : (
+                <div style={{ fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.5)" }}>
+                No cities or neighbouring regions are known for this region.
+                </div>
+            )}
+            </>
+        )}
+
+        {controlStatus && (
             <>
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
             <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+            {!isUnclaimed && (
+                <>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+                </>
+            )}
             <span style={{ color: "rgba(255,255,255,0.42)" }}>Status</span>
             <span style={{ color: isOccupied ? "#fbbf24" : "rgba(255,255,255,0.84)", fontWeight: 700 }}>{controlStatus}</span>
             {claimants.length > 0 && (

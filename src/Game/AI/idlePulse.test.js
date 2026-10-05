@@ -13,8 +13,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { applyEventImpactsToWorld, normalizeWorldState } from "../../runtime/gameState.js";
-import { IDLE_PULSE_EVENT_ID, idlePulseEvent, idlePulseUnitOps, keepDetectedEvents } from "./idlePulse.js";
+import { applyEventImpactsToWorld, normalizeEventEntry, normalizeWorldState } from "../../runtime/gameState.js";
+import { IDLE_PULSE_EVENT_ID, idlePulseEvent, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 
 const PLAYER = "United States of America";
 const RUSSIA = "Russian Federation";
@@ -104,6 +104,18 @@ test("a unit the pulse touched keeps the event it was detected with; nothing poi
   assert.ok(raised, "the spawn landed");
   assert.equal(raised.eventId || "", "");
   assert.equal(JSON.stringify(after).includes(IDLE_PULSE_EVENT_ID), false);
+});
+
+test("a sighting is logged as the AI's event, not as scenario text to translate", () => {
+  const ops = [{ op: "move", unitId: "ru-armor", lng: 36.2, lat: 50.1 }];
+  const event = normalizeEventEntry(sightingEvent("2014-03-02", { title: " Columns near Belgorod ", description: "Armour moving west." }, ops));
+  // An event with no source is read as "scenario", which the translator sends
+  // off for a content-translation request.
+  assert.equal(event.source, "ai");
+  assert.equal(event.title, "Columns near Belgorod");
+  assert.equal(event.kind, "intel");
+  assert.equal(event.playerRelated, true);
+  assert.equal(event.impacts.unitOps.length, 1, "the event carries the ops it reports");
 });
 
 test("the pulse is wired to them", () => {

@@ -38,11 +38,6 @@ export const templateAlreadySays = (renderedPrompt, marker) => {
     return haystack.includes(needle);
 };
 
-// The opening claim of the units contract. Chosen because it is the one sentence
-// the bundled template and the [Units on the Map] directive share verbatim, and
-// no other directive says it.
-export const UNIT_CONTRACT_MARKER = "Units are EVIDENCE OF YOUR OWN EVENTS";
-
 // ---------------------------------------------------------------------------
 // A large block the prompt carries more than once
 // ---------------------------------------------------------------------------

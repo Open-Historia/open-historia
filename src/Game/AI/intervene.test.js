@@ -1,7 +1,7 @@
 /*! Open Historia — Intervene tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/intervene.test.js
 //
-// Runs without node_modules: intervene.js imports nothing.
+// Runs without node_modules: intervene.js imports only runtime/gameDates.js.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -25,6 +25,10 @@ const turn = () => journalTurn({
     ],
     relationUpdates: [{ id: "rel-1", a: "A", b: "B", eventIndexes: [3] }],
     agreementUpdates: [],
+    puppetUpdates: [
+        { id: "puppet-1", op: "install", overlord: "Russia", puppet: "Crimea", eventIds: ["event-ai-r0002-20140503-002"] },
+        { id: "puppet-2", op: "release", overlord: "Russia", puppet: "Crimea", eventIds: ["event-ai-r0002-20140518-004"] },
+    ],
     storylineUpdates: [{ id: "story-1", eventIds: ["event-ai-r0002-20140425-001", "event-ai-r0002-20140518-004"] }],
     stopDate: "2014-05-21",
     summary: "A month of war.",
@@ -38,7 +42,9 @@ test("the journal keeps the model's events in reveal order and leaves the engine
     assert.deepEqual(journal.events.map((entry) => entry.title), ["Ultimatum delivered", "Columns cross the border", "Kharkiv falls", "Ceasefire talks open"]);
     assert.equal(journal.stopDate, "2014-05-21");
     assert.equal(journal.mode, "jump");
+    assert.deepEqual(journal.puppetUpdates.map((update) => update.id), ["puppet-1", "puppet-2"], "the puppet changes are journaled with the other ledgers");
     assert.deepEqual(journalTurn().events, []);
+    assert.deepEqual(journalTurn().puppetUpdates, []);
 });
 
 test("stopping after the second event keeps two, drops two, and closes on the second's date", () => {
@@ -54,6 +60,7 @@ test("ledger records bound only to discarded events go with them; baselines and 
     const { result } = truncateTurn(turn(), 2, { originDate: "2014-04-21" });
     assert.deepEqual(result.warUpdates.map((update) => update.op), ["start", "note"], "the ceasefire was bound to a discarded event");
     assert.deepEqual(result.relationUpdates, [], "bound by index to the fourth event");
+    assert.deepEqual(result.puppetUpdates.map((update) => update.op), ["install"], "a kept event's puppet stays; a discarded one's goes");
     assert.equal(result.storylineUpdates.length, 1, "bound to a kept event as well as a discarded one");
 });
 
@@ -74,6 +81,13 @@ test("the closing date is the last kept event's, never before the day after the 
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-21", "same day")], originDate: "2014-04-21", minimumDate: "2014-04-22" }), "2014-04-22");
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-30", "x"), event("b", "2014-04-25", "y")], originDate: "2014-04-21" }), "2014-04-30", "the latest date, whatever the order");
     assert.equal(closingDateAfterIntervene({ keptEvents: [], originDate: "2014-04-21" }), "2014-04-21");
+});
+
+test("BC closing dates follow the calendar across a year boundary", () => {
+    const kept = [event("a", "-0218-12-20", "Winter quarters"), event("b", "-0217-01-15", "The thaw")];
+    assert.equal(closingDateAfterIntervene({ keptEvents: kept, originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0217-01-15", "217 BC comes after 218 BC");
+    assert.equal(closingDateAfterIntervene({ keptEvents: [kept[1]], originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0217-01-15", "a later BC year is not before the floor");
+    assert.equal(closingDateAfterIntervene({ keptEvents: [event("c", "-0218-12-10", "Same day")], originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0218-12-11");
 });
 
 test("the receipt names where the player stopped and what never happened", () => {

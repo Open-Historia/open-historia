@@ -7,17 +7,25 @@
 // optionally — a human 1-10 satisfaction rating. The debug console
 // (GameUI/debugConsole.jsx) reads these; the rating toast writes the rating.
 //
-// Storage: an in-memory buffer holds the session at full fidelity; every
-// finished record is also mirrored into a small dedicated IndexedDB store
-// (oh-debug-telemetry) so the console can review and export history across
-// sessions. Without IndexedDB the buffer alone still works — telemetry must
-// never break a turn, so every persistence call is best-effort.
+// Storage: an in-memory buffer holds the session; every finished record is
+// also mirrored into a small dedicated IndexedDB store (oh-debug-telemetry) so
+// the console can review and export history across sessions. Without
+// IndexedDB the buffer alone still works — telemetry must never break a turn,
+// so every persistence call is best-effort.
+//
+// Recording is on by default and almost nobody opens the console, so the
+// buffer must not hold every prompt of the session: the prompts and answers
+// are the largest strings in the game, and on a phone they add up. Only the
+// newest FULL_TEXT_RECORDS keep their text in memory. An older one, once its
+// stored copy is safely written, keeps its counts and summaries and drops the
+// text, which the console reads back from IndexedDB when it is opened.
 
 const DB_NAME = "oh-debug-telemetry";
 const DB_VERSION = 1;
 const STORE = "generations";
 const MAX_PERSISTED_RECORDS = 200;
 const MAX_SESSION_RECORDS = 500;
+const FULL_TEXT_RECORDS = 20;
 // Prompts, user messages and answers are kept WHOLE. They used to be clipped
 // (80k / 20k / 60k characters), which cut the system prompt of any real turn
 // short in the console — a jump's prompt is well past 80k — and read as the
@@ -105,16 +113,56 @@ const idbGetAll = async () => {
   const result = await withStore("readonly", (store) => store.getAll());
   return Array.isArray(result) ? result : [];
 };
+// Ids only, oldest first, from the startedAt index: trimming needs nothing else,
+// and reading every whole record to find them is what it used to do.
+const idbKeysOldestFirst = async () => {
+  const result = await withStore("readonly", (store) => store.index("startedAt").getAllKeys());
+  return Array.isArray(result) ? result : [];
+};
+// Merges fields into the stored copy of a record, if there is one; resolves
+// whether there was.
+const idbUpdate = (id, fields) => withStore("readwrite", (store) => {
+  const outcome = { result: false };
+  const request = store.get(id);
+  request.onsuccess = () => {
+    if (!request.result) return;
+    store.put({ ...request.result, ...fields });
+    outcome.result = true;
+  };
+  return outcome;
+});
 const idbClear = () => withStore("readwrite", (store) => { store.clear(); });
 const idbDeleteMany = (ids) => withStore("readwrite", (store) => { for (const id of ids) store.delete(id); });
 
 // --- Record lifecycle ----------------------------------------------------------
 
 const sessionRecords = []; // newest last
-let idbHistory = null; // loaded once per session, merged into getAiRecords()
-let idbHistoryFailed = false;
 let putCounter = 0;
 let recordCounter = 0;
+// Per record: how many writes were asked for and whether the latest landed.
+const writes = new WeakMap();
+// Records whose text now lives only in the stored copy.
+const lightRecords = new WeakSet();
+
+const lighten = (record) => {
+  lightRecords.add(record);
+  record.systemPrompt = "";
+  record.userMessage = "";
+  record.rawResponse = "";
+  // Replaced, not edited: a write still waiting holds the old object.
+  if (record.lookups?.entries?.length) {
+    record.lookups = { ...record.lookups, entries: record.lookups.entries.map((entry) => ({ ...entry, response: "" })) };
+  }
+};
+
+// Every record past the newest few that is final and safely stored.
+const lightenOlderRecords = () => {
+  for (let index = 0; index < sessionRecords.length - FULL_TEXT_RECORDS; index += 1) {
+    const record = sessionRecords[index];
+    if (lightRecords.has(record) || !record.finished || record.awaitingOutcome || !writes.get(record)?.stored) continue;
+    lighten(record);
+  }
+};
 
 const clip = (text, max) => {
   const value = typeof text === "string" ? text : "";
@@ -123,8 +171,27 @@ const clip = (text, max) => {
 
 const persist = (record) => {
   if (!isTelemetryEnabled()) return;
+  // Its text is only in the stored copy: merge the rest in, keep the text.
+  if (lightRecords.has(record)) {
+    const { systemPrompt, userMessage, rawResponse, lookups, ...rest } = record;
+    idbUpdate(record.id, rest).catch(() => { /* best-effort persistence */ });
+    return;
+  }
+  const state = writes.get(record) ?? { asked: 0, stored: false };
+  state.asked += 1;
+  state.stored = false;
+  writes.set(record, state);
+  const asked = state.asked;
   putCounter += 1;
-  idbPut(record).catch(() => { /* best-effort persistence */ });
+  // A copy: the write waits for the database to open, and by then the record
+  // may be one of the older ones and have dropped its text.
+  idbPut({ ...record })
+    .then(() => {
+      if (state.asked !== asked) return;
+      state.stored = true;
+      lightenOlderRecords();
+    })
+    .catch(() => { /* best-effort persistence */ });
   if (putCounter % 25 === 0) trimPersistedRecords().catch(() => {});
 };
 
@@ -171,6 +238,10 @@ export const startAiRecord = (meta = {}) => {
     // what the model asked for on the way (lookupTools.js): every function call
     // it made and what it was told, round by round — see attachLookupRound
     lookups: null,
+    // every HTTP request the generation made — lookup rounds, retries, fallback
+    // switches — by outcome, as the request budget counts them: see
+    // attachRequestOutcome
+    requests: null,
     // human feedback
     rating: null,
     ratedAt: null,
@@ -183,6 +254,7 @@ export const startAiRecord = (meta = {}) => {
   };
   sessionRecords.push(record);
   if (sessionRecords.length > MAX_SESSION_RECORDS) sessionRecords.shift();
+  lightenOlderRecords();
   return record;
 };
 
@@ -226,6 +298,29 @@ export const attachLookupRound = (record, { round, calls = [], elapsedMs = null,
   record.lookups = ledger;
 };
 
+// One provider response for this generation, classified the way the request
+// budget (requestBudget.js) classifies it: 2xx answered, 429 refused, anything
+// else failed. One generation can be many requests.
+export const attachRequestOutcome = (record, status) => {
+  if (!record) return;
+  const requests = record.requests && typeof record.requests === "object"
+    ? record.requests
+    : { ok: 0, refused: 0, failed: 0 };
+  const code = Number(status);
+  if (code >= 200 && code < 300) requests.ok += 1;
+  else if (code === 429) requests.refused += 1;
+  else requests.failed += 1;
+  record.requests = requests;
+};
+
+// All the requests a record made, or null for a record from before they were
+// counted.
+export const requestCount = (record) => {
+  const requests = record?.requests;
+  if (!requests || typeof requests !== "object") return null;
+  return (Number(requests.ok) || 0) + (Number(requests.refused) || 0) + (Number(requests.failed) || 0);
+};
+
 export const finishAiRecord = (record, { ok = true, error = "", rawResponse = "" } = {}) => {
   if (!record || record.finished) return;
   record.finished = true;
@@ -261,10 +356,9 @@ export const attachAttemptOutcome = (record, { ok, validationError = "", parsedS
 };
 
 const trimPersistedRecords = async () => {
-  const all = await idbGetAll();
-  if (all.length <= MAX_PERSISTED_RECORDS) return;
-  all.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
-  await idbDeleteMany(all.slice(0, all.length - MAX_PERSISTED_RECORDS).map((record) => record.id));
+  const ids = await idbKeysOldestFirst();
+  if (ids.length <= MAX_PERSISTED_RECORDS) return;
+  await idbDeleteMany(ids.slice(0, ids.length - MAX_PERSISTED_RECORDS));
 };
 
 // A compact, schema-agnostic shape summary of a validated payload — enough for
@@ -305,20 +399,20 @@ export const normalizeParsedSummary = (taskKey, parsed) => {
 
 // --- Reading --------------------------------------------------------------------
 
+// Read afresh on every call rather than kept: the history is for the console
+// while it is open, not for the rest of the session. A session record that has
+// dropped its text is shown from its stored copy.
 export const getAiRecords = async () => {
-  if (idbHistory === null && !idbHistoryFailed) {
-    try {
-      const all = await idbGetAll();
-      all.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
-      idbHistory = all;
-    } catch {
-      idbHistoryFailed = true;
-      idbHistory = [];
-    }
-  }
+  let stored = [];
+  try {
+    stored = await idbGetAll();
+  } catch { /* memory-only mode */ }
   const merged = new Map();
-  for (const record of idbHistory ?? []) merged.set(record.id, record);
-  for (const record of sessionRecords) merged.set(record.id, record);
+  for (const record of stored) merged.set(record.id, record);
+  for (const record of sessionRecords) {
+    const full = lightRecords.has(record) ? merged.get(record.id) : null;
+    merged.set(record.id, full ? { ...full, rating: record.rating, ratedAt: record.ratedAt } : record);
+  }
   return [...merged.values()].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
 };
 
@@ -326,28 +420,25 @@ export const setGenerationRating = async (recordId, rating) => {
   const value = Math.round(Number(rating));
   if (!Number.isFinite(value)) return false;
   const clamped = Math.max(1, Math.min(10, value));
-  const update = (record) => {
-    if (record && record.id === recordId) {
-      record.rating = clamped;
-      record.ratedAt = Date.now();
+  const fields = { rating: clamped, ratedAt: Date.now() };
+  const inSession = sessionRecords.find((record) => record.id === recordId) ?? null;
+  if (inSession) Object.assign(inSession, fields);
+  if (!isTelemetryEnabled()) return Boolean(inSession);
+  try {
+    // A whole record is written whole; one that has dropped its text, or one
+    // from an earlier session, only has the rating merged into its stored copy.
+    if (inSession && !lightRecords.has(inSession)) {
+      await idbPut({ ...inSession });
       return true;
     }
-    return false;
-  };
-  let updated = sessionRecords.some(update);
-  if (!updated && idbHistory) updated = idbHistory.some(update);
-  if (updated && isTelemetryEnabled()) {
-    try {
-      const record = (await getAiRecords()).find((entry) => entry.id === recordId);
-      if (record) await idbPut(record);
-    } catch { /* best-effort */ }
+    return (await idbUpdate(recordId, fields)) || Boolean(inSession);
+  } catch {
+    return Boolean(inSession);
   }
-  return updated;
 };
 
 export const clearAiRecords = async () => {
   sessionRecords.length = 0;
-  idbHistory = [];
   try {
     await idbClear();
   } catch { /* memory-only mode */ }
@@ -361,6 +452,7 @@ const CSV_COLUMNS = [
   "thinkingTokens", "latencyMs", "firstByteMs", "systemPromptChars",
   "responseChars", "staticPrefixEnd", "ok", "validationError", "rating",
   "eventCount", "stopDate", "lookupRounds", "lookupCalls", "lookupNames",
+  "requestsOk", "requestsRefused", "requestsFailed",
 ];
 
 const csvCell = (value) => {
@@ -398,6 +490,9 @@ export const exportTelemetryCsv = (records) => {
       record.lookups?.rounds ?? "",
       record.lookups?.calls ?? "",
       (record.lookups?.entries ?? []).map((entry) => entry.name).join(" "),
+      record.requests?.ok ?? "",
+      record.requests?.refused ?? "",
+      record.requests?.failed ?? "",
     ].map(csvCell).join(","));
   }
   return rows.join("\n");

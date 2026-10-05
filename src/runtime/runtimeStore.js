@@ -79,6 +79,10 @@ export const deepEqual = (a, b) => {
 // The newest turn published, so a background read cannot revert a fresh jump.
 let gameStamp = { round: 0, date: "" };
 
+// Bumped by a switch to another save. A read begun before the switch is the
+// previous save's, whatever it returns, and is never applied.
+let generation = 0;
+
 export const runtimeGameStamp = (game) => ({
   round: Number(game?.round) || 0,
   date: game?.gameDate || "",
@@ -124,22 +128,27 @@ const applyValue = (key, raw, { normalize = true } = {}) => {
 const readOne = (key, force) => {
   const entry = entries.get(key);
   if (entry.pending) return entry.pending;
-  entry.pending = SOURCES[key].read({ force })
-    .then((value) => ({ key, value }), () => null)
-    .finally(() => { entry.pending = null; });
-  return entry.pending;
+  const readIn = generation;
+  const pending = SOURCES[key].read({ force })
+    .then((value) => ({ key, value, generation: readIn }), () => null)
+    // Only its own: a switch may already have replaced it with the new save's.
+    .finally(() => { if (entry.pending === pending) entry.pending = null; });
+  entry.pending = pending;
+  return pending;
 };
 
 const refreshKeys = (keys, { force = true } = {}) => {
   const wanted = keys.filter((key) => entries.has(key));
   if (!wanted.length) return Promise.resolve();
-  return Promise.all(wanted.map((key) => readOne(key, force))).then((results) => {
+  return Promise.all(wanted.map((key) => readOne(key, force))).then((read) => {
+    // Reads from before a switch to another save carry that save's documents.
+    const results = read.filter((result) => result?.generation === generation);
     // The whole batch goes, not just the game: world and events belong to that
     // same stale turn.
     const game = results.find((result) => result?.key === "game");
     if (game && isStaleGameRead(game.value, gameStamp)) return;
     for (const result of results) {
-      if (result) applyValue(result.key, result.value, { normalize: false });
+      applyValue(result.key, result.value, { normalize: false });
     }
   });
 };
@@ -197,11 +206,14 @@ const openChannel = () => {
 };
 
 // Authoritative on arrival: take the object writeJson holds, skip the fetch.
+// A writer that normalized the document before saving it says so
+// (detail.normalized), and it is not normalized again: for the world that was
+// a second full normalization on the main thread on every write.
 const onRuntimeJsonUpdated = (event) => {
   const key = keyForUrl(event?.detail?.url);
   if (!key) return;
   entries.get(key).canonicalAt = Date.now();
-  applyValue(key, event.detail.value);
+  applyValue(key, event.detail.value, { normalize: event.detail.normalized !== true });
   // BroadcastChannel never echoes to its own sender, so this cannot loop.
   channel?.postMessage({ key });
 };
@@ -214,11 +226,15 @@ const onRolledBack = () => {
 
 const onActiveGameChanged = () => {
   gameStamp = { round: 0, date: "" };
+  generation += 1;
   for (const [key, entry] of entries) {
     entry.value = SOURCES[key].empty;
     entry.loaded = false;
     entry.stale = false;
     entry.canonicalAt = 0;
+    // A read still in flight is the previous save's: the next one starts afresh
+    // rather than joining it.
+    entry.pending = null;
   }
   void refreshKeys(activeKeys());
 };

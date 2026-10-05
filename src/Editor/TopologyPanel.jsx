@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import { inputStyle, pillButton } from "./editorStyles.js";
+import { yieldToBrowser } from "./topologySweep.js";
 
 const formatArea = (m2) => {
   const n = Number(m2) || 0;
@@ -20,12 +21,14 @@ const LARGE_AREA_CAP = 1500;
 const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
   const [maxWidth, setMaxWidth] = useState(500);
   const [report, setReport] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(""); // the pass running: "analyze" or "repair"
+  const [notice, setNotice] = useState("");
 
   // A geometry mutation invalidates the old preview. Clear it rather than
   // pretending the highlighted candidates still describe the current map.
   useEffect(() => {
     setReport(null);
+    setNotice("");
     api?.clearTopologyDiagnostics?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionEpoch, selection.join(",")]);
@@ -42,29 +45,34 @@ const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
 
   const analyze = async () => {
     if (!api || !canAnalyze || busy) return;
-    setBusy(true);
+    setBusy("analyze");
+    setNotice("");
+    // Both passes are synchronous and can take seconds: let "Working…" paint
+    // first so the Workshop does not look frozen.
+    await yieldToBrowser();
     try {
       const next = api.analyzeTopology?.(selection, { maxWidth: Math.max(1, Number(maxWidth) || 500) });
       setReport(next || null);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
 
   const repair = async () => {
     if (!api || !report || !totalCandidates || busy) return;
     const ok = window.confirm(
-      `Repair ${totalCandidates} previewed topology issue${totalCandidates === 1 ? "" : "s"}?\n\n` +
-      "This is selection-scoped and becomes ONE undoable editor operation. Enclosed gaps are filled; narrow overlaps are trimmed deterministically. Open coastlines are never auto-filled.",
+      `${totalCandidates === 1 ? "Repair the 1 previewed issue?" : `Repair the ${totalCandidates} previewed issues?`}\n\n` +
+      "Only the selected regions change, and one Undo reverts the whole repair. Enclosed gaps are filled and narrow overlaps are trimmed. Open coastlines are never filled.",
     );
     if (!ok) return;
-    setBusy(true);
+    setBusy("repair");
+    await yieldToBrowser();
     try {
       const result = api.repairTopology?.(selection, { maxWidth: Math.max(1, Number(maxWidth) || 500) });
       setReport(null);
-      if (!result?.changed) window.alert("Nothing eligible was repaired. Re-analyze the selection or adjust the tolerance.");
+      setNotice(result?.changed ? "" : "Nothing eligible was repaired. Analyze the selection again or change the maximum width.");
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
 
@@ -80,7 +88,7 @@ const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
           ? "Local mode. Province clusters, border sections and whole polities are fine."
           : selection.length <= LARGE_AREA_CAP
             ? "Large-area mode. The same conservative repair rules are used, but overlap discovery now uses the map spatial index instead of all-pairs scanning."
-            : `Too large for one pass. R2.4 caps a single conservative repair at ${LARGE_AREA_CAP.toLocaleString()} regions; split the scenario into country / empire / continental chunks.`}
+            : `Too large for one pass. One repair covers at most ${LARGE_AREA_CAP.toLocaleString()} regions, so select one country, empire or continent at a time.`}
       </div>
 
       <div>
@@ -103,11 +111,11 @@ const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
       </div>
 
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-        <button type="button" style={pillButton(false)} disabled={!canAnalyze || busy} onClick={analyze}>
-          {busy ? "Working…" : isLargeArea ? "Analyze large selection" : "Analyze selection"}
+        <button type="button" style={pillButton(false)} disabled={!canAnalyze || !!busy} onClick={analyze}>
+          {busy === "analyze" ? "Working…" : isLargeArea ? "Analyze large selection" : "Analyze selection"}
         </button>
-        <button type="button" style={{ ...pillButton(false), background: totalCandidates ? "rgba(34,197,94,0.2)" : undefined }} disabled={!totalCandidates || busy} onClick={repair}>
-          Repair previewed issues
+        <button type="button" style={{ ...pillButton(false), background: totalCandidates ? "rgba(34,197,94,0.2)" : undefined }} disabled={!totalCandidates || !!busy} onClick={repair}>
+          {busy === "repair" ? "Working…" : "Repair previewed issues"}
         </button>
         <button
           type="button"
@@ -118,6 +126,10 @@ const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
           Clear preview
         </button>
       </div>
+
+      {notice ? (
+        <div style={{ fontSize: 11.5, color: "rgba(254,215,170,0.9)" }}>{notice}</div>
+      ) : null}
 
       {report && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

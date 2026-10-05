@@ -195,15 +195,40 @@ export const difficultyMeta = (value) =>
 
 const DIFFICULTY_SCOPES = new Set(["simulation", "diplomacy", "interactive"]);
 
-export const difficultyDirective = (value, scope = "simulation") => {
-  const meta = difficultyMeta(value);
+const DIFFICULTY_DOCTRINE = "Difficulty adjusts how uncertainty, opposition, player mistakes, and bargaining are resolved. It never changes established canon, deterministic accounting, geography, territorial semantics, or explicit GM/editor instructions. Higher difficulty means less benefit of the doubt and more competent causally-motivated opposition — never anti-player scripting, secret knowledge, or arbitrary penalties.";
+
+const scopedDirectiveOf = (meta, scope) => {
   const normalizedScope = DIFFICULTY_SCOPES.has(String(scope ?? "").trim().toLowerCase())
     ? String(scope).trim().toLowerCase()
     : "simulation";
-  const scopedDirective = meta.directives?.[normalizedScope] || meta.directives?.simulation || meta.directive;
+  return meta.directives?.[normalizedScope] || meta.directives?.simulation || meta.directive;
+};
+
+// Which directive a gameplay task reads (gameplay.js appends it): the ones
+// where governments talk get the diplomacy reading — the idle outreach and the
+// group-chat batch, where leaders bargain exactly as a one-to-one leader does —
+// interactive events their own, everything else the simulation one.
+export const difficultyScopeForTask = (taskKey) => {
+  const key = String(taskKey ?? "").trim();
+  if (key === "idleDiplomacy" || key === "chatActions") return "diplomacy";
+  if (key.startsWith("interactive")) return "interactive";
+  return "simulation";
+};
+
+export const difficultyDirective = (value, scope = "simulation") => {
+  const meta = difficultyMeta(value);
 
   return `[Difficulty 2.0 — ${meta.label}]
-Difficulty adjusts how uncertainty, opposition, player mistakes, and bargaining are resolved. It never changes established canon, deterministic accounting, geography, territorial semantics, or explicit GM/editor instructions. Higher difficulty means less benefit of the doubt and more competent causally-motivated opposition — never anti-player scripting, secret knowledge, or arbitrary penalties.
+${DIFFICULTY_DOCTRINE}
 
-${scopedDirective}`;
+${scopedDirectiveOf(meta, scope)}`;
+};
+
+// The same directive as a passage, for a template that gives it its own
+// heading: the leader's ${DIFFICULTY_DESCRIPTION_CHATS} (diplomacy) and the
+// time skip's ${DIFFICULTY_DESCRIPTION_JUMP_FORWARD} (simulation). A prompt
+// carries one or the other, never both, so it is told one difficulty once.
+export const difficultyPassage = (value, scope = "simulation") => {
+  const meta = difficultyMeta(value);
+  return `The difficulty is ${meta.label}. ${DIFFICULTY_DOCTRINE}\n${scopedDirectiveOf(meta, scope)}`;
 };

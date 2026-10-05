@@ -1,11 +1,11 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
-import { applyGroupOps, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
-import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
+import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
-import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
+import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, samePolityName } from "../../server/polityRename.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
@@ -21,11 +21,12 @@ import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeSpyOp } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
-import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import {
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
   normalizeInstitutions,
+  removePolityFromInstitutions,
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
@@ -45,6 +46,7 @@ import {
   maxTravelKm,
   patrolPoint,
   stepToward,
+  wrapLng,
 } from "./unitMotion.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 
@@ -178,7 +180,6 @@ export const WORLD_DEFAULTS = {
   // another look (projects.js boardPassReasons). Listed in the normalizeWorldState
   // return too, for the reason given above.
   boardReviewedRound: 0,
-  notes: "",
   // Standing multi-turn orders the ENGINE advances: {id, unitId, kind, toLng,
   // toLat, radiusKm, untilRound, targetId, targetLabel, note, issuedAt,
   // issuedRound}. kind is "move" (travel to a destination) or "patrol" (work a
@@ -255,7 +256,8 @@ export const WORLD_DEFAULTS = {
 export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
 const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
-const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
+export const UNIT_STATUSES = ["idle", "moving", "engaged", "defeated", "pending"];
+const UNIT_STATUS_SET = new Set(UNIT_STATUSES);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
 // What a formation is DOING, as distinct from `status`, which is its lifecycle.
 // Posture is what makes the map readable at a glance — "massing" on a border and
@@ -406,18 +408,23 @@ const normalizeActionParticipants = (value) =>
     .filter(Boolean);
 
 // How to undo a queued manual troop order if its action is deleted before the
-// next jump (see unitsController): a deploy is removed again, a move snaps the
-// unit back, a long-range order restores the prior status (#368).
+// next jump (see unitsController): a deploy is removed again, a disbanded unit
+// comes back as it was (`restore`, the whole unit), a move snaps the unit back,
+// a long-range order restores the prior status (#368).
 const normalizeUnitRevert = (value) => {
   if (!value || typeof value !== "object") return null;
   const unitId = normalizeOptionalString(value.unitId);
   if (!unitId) return null;
   const lng = finiteOrNull(value.lng);
   const lat = finiteOrNull(value.lat);
+  const restore = value.restore && typeof value.restore === "object"
+    ? normalizeUnitEntry({ ...value.restore, id: unitId })
+    : null;
   return {
     unitId,
     ...(lng !== null && lat !== null ? { lng, lat } : {}),
     ...(value.remove === true ? { remove: true } : {}),
+    ...(restore ? { restore } : {}),
     ...(normalizeOptionalString(value.status) ? { status: normalizeOptionalString(value.status) } : {}),
     // The standing multi-turn order (world.pendingUnitOrders) this move/attack
     // created, if any — so deleting the queued action also cancels the order
@@ -917,14 +924,6 @@ const reconcileModernChatForPlayer = (entry, world, playerCountry = "", identity
   }, desiredCountries, world, index);
 };
 
-export const reconcileChatsForWorld = (chats, world) =>
-  normalizeChats(chats).map((chat) => {
-    const institutionId = normalizeOptionalString(chat?.institutionId || chat?.channelInstitutionId);
-    if (!institutionId) return chat;
-    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
-    return canonicalId ? { ...chat, institutionId: canonicalId } : chat;
-  });
-
 const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", identityIndex = null) => {
   const left = reconcileModernChatForPlayer(primary, world, playerCountry, identityIndex);
   const right = reconcileModernChatForPlayer(incoming, world, playerCountry, identityIndex);
@@ -982,9 +981,6 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   }
   return output.filter(Boolean);
 };
-
-export const mergeIncomingChats = (existing, incoming, world, { playerCountry = "" } = {}) =>
-  reconcileChatsForPlayer([...normalizeArray(existing), ...normalizeArray(incoming)], world, playerCountry);
 
 const normalizeRegionTransfer = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -1175,7 +1171,9 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     return null;
   }
 
-  const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  const rawLng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  // A position on a world copy past the date line is the same place in range.
+  const lng = rawLng === null ? null : wrapLng(rawLng);
   const lat = finiteOrNull(entry.lat ?? entry.latitude);
   // Full country name, never a code — same identity everywhere (see ownerNames.js).
   const ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code));
@@ -2287,71 +2285,42 @@ const resolveProjectOpOwner = (raw, resolveOwner) => {
 // does, because identical inputs go in. NOTHING may be written back into the
 // event: an effect cached onto events.json impacts would be applied a second time
 // by any later replay, which is precisely the bug the latch exists to prevent.
+//
+// It is worked out by running the batch through applyProjectOps itself and
+// collecting every transition it latches. This used to be a separate scan that
+// recognised only a close op or a status-complete update, matched against the
+// board as it stood BEFORE the batch — so a create restating a project as
+// complete, or a close aimed at a project opened or renamed earlier in the same
+// batch, finished the project with its effects never released (and a later
+// "complete" found it already closed). One applier cannot disagree with itself.
 export const releaseProjectCompletionEffects = (projects, ops) => {
-  const list = normalizeProjects(projects);
   const polityChanges = [];
   const regionClaims = [];
   const regionTransfers = [];
   const projectIds = [];
-  const fired = new Set();
 
-  for (const raw of normalizeArray(ops)) {
-    const op = normalizeProjectOp(raw);
-    if (!op) continue;
-
-    // Two ways a project reaches `complete`, and the second is the one a model
-    // reaches for at least as often: an explicit close op, and a plain update
-    // carrying status "complete" (status is in PROJECT_PATCHABLE_FIELDS, so it
-    // lands). Handling only the first would make this fire about half the time,
-    // which is worse than not shipping it — an annexation that transfers the
-    // border on some completions and not others is unreadable to the player.
-    let completing = op.op === "close" && op.status === "complete";
-    if (!completing && op.op === "update") {
-      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
-      const alias = patchedAlias(patch, "status");
-      completing = Boolean(alias) && resolveProjectStatus(patch[alias]) === "complete";
-    }
-    if (!completing) continue;
-
-    const index = findProjectIndexForOp(list, op);
-    if (index === -1) continue;
-    const project = list[index];
-
-    if (fired.has(project.id)) continue;
-    if (!project.onComplete) continue;
-    // Only the TRANSITION fires. A project that is already closed is a
-    // restatement, and one already latched has spent its effects.
-    if (!PROJECT_OPEN_STATUSES.has(project.status)) continue;
-    if (project.onCompleteAppliedAt) continue;
-
-    fired.add(project.id);
-    projectIds.push(project.id);
-    polityChanges.push(...project.onComplete.polityChanges);
-    regionClaims.push(...project.onComplete.regionClaims);
-    regionTransfers.push(...project.onComplete.regionTransfers);
-  }
+  applyProjectOps(projects, ops, {
+    onRelease: (project) => {
+      projectIds.push(project.id);
+      polityChanges.push(...project.onComplete.polityChanges);
+      regionClaims.push(...project.onComplete.regionClaims);
+      regionTransfers.push(...project.onComplete.regionTransfers);
+    },
+  });
 
   return { polityChanges, projectIds, regionClaims, regionTransfers };
 };
 
-// Stamps the onComplete latch on the transition into `complete`.
-//
-// The invariant a future edit will break if it is not stated: this fires under
-// EXACTLY the predicate releaseProjectCompletionEffects fires under — the project
-// was open, it carries effects, it is not already latched, and it is completing
-// (not cancelled, not failed). The two agree by construction because they are
-// handed the same list, the same op and the same matcher; if you change the
-// condition in one, change it in the other or a completion will either transfer
-// its regions twice or never transfer them at all.
-//
-// Stamped whether or not THIS caller applied the effects. Both call sites
-// (applyEventImpactsToWorld and applyProjectOpsToWorld) run the release first, and
-// the alternative — threading a "did you apply them?" flag down here — is a flag
-// that eventually arrives false and silently swallows a country's annexation.
-const stampCompletionLatch = (project, completing, when) => (
-  completing && project.onComplete && !project.onCompleteAppliedAt
-    ? when
-    : project.onCompleteAppliedAt);
+// Is `after` the moment `before` completes? The one transition that releases a
+// project's onComplete effects and stamps its latch: it carries effects, it is
+// not already latched, it is now complete, and it was open before this op
+// (`before` is null for a project the op creates). Every op that can finish a
+// project — close, a status-complete update, a create restating it — asks this,
+// so no path can finish a project without deciding what happens to its effects.
+const completesWithEffects = (before, after) => Boolean(after?.onComplete)
+  && !after.onCompleteAppliedAt
+  && after.status === "complete"
+  && (!before || PROJECT_OPEN_STATUSES.has(before.status));
 
 // Apply a batch of project ops (pure).
 //
@@ -2359,12 +2328,62 @@ const stampCompletionLatch = (project, completing, when) => (
 //
 // `ctx` carries the event that caused the change ({date, eventId, round}), which
 // is what builds the activity feed without the model having to maintain it.
+// See applyProjectOps. `before` is the board the ops were applied to, so only a
+// date this call wrote is judged; `date` is the game date the ops land on.
+const withoutPastDeadlines = (projects, before, date) => {
+  const today = normalizeGameDate(date);
+  if (!today) return projects;
+  const inThePast = (value) => {
+    const day = normalizeGameDate(value);
+    return Boolean(day) && compareGameDates(day, today) < 0;
+  };
+  const outstanding = (milestone) => ["pending", "slipped"].includes(milestone?.status || "pending");
+  const priorById = new Map(normalizeProjects(before).map((project) => [project.id, project]));
+  return projects.map((project, index) => {
+    const prior = priorById.get(project.id);
+    let changed = false;
+    let targetDate = project.targetDate;
+    if (targetDate && targetDate !== prior?.targetDate && inThePast(targetDate)) {
+      targetDate = prior?.targetDate || "";
+      changed = true;
+    }
+    const priorMilestones = new Map(normalizeArray(prior?.milestones).map((milestone) => [milestone.id, milestone]));
+    const milestones = normalizeArray(project.milestones).map((milestone) => {
+      if (!outstanding(milestone) || !milestone.date || !inThePast(milestone.date)) return milestone;
+      const was = priorMilestones.get(milestone.id);
+      if (was && was.date === milestone.date) return milestone;
+      changed = true;
+      return { ...milestone, date: was?.date || "" };
+    });
+    if (!changed) return project;
+    const normalized = normalizeProjectEntry({ ...project, targetDate, milestones, nextMilestone: null }, index);
+    return normalized ? { ...project, ...normalized } : project;
+  });
+};
+
+// Two ctx hooks decide what a completion with effects does (see
+// completesWithEffects). `onRelease(project)` is told of each one as it latches;
+// releaseProjectCompletionEffects collects them. `holdCompletions` is the
+// non-event door's rule (applyProjectOpsToWorld): the project is left open, the
+// rest of the op still lands, and its id is passed to `onHold(project)`.
 export const applyProjectOps = (projects, ops, ctx = {}) => {
-  const { date = "", eventId = "", round = 0 } = ctx;
+  const { date = "", eventId = "", round = 0, holdCompletions = false, onHold, onRelease } = ctx;
   const stamp = new Date().toISOString();
   let next = normalizeProjects(projects);
 
   const indexOf = (op) => findProjectIndexForOp(next, op);
+
+  // `after` as it lands, given the entry it replaces (null for a new one). A
+  // held completion keeps everything else the op said and only stays open.
+  const settleCompletion = (before, after) => {
+    if (!completesWithEffects(before, after)) return after;
+    if (holdCompletions) {
+      onHold?.(after);
+      return { ...after, status: before ? before.status : "active" };
+    }
+    onRelease?.(after);
+    return { ...after, onCompleteAppliedAt: date || stamp };
+  };
 
   // Every mutation routes through here so the "when did this last move" fields
   // and the activity feed cannot be updated in one branch and forgotten in
@@ -2407,22 +2426,24 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           if (field === "name") continue; // matched BY the name; never rewrite it here
           merged[field] = op.project[field];
         }
+        // A restatement may say the project is complete, which finishes it
+        // exactly as a close op would — see completesWithEffects.
         next = next.map((project, index) => (index === existingIndex
-          ? touch({
+          ? settleCompletion(existing, touch({
             ...merged,
             id: existing.id,
             createdAt: existing.createdAt,
             // A restatement rarely repeats the history, so keep what we had.
             eventIds: existing.eventIds,
-          })
+          }))
           : project));
         continue;
       }
-      next = [...next, touch({
+      next = [...next, settleCompletion(null, touch({
         ...op.project,
         startedAt: op.project.startedAt || date,
         createdAt: stamp,
-      })];
+      }))];
       continue;
     }
 
@@ -2457,14 +2478,8 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       );
       if (!normalized) continue;
       // A model completes a project with a plain status patch at least as often
-      // as with an explicit close op, so the latch has to be stamped here too.
-      const completedHere = PROJECT_OPEN_STATUSES.has(current.status) && normalized.status === "complete";
-      next = next.map((project, i) => (i === index
-        ? touch({
-          ...normalized,
-          onCompleteAppliedAt: stampCompletionLatch(current, completedHere, date || stamp),
-        })
-        : project));
+      // as with an explicit close op, so the latch has to be settled here too.
+      next = next.map((project, i) => (i === index ? settleCompletion(current, touch(normalized)) : project));
       continue;
     }
 
@@ -2540,8 +2555,14 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
 
     if (op.op === "close") {
       const succeeded = op.status === "complete";
+      // A held completion drops the close whole: marking the milestones done on
+      // a project that stays open would be a claim the board cannot keep.
+      if (holdCompletions && completesWithEffects(current, { ...current, status: op.status })) {
+        onHold?.(current);
+        continue;
+      }
       next = next.map((project, i) => (i === index
-        ? touch({
+        ? settleCompletion(project, touch({
           ...project,
           status: op.status,
           // Only success implies the work is all done. A cancelled programme at
@@ -2556,14 +2577,10 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
             (isMilestoneOutstanding(entry) ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
-          // Cancel and fail never release effects: `succeeded` is the only gate,
-          // so a called-off annexation leaves the border exactly where it was.
-          onCompleteAppliedAt: stampCompletionLatch(
-            project,
-            succeeded && PROJECT_OPEN_STATUSES.has(project.status),
-            date || stamp,
-          ),
-        })
+          // Cancel and fail never release effects: only `complete` passes
+          // completesWithEffects, so a called-off annexation leaves the border
+          // exactly where it was.
+        }))
         : project));
       continue;
     }
@@ -2573,7 +2590,12 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     }
   }
 
-  return next;
+
+  // No deadline in the past. A target date or an outstanding milestone that this
+  // call set earlier than the date it applies on is not kept (2026-09-26): the
+  // entry keeps the date it had, or none. Dates already on the board stay — an
+  // effort that has since run late is overdue, and saying so is the board's job.
+  return withoutPastDeadlines(next, projects, date);
 };
 
 // One AI-authored mutation to the unit list: spawn | move | strength | remove.
@@ -2921,19 +2943,13 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
 };
 
-// Back-compat shape: units in, units out. applyUnitOpBatch is the real one and
-// is what applyEventImpactsToWorld calls; this keeps the documented array
-// contract for any caller that still expects it.
-export const applyUnitOps = (units, ops, context = {}) =>
-  applyUnitOpBatch(units, [], ops, context).units;
-
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
 // order repositions deterministically around its station.
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [] } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -2941,10 +2957,14 @@ export const advanceStandingOrders = (
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
-  // Units the caller already moved this turn (an event's own unit ops). Advancing
-  // them again here would move them twice for the same elapsed time — their step
-  // was taken per-event, against that event's own budget.
+  // Units the caller wants left alone entirely.
   const skip = new Set(normalizeArray(skipUnitIds));
+  // Units an event MOVED this period (lastUnitMoveDates), with the date of their
+  // last move: they already stepped once per event against that event's own
+  // budget, so they are credited only the days after it. Skipping them outright
+  // froze them for the rest of the jump, and a unit that only took losses or
+  // reinforcements was skipped too.
+  const lastMoved = movedAt instanceof Map ? movedAt : new Map(Object.entries(movedAt || {}));
   const expired = new Set();
   // Formations that marched in under posture "patrol" and arrived this turn:
   // they start working a station where they stand, as a unit that gets there
@@ -2963,6 +2983,11 @@ export const advanceStandingOrders = (
       return { ...unit, orderId: "", posture: "", status: "idle", updatedAt: stamp };
     }
 
+    // The days left after this unit's last move, or the whole period. Moved on
+    // its last day (or on a date that does not parse): nothing left to credit.
+    const unitElapsed = lastMoved.has(unit.id) ? (daysBetweenDates(lastMoved.get(unit.id), toDate) ?? 0) : elapsed;
+    if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
+
     if (order.kind === "patrol") {
       const point = patrolPoint(
         { lng: order.toLng, lat: order.toLat },
@@ -2976,7 +3001,7 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
-      maxTravelKm(unit.type, toDate || fromDate, elapsed),
+      maxTravelKm(unit.type, toDate || fromDate, unitElapsed),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
@@ -3010,6 +3035,27 @@ export const advanceStandingOrders = (
     units: nextUnits,
     pendingUnitOrders: pruneSatisfiedUnitOrders(nextUnits, kept),
   };
+};
+
+// The units a period's events MOVED, each with the date of its last move, for
+// advanceStandingOrders' movedAt. Only a move op changes where a unit is (and a
+// spawn puts one somewhere, so a unit raised mid-period is credited from then):
+// a strength change or a removal does not, and counting them froze a fleet that
+// only took attrition for the whole jump. An event with no date of its own
+// counts as `fallbackDate` (the period's start).
+export const lastUnitMoveDates = (events, fallbackDate = "") => {
+  const moved = new Map();
+  for (const event of normalizeArray(events)) {
+    const date = normalizeOptionalString(event?.date) || normalizeOptionalString(fallbackDate);
+    for (const op of normalizeArray(event?.impacts?.unitOps)) {
+      if (op?.op !== "move" && op?.op !== "spawn") continue;
+      const unitId = normalizeOptionalString(op.unitId || op.unit?.id);
+      if (!unitId) continue;
+      const previous = moved.get(unitId);
+      if (previous === undefined || compareGameDates(date, previous) > 0) moved.set(unitId, date);
+    }
+  }
+  return moved;
 };
 
 // Repair units that claim to be moving when nothing is moving them. This is a
@@ -3301,6 +3347,11 @@ const normalizeEventImpacts = (value) => {
   };
 };
 
+// Every family of operation an event's impacts can carry, from the normalizer
+// itself, so a list built from it (the GM Console preview) cannot leave out a
+// family added later.
+export const EVENT_IMPACT_KEYS = Object.freeze(Object.keys(normalizeEventImpacts({})));
+
 // An event's kind and a turn record's mode. A played-out scene was "catalyst"
 // in both until interactive events were renamed (18 September 2026).
 const normalizeRenamedKind = (value) => {
@@ -3328,11 +3379,17 @@ const normalizeEventNpcReaction = (value) => {
   const evaluatedAt = normalizeOptionalString(value.evaluatedAt);
   const result = normalizeOptionalString(value.result);
   const chatId = normalizeOptionalString(value.chatId);
+  // A reaction given up after its last failed attempt ("failed") says how many
+  // attempts it made and why the last one failed, for the Event Editor.
+  const attempts = Math.max(0, Math.trunc(Number(value.attempts) || 0));
+  const lastError = normalizeOptionalString(value.lastError);
   return {
     enabled: value.enabled === true,
     ...(evaluatedAt ? { evaluatedAt } : {}),
     ...(result ? { result } : {}),
     ...(chatId ? { chatId } : {}),
+    ...(attempts ? { attempts } : {}),
+    ...(lastError ? { lastError } : {}),
   };
 };
 
@@ -3487,6 +3544,8 @@ const normalizeActionSuggestions = (value) =>
       description: normalizeOptionalString(topic.description),
       id: normalizeOptionalString(topic.id) || generateId("topic"),
       title,
+      // Canned topics written when the AI could not be reached say so.
+      ...(topic.source === "fallback" ? { source: "fallback" } : {}),
     };
   }).filter(Boolean);
 
@@ -3576,8 +3635,6 @@ const normalizeWorldStoryline = (entry, index = 0) => {
     nextReviewDate:
       status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
     state: normalizeTextLike(entry.state || entry.summary || entry.description),
-    drivers: uniqueStrings(entry.drivers, 8),
-    constraints: uniqueStrings(entry.constraints, 8),
     sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
     createdRound:
       Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0
@@ -4052,7 +4109,6 @@ export const normalizeWorldState = (world) => {
     boardReviewedRound: Number.isFinite(Number(nextWorld.boardReviewedRound))
       ? Math.max(0, Math.trunc(Number(nextWorld.boardReviewedRound)))
       : 0,
-    notes: normalizeOptionalString(nextWorld.notes),
     polityOverrides,
     regionClaimants,
     settledRegionClaims,
@@ -4183,18 +4239,34 @@ export const normalizeWorldState = (world) => {
 // The distinction that matters: owning a region via an override = has land; but
 // a scenario that ships NO override list at all means the polity owns its country
 // through the base map tiles (a stock modern map), which is NOT landless.
+//
+// Reads the three maps straight off the world rather than normalizing all of it:
+// the UI asks this on every world change, and normalizeWorldState rebuilds
+// institutions, actors and relations to answer a question about two maps. Owners
+// fold through the same alias resolver normalization uses, built only when a
+// region's owner is not already the polity's exact key.
 export const isPolityLandless = (world, code) => {
   const polityCode = normalizeString(code);
   if (!polityCode) return false;
-  const normalized = normalizeWorldState(world);
-  const entries = Object.entries(normalized.regionOwnershipOverrides);
+  const source = world && typeof world === "object" ? world : {};
+  const polityOverrides = source.polityOverrides && typeof source.polityOverrides === "object" ? source.polityOverrides : {};
+  const entries = Object.entries(source.regionOwnershipOverrides ?? {})
+    .filter(([regionId, ownerCode]) => normalizeOptionalString(regionId) && normalizeOptionalString(ownerCode));
+  const wanted = polityCode.toLowerCase();
+  let resolveOwner = null;
+  const isPolity = (ownerCode) => {
+    const raw = normalizeString(ownerCode);
+    if (raw.toLowerCase() === wanted) return true;
+    resolveOwner ??= createOwnerResolver(buildOwnerAliasMap(polityOverrides));
+    return normalizeString(resolveOwner(raw)).toLowerCase() === wanted;
+  };
   // Administering a region or being its lawful sovereign both count: an
   // occupied homeland is still a homeland.
-  const owns = [...entries, ...Object.entries(normalized.regionSovereigntyOverrides || {})].some(
-    ([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === polityCode.toLowerCase(),
+  const owns = [...entries, ...Object.entries(source.regionSovereigntyOverrides ?? {})].some(
+    ([, ownerCode]) => isPolity(ownerCode),
   );
   if (owns) return false;
-  const isKnownPolity = Boolean(normalized.polityOverrides?.[polityCode]);
+  const isKnownPolity = Boolean(polityOverrides[polityCode]);
   // No override list AND not a declared polity = stock map, owns via base tiles.
   if (entries.length === 0 && !isKnownPolity) return false;
   return true;
@@ -4374,11 +4446,11 @@ export const primeCountryStatsWorkerCommit = async ({
 
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
-  // Edited/AI-written polity names, aliases and notes get translated (and
-  // saved to the server language pack) the moment they're written, not when
-  // they first happen to be rendered somewhere.
-  enqueueContentStrings(normalized.polityOverrides);
-  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options });
+  // Polity names, aliases and notes written during play are not queued for
+  // translation: the AI writes them in the player's language already, and the
+  // player types theirs in it. A scenario's own polities are content, queued
+  // when the game opens and when the scenario is saved (translator.js).
+  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options, normalized: true });
 };
 
 export const readGameData = async ({ force = false } = {}) =>
@@ -4426,8 +4498,26 @@ export const readInterceptsState = async ({ force = false } = {}) => {
 export const writeInterceptsState = async (intercepts, options = {}) =>
   writeJson(JSON_URLS.intercepts, intercepts && typeof intercepts === "object" ? intercepts : {}, { pretty: true, ...options });
 
+// The conversations, the player's and the advisor's: a failed read THROWS. It
+// used to come back as [] like an empty file, and every writer that read,
+// changed and wrote the list (the Diplomacy panel, the runtime store it syncs
+// from, a turn's commit, the outreach and idle drips, the advisor's notices)
+// then saved that short list over every conversation. A missing document (a
+// new game) is legitimately empty: the stores answer it with an empty list or
+// a 404.
+const readConversationJson = (url, { force = false } = {}) =>
+  readJson(url, { force }).catch((error) => {
+    if (error?.status === 404) return [];
+    throw error;
+  });
+
 export const readChatsState = async ({ force = false } = {}) =>
-  normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
+  normalizeChats(await readConversationJson(JSON_URLS.chat, { force }));
+
+export const readAdvisorMessages = async ({ force = false } = {}) => {
+  const messages = await readConversationJson(JSON_URLS.advisor, { force });
+  return Array.isArray(messages) ? messages : [];
+};
 
 let chatWriteQueue = Promise.resolve();
 
@@ -4457,7 +4547,6 @@ const buildCanonicalTurnPayload = ({
   world = {},
 } = {}, { expectedGameId = "", preserveApprovedEvents = false } = {}) => {
   const normalizedWorld = normalizeWorldState(world);
-  enqueueContentStrings(normalizedWorld.polityOverrides);
 
   const eventLog = normalizeEvents(events);
   const normalizedEvents = preserveApprovedEvents
@@ -4488,6 +4577,14 @@ const commitCanonicalTurnPayload = async (payload, {
     { extra: `${Math.round(body.length / 1024)} KiB`, warnAt: 50 },
   );
 
+  // The campaign this generation is written to, as the endpoints named it when
+  // the commit went out. Several MB of echo take a while to arrive and parse, and
+  // a switch to another save in that time repoints JSON_URLS at it (the token in
+  // them changes): publishing then would fill the new save's caches and map with
+  // this campaign's state, and the next unforced read would hand it back to be
+  // written over the new save. writeJson is safe the same way, by priming the URL
+  // it wrote rather than the one that is current.
+  const generationUrl = String(JSON_URLS.game || "");
   const response = await fetch("/api/runtime/turn-commit", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -4506,13 +4603,24 @@ const commitCanonicalTurnPayload = async (payload, {
     // generation remains the best available client representation.
   }
 
+  // Written, and to the right campaign (the store checked expectedGameId), but
+  // no longer the one on screen: nothing of it belongs in the caches now.
+  if (String(JSON_URLS.game || "") !== generationUrl) {
+    reportPerfOperation(
+      "canonical turn commit",
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+      { extra: `${transactionId} (not published: the campaign changed)`, warnAt: 100 },
+    );
+    return { ...committed, transactionId, published: false };
+  }
+
   publishJsonWriteBatch([
     { url: JSON_URLS.actions, value: committed.actions },
     { url: JSON_URLS.chat, value: committed.chat },
     { url: JSON_URLS.events, value: committed.events },
     { url: JSON_URLS.game, value: committed.game },
     { url: JSON_URLS.colors, value: committed.colors },
-    { url: JSON_URLS.world, value: committed.world, cacheClone: false },
+    { url: JSON_URLS.world, value: committed.world, cacheClone: false, normalized: true },
   ], { emitEvents });
 
   worldViewRaw = committed.world;
@@ -4530,6 +4638,37 @@ const enqueueCanonicalGenerationWrite = (write) => {
   const pending = chatWriteQueue.then(write, write);
   chatWriteQueue = pending.then(() => undefined, () => undefined);
   return pending;
+};
+
+// How far each leader has been shown of its other threads
+// (AI/crossChatKnowledge.js), merged into the saved world after a diplomatic
+// reply. Merged rather than replaced: a turn in one chat must not forget what
+// another chat showed. In the canonical write queue, so it can neither land
+// between a canonical commit's read and its write nor be overwritten by one,
+// and it re-reads the world first. Quiet: no echo to parse and no
+// world-updated event for the map and every panel, for a few ids nothing on
+// screen shows. Calls made while one is waiting to run join it, and nothing is
+// written when every cursor already stands at what it is given.
+let pendingCursorMerge = null;
+
+export const mergeChatKnowledgeCursors = (cursors) => {
+  if (!cursors || typeof cursors !== "object" || !Object.keys(cursors).length) return Promise.resolve(false);
+  if (pendingCursorMerge) {
+    Object.assign(pendingCursorMerge.cursors, cursors);
+    return pendingCursorMerge.done;
+  }
+  const merge = { cursors: { ...cursors }, done: null };
+  pendingCursorMerge = merge;
+  merge.done = enqueueCanonicalGenerationWrite(async () => {
+    if (pendingCursorMerge === merge) pendingCursorMerge = null;
+    const world = await readWorldState({ force: true });
+    const current = world?.chatKnowledgeCursors ?? {};
+    const moved = Object.entries(merge.cursors).some(([key, value]) => JSON.stringify(current[key]) !== JSON.stringify(value));
+    if (!moved) return false;
+    await writeWorldState({ ...world, chatKnowledgeCursors: { ...current, ...merge.cursors } }, { echo: false, emitEvents: false });
+    return true;
+  });
+  return merge.done;
 };
 
 export const writeCanonicalTurnState = (state = {}, {
@@ -4637,10 +4776,9 @@ const RUNTIME_DOCUMENTS = {
   // The advisor's conversation: written by its panel, by document notices and
   // by a rollback, so all three meet here too.
   advisor: {
-    read: async () => {
-      const messages = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
-      return Array.isArray(messages) ? messages : [];
-    },
+    // A read that fails throws (readConversationJson), so nothing is ever written
+    // over a conversation that could not be loaded.
+    read: () => readAdvisorMessages({ force: true }),
     write: (value, options) => writeJson(JSON_URLS.advisor, Array.isArray(value) ? value : [], options),
   },
 };
@@ -5142,6 +5280,7 @@ const applyPolityAndTerritoryImpacts = ({
     if (change.stats && typeof change.stats === "object") {
       const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
+        maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
       });
       const rep = Number(merged?.indices?.internationalReputation);
       if (Number.isFinite(rep)) {
@@ -5167,7 +5306,10 @@ const applyPolityAndTerritoryImpacts = ({
   // same event must have settled its land first. A dissolved polity keeps its
   // record (aliases still fold old history onto it) but leaves the present:
   // its stats, tags, reputation, intelligence and colour go, and its standing
-  // agreements end on the event's date.
+  // agreements end on the event's date. So do its wars: it leaves every side it
+  // fought on, and a war with nobody left on one side ends that day (the sides
+  // are kept as they were, so the record still says who fought). Its units
+  // leave the map with it, and their standing orders with them.
   for (const { code } of dissolutions) {
     const holdsTerritory = [
       ...Object.values(world.regionOwnershipOverrides || {}),
@@ -5196,6 +5338,45 @@ const applyPolityAndTerritoryImpacts = ({
         lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
       };
     });
+    world.wars = normalizeArray(world.wars).map((war) => {
+      if (!war || typeof war !== "object" || war.status === "ended") return war;
+      const sideA = normalizeArray(war.sideA).filter((party) => !samePolity(party, code));
+      const sideB = normalizeArray(war.sideB).filter((party) => !samePolity(party, code));
+      if (sideA.length === normalizeArray(war.sideA).length && sideB.length === normalizeArray(war.sideB).length) return war;
+      const lastUpdatedDate = endedDate || war.lastUpdatedDate;
+      if (!sideA.length || !sideB.length) {
+        return { ...war, status: "ended", endedDate: endedDate || war.lastUpdatedDate, lastUpdatedDate };
+      }
+      return { ...war, sideA, sideB, lastUpdatedDate };
+    });
+    world.units = normalizeArray(world.units).filter((unit) => !samePolity(unit?.ownerCode, code));
+    const unitIds = new Set(world.units.map((unit) => unit?.id));
+    world.pendingUnitOrders = normalizeArray(world.pendingUnitOrders).filter((order) => unitIds.has(order?.unitId));
+    // It leaves its institutions (seats, open ballots, open cases), and every
+    // subordination it was party to ends: released when it was the Overlord,
+    // annexed when it was the Puppet and this event handed its land to the
+    // Overlord, released otherwise.
+    if (world.institutions && typeof world.institutions === "object") {
+      world.institutions = removePolityFromInstitutions(world.institutions, code, world, endedDate);
+    }
+    if (Array.isArray(world.puppets)) {
+      world.puppets = world.puppets.map((row) => {
+        if (!row || typeof row !== "object" || normalizeOptionalString(row.status || "active").toLowerCase() !== "active") return row;
+        const isOverlord = samePolity(row.overlord, code);
+        if (!isOverlord && !samePolity(row.puppet, code)) return row;
+        const annexed = !isOverlord && regionTransfers.some((transfer) => (
+          samePolity(resolveOwner(transfer.fromCode) || transfer.fromCode, code)
+          && samePolity(resolveOwner(transfer.toCode) || transfer.toCode, row.overlord)
+        ));
+        return {
+          ...row,
+          status: annexed ? "annexed" : "released",
+          endedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+          lastUpdatedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+          ...(eventId ? { sourceEventIds: [...new Set([...normalizeArray(row.sourceEventIds), eventId])].slice(-24) } : {}),
+        };
+      });
+    }
     delete colors[code];
     console.info(`[polity lifecycle] dissolved "${code}".`);
   }
@@ -5274,7 +5455,7 @@ export const applyEventImpactsToWorld = ({
       eventId: event.id,
       polityChanges,
       regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
-      regionControlOps: [...event.impacts.regionControlOps, ...normalizeArray(released.regionControlOps)],
+      regionControlOps: event.impacts.regionControlOps,
       regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
       resolveOwner,
       world: nextWorld,
@@ -5291,9 +5472,47 @@ export const applyEventImpactsToWorld = ({
     // Groups after the land has moved, so a group can take what the same event
     // just changed hands.
     if (event.impacts.groupOps?.length) {
-      const applied = applyGroupOps(nextWorld, event.impacts.groupOps);
+      // A group that is also a polity (the player leading a group, groups.js
+      // playerGroupKey) is one actor under one name. The model may not dissolve
+      // it: losing its whole area is a release, and it goes on with none. A
+      // rename of it renames the polity, which renames the group with it
+      // (server/polityRename.js), so the game's own polity follows.
+      const groupOps = [];
+      for (const raw of event.impacts.groupOps) {
+        const op = normalizeGroupOp(raw);
+        if (!op) continue;
+        const key = findGroupKey(nextWorld.groups, op.name);
+        const isPolity = Boolean(key) && Object.keys(nextWorld.polityOverrides ?? {}).some((name) => samePolityName(name, key));
+        if (!isPolity) {
+          groupOps.push(op);
+          continue;
+        }
+        if (op.op === "dissolve") {
+          console.info(`[groups] "${key}" is a polity as well as a group; it is not dissolved (a release takes its area).`);
+          continue;
+        }
+        let name = key;
+        if (canRenameGroup(nextWorld.groups, key, op.newName)) {
+          try {
+            const result = renamePolityInWorld(nextWorld, key, op.newName);
+            Object.assign(nextWorld, result.world);
+            nextColors = renamePolityInColors(nextColors, result.from, result.to);
+            renamedPolities.push({ from: result.from, to: result.to });
+            resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+            name = findGroupKey(nextWorld.groups, result.to) || key;
+          } catch (error) {
+            console.warn(`[groups] could not rename "${key}" as "${op.newName}": ${error?.message || error}`);
+          }
+        }
+        const { newName: _newName, ...rest } = op;
+        groupOps.push({ ...rest, name });
+      }
+      const applied = applyGroupOps(nextWorld, groupOps);
       nextWorld.groups = applied.groups;
       nextWorld.groupAreas = applied.groupAreas;
+      for (const change of applied.changes) {
+        if (change.op === "refused") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
+      }
     }
 
     if (event.impacts.politicalActorOps?.length) {
@@ -5466,19 +5685,16 @@ export const applyProjectOpsToWorld = ({
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
   const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
 
-  // The same pre-scan the event path runs, used here purely as a PREDICATE: what
-  // would this batch release? Anything it names is an op this door may not apply.
-  const released = releaseProjectCompletionEffects(nextWorld.projects, resolved);
-  const deferred = new Set(released.projectIds);
+  const deferred = new Set();
   const refused = new Set();
 
   const allowed = resolved.filter((raw) => {
     const op = normalizeProjectOp(raw);
     if (!op) return true;
     const index = findProjectIndexForOp(nextWorld.projects, op);
-    // A create names nothing on the board yet, so there is no owner to check and
-    // no completion to defer. The panel never sends one; the advisor legitimately
-    // opens a rival's programme.
+    // A create names nothing on the board yet, so there is no owner to check.
+    // The panel never sends one; the advisor legitimately opens a rival's
+    // programme.
     if (index === -1) return true;
     const target = nextWorld.projects[index];
 
@@ -5488,21 +5704,22 @@ export const applyProjectOpsToWorld = ({
       refused.add(target.id);
       return false;
     }
-
-    // Only the completing op is dropped. An update to the same project in the same
-    // batch — progress, a note, a milestone — still lands: refusing to close it is
-    // not a reason to lose everything else the reply said about it.
-    if (!deferred.has(target.id)) return true;
-    if (op.op === "close" && op.status === "complete") return false;
-    if (op.op === "update") {
-      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
-      const alias = patchedAlias(patch, "status");
-      if (alias && resolveProjectStatus(patch[alias]) === "complete") return false;
-    }
     return true;
   });
 
-  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, { date, eventId, round });
+  // Held inside the applier rather than filtered out here, because only the
+  // applier knows every way a batch can finish a project (a create restating it,
+  // a close aimed at one opened earlier in the batch). Only the completion is
+  // held: an update to the same project — progress, a note, a milestone — still
+  // lands, since refusing to close it is not a reason to lose everything else
+  // the reply said about it.
+  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, {
+    date,
+    eventId,
+    round,
+    holdCompletions: true,
+    onHold: (project) => deferred.add(project.id),
+  });
 
   return { deferredProjectIds: [...deferred], refusedProjectIds: [...refused], world: nextWorld };
 };

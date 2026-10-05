@@ -92,7 +92,9 @@ test("the curator hands on the events it keeps off the timeline", () => {
 test("the board pass is given the Hidden events, and their ops land before the write", () => {
   const board = at("if (projects) {", "the projects/board call");
   const handedOn = at("hiddenEvents: boardHiddenEvents", "passing the Hidden events to the board pass");
-  const applied = at("boardOnlyEventIds:", "applying Hidden-event ops without stamping activity");
+  // The carriers are applied in boardPassApply.js, where a Hidden event's ops
+  // go in without stamping activity (boardPassApply.test.js).
+  const applied = at("applyBoardCarriers({", "applying the board pass's ops, Hidden events' included");
   const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(board < handedOn && handedOn < write, "the board pass must receive the Hidden events before the write");
   assert.ok(applied < write, "a Hidden event's Board ops must be applied before the write, or they are lost");

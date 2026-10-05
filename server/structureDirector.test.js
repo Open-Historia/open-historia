@@ -129,3 +129,20 @@ test("links join the Project only for a structure that reached the map", () => {
   assert.deepEqual(linked.projects.find((project) => project.id === "p-argus").linkedMarkerIds, []);
   assert.equal(linkStructuresToProjects(built, []), built);
 });
+
+test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    run([], {
+      signal: controller.signal,
+      analyzeBatch: async () => {
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+        throw controller.signal.reason;
+      },
+    }),
+    (error) => error?.name === "AbortError",
+  );
+  // Any other failure still leaves the events as they were.
+  const { events: kept } = await run([], { analyzeBatch: async () => { throw new Error("model unavailable"); } });
+  assert.equal(kept, events);
+});

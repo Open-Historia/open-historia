@@ -37,10 +37,11 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
+import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
-import { playerFocusOf } from "../../../server/gameFeatures.js";
+import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -64,7 +65,7 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -75,6 +76,7 @@ import {
     fetchDesktopLog,
     formatLogSize,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogLimitBytes,
     getDebugLogSize,
     getLoggingFileEntries,
@@ -82,6 +84,7 @@ import {
     isDebugLogVerbose,
     logDebugEvent,
     logSettingChange,
+    logSettingMessage,
     setDebugLogEnabled,
     setDebugLogVerbose,
     subscribeToDebugLog,
@@ -91,6 +94,7 @@ import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtim
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
 
 const baseStyle = {
@@ -315,32 +319,45 @@ const ChatLanguageSelector = () => {
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
-const Toggle = ({ label, enabled, onToggle }) => {
+// disabled: the switch shows its state but is held there by something else
+// (the system's reduced-motion setting), so it does not respond.
+// `inactive`: the switch keeps its stored choice and can still be flipped, but
+// something else stops it working for now, which the line under the label says.
+const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) => {
     const touch = useTouchPrimary();
     return (
     <div
     className="oh-tap-row"
-    onClick={touch ? onToggle : undefined}
+    onClick={touch && !disabled ? onToggle : undefined}
     style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: "1rem",
-        ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
+        ...(touch ? { cursor: disabled ? "default" : "pointer", gap: "0.75rem" } : null),
     }}
     >
-    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    {inactive
+        ? (
+            <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.9rem" }}>{label}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)", display: "block", fontSize: "0.72rem", marginTop: "0.1rem" }}>{inactive}</span>
+            </span>
+        )
+        : <span style={{ fontSize: "0.9rem" }}>{label}</span>}
     <button
-    onClick={touch ? undefined : onToggle}
+    onClick={touch || disabled ? undefined : onToggle}
+    disabled={disabled}
     style={{
         width: "3.5rem",
         height: "1.75rem",
         borderRadius: "1rem",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.55 : 1,
         position: "relative",
         transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#55555b",
+        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "#55555b",
         ...(touch ? { flexShrink: 0 } : null),
     }}
     >
@@ -499,6 +516,42 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
+// What each model has said about its context window (contextWindow.js), read
+// from the same storage the AI calls keep it in (main.jsx contextWindows).
+const contextWindowMemory = createContextWindowMemory({
+    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
+    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
+});
+
+// A model's context window: what was learned from its refusals, which keeps a
+// request it cannot fit from being sent to it, and the player's own figure,
+// which beats that. Forget clears either — for a local model whose window was
+// raised, or a provider that raised its limit — and the next request is sent.
+const ContextWindowField = ({ entry }) => {
+    const [, setRevision] = useState(0);
+    if (!entry) return null;
+    const key = contextWindowKey(entry);
+    const known = contextWindowMemory.remembered(key);
+    const changed = () => setRevision((value) => value + 1);
+    return (
+        <div>
+        <SettingsInput
+        label="Context window (tokens)"
+        type="number"
+        value={known?.source === "declared" ? String(known.limitTokens) : ""}
+        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
+        placeholder="Not set"
+        helperText={describeRememberedWindow(known)}
+        />
+        {known && (
+            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
+            Forget this window
+            </button>
+        )}
+        </div>
+    );
+};
+
 // How to ask this provider for structured data. "Auto" tries the strongest
 // method and steps down when a gateway ignores it, which is right for almost
 // everyone — but that discovery costs a full generation per rung, and on a slow
@@ -514,7 +567,6 @@ const StructuredModeSelect = ({ onChange, value }) => {
         <div style={fieldGroupStyle}>
         <label style={labelStyle}>How the AI answers</label>
         <select
-        data-no-translate
         value={mode}
         onChange={(event) => onChange(event.target.value)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -687,12 +739,17 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
             label="API endpoint"
             value={connection.endpoint}
             onChange={set("endpoint")}
-            placeholder={connection.provider === "openai-compatible" ? "http://localhost:11434/v1" : "https://my-proxy.example/v1"}
+            // On a phone localhost is the phone itself, so the example is a LAN address.
+            placeholder={connection.provider === "openai-compatible" ? (import.meta.env.VITE_OH_NATIVE ? "http://192.168.1.20:11434/v1" : "http://localhost:11434/v1") : "https://my-proxy.example/v1"}
             // A server on the player's own machine works from the website too, but only
             // if it allows this origin — otherwise the browser silently drops the reply.
             // Say so up front here rather than letting it surface as "Failed to fetch".
+            // The Android app has no such limit (native HTTP, runtime/native/http.js),
+            // but reaches the server over the network and without streaming.
             helperText={connection.provider === "openai-compatible"
-                ? (import.meta.env.VITE_OH_WEB
+                ? (import.meta.env.VITE_OH_NATIVE
+                    ? "Base URL that exposes /chat/completions and /models. A server on your network (Ollama, LM Studio) works directly. Use the computer's network address, such as http://192.168.1.20:11434/v1, not localhost, which on a phone means the phone itself. The server has to listen on that address: start Ollama with OLLAMA_HOST=0.0.0.0. Its replies arrive whole rather than word by word."
+                    : import.meta.env.VITE_OH_WEB
                     ? "Base URL that exposes /chat/completions and /models. A server on your own machine (Ollama, LM Studio) also has to allow this site: start Ollama with OLLAMA_ORIGINS set to this site's address, or use the desktop app."
                     : "Base URL that exposes /chat/completions and /models.")
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
@@ -773,6 +830,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
+        <ContextWindowField entry={entry.resolved} />
         </details>
         </div>
     );
@@ -1069,8 +1127,30 @@ const useRequestDay = () => {
     return day;
 };
 
+// Whether requests are being saved, following the switch in AI requests.
+const useSavingRequests = () => {
+    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    useEffect(() => {
+        const refresh = () => setSaving(requestSettings.saveRequests());
+        window.addEventListener("ai:request-budget", refresh);
+        return () => window.removeEventListener("ai:request-budget", refresh);
+    }, []);
+    return saving;
+};
+
+// Task keys the request count holds that are not per-task models
+// (AI_TASK_ROUTING): the translator's requests, and a call that named no task.
+const OTHER_REQUEST_TASKS = [
+    { key: "translation", label: "Translation" },
+    { key: "other", label: "Other" },
+    { key: "direct", label: "Other" },
+];
+const REQUEST_TASK_LABELS = Object.fromEntries([...AI_TASK_ROUTING, ...OTHER_REQUEST_TASKS].map(({ key, label }) => [key, label]));
+
 const RequestBudgetSection = () => {
     const day = useRequestDay();
+    const touch = useTouchPrimary();
+    const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
@@ -1107,8 +1187,23 @@ const RequestBudgetSection = () => {
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
                     {day.background > 0 ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
+                    {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
                 </div>
+                {tasks.length > 0 && (
+                    <details style={{ marginTop: "0.4rem" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", ...(touch ? TOUCH_SUMMARY : null) }}>Used today, by task</summary>
+                        <div style={{ display: "grid", gap: "0.15rem", marginTop: "0.3rem" }}>
+                            {tasks.map((row) => (
+                                <div key={row.label} style={{ color: "rgba(255,255,255,0.72)", display: "flex", fontSize: "0.72rem", gap: "0.5rem", justifyContent: "space-between" }}>
+                                    {/* A task this table does not name is shown as it was counted. */}
+                                    <span data-no-translate={row.named ? undefined : true} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                                    <span data-no-translate>{row.count}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
             </div>
 
             <Toggle
@@ -1309,26 +1404,39 @@ const NetworkSharing = () => {
         );
     }
 
-    const toggle = async () => {
-        if (busy || state.lockedByEnv) return;
+    // One switch's change: the server answers with the whole network state.
+    const change = async (body, label, key) => {
+        if (busy) return;
         setBusy(true);
         setError("");
-        const next = !state.lanEnabled;
         try {
             const response = await fetch("/api/server/network", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ lanEnabled: next }),
+                body: JSON.stringify(body),
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data?.error || "Could not change this.");
             setState(data);
-            logSettingChange("Let other devices connect", Boolean(data?.lanEnabled));
+            logSettingChange(label, Boolean(data?.[key]));
         } catch (nextError) {
             setError(nextError.message);
         } finally {
             setBusy(false);
         }
+    };
+
+    const toggle = () => {
+        if (state.lockedByEnv) return;
+        change({ lanEnabled: !state.lanEnabled }, "Let other devices connect", "lanEnabled");
+    };
+
+    // A browser on another device reaches a model on this computer (LM Studio,
+    // Ollama) through the relay when the model refuses browser calls from other
+    // sites. The relay answers only this machine unless the player says so here.
+    const toggleRelay = () => {
+        if (state.relayLockedByEnv) return;
+        change({ relayForLan: !state.relayForLan }, "Let other devices send AI calls through this server", "relayForLan");
     };
 
     return (
@@ -1349,6 +1457,23 @@ const NetworkSharing = () => {
             <div style={helperTextStyle}>
             On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
             </div>
+        )}
+
+        {state.lanEnabled && (
+            <>
+            <div style={state.relayLockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+            <Toggle
+            label="Let other devices send AI calls through this server"
+            enabled={Boolean(state.relayForLan)}
+            onToggle={toggleRelay}
+            />
+            </div>
+            <div style={helperTextStyle}>
+            {state.relayLockedByEnv
+                ? "Set by the OH_ALLOW_REMOTE_RELAY environment variable, so this switch is read-only."
+                : "For a browser on another device whose AI runs on this computer (LM Studio, Ollama) and refuses calls from other sites. Anyone on your network could send requests through this server while it is on."}
+            </div>
+            </>
         )}
 
         {state.lanEnabled && state.addresses?.length > 0 && (
@@ -1390,6 +1515,93 @@ const NetworkSharing = () => {
 
         {error && (
             <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginBottom: "0.4rem" }}>{error}</div>
+        )}
+        </div>
+    );
+};
+
+// --- Storage: the community download cache ------------------------------------
+// Every scenario, basemap and flag downloaded from the community is kept on the
+// server's disk (server/hubCache.js), so opening it again needs no download and
+// does not count on GitHub again. It is capped at 1 GB, the files used longest
+// ago going first, but a player who wants the space back now should not have to
+// go looking for a hidden folder. Server-backed builds only, like Network.
+const formatCacheSize = (bytes) => (bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`);
+
+const DownloadCache = () => {
+    const [usage, setUsage] = useState(null);   // null until we know there is a server
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch("/api/hub/cache", { cache: "no-store" });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!cancelled) setUsage(data);
+            } catch {
+                /* no server behind this build — nothing is stored here */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    if (!usage) {
+        return (
+            <div style={{ ...helperStyle, marginTop: 0 }}>
+            No local server is behind this build, so nothing is stored here.
+            </div>
+        );
+    }
+
+    const clear = async () => {
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+            const response = await fetch("/api/hub/cache", { method: "DELETE" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "Could not clear the download cache.");
+            setUsage(data);
+            logSettingMessage("download-cache", "Download cache cleared.");
+        } catch (nextError) {
+            setError(nextError.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const size = formatCacheSize(usage.bytes);
+    return (
+        <div>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.8rem" }}>
+        {usage.files === 0
+            ? "No community downloads are stored."
+            : usage.files === 1
+            ? `1 community download is stored (${size}).`
+            : `${usage.files} community downloads are stored (${size}).`}
+        </span>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={clear}
+        disabled={busy || usage.files === 0}
+        style={{ ...diagnosticsButton, opacity: busy || usage.files === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+        >
+        Clear download cache
+        </button>
+        </div>
+        <div style={{ ...helperStyle, marginTop: 0 }}>
+        Scenarios, maps and flags you download from the community are kept so opening them again needs no new download. Past 1 GB, the ones used longest ago are removed on their own.
+        </div>
+        {error && (
+            <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>{error}</div>
         )}
         </div>
     );
@@ -1517,6 +1729,9 @@ const DiagnosticsPanel = () => {
     // player should say so, rather than pasting an empty report.
     const [count, setCount] = useState(() => getDebugLogSize());
     const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // How many of the oldest entries the size cap has rolled off: a log that
+    // no longer reaches back to the bug should say so before it is sent.
+    const [dropped, setDropped] = useState(() => getDebugLogDroppedCount());
     // Both toggles are read from the module rather than held only here, because
     // the module is where the persisted answer lives — this panel is unmounted
     // every time the menu closes, and a useState default would otherwise be a
@@ -1527,6 +1742,7 @@ const DiagnosticsPanel = () => {
     useEffect(() => subscribeToDebugLog(() => {
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     }), []);
 
     const toggleEnabled = () => {
@@ -1535,6 +1751,7 @@ const DiagnosticsPanel = () => {
         setEnabled(next);
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     };
 
     const toggleVerbose = () => {
@@ -1667,6 +1884,11 @@ const DiagnosticsPanel = () => {
             : cleared
             ? "Cleared."
             : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
+        {enabled && !cleared && dropped > 0 && (
+            <span style={{ display: "block" }}>
+            {dropped === 1 ? "1 older entry dropped to stay within the limit" : `${dropped} older entries dropped to stay within the limit`}
+            </span>
+        )}
         </span>
         <button
         type="button"
@@ -1689,7 +1911,10 @@ const DiagnosticsPanel = () => {
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
         <div style={helperTextStyle}>
-        On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts.
+        {/* The desktop app's own log exists only on desktop. */}
+        {import.meta.env.VITE_OH_WEB
+            ? "On by default. Off: nothing is recorded and the log on this device is deleted. Remembered across save changes and restarts."
+            : "On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts."}
         </div>
 
         <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
@@ -1748,6 +1973,13 @@ const diagnosticsButton = {
 // system, network sharing, diagnostics) sit inside those four sections rather
 // than adding sections of their own.
 
+// The guides are site pages. The Android app leaves them out of the APK
+// (mobile/scripts/stage-www.mjs), so there it opens the website's copy.
+const GUIDES_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/guides/" : "/guides/";
+// The privacy policy, from the same place as the guides: the desktop serves its
+// own copy, the website its root page, and the Android app links to the website.
+const PRIVACY_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/privacy/" : "/privacy/";
+
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
         neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
@@ -1782,10 +2014,44 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         </>
     );
 
+    // Always a new window, never this one: a page opened in place ends the
+    // running skip or AI call, and the desktop window has no back button to
+    // return by (electron/main.cjs sends a new window to the system browser).
     if (href) {
-        return <a href={href} target={href.startsWith("/") ? undefined : "_blank"} rel="noopener noreferrer" style={common}>{content}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" style={common}>{content}</a>;
     }
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
+};
+
+// Which path the map takes on this device (runtime/deviceProfile.js). Auto is
+// the guess; the choice is read once, when the game loads.
+const PERFORMANCE_MODES = [
+    { key: "", label: "Auto" },
+    { key: "constrained", label: "Low memory" },
+    { key: "full", label: "Full" },
+];
+
+const PerformanceModeSetting = () => {
+    const [mode, setMode] = useState(() => getDeviceProfileOverride());
+    const running = isConstrainedDevice();
+    const choose = (value) => {
+        setDeviceProfileOverride(value);
+        const next = getDeviceProfileOverride();
+        setMode(next);
+        logSettingChange("Performance mode", PERFORMANCE_MODES.find((entry) => entry.key === next)?.label ?? "Auto");
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle} htmlFor="game-performance-mode">Performance mode</label>
+        <select id="game-performance-mode" value={mode} onChange={(event) => choose(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        {PERFORMANCE_MODES.map((entry) => <option key={entry.key || "auto"} value={entry.key} style={{ color: "black" }}>{entry.label}</option>)}
+        </select>
+        <div style={helperStyle}>
+        Auto picks Low memory in the Android app, on a touch screen with no mouse, and on a device with 4 GB of memory or less: the map loads in smaller steps with fewer workers. Full is faster on a strong tablet, and Low memory can steady a weak computer. A change applies after the game is reloaded.
+        </div>
+        <div style={helperStyle}>{running ? "Running now: Low memory." : "Running now: Full."}</div>
+        </div>
+    );
 };
 
 // How much of each time skip is about the player's own country (AI/playerFocus.js).
@@ -1819,8 +2085,12 @@ const PlayerFocusSetting = () => {
         setSaving(true);
         setError("");
         try {
-            // undefined clears the override, so the game follows its scenario again.
-            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+            // null clears the override, so the game follows its scenario again.
+            // The stores take `features` as the game's complete override set,
+            // so the others (Espionage off, its own idle diplomacy) are sent
+            // along rather than wiped.
+            const features = withFeatureOverride(library.activeGame?.features, "playerFocus", value ? { level: value } : null);
+            await saveGame(gameId, { features });
         } catch (problem) {
             setError(problem?.message || "That could not be saved.");
         } finally {
@@ -1833,7 +2103,6 @@ const PlayerFocusSetting = () => {
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
-        data-no-translate
         disabled={saving || !gameId}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
@@ -1961,6 +2230,12 @@ const SettingsWorkspace = ({
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
     const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
+    // The system asks for reduced motion: the motion switches are on whatever
+    // is stored, so they show on and stay put (mapSettings.js).
+    const systemReducedMotion = useSystemReducedMotion();
+    // Lookups run only while requests are not being saved (gameplay.js
+    // lookupFunctionsEnabled), so the switch shows as paused meanwhile.
+    const savingRequests = useSavingRequests();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2038,16 +2313,18 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
                 </SettingsSection>
-                <SettingsSection title="Accessibility" description="Reduce automatic camera motion without changing simulation behavior.">
+                <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"
-                    enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+                    enabled={systemReducedMotion || (mapSettings.disableIdleRotation && mapSettings.disableEventCamera)}
+                    disabled={systemReducedMotion}
                     onToggle={() => {
                         const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
                         updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
                         updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
                     }}
                     />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2057,7 +2334,7 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
                     <div style={fieldGroupStyle}>
                         <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-                        <select id="game-basemap-style" data-no-translate value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                        <select id="game-basemap-style" value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
                             <option value="" style={{ color: "black" }}>Scenario default</option>
                             {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
                         </select>
@@ -2084,6 +2361,7 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <PerformanceModeSetting />
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
@@ -2091,8 +2369,9 @@ const SettingsWorkspace = ({
                     <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
                 </SettingsSection>
                 <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">
-                    <Toggle label="Disable idle globe rotation" enabled={mapSettings.disableIdleRotation} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
-                    <Toggle label="Disable camera movement during events" enabled={mapSettings.disableEventCamera} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    <Toggle label="Disable idle globe rotation" enabled={systemReducedMotion || mapSettings.disableIdleRotation} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
+                    <Toggle label="Disable camera movement during events" enabled={systemReducedMotion || mapSettings.disableEventCamera} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2113,7 +2392,7 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
+                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
                     Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
@@ -2190,6 +2469,11 @@ const SettingsWorkspace = ({
                 {!import.meta.env.VITE_OH_WEB && (
                     <SettingsSection title="Network" description="Other devices — the Android app, a browser on another computer — reach this server only while you say so.">
                         <NetworkSharing />
+                    </SettingsSection>
+                )}
+                {!import.meta.env.VITE_OH_WEB && (
+                    <SettingsSection title="Storage" description="What this server keeps on disk for you.">
+                        <DownloadCache />
                     </SettingsSection>
                 )}
                 <SettingsSection title="Diagnostics" description="The log a bug report needs. Copy it for Discord, save it for a GitHub issue.">
@@ -2349,10 +2633,9 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        // Not getMapSetting: this one ships ON, and an absent key must read as
-        // on rather than off (see mapSettings.js).
+        // Off by default, so getMapSetting: an absent key reads as off.
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
-        // Same again: ships ON.
+        // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
@@ -2379,7 +2662,8 @@ const SettingsMenu = ({
         setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
     };
 
-    // Telemetry switches (telemetry.js): their own keys, both on by default.
+    // Telemetry switches (telemetry.js): their own keys; recording is on by
+    // default, rating off.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
     // Logged here rather than in telemetry.js, which imports nothing on purpose.
@@ -2477,8 +2761,9 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
-                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href={GUIDES_HREF} />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
+                    <QuickAction title="Privacy" description="What the game keeps and sends" symbol="§" href={PRIVACY_HREF} />
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
                     <span style={{ color: "rgba(255,255,255,0.24)", fontSize: "0.6rem" }}>Community</span>

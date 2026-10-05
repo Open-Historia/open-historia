@@ -510,33 +510,3 @@ export const resolvePolityIdentity = (
       ),
   };
 };
-
-// Territory is stricter than metadata. A dormant historical identity does not
-// suddenly get land because the model used an old/base name. A same-event
-// create/restore/rename becomes status=active before transfers are resolved, so
-// newborn or restored states still work without a hardcoded exception list.
-export const resolveTerritorialPolityIdentity = (
-  token,
-  world,
-) =>
-  resolvePolityIdentity(
-    token,
-    world,
-    {
-      allowUnknown: false,
-      requireActive: true,
-      allowCoreMatch: true,
-      allowStockBase: true,
-    },
-  );
-
-export const resolvePolityName = (
-  token,
-  world,
-  options,
-) =>
-  resolvePolityIdentity(
-    token,
-    world,
-    options,
-  ).resolved;

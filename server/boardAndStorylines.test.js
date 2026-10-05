@@ -15,6 +15,7 @@ import {
   validateWorldEventConsequencePayload,
 } from "../src/Game/AI/nativeWorldDirector.js";
 import { screenGeneratedWorldEvents } from "../src/Game/AI/nativeWorldIntegrity.js";
+import { buildJumpProjectsDirective } from "../src/Game/AI/projectsDirective.js";
 import { curateGeneratedEvents, curateGeneratedEventsWithHidden } from "../src/Game/AI/nativeTimelineCurator.js";
 
 const baseImpacts = () => ({
@@ -267,9 +268,13 @@ const directorText = () => buildWorldInitiativeContext({
 }, { targetDate: "1914-10-01" }).text;
 
 test("the director tells the jump that a polity's own Project is a Board entry, not a Storyline", () => {
-  assert.match(directorText(), /own deliberate Project or Operation[^.]*Projects & Operations board, not in storylineUpdates/);
+  assert.match(directorText(), /Open a new storyline[^.]*never for an effort on the Projects board/);
 });
 
-test("the director tells the jump that routine Board progress is still written as an event", () => {
-  assert.match(directorText(), /Projects & Operations board[^.]*written as events naming the entry exactly as the board names it, however routine/);
+// The director used to say this too; the board's own block says it once now,
+// beside the entries it is about.
+test("the jump is told that routine Board progress is still written as an event", () => {
+  const board = buildJumpProjectsDirective("- Operation \"Bridge at Remagen\" [id project-1], ours, active, 40% complete.");
+  assert.match(board, /Write what happens to an entry as an event however routine it is/);
+  assert.match(board, /Name each effort exactly as the board names it/);
 });

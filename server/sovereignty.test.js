@@ -125,6 +125,38 @@ test("the polity lifecycle: create, rename re-keys the country, dissolve waits f
   assert.ok(world.polityOverrides.Ruritania, "the record survives so old history still folds onto it");
 });
 
+test("a dissolved polity leaves its wars and takes its units off the map", () => {
+  const world = normalizeWorldState({
+    ...baseWorld(),
+    wars: [
+      { id: "war-1", title: "Bordurian War", status: "active", sideA: ["Borduria"], sideB: ["Ruritania"], startedDate: "1929-01-01" },
+      { id: "war-2", title: "Coalition War", status: "active", sideA: ["Syldavia"], sideB: ["Ruritania", "Borduria"], startedDate: "1929-06-01" },
+      { id: "war-3", title: "Border War", status: "active", sideA: ["Syldavia"], sideB: ["Borduria"], startedDate: "1929-06-01" },
+    ],
+    units: [
+      { id: "u-rur", name: "1st Army", ownerCode: "Ruritania", lng: 10, lat: 50 },
+      { id: "u-bor", name: "2nd Army", ownerCode: "Borduria", lng: 11, lat: 51 },
+    ],
+    pendingUnitOrders: [{ unitId: "u-rur", kind: "move", toLng: 20, toLat: 45, issuedRound: 1 }],
+  });
+  const next = apply(world, {
+    regionTransfers: [{ regionId: "r1", fromCode: "Ruritania", toCode: "Borduria" }, { regionId: "r2", fromCode: "Ruritania", toCode: "Borduria" }],
+    polityChanges: [{ operation: "dissolve", code: "Ruritania" }],
+  });
+  assert.equal(world.pendingUnitOrders.length, 1, "the fixture order must survive normalization");
+  const wars = Object.fromEntries(next.wars.map((war) => [war.id, war]));
+
+  assert.equal(next.polityOverrides.Ruritania.status, "dissolved");
+  assert.equal(wars["war-1"].status, "ended", "a war with nobody left on one side is over");
+  assert.equal(wars["war-1"].endedDate, "1930-05-10");
+  assert.deepEqual(wars["war-1"].sideB, ["Ruritania"], "the record still says who fought");
+  assert.equal(wars["war-2"].status, "active", "a coalition fights on without it");
+  assert.deepEqual(wars["war-2"].sideB, ["Borduria"]);
+  assert.deepEqual(wars["war-3"], world.wars.find((war) => war.id === "war-3"), "a war it was not in is untouched");
+  assert.deepEqual(next.units.map((unit) => unit.id), ["u-bor"]);
+  assert.deepEqual(next.pendingUnitOrders, []);
+});
+
 test("the owner migration derives stock-geography provenance per polity and never merges a split base country", () => {
   const registry = { RUR: "Ruritania", BOR: "Borduria" };
   const ctx = {

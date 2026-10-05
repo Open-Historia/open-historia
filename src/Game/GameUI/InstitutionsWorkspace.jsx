@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { institutionLogoUrl } from "../../runtime/institutionLogos.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat, institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycle.js";
+import { institutionLifecycleConfirmText } from "../../runtime/institutionLifecycleCore.js";
 import { collectActiveScenarioPolityKeys } from "../../runtime/scenarioPolities.js";
 import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import {
   buildInstitutionDiplomacyView,
   buildPublicInstitutionDiplomacyView,
@@ -17,9 +19,11 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { documentsReadableBy } from "../../runtime/reportDelivery.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { assertNoTurnRunning } from "../AI/simulationStatus.js";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -194,7 +198,7 @@ const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResol
     </div> : null}
     {proposal.playerCanAmend && view?.canParticipate && <div style={{ marginTop: ".55rem", display: "flex", gap: ".35rem" }}>
       <input value={amendText} onChange={(e) => setAmendText(e.target.value)} placeholder="Propose amendment…" maxLength={4000} style={{ flex: 1, minWidth: 0, border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "rgba(0,0,0,.18)", color: "white", padding: ".35rem .45rem", fontSize: ".64rem" }} />
-      <button disabled={busy || !amendText.trim()} onClick={async () => { await onAmend(proposal.id, amendText.trim()); setAmendText(""); }} style={{ border: "1px solid rgba(167,139,250,.22)", background: "rgba(139,92,246,.1)", color: "#ddd6fe", borderRadius: 8, padding: ".3rem .45rem", fontSize: ".61rem", cursor: busy || !amendText.trim() ? "not-allowed" : "pointer" }}>Add</button>    </div>}
+      <button disabled={busy || !amendText.trim()} onClick={async () => { const result = await onAmend(proposal.id, amendText.trim()); if (result) setAmendText(""); }} style={{ border: "1px solid rgba(167,139,250,.22)", background: "rgba(139,92,246,.1)", color: "#ddd6fe", borderRadius: 8, padding: ".3rem .45rem", fontSize: ".61rem", cursor: busy || !amendText.trim() ? "not-allowed" : "pointer" }}>Add</button>    </div>}
   </div>;
 };
 
@@ -204,7 +208,7 @@ const fieldStyle = {
   background: "rgba(0,0,0,.2)", color: "white", padding: ".48rem .56rem", fontSize: ".68rem", fontFamily: "inherit",
 };
 
-const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null }) => {
+const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, canRetract = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null, onRetract = null }) => {
   const kind = humanize(entry?.kind || "membership case");
   const status = humanize(entry?.status || "pending");
   const tone = ["accepted", "resolved"].includes(lower(entry?.status)) ? "good"
@@ -229,6 +233,9 @@ const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, ca
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 7, background: "rgba(139,92,246,.08)", color: "#ddd6fe", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Seek observer status</button>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 7, background: "rgba(245,158,11,.06)", color: "#fde68a", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Decide later</button>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Reject</button>    </div>}
+    {canRetract && <div data-player-lifecycle-retract-controls="true" style={{ display: "flex", justifyContent: "flex-end", marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+      <button className="oh-tap-row" disabled={busy} onClick={() => onRetract?.()} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Retract</button>
+    </div>}
   </div>;
 };
 
@@ -241,7 +248,9 @@ const LifecycleRuleRow = ({ label, rule }) => <div style={{ ...panel, padding: "
   {Number(rule?.noticeDays) > 0 && <span style={{ fontSize: ".59rem", color: "rgba(255,255,255,.36)" }}>{rule.noticeDays}d notice</span>}
 </div>;
 
-const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Select governments", multiple = true }) => {
+// allowUnlisted: Enter takes the typed name as written when no polity in the
+// list matches it (the scenario editor, where an author may name one on purpose).
+export const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Select governments", multiple = true, allowUnlisted = false }) => {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const selected = useMemo(() => multiple ? splitList(value) : [clean(value)].filter(Boolean), [value, multiple]);
@@ -268,7 +277,7 @@ const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Selec
   const remove = (polity) => commitSelected(selected.filter((entry) => lower(entry) !== lower(polity)));
   const chooseFirst = () => {
     const exact = polities.find((polity) => lower(polity) === normalizedQuery);
-    const candidate = exact || matches[0];
+    const candidate = exact || matches[0] || (allowUnlisted ? query : "");
     if (candidate) choose(candidate);
   };
 
@@ -297,7 +306,7 @@ const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Selec
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
       </button>)}
     </div>}
-    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>No canonical polity matches “{query}”.</div>}
+    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
   </div>;
 };
 
@@ -465,7 +474,14 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const adopt = (result) => {
     if (result) onAdoptResult?.(result);
   };
-  const expectedGameId = () => clean(getLibraryState()?.activeGameId);
+  // Every command here asks for the campaign it writes to first, so this is
+  // where one is refused while a turn runs: the turn writes back the world the
+  // institutions live in, and the vote or the proposal would be gone when it
+  // landed. The error shows where the command's own errors do.
+  const expectedGameId = () => {
+    assertNoTurnRunning();
+    return clean(getLibraryState()?.activeGameId);
+  };
   const run = async (key, fn) => {
     if (busy) return null;
     setBusy(key); setError("");
@@ -498,7 +514,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
       const proposalId = clean(result?.proposal?.id);
       if (!proposalId) throw new Error("The proposal was created but its canonical id was not returned.");
       if (mode === "vote") {
-        result = await commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() });
+        result = await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() }), { institutionId, proposalId, expectedGameId: expectedGameId() });
         adopt(result);
       }
       setProposalTitle("");
@@ -526,7 +542,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     setBusy(`submit:${proposalId}`);
     setError("");
     try {
-      const result = await commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() });
+      const result = await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() }), { institutionId, proposalId, expectedGameId: expectedGameId() });
       adopt(result);
       try {
         await onRequestCouncilTurn?.({ institutionId, proposalId, kind: "vote", playerComment, source: "call-vote" });
@@ -589,6 +605,9 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const respondToLifecycleCase = (entry, decision) => lifecycleCommand(`respond:${entry?.id}:${decision}`, {
     type: "respond", caseId: entry?.id, actorPolity: playerCountry, decision, reason: clean(lifecycleReason), authority: "player",
   });
+  const retractLifecycleCase = (entry) => lifecycleCommand(`retract:${entry?.id}`, {
+    type: "retract", caseId: entry?.id, initiatedBy: playerCountry, authority: "player",
+  });
   const openLifecycleNegotiation = async (entry) => {
     if (!entry?.id || !selectedView?.institution?.id) return;
     const groupedCases = lower(entry?.kind) === "founding-invitation"
@@ -603,8 +622,19 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     }));
     if (result?.channel) onOpenLifecycleChat?.(result.channel, result);
   };
-  const withdraw = () => lifecycleCommand("withdraw", { type: "withdraw", polity: playerCountry, reason: clean(lifecycleReason), authority: "player" });
-  const proposeLifecycle = (type, polity = "") => lifecycleCommand(`${type}:${polity}`, { type, polity, initiatedBy: playerCountry, reason: clean(lifecycleReason) });
+  // Withdrawing can end a membership at once, so it asks first, saying what the
+  // charter makes of it; dissolution and expulsion only open a vote, and ask
+  // more lightly.
+  const confirmed = (type, polity = "") => {
+    const question = institutionLifecycleConfirmText(selectedView.institution, type, polity);
+    return !question || window.confirm(question);
+  };
+  const withdraw = () => (confirmed("withdraw")
+    ? lifecycleCommand("withdraw", { type: "withdraw", polity: playerCountry, reason: clean(lifecycleReason), authority: "player" })
+    : null);
+  const proposeLifecycle = (type, polity = "") => (confirmed(type, polity)
+    ? lifecycleCommand(`${type}:${polity}`, { type, polity, initiatedBy: playerCountry, reason: clean(lifecycleReason) })
+    : null);
 
   if (!selectedView) {
     return <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -716,7 +746,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
 
         {selectedPendingLifecycle.length > 0 && <section>
           <div style={{ fontSize: ".64rem", fontWeight: 850, letterSpacing: ".075em", textTransform: "uppercase", color: "rgba(253,230,138,.68)", marginBottom: ".45rem" }}>Pending membership business</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} />)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canRetract={lower(entry?.initiatedBy) === lower(playerCountry) && ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} onRetract={() => retractLifecycleCase(entry)} />)}</div>
         </section>}
 
         <section>
@@ -762,7 +792,8 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
         </div>
         {selectedView.decisionHistory?.length ? selectedView.decisionHistory.map((proposal) => <DecisionCard key={proposal.id} proposal={proposal} />) : <div style={{ color: "rgba(255,255,255,.3)", fontSize: ".67rem", textAlign: "center", padding: "2rem .5rem" }}>No recorded formal decisions yet.</div>}
       </div>}
-      {section === "documents" && <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{readableDocs.length ? readableDocs.map((report) => <div key={report.id} style={{ ...panel, padding: ".65rem" }}><div style={{ display: "flex", gap: ".4rem", alignItems: "center" }}><span aria-hidden="true">📄</span><strong style={{ flex: 1, fontSize: ".65rem" }}>{report.title}</strong>{report.dateline && <span style={{ fontSize: ".59rem", color: "rgba(255,255,255,.3)" }}>{report.dateline}</span>}</div><div style={{ marginTop: ".3rem", fontSize: ".62rem", color: "rgba(255,255,255,.45)" }}>{report.from ? `From ${report.from} · ` : ""}{report.visibleTo === null ? "published" : report.visibleTo?.some((name) => lower(name) === lower(playerCountry)) ? "held by your government" : "intercepted copy"}</div><div style={{ marginTop: ".35rem", fontSize: ".65rem", lineHeight: 1.45, color: "rgba(255,255,255,.6)", whiteSpace: "pre-wrap" }}>{report.body}</div></div>) : <div style={{ color: "rgba(255,255,255,.3)", fontSize: ".67rem", textAlign: "center", padding: "2rem .5rem" }}>No institution-related documents currently readable by your government.</div>}</div>}
+      {section === "documents" && <MarkdownStyleInjector />}
+      {section === "documents" && <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{readableDocs.length ? readableDocs.map((report) => <div key={report.id} style={{ ...panel, padding: ".65rem" }}><div style={{ display: "flex", gap: ".4rem", alignItems: "center" }}><span aria-hidden="true">📄</span><strong style={{ flex: 1, fontSize: ".65rem" }}>{report.title}</strong>{report.dateline && <span style={{ fontSize: ".59rem", color: "rgba(255,255,255,.3)" }}>{report.dateline}</span>}</div><div style={{ marginTop: ".3rem", fontSize: ".62rem", color: "rgba(255,255,255,.45)" }}>{report.from ? `From ${report.from} · ` : ""}{report.visibleTo === null ? "published" : report.visibleTo?.some((name) => lower(name) === lower(playerCountry)) ? "held by your government" : "intercepted copy"}</div><Markdown bare className="timeline-markdown" style={{ marginTop: ".35rem", fontSize: ".65rem", lineHeight: 1.45, color: "rgba(255,255,255,.6)" }}>{report.body}</Markdown></div>) : <div style={{ color: "rgba(255,255,255,.3)", fontSize: ".67rem", textAlign: "center", padding: "2rem .5rem" }}>No institution-related documents currently readable by your government.</div>}</div>}
       {section === "council" && activeCouncilAutomation && <div data-institution-council-automation="true" style={{ marginBottom: ".5rem", padding: ".55rem .7rem", border: "1px solid rgba(167,139,250,.18)", borderRadius: 10, background: "rgba(139,92,246,.075)", color: "rgba(255,255,255,.72)", fontSize: ".66rem", lineHeight: 1.45, flexShrink: 0 }}>{activeCouncilAutomation.kind === "vote" ? "Member governments are casting formal ballots…" : "Council members are considering the tabled matter…"}</div>}
       {section === "council" && (selectedRow.member ? (selectedChannel && renderCouncil ? <div data-institution-council-pane="embedded" style={{ ...panel, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", background: "rgba(7,7,10,.22)", borderColor: "rgba(167,139,250,.12)" }}>{renderCouncil(selectedChannel)}</div> : <div style={{ ...panel, padding: ".8rem" }}><strong style={{ fontSize: ".68rem" }}>Council channel</strong><p style={{ margin: ".4rem 0 .65rem", fontSize: ".62rem", lineHeight: 1.5, color: "rgba(255,255,255,.5)" }}>{busy === "council" ? "Preparing the persistent council channel…" : "This institution has a persistent Council channel for member discussion. Formal proposals, amendments and ballots remain governed by the institution\'s charter."}</p><button className="oh-tap-row" disabled={Boolean(busy)} onClick={openCouncil} style={{ border: "1px solid rgba(167,139,250,.28)", borderRadius: 9, background: "rgba(139,92,246,.13)", color: "#ede9fe", cursor: busy ? "wait" : "pointer", padding: ".45rem .65rem", fontSize: ".64rem", fontWeight: 760 }}>{busy === "council" ? "Opening…" : "Open council channel"}</button></div>) : <div style={{ ...panel, padding: ".8rem" }}><strong style={{ fontSize: ".68rem" }}>Council channel</strong><p style={{ margin: ".4rem 0 0", fontSize: ".62rem", lineHeight: 1.5, color: "rgba(255,255,255,.5)" }}>Only participating governments receive a persistent institutional council channel. This public view does not create one.</p></div>)}    </div>
   </div>;

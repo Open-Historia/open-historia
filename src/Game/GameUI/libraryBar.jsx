@@ -1,6 +1,6 @@
 /*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, SCREEN_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { Presence } from "./presence.jsx";
 import {
@@ -36,14 +36,17 @@ import {
   uploadGameAsset,
   uploadScenarioAsset,
   useLibraryState,
+  withSingleLibraryRefresh,
   writeGameSnapshotsText,
 } from "../../runtime/library.js";
 import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
 import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
+import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+import PrehistoryPanel from "./PrehistoryPanel.jsx";
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
@@ -53,16 +56,29 @@ import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runtime/politicalWorldCapability.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
-import {
-  splitScenarioBundleImage,
-  embedScenarioBundleImage,
-  embedScenarioBundleVector,
-} from "../../runtime/communityBasemaps.js";
-import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
-import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
+import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runtime/communityBasemaps.js";
+import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
+import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
+import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
+import { createLatestRequest } from "../../runtime/latestRequest.js";
+import { changedFields, followSavedFields, formDiffers } from "../../runtime/editorForm.js";
+import { createActivationHandOff } from "../../runtime/afterActivation.js";
+import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
+import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
+import { fetchHubPosts, fetchPostComments, hubUpdateAvailable, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { isBlockedContributor, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
+import {
+  ScenarioCommunityCard,
+  SuggestChangesDialog,
+  SuggestionCountBadge,
+  SuggestionReviewDialog,
+  SuggestionsBanner,
+  openSuggestionsOf,
+} from "./ScenarioSuggestions.jsx";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -98,20 +114,6 @@ const hexToRgbArray = (hex) => {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
 
-const TECHNICAL_OWNER_CODES = new Set([
-  "NA",
-  "XCA",
-  "Z01",
-  "Z02",
-  "Z03",
-  "Z04",
-  "Z05",
-  "Z06",
-  "Z07",
-  "Z08",
-  "Z09",
-]);
-
 // Set by the mounted LibraryTopBar; lets outside callers open the main menu
 // on a specific tab.
 let _openLibraryTab = null;
@@ -136,6 +138,11 @@ const subscribeMainMenu = (listener) => {
   return () => mainMenuListeners.delete(listener);
 };
 export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isMainMenuOpen, isMainMenuOpen);
+// What a flow that activated a game still owes the player once the UI has
+// remounted around that game: offer the Apply & Play country picker, or open
+// its editor to say why the rest of the setup failed (runtime/afterActivation.js).
+const afterActivation = createActivationHandOff();
+const handOffAfterActivation = (work) => afterActivation.put(work);
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
 // widget, forces panel, editor drawer) starts at the screen edge, below a
 // status bar or camera cutout the page is drawn under (Android Chrome in
@@ -343,6 +350,7 @@ const editorSectionLabels = {
   assets: "Assets",
   bundles: "Bundles",
   features: "Features",
+  history: "Pre-history",
   overview: "Overview",
   politics: "Politics",
   prompts: "Prompts",
@@ -413,8 +421,10 @@ const buildGameEditorState = (details) => {
 // Historia in the Android app. (The copy that lived here revoked the object URL in the
 // same task as the click, which Firefox treats as a cancelled download.)
 
-const saveJsonBundleToDisk = (bundle, fileName) => {
-  saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
+// Every save here is awaited: in the Android app the Downloads write and the
+// share-sheet fallback can both fail, and the caller's catch has to see it.
+const saveJsonBundleToDisk = async (bundle, fileName) => {
+  await saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
 };
 
 // Prompt-pack files intentionally contain only scenario-author editable guidance.
@@ -815,8 +825,13 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
                 </span>
               )}
             </div>
-            <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.74rem" }}>
-              {scenario.gameCount} game{scenario.gameCount === 1 ? "" : "s"}
+            <span style={{ alignItems: "center", display: "inline-flex", gap: "0.45rem" }}>
+              {/* Changes people suggested on the hub post the player made of
+                  this scenario: the editor's Community card lists them. */}
+              <SuggestionCountBadge count={openSuggestionsOf(scenario).length} onClick={() => onEdit(scenario.id)} />
+              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.74rem" }}>
+                {scenario.gameCount} game{scenario.gameCount === 1 ? "" : "s"}
+              </span>
             </span>
           </div>
           <div style={{ marginTop: "4rem" }}>
@@ -1328,6 +1343,13 @@ const EditorDrawer = ({
   setPromptSectionKey,
   statsValue,
   onStatsChange,
+  // The scenario's place on the community hub (ScenarioSuggestions.jsx), shown
+  // at the top of the Overview, and Suggest changes for a downloaded one.
+  communityCard = null,
+  onSuggestChanges = null,
+  // The countries this map offers (buildScenarioCountryOptions), for the
+  // Player Country field's suggestions and its check.
+  countryOptions = [],
 }) => {
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
@@ -1338,7 +1360,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "politics", "stats", "features", "prompts", "assets", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   // Two fields to a row leave a phone under 140 px for each, too narrow for a
   // date or a font name, so there the fields stack.
@@ -1396,6 +1418,7 @@ const EditorDrawer = ({
       </div>
 
       <SectionTabs badges={sectionBadges} currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
+      {editorSection === "overview" && kind === "scenario" && communityCard}
       {editorSection === "overview" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
@@ -1436,7 +1459,17 @@ const EditorDrawer = ({
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
             <div>
               <label style={fieldLabelStyle}>Player Country</label>
-              <input style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
+              <input list="oh-player-country-options" style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
+              <datalist id="oh-player-country-options">
+                {countryOptions.map((option) => (
+                  <option key={option.code} value={option.code} label={option.name !== option.code ? option.name : undefined} />
+                ))}
+              </datalist>
+              {!isOfferedCountry(formState.country, countryOptions) && (
+                <div style={{ color: "#fde68a", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>
+                  No country or faction by this name is on this map, so the player would start with nothing. Pick one from the list.
+                </div>
+              )}
             </div>
             <div>
               <label style={fieldLabelStyle}>Game Date</label>
@@ -1537,6 +1570,13 @@ const EditorDrawer = ({
         </div>
       )}
 
+      {editorSection === "history" && kind === "scenario" && (
+        <PrehistoryPanel
+          details={details}
+          onDetailsChange={onDetailsChange}
+        />
+      )}
+
       {editorSection === "politics" && kind === "scenario" && (
         <>
           <Suspense
@@ -1576,6 +1616,8 @@ const EditorDrawer = ({
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle, fieldLabelStyle, inputStyle }}
+          currentDate={formState.gameDate}
+          firstSkipAhead={kind === "scenario" || !(details?.data?.world?.simulationHistory?.length > 0)}
         />
       )}
 
@@ -1716,6 +1758,17 @@ const EditorDrawer = ({
             🗺️ Open Map Editor
           </button>
         )}
+        {kind === "scenario" && onSuggestChanges && record.hubOrigin && (
+          <button
+            className="oh-tap-row"
+            onClick={onSuggestChanges}
+            title="Send your changes to this community scenario's author, who can accept or reject each one."
+            style={touchFit({ ...actionButtonStyle, background: "rgba(43,193,243,0.18)", borderColor: "rgba(43,193,243,0.45)", color: "#fff" }, touch)}
+            type="button"
+          >
+            Suggest changes
+          </button>
+        )}
         {record.canDelete && (
           <button
             className="oh-tap-row"
@@ -1758,7 +1811,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // remount a game activation triggers, so every open/close writes it first.
   // Flows that activate a game flip it BEFORE awaiting the request — the
   // remount happens mid-await, and the new instance must mount closed.
+  // An instance the activation already unmounted must not write it: its own
+  // copy is gone, and the live instance's would disagree with isMainMenuOpen().
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const setMenuOpen = (open) => {
+    if (!mountedRef.current) return;
     menuOpenDefault = open;
     setMenuOpenState(open);
     if (!open) setMenuOverGame(false);
@@ -1779,6 +1842,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
   const [editorStats, setEditorStats] = useState(() => normalizeStatsEditorValue(null));
+  // The Stats sheet as last loaded or saved, to tell an unsaved edit from none.
+  const editorStatsSavedRef = useRef(editorStats);
+  const adoptSavedStats = (value) => {
+    editorStatsSavedRef.current = value;
+    setEditorStats(value);
+  };
+  // The open scenario's Stats sheet failed to download: Save leaves it alone.
+  const [editorStatsFailed, setEditorStatsFailed] = useState(false);
   const [editorError, setEditorError] = useState(null);
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
@@ -1799,10 +1870,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorKind(null);
     setEditorDetails(null);
     setEditorState(null);
-    setEditorStats(normalizeStatsEditorValue(null));
+    adoptSavedStats(normalizeStatsEditorValue(null));
+    setEditorStatsFailed(false);
     setEditorError(null);
     setEditorSection("overview");
     setPromptSectionKey("leader");
+  };
+
+  // The drawer's X and a phone's Back: asks first when the form or the Stats
+  // sheet holds changes not saved. Returns false when the player stays, which
+  // keeps Back's step (runtime/backToClose.js).
+  const closeEditor = () => {
+    const unsaved = Boolean(editorKind && editorDetails && editorState) && (
+      formDiffers(editorState, editorKind === "scenario" ? buildScenarioEditorState(editorDetails) : buildGameEditorState(editorDetails))
+      || formDiffers(editorStats, editorStatsSavedRef.current)
+    );
+    if (unsaved && !window.confirm("Close the editor? The changes you have not saved will be lost.")) return false;
+    resetEditor();
+    return true;
   };
 
   const openScenarioEditor = async (scenarioId) => {
@@ -1810,14 +1895,23 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
+      // A Stats sheet that failed to download (rather than one the scenario
+      // does not have) must not read as "the standard sheet": Save would then
+      // delete the author's custom one. It is left out of Save instead.
+      let statsFailed = false;
       const [details, statsAsset] = await Promise.all([
         loadScenarioDetails(scenarioId),
-        downloadScenarioJsonAsset(scenarioId, "stats"),
+        downloadScenarioJsonAsset(scenarioId, "stats").catch(() => {
+          statsFailed = true;
+          return null;
+        }),
       ]);
       setEditorKind("scenario");
       setEditorDetails(details);
       setEditorState(buildScenarioEditorState(details));
-      setEditorStats(normalizeStatsEditorValue(statsAsset));
+      adoptSavedStats(normalizeStatsEditorValue(statsAsset));
+      setEditorStatsFailed(statsFailed);
+      if (statsFailed) setEditorError("This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.");
       setEditorSection("overview");
       setPromptSectionKey("leader");
     } catch (nextError) {
@@ -1846,7 +1940,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   // Create the game from the scenario with the starting country and difficulty
-  // the player chose in the two-step picker, then open its editor.
+  // the player chose in the two-step picker, and go straight into it.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
@@ -1862,13 +1956,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
       const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
-      const details = await createGame({
+      await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
         ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      await openGameEditor(details.game.id);
+      // The UI remounts around the new game, menu closed, and play begins. Its
+      // editor is not opened: the call that did so ran in the instance being
+      // unmounted and never showed, and players start straight into the game.
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
@@ -1876,6 +1972,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       setIsBusy(false);
     }
   };
+
+  // The world a new game was seeded with, read to merge the player's polity
+  // into; a read that fails stops the start (seededWorldOf).
+  const readNewGameWorld = async (gameId, name) =>
+    seededWorldOf(await loadGameDetails(gameId).catch(() => null), name);
 
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
@@ -1886,6 +1987,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorError(null);
     setIsBusy(true);
     setMenuOpen(false);
+    let gameId = null;
     try {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
@@ -1896,31 +1998,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
-      const gameId = details.game.id;
+      gameId = details.game.id;
 
       // Read the game's world, which createGame seeded from the scenario, and merge
       // the faction into its existing maps. This read-merge-write is load-bearing:
       // saveGame writes `world` whole (a worldPatch would SHALLOW-merge, replacing
       // polityOverrides/ownerCodes/regionOwnershipOverrides outright and wiping
       // every other country on the map).
-      const gameDetails = await loadGameDetails(gameId).catch(() => null);
-      const world = { ...(gameDetails?.data?.world ?? {}) };
-      const name = faction.name;
-      const hexColor = /^#[0-9a-fA-F]{6}$/.test(faction.color) ? faction.color : "#a1a1aa";
-
-      world.polityOverrides = {
-        ...(world.polityOverrides ?? {}),
-        [name]: { name, aliases: [], color: hexColor, note: faction.lore || "" },
-      };
-      world.regionOwnershipOverrides = { ...(world.regionOwnershipOverrides ?? {}) };
-      for (const regionId of faction.regionIds ?? []) {
-        world.regionOwnershipOverrides[regionId] = name;
-      }
-      // ownerCodes lists who is playable — include the faction even when landless.
-      world.ownerCodes = [...new Set([...(world.ownerCodes ?? []), name])].sort();
-      // A faction that claimed drawn/overridden territory needs the custom-region
-      // renderer on so its regions paint; a landless faction leaves the flag as-is.
-      if ((faction.regionIds ?? []).length) world.customRegions = true;
+      const { world, name, color: hexColor } = worldWithFaction(await readNewGameWorld(gameId, faction.name), faction);
 
       await saveGame(gameId, { world, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
 
@@ -1941,55 +2026,74 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           await writeJson(JSON_URLS.flags, { ...flags, [name]: faction.flag }, { pretty: true });
         } catch { /* flag is cosmetic */ }
       }
-
-      await openGameEditor(gameId);
     } catch (nextError) {
-      setMenuOpen(true);
-      setEditorError(nextError.message);
+      if (gameId) {
+        // Activated already: the remounted UI opens the game and says why.
+        handOffAfterActivation({ gameId, editor: true, error: nextError.message });
+      } else {
+        setMenuOpen(true);
+        setEditorError(nextError.message);
+      }
     } finally {
       setIsBusy(false);
     }
   };
 
-  // Build the start-country list for a scenario: only the factions that actually
-  // exist in it (world.ownerCodes), named as era polities where defined. Falls
-  // back to every country for scenarios without an owner list.
-  const buildScenarioCountryOptions = (world, allCountries, nameOverrides = {}) => {
-    const entries = Array.isArray(allCountries) ? allCountries : [];
-    const entriesByCode = new Map();
-    for (const entry of entries) {
-      const code = String(entry?.code ?? "").trim();
-      const name = String(entry?.name ?? "").trim();
-      if (!code || !name || TECHNICAL_OWNER_CODES.has(code)) continue;
-      const existing = entriesByCode.get(code);
-      if (!existing || existing.name === code) entriesByCode.set(code, { code, name });
+  // The groups a scenario has, for the picker's "Play as a group" tab: name,
+  // colour, what it is and how much it controls (runtime/groups.js).
+  const scenarioGroupsFor = (world) => {
+    const groups = normalizeGroups(world?.groups);
+    const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
+    return Object.values(groups).map((group) => ({ ...group, regionCount: (areas[group.name] ?? []).length }));
+  };
+
+  // Create a game led by a group rather than a country (runtime/groups.js). The
+  // player's polity is a LANDLESS polity and the group of the same name: the polity
+  // carries everything keyed by the player (flag, colour, diplomacy, orders), the
+  // group the area the map draws and what the story knows the player is. Written
+  // into the game's own world, like a faction, so the scenario is never touched.
+  const startGameForGroup = async (scenario, group, difficulty) => {
+    setCountryPicker(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
+    setEditorError(null);
+    setIsBusy(true);
+    setMenuOpen(false);
+    let gameId = null;
+    try {
+      const name = String(group.name ?? "").trim();
+      const details = await createGame({
+        name: `${name} — ${scenario.name}`,
+        scenarioId: scenario.id,
+        gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
+        setActive: true,
+      });
+      gameId = details.game.id;
+      // The same read-merge-write as a faction (see startGameForFaction): saveGame
+      // writes `world` whole.
+      const { world, key, color: hexColor } = worldWithPlayerGroup(await readNewGameWorld(gameId, name), group);
+
+      await saveGame(gameId, { world, gamePatch: { country: key, ...(difficulty ? { difficulty } : null) } });
+
+      try {
+        const colors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
+        await writeJson(JSON_URLS.colors, { ...colors, [key]: hexToRgbArray(hexColor) }, { pretty: true });
+      } catch { /* colours are cosmetic — the group's area draws in its own colour */ }
+      if (group.flag) {
+        try {
+          const flags = await readJson(JSON_URLS.flags, { defaultValue: {}, force: true });
+          await writeJson(JSON_URLS.flags, { ...flags, [key]: group.flag }, { pretty: true });
+        } catch { /* flag is cosmetic */ }
+      }
+    } catch (nextError) {
+      if (gameId) {
+        handOffAfterActivation({ gameId, editor: true, error: nextError.message });
+      } else {
+        setMenuOpen(true);
+        setEditorError(nextError.message);
+      }
+    } finally {
+      setIsBusy(false);
     }
-    const list = [...entriesByCode.values()];
-    const ownerCodes = Array.isArray(world?.ownerCodes) ? world.ownerCodes : null;
-    const nameByCode = new Map(list.map((entry) => [entry.code, entry.name]));
-    const polity = world?.polityOverrides ?? {};
-    const resolveOption = (code, fallbackName = code) => {
-      const scenarioName = nameOverrides[code] || nameOverrides[fallbackName];
-      const polityName = polity[code]?.name;
-      return {
-        code,
-        name: (polityName && polityName !== code ? polityName : null) || scenarioName || fallbackName,
-      };
-    };
-    // ownerCodes lists only owners that hold territory (it is the deduped values of
-    // regionOwnershipOverrides). A LANDLESS faction — a polity that owns no regions,
-    // e.g. a government-in-exile — is defined in polityOverrides but appears in no
-    // ownership override, so it would never reach this list. Union the two: a
-    // faction is playable if it holds land OR exists as a polity. The map surface
-    // needs no change — a landless faction has nothing to click, and the list
-    // button is selection enough.
-    const codes = new Set(ownerCodes && ownerCodes.length ? ownerCodes : list.map((e) => e.code));
-    for (const code of Object.keys(polity)) codes.add(code);
-    const options = [...codes]
-      .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
-      .map((code) => resolveOption(code, nameByCode.get(code) || code));
-    return options
-      .sort((left, right) => left.name.localeCompare(right.name));
   };
 
   const getBaseCountryOptions = () =>
@@ -1999,11 +2103,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The scenario's own basemap for the picker: the descriptor says whether
   // there is one, background.json carries it - the same two the game map reads
   // (useCustomBackground). Nothing to load means ESRI, as before.
-  const loadPickerBackground = (scenarioId, descriptor) => {
+  const loadPickerBackground = (scenarioId, descriptor, isCurrent) => {
     const kind = descriptor?.kind;
     if (kind !== "image" && kind !== "vector") return;
     downloadScenarioJsonAsset(scenarioId, "backgroundData")
       .then((data) => {
+        if (!isCurrent()) return;
         if (kind === "image" && data?.dataUrl) setPickerBackground({ kind, imageUrl: data.dataUrl });
         else if (kind === "vector" && data?.geojson) setPickerBackground({ kind, geojson: data.geojson });
       })
@@ -2011,14 +2116,20 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   const handleScenarioPlay = (scenario) => {
+    // Loads for a picker the player has since closed, or opened on another
+    // scenario, never land in this one (a late A could offer A's countries and
+    // borders in B's picker, and start a B game as a country B does not have).
+    const isCurrent = pickerRequest.begin();
     setCountryQuery("");
     setCountryOptions([]);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setPlayGameId(null);
     setPickerTab("country");
+    setPickerGroups([]);
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
+        if (!isCurrent()) return;
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -2028,32 +2139,32 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // stock seed is repainted in this scenario's owners, without it the picker
         // shows modern countries the scenario does not contain.
         setPickerOwnerOverrides(details?.data?.world?.regionOwnershipOverrides ?? null);
+        setPickerGroups(scenarioGroupsFor(details?.data?.world));
         // Load custom region geometry so the map renders the scenario's actual
         // boundaries instead of the stock world seed.
         if (details?.data?.world?.customRegions) {
           downloadScenarioJsonAsset(scenario.id, "regionsGeojson", { coarse: true })
-            .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+            .then((geojson) => { if (geojson && isCurrent()) setCustomRegionData(geojson); })
             .catch(() => {});
         }
         // And the scenario's own basemap, when it has one, so the picker shows
         // the map the player is about to play on rather than the ESRI canvas.
-        loadPickerBackground(scenario.id, details?.data?.world?.background);
+        loadPickerBackground(scenario.id, details?.data?.world?.background, isCurrent);
       })
-      .catch(() => setCountryOptions([]));
+      .catch(() => { if (isCurrent()) setCountryOptions([]); });
   };
 
   // Hub update detection: scenarios imported straight from the community tab
-  // (and not modified since) carry hubOrigin. When the Scenarios tab shows any,
-  // fetch the hub posts (lazily — same chunk as the Community tab, and the
-  // module's 5-minute cache dedupes) and compare each post's CURRENT bundle
-  // file against the one imported. A silent failure just means no Update
-  // buttons — offline behaves exactly as before.
+  // carry hubOrigin, and those not modified since (no editedAt) can take the
+  // post's newer file. When the Scenarios tab shows any, fetch the hub posts
+  // (runtime/hubPosts.js; its 5-minute cache dedupes) and compare each post's
+  // CURRENT bundle file against the one imported. A silent failure just means
+  // no Update buttons — offline behaves exactly as before.
   const [hubPostById, setHubPostById] = useState(null);
   useEffect(() => {
-    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
+    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin && !entry.hubOrigin.editedAt)) return undefined;
     let cancelled = false;
-    import("./communityHub.jsx")
-      .then(({ fetchHubPosts }) => fetchHubPosts())
+    fetchHubPosts()
       .then((posts) => {
         if (cancelled) return;
         const byId = {};
@@ -2066,11 +2177,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     };
   }, [menuOpen, activeTab, scenarios]);
 
-  const scenarioUpdateAvailable = (scenario) => Boolean(
-    scenario.hubOrigin &&
-    hubPostById?.[scenario.hubOrigin.postId]?.bundleUrl &&
-    hubPostById[scenario.hubOrigin.postId].bundleUrl !== scenario.hubOrigin.bundleUrl,
-  );
+  // An edited copy is never overwritten: its player suggests their changes to
+  // the post instead, and keeps their copy. The Community tab's cards ask the
+  // same question (runtime/hubPosts.js).
+  const scenarioUpdateAvailable = (scenario) =>
+    hubUpdateAvailable(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
@@ -2084,12 +2195,228 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     try {
       const { downloadHubBundle } = await import("./communityHub.jsx");
       const bundle = await downloadHubBundle(post.bundleUrl);
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       await updateScenarioFromBundle(scenario.id, bundle);
+      // The stores keep the basemap the scenario had when the new one could not
+      // be downloaded (updateScenarioFromBundle).
+      const missingBasemap = unresolvedBundleBackground(bundle);
+      if (missingBasemap) {
+        setEditorError(`The scenario was updated, but its community basemap could not be downloaded (${missingBasemap}), so it keeps the basemap it had.`);
+      }
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
     } finally {
       setIsBusy(false);
+    }
+  };
+
+  // ---- suggested changes (ScenarioSuggestions.jsx) ---------------------------
+  // A downloaded scenario suggests its changes back to its post; a player's
+  // own post collects the suggestions others leave on it as comments.
+  const [suggestTarget, setSuggestTarget] = useState(null); // scenario id
+  const [reviewTarget, setReviewTarget] = useState(null); // { scenarioId, source: { ref } | { suggestion } }
+  const [communityBusy, setCommunityBusy] = useState(false);
+  const [communityNote, setCommunityNote] = useState("");
+  const scenarioById = (id) => scenarios.find((entry) => entry.id === id) ?? null;
+
+  // A bookkeeping write, shown in the open drawer at once (its form is untouched).
+  const adoptScenarioSummary = (details) => {
+    if (!details?.scenario) return;
+    setEditorDetails((current) => (current?.scenario?.id === details.scenario.id ? { ...current, scenario: details.scenario } : current));
+  };
+
+  // The posts carrying this scenario's key, and the suggestions left on them.
+  const refreshSuggestionsFor = async (scenario, { force = false } = {}) => {
+    if (!scenario?.hubPublished) return null;
+    const posts = await fetchHubPosts({ force });
+    const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, {
+      fetchComments: (postId) => fetchPostComments(postId, { force }),
+      reviews: scenario.hubReviews,
+    });
+    if (changed) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: published }));
+    return published;
+  };
+
+  // When the menu opens, an author learns of new suggestions on their posts:
+  // one post list (cached five minutes) and a post's comments only when its
+  // comment count moved. Unauthenticated GitHub allows 60 requests an hour.
+  const suggestionsCheckedAtRef = useRef(0);
+  useEffect(() => {
+    if (!menuOpen || !loaded) return;
+    const mine = scenarios.filter((entry) => entry.hubPublished);
+    if (!mine.length || Date.now() - suggestionsCheckedAtRef.current < 5 * 60 * 1000) return;
+    suggestionsCheckedAtRef.current = Date.now();
+    (async () => {
+      try {
+        const posts = await fetchHubPosts();
+        for (const scenario of mine) {
+          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, { reviews: scenario.hubReviews });
+          if (changed) await saveScenario(scenario.id, { hubPublished: published });
+        }
+      } catch (nextError) {
+        console.warn("[hub] could not check for suggested changes:", nextError?.message || nextError);
+      }
+    })();
+  }, [menuOpen, loaded, scenarios]);
+
+  const handleSuggestChanges = async (scenario) => {
+    // Suggest changes compares what is saved: edits still in the form go in first.
+    if (editorKind === "scenario" && editorDetails?.scenario?.id === scenario.id && editorState
+      && JSON.stringify(editorState) !== JSON.stringify(buildScenarioEditorState(editorDetails))) {
+      if (!window.confirm("Save your changes to this scenario first? Only saved changes can be suggested.")) return;
+      await handleSave();
+    }
+    setSuggestTarget(scenario.id);
+  };
+
+  const handleUnlinkOrigin = async (scenario) => {
+    if (!window.confirm("Unlink this scenario from its community post? It becomes your own scenario: it no longer follows the post, and you can no longer suggest changes to it.")) return;
+    setCommunityBusy(true);
+    try {
+      adoptScenarioSummary(await saveScenario(scenario.id, { hubOrigin: null }));
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleForgetPost = async (scenario) => {
+    if (!window.confirm("Stop looking for suggested changes on your post? The post stays on the hub, and you can link it again later.")) return;
+    setCommunityBusy(true);
+    try {
+      adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: null }));
+      setCommunityNote("");
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleRefreshSuggestions = async (scenario) => {
+    setCommunityBusy(true);
+    setCommunityNote("");
+    try {
+      const published = await refreshSuggestionsFor(scenario, { force: true });
+      const waiting = openSuggestionsOf({ ...scenario, hubPublished: published }).length;
+      setCommunityNote(!published?.postIds?.length
+        ? "Your post is not on the hub yet. If you posted it before this version of the game, link it by its address."
+        : waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Checked just now: no suggested changes waiting.");
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleLinkPost = async (scenario, postId) => {
+    setCommunityBusy(true);
+    setCommunityNote("");
+    try {
+      const current = scenario.hubPublished;
+      const details = await saveScenario(scenario.id, {
+        hubPublished: {
+          ...(current ?? {}),
+          postIds: [postId, ...(current?.postIds ?? []).filter((id) => id !== postId)],
+          publishedAt: current?.publishedAt || new Date().toISOString(),
+        },
+      });
+      adoptScenarioSummary(details);
+      const published = await refreshSuggestionsFor(details.scenario, { force: true });
+      const waiting = openSuggestionsOf({ ...details.scenario, hubPublished: published }).length;
+      setCommunityNote(waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Linked. No suggested changes waiting.");
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  // "Reject all from @…", for a contributor flooding a post with bad edits:
+  // everything they suggested goes, on every post this player made, and what
+  // they suggest later is hidden and never stored (server/hubProvenance.js).
+  const handleRejectContributor = async (login) => {
+    if (!window.confirm(`Reject everything @${login} suggested? Their suggestions are put away on all your posts, and anything they suggest later is hidden. You can unblock them in the scenario's Community card.`)) return;
+    setCommunityBusy(true);
+    try {
+      for (const scenario of scenarios.filter((entry) => entry.hubPublished)) {
+        const next = withContributorBlocked(scenario.hubPublished, login, true);
+        if (next) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: next }));
+      }
+      setReviewTarget((current) => (String(current?.source?.ref?.author ?? "").toLowerCase() === login.toLowerCase() ? null : current));
+      setCommunityNote(`Rejected everything from @${login}.`);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleUnblockContributor = async (login) => {
+    setCommunityBusy(true);
+    try {
+      let drawerRecord = null;
+      for (const scenario of scenarios.filter((entry) => isBlockedContributor(entry.hubPublished, login))) {
+        const details = await saveScenario(scenario.id, { hubPublished: withContributorBlocked(scenario.hubPublished, login, false) });
+        adoptScenarioSummary(details);
+        if (details?.scenario?.id === editorDetails?.scenario?.id) drawerRecord = details.scenario;
+      }
+      // Their suggestions come back with the next look at the post's comments.
+      if (drawerRecord) await refreshSuggestionsFor(drawerRecord, { force: true });
+      setCommunityNote(`@${login} is unblocked.`);
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleOpenSuggestionFile = async (scenario, file) => {
+    try {
+      const suggestion = await readSuggestionFile(file);
+      setReviewTarget({ scenarioId: scenario.id, source: { suggestion } });
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
+  };
+
+  // The map's changes open in the Workshop, listed and marked on the map
+  // (src/Editor/SuggestionReviewPanel.jsx). The decisions made there are kept
+  // with the review once the map is saved into the scenario.
+  const openMapReview = async (scenarioId, suggestion, decisions, key) => {
+    try {
+      const details = await loadScenarioDetails(scenarioId);
+      openMapEditorFor(details.scenario, details.data?.world ?? {}, {
+        review: {
+          suggestion,
+          decisions: { accepted: [...decisions.accepted], rejected: [...decisions.rejected] },
+          onSaved: async (mapDecisions) => {
+            const latest = (await loadScenarioDetails(scenarioId)).scenario;
+            const reviews = { ...(latest?.hubReviews ?? {}) };
+            const record = reviews[key] ?? { status: "reviewing", accepted: [], rejected: [] };
+            const accepted = new Set(record.accepted);
+            const rejected = new Set(record.rejected);
+            for (const change of suggestion.changes) {
+              if (change.area !== "map") continue;
+              accepted.delete(change.id);
+              rejected.delete(change.id);
+            }
+            mapDecisions.accepted.forEach((id) => accepted.add(id));
+            mapDecisions.rejected.forEach((id) => rejected.add(id));
+            const everyDecided = suggestion.changes.every((change) => accepted.has(change.id) || rejected.has(change.id));
+            reviews[key] = {
+              status: everyDecided ? "done" : record.status === "dismissed" ? "dismissed" : "reviewing",
+              accepted: [...accepted],
+              rejected: [...rejected],
+              updatedAt: new Date().toISOString(),
+            };
+            await saveScenario(scenarioId, { hubReviews: reviews });
+          },
+        },
+      });
+    } catch (nextError) {
+      setEditorError(nextError.message);
     }
   };
 
@@ -2119,12 +2446,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setMenuOpen(false);
 
     try {
-      const details = await createGame({
+      await createGame({
         name: `${game.name} Copy`,
         seedGameId: game.id,
         setActive: true,
       });
-      await openGameEditor(details.game.id);
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
@@ -2193,10 +2519,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           `so this export carries everything except the map. Send the scenario separately from the Scenarios tab.`,
         );
       }
-      // The deferred-revoke saver, NOT the saveBlobToDisk defined above: that one
-      // revokes the object URL in the same task as the click, which Firefox treats
-      // as a cancelled download.
-      saveGameZipToDisk(blob, `${game.id}-game.zip`);
+      // Awaited, so a failed write (the Android app's Downloads or share sheet)
+      // reaches the catch below and the card stays busy until the file is out.
+      await saveGameZipToDisk(blob, `${game.id}-game.zip`);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2226,14 +2551,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const { bundle, scenarioBundle, snapshotsText } = await readGameZip(buffer);
 
       // The scenario first, so the game's card names its map the moment it
-      // appears. Only when this library doesn't already hold that id: importing
-      // regardless would mint a second copy of the same map — up to 53 MB —
-      // every time the same game was imported, and ensureUniqueId would rename
-      // it, so the game would point at whichever copy arrived first anyway.
+      // appears. The carried map is imported unless this library already holds
+      // a copy of it (importedScenarioCopy.js): an id match alone is no match,
+      // since ids come from names and every "New Scenario" shares one. The game
+      // names whichever id the map ends up under.
       let scenarioId = bundle.scenarioRef?.scenarioId ?? "";
-      if (scenarioBundle && !scenarios.some((entry) => entry.id === scenarioId)) {
-        const imported = await importScenarioBundle(scenarioBundle);
-        scenarioId = imported.scenario.id;
+      if (scenarioBundle) {
+        scenarioId = await findScenarioCopyOfBundle(scenarioBundle, scenarios, loadScenarioDetails)
+          ?? (await importScenarioBundle(scenarioBundle)).scenario.id;
       }
 
       const details = await importGameBundle({
@@ -2262,16 +2587,25 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
-      const { downloadHubBundle } = await import("./communityHub.jsx");
       const origin = game.importedScenarioOrigin;
-      const bundle = await downloadHubBundle(origin.bundleUrl);
-      // Stamp where it came from, exactly as the Community tab's own import does
-      // (communityHub.jsx). Without it the scenario looks editor-made to every
-      // later export, which would try to carry the whole map inside the next game
-      // exported from it — hundreds of megabytes, built in the page.
-      bundle.hubOrigin = { bundleUrl: origin.bundleUrl, postId: origin.postId, syncedAt: origin.syncedAt };
-      const imported = await importScenarioBundle(bundle);
-      await saveGame(game.id, { scenarioId: imported.scenario.id });
+      // A copy of that very file already in the library (fetched from the
+      // Community tab since, or by an earlier try) is the map: every retry
+      // importing another one piled up copies tens of MB each.
+      let scenarioId = scenarioCopyOfHubFile(origin, scenarios)?.id ?? "";
+      if (!scenarioId) {
+        const { downloadHubBundle } = await import("./communityHub.jsx");
+        const bundle = await downloadHubBundle(origin.bundleUrl);
+        // Stamp where it came from, exactly as the Community tab's own import does
+        // (communityHub.jsx). Without it the scenario looks editor-made to every
+        // later export, which would try to carry the whole map inside the next game
+        // exported from it — hundreds of megabytes, built in the page.
+        bundle.hubOrigin = { bundleUrl: origin.bundleUrl, postId: origin.postId, syncedAt: origin.syncedAt };
+        const imported = await importScenarioBundle(bundle);
+        scenarioId = imported.scenario.id;
+      }
+      // The import may land under another id than the one the game names (the
+      // sender's id taken here already): the game follows the map it gets.
+      await saveGame(game.id, { scenarioId });
       await refreshLibraryCatalog({ force: true });
       setMissingScenarioGame(null);
       setMenuOpen(false);
@@ -2328,7 +2662,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     });
   };
 
-  const handleExportPrompts = () => {
+  const handleExportPrompts = async () => {
     if (editorKind !== "scenario" || !editorState || !editorDetails?.scenario) return;
     const scenario = editorDetails.scenario;
     const bundle = {
@@ -2338,10 +2672,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       scenario: { id: scenario.id, name: scenario.name },
       prompts: materializePromptPack(editorState.prompts),
     };
-    saveGameZipToDisk(
-      new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }),
-      `${scenario.id}-prompts.json`,
-    );
+    setEditorError(null);
+    try {
+      await saveJsonBundleToDisk(bundle, `${scenario.id}-prompts.json`);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
   };
 
   const handleImportPrompts = (rawPromptPack) => {
@@ -2395,7 +2731,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             startingTimelineText: editorState.startingTimelineText,
           },
         });
-        if (editorStats.custom) {
+        if (editorStatsFailed) {
+          // Never loaded, so never written: see openScenarioEditor.
+        } else if (editorStats.custom) {
           if ((editorStats.sections || []).some((section) => !Array.isArray(section?.stats) || section.stats.length === 0)) {
             throw new Error("Each custom Stats section needs at least one statistic before saving.");
           }
@@ -2405,43 +2743,42 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           }
           const blob = new Blob([JSON.stringify(serializeStatSheet(definition), null, 2)], { type: "application/json" });
           details = await uploadScenarioAsset(editorDetails.scenario.id, "stats", blob);
-          setEditorStats({ custom: true, version: definition.version, sections: definition.sections });
+          adoptSavedStats({ custom: true, version: definition.version, sections: definition.sections });
         } else {
           if (editorDetails.assetStatus?.stats || details.assetStatus?.stats) {
             details = await clearScenarioAsset(editorDetails.scenario.id, "stats");
           }
-          setEditorStats(normalizeStatsEditorValue(null));
+          adoptSavedStats(normalizeStatsEditorValue(null));
         }
         setEditorDetails(details);
         setEditorState(buildScenarioEditorState(details));
       } else {
-        const currentGame = editorDetails.data?.game ?? {};
-        const currentWorld = editorDetails.data?.world ?? {};
+        // Only what was changed in the form, as patches the store merges into
+        // the files as they are now. The drawer can stay open over the game
+        // while turns are played, and writing back the game.json and world.json
+        // it loaded rolled back the date, round, borders, units and polities.
+        const baseline = buildGameEditorState(editorDetails);
+        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+        const worldPatch = changedFields(editorState, baseline, [
+          "labelFont",
+          "labelHaloColor",
+          "labelTextColor",
+          "language",
+          "simulationRules",
+          "startingTimelineText",
+        ]);
         const details = await saveGame(editorDetails.game.id, {
           accentColor: editorState.accentColor,
           description: editorState.description,
           eyebrow: editorState.eyebrow,
           features: editorState.features,
-          game: {
-            ...currentGame,
-            country: editorState.country,
-            gameDate: editorState.gameDate,
-            language: editorState.language,
-          },
+          ...(Object.keys(gamePatch).length ? { gamePatch } : null),
           heroSubtitle: editorState.heroSubtitle,
           heroTitle: editorState.heroTitle,
           name: editorState.name,
           prompts,
           subtitle: editorState.subtitle,
-          world: {
-            ...currentWorld,
-            labelFont: editorState.labelFont,
-            labelHaloColor: editorState.labelHaloColor,
-            labelTextColor: editorState.labelTextColor,
-            language: editorState.language,
-            simulationRules: editorState.simulationRules,
-            startingTimelineText: editorState.startingTimelineText,
-          },
+          ...(Object.keys(worldPatch).length ? { worldPatch } : null),
         });
         setEditorDetails(details);
         setEditorState(buildGameEditorState(details));
@@ -2500,12 +2837,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         editorKind === "scenario"
           ? await uploadScenarioAsset(editorDetails.scenario.id, assetKey, file)
           : await uploadGameAsset(editorDetails.game.id, assetKey, file);
+      // The details only: the form holds no asset, and rebuilding it from the
+      // saved record threw away everything typed since the last Save.
       setEditorDetails(details);
-      setEditorState(
-        editorKind === "scenario"
-          ? buildScenarioEditorState(details)
-          : buildGameEditorState(details),
-      );
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2526,12 +2860,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         editorKind === "scenario"
           ? await clearScenarioAsset(editorDetails.scenario.id, assetKey)
           : await clearGameAsset(editorDetails.game.id, assetKey);
+      // As an upload: the details only, so the form keeps what was typed.
       setEditorDetails(details);
-      setEditorState(
-        editorKind === "scenario"
-          ? buildScenarioEditorState(details)
-          : buildGameEditorState(details),
-      );
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2569,9 +2899,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         const lifted = splitBundleFiles(bundle);
         Object.assign(files, lifted.files);
         files["scenario.json"] = JSON.stringify(lifted.bundle);
-        saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
+        await saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
       } else {
-        saveJsonBundleToDisk(bundle, `${id}-scenario.json`);
+        await saveJsonBundleToDisk(bundle, `${id}-scenario.json`);
       }
     } catch (nextError) {
       setEditorError(nextError.message);
@@ -2592,31 +2922,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
-      // A scenario exported with a custom basemap arrives as a .zip (scenario.json +
-      // the raw basemap file); everything else is a plain JSON bundle. Detect the zip
-      // by its magic bytes so a renamed file still works, then re-embed the basemap so
-      // the importer sees a normal self-contained bundle.
-      const buffer = await file.arrayBuffer();
-      let bundle;
-      if (looksLikeZip(new Uint8Array(buffer))) {
-        const zip = await unzipBundle(buffer);
-        const scenarioText = await zip.text("scenario.json");
-        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-        bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-        if (imageName) {
-          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-        } else {
-          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-        }
-      } else {
-        bundle = JSON.parse(new TextDecoder().decode(buffer));
-      }
+      // A .zip or a plain JSON bundle, read the way a hub download is
+      // (runtime/hubPosts.js) — so a post's .zip downloaded by hand and imported
+      // here still fetches the community basemap it references.
+      const bundle = await readScenarioBundleBytes(await file.arrayBuffer());
       const details = await importScenarioBundle(bundle);
       setActiveTab("scenarios");
       setMenuOpen(true);
       await openScenarioEditor(details.scenario.id);
+      // Shown in the drawer that just opened on it.
+      const missingBasemap = unresolvedBundleBackground(bundle);
+      if (missingBasemap) {
+        setEditorError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+      }
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2640,6 +2958,98 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
+  // A suggestion being reviewed in the Workshop (openMapReview), or null.
+  const [mapEditorReview, setMapEditorReview] = useState(null);
+  // Which opening of the Workshop the map downloads in flight belong to. Every
+  // open and every close moves it on, so a map still downloading for a
+  // Workshop the player already left can never seed the next one: MapEditor
+  // hydrates once, from the first map it is handed, and saves into its own
+  // scenario whatever that map was.
+  const [mapEditorRequest] = useState(createLatestRequest);
+
+  // Open the Workshop on a scenario's CURRENT map (geometry + owners + cities +
+  // palette) so it edits that map instead of the default world. Assets stream
+  // in async; the editor hydrates the moment they arrive. `review` puts a
+  // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
+  const openMapEditorFor = (scenario, world = {}, { review = null } = {}) => {
+    const isCurrent = mapEditorRequest.begin();
+    setMapEditorScenario(scenario);
+    setMapEditorSeed(null);
+    setMapEditorReview(review);
+    setIsMapEditorOpen(true);
+    if (!scenario) return;
+    Promise.all([
+      downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
+      downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
+      downloadScenarioJsonAsset(scenario.id, "colors"),
+      // The author-set flags, for the same reason as the background below:
+      // without them the editor opens with none, and Apply & Play cannot
+      // tell "this map has no flags" from "this map never loaded them" —
+      // so it clears the scenario's flags.json and the author's work is gone.
+      downloadScenarioJsonAsset(scenario.id, "flags"),
+      downloadScenarioJsonAsset(scenario.id, "tags"),
+      // The custom map background so re-opening the editor restores it.
+      world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+    ]).then(([regions, cities, colors, flags, tags, bgData]) => {
+      if (!isCurrent()) return;
+      const bgDesc = world.background;
+      const background =
+        bgDesc?.kind === "image" && bgData?.dataUrl
+          ? { kind: "image", dataUrl: bgData.dataUrl }
+          : bgDesc?.kind === "vector" && bgData?.geojson
+            ? { kind: "vector", geojson: bgData.geojson }
+            : null;
+      setMapEditorSeed({
+        name: scenario.name || "",
+        author: world.author || "",
+        ownershipOverrides: world.regionOwnershipOverrides || {},
+        // The world's disputes, stamped over the map file's as the game
+        // reads them, so the Workshop edits what the game shows.
+        claimOverrides: {
+          claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
+            ? world.regionClaimants
+            : {},
+          settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
+          // Which group's area each region is in; stamped with the disputes.
+          groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
+            ? world.groupAreas
+            : {},
+        },
+        groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
+        regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
+        cities: cities && Array.isArray(cities.features) ? cities : null,
+        colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+        flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
+        tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
+        polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
+          ? world.polityOverrides
+          : {},
+        background,
+        basemap: world.basemap || null,
+        // Carried like the flags above: a round-trip must not reset it.
+        customCities: Boolean(world.customCities),
+        // The scenario's starting units, so the Units panel edits what the game starts with.
+        units: Array.isArray(world.units) ? world.units : [],
+        // Its structures, edited as map features that are not cities.
+        markers: Array.isArray(world.markers) ? world.markers : [],
+        // Its puppet states, for the Countries panel.
+        puppets: Array.isArray(world.puppets) ? world.puppets : [],
+      });
+    }).catch((error) => {
+      if (!isCurrent()) return;
+      // A piece that failed to download is not a piece the map lacks: seeded
+      // without it, the Workshop's save would clear the flags, tags and
+      // background and write the stock world over the geometry. So the
+      // Workshop closes before anything can be saved, and the drawer says why.
+      console.warn("[editor] the scenario's map could not be loaded:", error);
+      mapEditorRequest.cancel();
+      setIsMapEditorOpen(false);
+      setMapEditorScenario(null);
+      setMapEditorSeed(null);
+      setMapEditorReview(null);
+      setEditorError(`The map editor was closed because this scenario's map could not be loaded, so nothing was saved over it. ${error?.message || error}`);
+    });
+  };
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
   const [customRegionData, setCustomRegionData] = useState(null);
@@ -2653,15 +3063,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [pickerBackground, setPickerBackground] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // Which tab of the new-game dialog: pick an existing country, or invent one.
-  const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction"
+  const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction" | "group"
+  const [pickerGroups, setPickerGroups] = useState([]);
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+  // Which opening of the picker its loads belong to (handleScenarioPlay).
+  const [pickerRequest] = useState(createLatestRequest);
 
   const closeCountryPicker = () => {
+    pickerRequest.cancel();
     setCountryPicker(null);
     setPlayGameId(null);
     setDifficultyPick(null);
@@ -2678,7 +3092,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // itself has no Back of its own here: its close button saves first and asks
   // before dropping work, and that lives in src/Editor/MapEditor.jsx.
   useBackToClose(menuOpen && menuOverGame && Boolean(activeGame), () => setMenuOpen(false));
-  useBackToClose(Boolean(editorKind && editorDetails && editorState) && !isMapEditorOpen, resetEditor);
+  useBackToClose(Boolean(editorKind && editorDetails && editorState) && !isMapEditorOpen, closeEditor);
   useBackToClose(Boolean(countryPicker), closeCountryPicker);
   // The difficulty step goes back to the country step, as its own Back does.
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
@@ -2689,13 +3103,33 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed, { play = true } = {}) => {
+  const applyMapToScenario = async (scenario, seed, { play = true, renames = [] } = {}) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
+    // A save is a scenario save and up to six asset writes. Each used to rebuild
+    // the library catalog on its own (and could rotate the running map's asset
+    // token half-way through the save); now the catalog is rebuilt once, after
+    // the last write.
+    const scenarioCountry = await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed, renames));
+
+    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
+    // flow below.
+    if (!play) return { saved: true, scenarioId };
+    await playAppliedMap(scenario, scenarioId, seed, scenarioCountry);
+  };
+
+  // Returns the scenario's player country as saved, for Apply & Play.
+  const writeMapToScenario = async (scenarioId, seed, renames) => {
     const details = await loadScenarioDetails(scenarioId);
-    const currentWorld = details?.data?.world ?? {};
-    const currentGame = details?.data?.game ?? {};
+    // The countries renamed in the Workshop since its last save: the player
+    // country and the world's name-keyed records follow them before the map
+    // is written (playerCountryAfterSave.js scenarioAfterWorkshopRenames).
+    const { world: currentWorld, game: currentGame } = scenarioAfterWorkshopRenames(
+      details?.data?.world ?? {},
+      details?.data?.game ?? {},
+      renames,
+    );
 
     // A Workshop that has not finished loading the scenario's map holds an empty
     // document, and writing that over a scenario with territory is never what a
@@ -2707,6 +3141,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       throw new Error("The map in the editor is empty while this scenario has territory — its map had not finished loading. Wait for it to appear, then save again.");
     }
 
+    // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
+    const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
         ...currentWorld,
@@ -2746,24 +3182,32 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       },
       game: {
         ...currentGame,
-        country: seed.game?.country || currentGame.country || "",
+        country: scenarioCountry,
         // Guarantee a valid date so the timeline never shows "Invalid Date".
         gameDate:
           currentGame.gameDate || currentGame.startDate || seed.game?.gameDate || seed.game?.startDate || "2016-01-01",
         startDate:
           currentGame.startDate || currentGame.gameDate || seed.game?.startDate || seed.game?.gameDate || "2016-01-01",
       },
-    });
+    }, { refresh: false });
 
-    // The canonical scenario just written, kept in the drawer too; otherwise
-    // reopening the Workshop resurrects the old world.json and a later ordinary
-    // scenario save can write the stale basemap back.
-    setEditorDetails(savedScenarioDetails);
+    // The canonical scenario just written, kept in the drawer too when it is
+    // open on this scenario; otherwise reopening the Workshop resurrects the old
+    // world.json and a later ordinary scenario save can write the stale basemap
+    // back. Its form follows the player country and date the save may have
+    // moved (a deleted polity, a stamped date), or the drawer's next Save
+    // writes the old ones back; a field the author changed there keeps theirs.
+    if (editorKind === "scenario" && editorDetails?.scenario?.id === scenarioId) {
+      const drawerGame = editorDetails.data?.game ?? {};
+      setEditorDetails(savedScenarioDetails);
+      setEditorState((current) => followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]));
+    }
 
     await uploadScenarioAsset(
       scenarioId,
       "colors",
       new Blob([JSON.stringify(seed.colors ?? {})], { type: "application/json" }),
+      { refresh: false },
     );
     // Author-set country flags. Only written when the map actually has some: a map
     // with no flags must leave the scenario's flags.json alone rather than stamping
@@ -2774,9 +3218,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "flags",
         new Blob([JSON.stringify(seed.flags)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "flags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "flags", { refresh: false });
     }
     // Author-set country tags, same contract as flags.
     if (seed.tags) {
@@ -2784,9 +3229,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "tags",
         new Blob([JSON.stringify(seed.tags)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "tags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "tags", { refresh: false });
     }
     await uploadScenarioAsset(
       scenarioId,
@@ -2794,6 +3240,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       new Blob([JSON.stringify(seed.regions ?? { type: "FeatureCollection", features: [] })], {
         type: "application/json",
       }),
+      { refresh: false },
     );
     await uploadScenarioAsset(
       scenarioId,
@@ -2801,6 +3248,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       new Blob([JSON.stringify(seed.cities ?? { type: "FeatureCollection", features: [] })], {
         type: "application/json",
       }),
+      { refresh: false },
     );
 
     // The custom background's heavy payload (image data URL / vector GeoJSON) is a
@@ -2812,29 +3260,33 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "backgroundData",
         new Blob([JSON.stringify(seed.backgroundData)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+      await clearScenarioAsset(scenarioId, "backgroundData", { refresh: false });
     }
+    return scenarioCountry;
+  };
 
-    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
-    // flow below.
-    if (!play) return { saved: true, scenarioId };
-
+  const playAppliedMap = async (scenario, scenarioId, seed, scenarioCountry) => {
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
     // map) in place — this guarantees the new map is live. Menu flag first: the
-    // activation remounts the UI and the remount must come up menu-closed.
+    // activation remounts the UI and the remount must come up menu-closed. The
+    // game starts as the scenario's own player country, just saved above, not
+    // the seed's, which is only the map's first owner (a Japan scenario started
+    // as Afghanistan whenever the picker was dismissed).
     setMenuOpen(false);
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
-      ...(seed.game?.country ? { gamePatch: { country: seed.game.country } } : null),
+      ...(scenarioCountry ? { gamePatch: { country: scenarioCountry } } : null),
       setActive: true,
     });
     const newGameId = gameDetails.game.id;
 
     // Tear down all the library UI so the freshly-activated game is visible.
+    mapEditorRequest.cancel();
     setIsMapEditorOpen(false);
     setMapEditorScenario(null);
     setMapEditorSeed(null);
@@ -2842,18 +3294,32 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setMenuOpen(false);
 
     // Optional: let the player pick who they control on the new game — limited to
-    // the factions this map actually contains.
-    const seedWorld = {
-      ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
-      polityOverrides: seed.world?.polityOverrides ?? {},
-    };
-    setPlayGameId(newGameId);
+    // the factions this map actually contains. Offered by the UI remounted
+    // around the new game (openPlayCountryPicker), since this one is gone.
+    handOffAfterActivation({
+      gameId: newGameId,
+      countryPicker: {
+        scenario,
+        seedWorld: {
+          ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
+          polityOverrides: seed.world?.polityOverrides ?? {},
+        },
+        background: seed.world?.background,
+      },
+    });
+  };
+
+  // The Apply-&-Play country picker over a game just made from `scenario`.
+  const openPlayCountryPicker = (gameId, { scenario, seedWorld, background }) => {
+    const isCurrent = pickerRequest.begin();
+    setPlayGameId(gameId);
     setCountryQuery("");
     setCountryOptions([]);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setCountryPicker(scenario);
     loadCountryNames().catch(() => [])
       .then((allCountries) => {
+        if (!isCurrent()) return;
         setCountryOptions(buildScenarioCountryOptions(
           seedWorld,
           [...getBaseCountryOptions(), ...allCountries],
@@ -2863,18 +3329,34 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // The map editor just saved custom region geometry — load it so the
         // country picker renders the scenario's actual map, not the stock seed.
         downloadScenarioJsonAsset(scenario.id, "regionsGeojson", { coarse: true })
-          .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
+          .then((geojson) => { if (geojson && isCurrent()) setCustomRegionData(geojson); })
           .catch(() => {});
-        loadPickerBackground(scenario.id, seed.world?.background);
+        loadPickerBackground(scenario.id, background, isCurrent);
       })
       // Falling back to every real-world country here was the same bug by another
       // route: a scenario picker listing Germany and France because a name lookup
       // failed. The scenario's own world is already in hand — build from it.
       .catch(() => {
+        if (!isCurrent()) return;
         setCountryOptions(buildScenarioCountryOptions(seedWorld, [], scenario.countryNameOverrides));
         setPickerOwnerOverrides(seedWorld.regionOwnershipOverrides ?? null);
       });
   };
+
+  // Pick up what a flow owes the game it just activated (handOffAfterActivation):
+  // only in the instance mounted for that game, whichever came first, the
+  // hand-off or the remount.
+  const pendingAfterActivation = useSyncExternalStore(afterActivation.subscribe, afterActivation.get, afterActivation.get);
+  useEffect(() => {
+    const work = afterActivation.take(activeGameId);
+    if (!work) return;
+    if (work.editor) {
+      openGameEditor(work.gameId).then(() => {
+        if (work.error) setEditorError(work.error);
+      });
+    }
+    if (work.countryPicker) openPlayCountryPicker(work.gameId, work.countryPicker);
+  }, [pendingAfterActivation, activeGameId]);
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.
@@ -2902,12 +3384,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // A created faction routes through the SAME difficulty step as a picked country —
   // it just carries a faction draft instead of a country code.
   const pickFaction = (faction) => setDifficultyPick({ faction });
+  // A group (one of the scenario's, or one just made) takes the same step.
+  const pickGroup = (group) => setDifficultyPick({ group });
 
   const pickDifficulty = (difficultyId) => {
     const draft = difficultyPick;
     setDifficultyPick(null);
     if (draft?.faction) {
       startGameForFaction(countryPicker, draft.faction, difficultyId);
+      return;
+    }
+    if (draft?.group) {
+      startGameForGroup(countryPicker, draft.group, difficultyId);
       return;
     }
     const countryCode = draft?.countryCode || "";
@@ -2969,16 +3457,35 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     () => [...scenarios].sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))),
     [scenarios],
   );
-  // "Your Scenarios": ones the player made or edited themselves. hubOrigin is
-  // null for locally created scenarios AND for hub imports edited locally (any
-  // local meta write clears it — see writeScenarioMeta). The stock built-in
+  // "Your Scenarios": ones the player made or edited themselves — no hubOrigin
+  // (made here, or unlinked), or a hub import they have edited (editedAt: the
+  // link stays, so they can suggest their changes back). The stock built-in
   // only counts once it has actually been touched.
   const yourScenarios = useMemo(
     () => scenarios.filter(
-      (scenario) => !scenario.hubOrigin && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
+      (scenario) => (!scenario.hubOrigin || scenario.hubOrigin.editedAt) && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
     ),
     [scenarios],
   );
+
+  // The countries the map open in the drawer offers: the scenario's, or the
+  // game's own world (polities founded in play included).
+  const editorCountryOptions = useMemo(
+    () => (editorDetails?.data?.world
+      ? buildScenarioCountryOptions(
+        editorDetails.data.world,
+        Object.entries(countryNames ?? {}).map(([code, name]) => ({ code, name })),
+        editorDetails.scenario?.countryNameOverrides,
+      )
+      : []),
+    [editorDetails, countryNames],
+  );
+
+  // The scenario open in the drawer as the catalog has it now: every hub
+  // bookkeeping write refreshes the catalog, not the drawer's copy.
+  const drawerScenario = editorKind === "scenario" && editorDetails?.scenario
+    ? (scenarioById(editorDetails.scenario.id) ?? editorDetails.scenario)
+    : null;
 
   // The open tab's own actions: in the bar on a desktop, heading the page on a
   // phone. The Community tab brings its own; the Lobbies tab's is hosting one.
@@ -3084,12 +3591,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           >
             <MapEditor
               onClose={() => {
+                mapEditorRequest.cancel();
                 setIsMapEditorOpen(false);
                 setMapEditorScenario(null);
                 setMapEditorSeed(null);
+                setMapEditorReview(null);
               }}
               scenarioName={mapEditorScenario?.name}
               initialMap={mapEditorSeed}
+              review={mapEditorReview}
               onApplyToScenario={
                 mapEditorScenario ? (seed, options) => applyMapToScenario(mapEditorScenario, seed, options) : undefined
               }
@@ -3098,17 +3608,39 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         </div>
       )}
 
+      {/* Suggested changes: sending one (a downloaded scenario), reviewing one
+          (the author). The review steps aside while its map changes are open
+          in the Workshop, and comes back when the Workshop closes. */}
+      {suggestTarget && scenarioById(suggestTarget) && (
+        <SuggestChangesDialog scenario={scenarioById(suggestTarget)} onClose={() => setSuggestTarget(null)} />
+      )}
+      {reviewTarget && !isMapEditorOpen && scenarioById(reviewTarget.scenarioId) && (
+        <SuggestionReviewDialog
+          key={`${reviewTarget.scenarioId}:${reviewTarget.source?.ref?.id || reviewTarget.source?.suggestion?.id || ""}`}
+          scenario={scenarioById(reviewTarget.scenarioId)}
+          source={reviewTarget.source}
+          onClose={() => setReviewTarget(null)}
+          onLoaded={(suggestion) => setReviewTarget((current) => (current ? { ...current, source: { ...current.source, suggestion } } : current))}
+          onReviewMap={(suggestion, decisions, key) => openMapReview(reviewTarget.scenarioId, suggestion, decisions, key)}
+          onRejectContributor={handleRejectContributor}
+        />
+      )}
+
       <Presence open={Boolean(countryPicker)} value={countryPicker}>
         {(countryPicker) => (
         <div
           onClick={closeCountryPicker}
-          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}        >
-          {/* On a phone the card takes the whole visible height rather than 80%
+          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: isMobile ? "flex-start" : "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}        >
+          {/* On a phone the card takes the whole screen height rather than 80%
               of it: the search, the map, the list and the buttons need every
-              row a phone has. */}
+              row a phone has. The SCREEN height, and pinned to the top: sized
+              from the visible height and centred, the card shrank and jumped
+              (above the top of the screen, for a moment) every time the
+              keyboard came up for the search box, and squeezed its map
+              (mobileUi.js SCREEN_HEIGHT). */}
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: isMobile ? `calc(${APP_HEIGHT} - 1.5rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
+            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: isMobile ? `calc(${SCREEN_HEIGHT} - 1.5rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : "80vh", marginTop: isMobile ? "0.75rem" : undefined, display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
           >
             {difficultyPick ? (
               <>
@@ -3122,6 +3654,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       {flagEmojiFromGid(selectedCountryOption.code) || "🏳️"}
                     </span>
                     <span>{selectedCountryOption.name}</span>
+                  </div>
+                )}
+                {difficultyPick?.group && (
+                  <div style={{ alignItems: "center", display: "flex", fontSize: "0.9rem", fontWeight: 700, gap: "0.5rem", marginBottom: "0.7rem" }}>
+                    <span aria-hidden="true" style={{ background: difficultyPick.group.color || "#a1a1aa", borderRadius: 4, display: "inline-block", height: 16, width: 16 }} />
+                    <span data-no-translate>{difficultyPick.group.name}</span>
                   </div>
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
@@ -3153,7 +3691,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ) : (
               <>
                 <div style={{ fontWeight: 800, fontSize: "1rem" }}>
-                  {pickerTab === "faction" ? "Create your faction" : "Choose your country"}
+                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" ? "Play as a group" : "Choose your country"}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.6rem" }}>
                   Starting “{countryPicker.name}”
@@ -3191,14 +3729,68 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Create a faction
                     </button>
+                    <button
+                      type="button"
+                      className="oh-tap-row"
+                      onClick={() => setPickerTab("group")}
+                      style={touchFit({
+                        ...actionButtonStyle,
+                        flex: 1,
+                        fontWeight: 700,
+                        background: pickerTab === "group" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "group" ? "rgba(255,255,255,0.28)" : undefined,
+                      }, touch)}
+                    >
+                      Play as a group
+                    </button>
                   </div>
                 )}
-                {pickerTab === "faction" && !playGameId ? (
+                {pickerTab === "group" && !playGameId ? (
+                  <>
+                    {/* A group controls an area without owning it (runtime/groups.js):
+                        lead one of the scenario's, or make one. */}
+                    <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.76rem", lineHeight: 1.45, marginBottom: "0.6rem" }}>
+                      Lead a group instead of a country: a cartel, a militia, a movement, an outbreak. It owns no land; it controls an area, and the world deals with it as what it is.
+                    </div>
+                    {pickerGroups.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.8rem" }}>
+                        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.78rem", fontWeight: 700 }}>This scenario's groups</div>
+                        {pickerGroups.map((entry) => (
+                          <button
+                            key={entry.name}
+                            type="button"
+                            className="oh-tap-row"
+                            onClick={() => pickGroup({ name: entry.name, color: entry.color, description: entry.description, existing: true })}
+                            style={touchFit({ ...actionButtonStyle, alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "flex-start", textAlign: "left" }, touch)}
+                          >
+                            <span aria-hidden="true" style={{ background: entry.color, borderRadius: 4, flex: "0 0 auto", height: 16, width: 16 }} />
+                            <span style={{ display: "flex", flexDirection: "column", gap: "0.1rem", minWidth: 0 }}>
+                              <span data-no-translate style={{ fontWeight: 700 }}>{entry.name}</span>
+                              <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem" }}>
+                                {entry.regionCount === 1 ? "Controls 1 region" : entry.regionCount ? `Controls ${entry.regionCount} regions` : "Controls no area yet"}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.3rem" }}>
+                      {pickerGroups.length ? "Or make a new group" : "Make a group"}
+                    </div>
+                    <FactionCreator
+                      mode="group"
+                      regionsGeojson={customRegionData}
+                      busy={isBusy}
+                      onCreate={(created) => pickGroup({ ...created, existing: false })}
+                      onCancel={() => { closeCountryPicker(); setPickerTab("country"); }}
+                    />
+                  </>
+                ) : pickerTab === "faction" && !playGameId ? (
                   <FactionCreator
                     regionsGeojson={customRegionData}
                     busy={isBusy}
                     onCreate={(faction) => pickFaction(faction)}
-                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }}
+                    onCancel={() => { closeCountryPicker(); setPickerTab("country"); }}
                   />
                 ) : (
                   <>
@@ -3225,7 +3817,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>                      {playGameId ? "Done" : "Cancel"}
+                    <button type="button" className="oh-tap-row" onClick={closeCountryPicker} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>                      {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
                 )}
@@ -3435,6 +4027,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 ))}
               </div>
             )}
+            {activeTab !== "community" && activeTab !== "lobbies" && (
+              <SuggestionsBanner scenarios={scenarios} onOpen={(scenario) => openScenarioEditor(scenario.id)} />
+            )}
             {activeTab === "lobbies" ? (
               <Suspense
                 fallback={
@@ -3453,7 +4048,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   </div>
                 }
               >
-                <CommunityPanel fullPage onImported={() => setActiveTab("scenarios")} />
+                <CommunityPanel fullPage onPlay={handleScenarioPlay} />
               </Suspense>
             ) : activeTab === "games" ? (
               loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
@@ -3597,7 +4192,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         onChange={handleEditorChange}
         onChangePrompt={handlePromptChange}
         onClearAsset={handleEditorAssetClear}
-        onClose={resetEditor}
+        onClose={closeEditor}
         onDelete={handleDelete}
         onExportBundle={handleExportBundle}
         onExportPrompts={handleExportPrompts}
@@ -3606,75 +4201,25 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           setEditorDetails(nextDetails);
           setEditorState((current) => current ? { ...current } : current);
         }}
-        onOpenMapEditor={() => {
-          const scenario = editorDetails?.scenario || null;
-          setMapEditorScenario(scenario);
-          setMapEditorSeed(null);
-          setIsMapEditorOpen(true);
-          // Load the scenario's CURRENT map (geometry + owners + cities + palette)
-          // so the editor opens it instead of the default world. Assets stream in
-          // async; the editor hydrates the moment they arrive.
-          if (scenario) {
-            const world = editorDetails?.data?.world ?? {};
-            Promise.all([
-              downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
-              downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
-              downloadScenarioJsonAsset(scenario.id, "colors"),
-              // The author-set flags, for the same reason as the background below:
-              // without them the editor opens with none, and Apply & Play cannot
-              // tell "this map has no flags" from "this map never loaded them" —
-              // so it clears the scenario's flags.json and the author's work is gone.
-              downloadScenarioJsonAsset(scenario.id, "flags"),
-              downloadScenarioJsonAsset(scenario.id, "tags"),
-              // The custom map background so re-opening the editor restores it.
-              world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
-            ]).then(([regions, cities, colors, flags, tags, bgData]) => {
-              const bgDesc = world.background;
-              const background =
-                bgDesc?.kind === "image" && bgData?.dataUrl
-                  ? { kind: "image", dataUrl: bgData.dataUrl }
-                  : bgDesc?.kind === "vector" && bgData?.geojson
-                    ? { kind: "vector", geojson: bgData.geojson }
-                    : null;
-              setMapEditorSeed({
-                name: scenario.name || "",
-                author: world.author || "",
-                ownershipOverrides: world.regionOwnershipOverrides || {},
-                // The world's disputes, stamped over the map file's as the game
-                // reads them, so the Workshop edits what the game shows.
-                claimOverrides: {
-                  claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
-                    ? world.regionClaimants
-                    : {},
-                  settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
-                  // Which group's area each region is in; stamped with the disputes.
-                  groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
-                    ? world.groupAreas
-                    : {},
-                },
-                groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
-                regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
-                cities: cities && Array.isArray(cities.features) ? cities : null,
-                colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
-                flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
-                tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
-                polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
-                  ? world.polityOverrides
-                  : {},
-                background,
-                basemap: world.basemap || null,
-                // Carried like the flags above: a round-trip must not reset it.
-                customCities: Boolean(world.customCities),
-                // The scenario's starting units, so the Units panel edits what the game starts with.
-                units: Array.isArray(world.units) ? world.units : [],
-                // Its structures, edited as map features that are not cities.
-                markers: Array.isArray(world.markers) ? world.markers : [],
-                // Its puppet states, for the Countries panel.
-                puppets: Array.isArray(world.puppets) ? world.puppets : [],
-              });
-            });
-          }
-        }}
+        onOpenMapEditor={() => openMapEditorFor(editorDetails?.scenario || null, editorDetails?.data?.world ?? {})}
+        communityCard={drawerScenario ? (
+          <ScenarioCommunityCard
+            scenario={drawerScenario}
+            busy={communityBusy}
+            refreshNote={communityNote}
+            onSuggest={() => handleSuggestChanges(drawerScenario)}
+            onUnlink={() => handleUnlinkOrigin(drawerScenario)}
+            onReview={(source) => setReviewTarget({ scenarioId: drawerScenario.id, source })}
+            onOpenFile={(file) => handleOpenSuggestionFile(drawerScenario, file)}
+            onRefresh={() => handleRefreshSuggestions(drawerScenario)}
+            onLinkPost={(postId) => handleLinkPost(drawerScenario, postId)}
+            onForgetPost={() => handleForgetPost(drawerScenario)}
+            onRejectContributor={handleRejectContributor}
+            onUnblockContributor={handleUnblockContributor}
+          />
+        ) : null}
+        onSuggestChanges={drawerScenario?.hubOrigin ? () => handleSuggestChanges(drawerScenario) : null}
+        countryOptions={editorCountryOptions}
         onFileSelect={handleEditorAssetSelect}
         onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}
         onSave={handleSave}

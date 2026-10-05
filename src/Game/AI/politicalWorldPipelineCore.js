@@ -2,6 +2,7 @@
 
 import { applyReviewedPoliticalGeneration } from "../../runtime/politicalWorldGenerationReview.js";
 import { initializePoliticalDispositionsForWorld } from "../../runtime/politicalDisposition.js";
+import { isCanonicalGameDate } from "../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => (Array.isArray(value) ? value : []);
@@ -70,6 +71,7 @@ export const generatePoliticalWorldPipelineCore = async ({
   world = {},
   relevanceByPolity = {},
   scenarioContext = "",
+  baseCountryTags = null,
   contextByPolity = {},
   maxBatchSize = 8,
   prioritizeQuantitativeLandscapeBackfill = true,
@@ -84,7 +86,9 @@ export const generatePoliticalWorldPipelineCore = async ({
   if (typeof generateGoverningAlignment !== "function") throw new Error("Political World pipeline requires a governing-alignment generator.");
   if (typeof generateGeopolitics !== "function") throw new Error("Political World pipeline requires a geopolitical generator.");
   const date = clean(scenarioDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Political World generation requires the canonical scenario date.");
+  // Checked before any provider call, by the same rule every later stage uses
+  // (runtime/gameDates.js: BC years carry a leading minus).
+  if (!isCanonicalGameDate(date)) throw new Error("Political World generation requires the canonical scenario date.");
   const generatedAt = new Date().toISOString();
   const allowEntityExpansionByPolity = allowEntityExpansion
     ? Object.fromEntries(Object.keys(politicalActors?.byPolity ?? {}).map((polityKey) => [polityKey, true]))
@@ -186,6 +190,7 @@ export const generatePoliticalWorldPipelineCore = async ({
     polities,
     world: stagedWorld,
     scenarioContext,
+    baseCountryTags,
     signal,
     onBatch: (batch) => onProgress?.({ stage: "geopolitics", ...batch }),
   });
@@ -213,6 +218,7 @@ export const resumePoliticalWorldPipelineGeopoliticsCore = async ({
   politicalActors = null,
   world = {},
   scenarioContext = "",
+  baseCountryTags = null,
   priorResult,
   signal,
   onProgress,
@@ -221,7 +227,7 @@ export const resumePoliticalWorldPipelineGeopoliticsCore = async ({
   if (typeof generateGeopolitics !== "function") throw new Error("Political World geopolitical resume requires a geopolitical generator.");
   if (!priorResult || priorResult.kind !== "political-world-pipeline-result") throw new Error("A prior Political World pipeline result is required to resume geopolitics.");
   const date = clean(scenarioDate || priorResult.scenarioDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Political World geopolitical resume requires the canonical scenario date.");
+  if (!isCanonicalGameDate(date)) throw new Error("Political World geopolitical resume requires the canonical scenario date.");
   if (clean(priorResult.scenarioDate) && clean(priorResult.scenarioDate) !== date) {
     throw new Error(`Political World scenario date mismatch: generated=${clean(priorResult.scenarioDate)} current=${date}.`);
   }
@@ -262,6 +268,7 @@ export const resumePoliticalWorldPipelineGeopoliticsCore = async ({
     polities,
     world: stagedWorld,
     scenarioContext,
+    baseCountryTags,
     signal,
     onBatch: (batch) => onProgress?.({ stage: "geopolitics", ...batch }),
   });

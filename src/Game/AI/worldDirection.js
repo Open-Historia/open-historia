@@ -12,7 +12,10 @@
 // (requestBudget.js) — and the simulator is told at the top of its next turn
 // (runtime/applicationReceipt.js, the "short" note).
 //
-// DELIBERATELY IMPORT-FREE: gameplay.js hands in the resolved settings.
+// Imports only the game-date rules (runtime/gameDates.js, itself import-free):
+// gameplay.js hands in the resolved settings.
+
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -88,42 +91,58 @@ export const worldShareShortfall = (events, floorPercent, { playerNames = [] } =
 // again would be a whole second request.
 const DATE_AT_START = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/;
 
-// A date as one number that sorts, negative years included: -0218-03-01 is
-// -2180301 and falls before 0001-01-01.
-export const dateKey = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const value = Number(match[2]) * 10000 + Number(match[3]) * 100 + Number(match[4]);
-    return match[1] ? -value : value;
-};
+// A date as one number that sorts, negative years included, and a count of
+// days for "within a week of": its day number (runtime/gameDates.js), so
+// 15 April 218 BC falls before 18 December 218 BC and both before 0001-01-01.
+// Null when it is not a game date.
+export const dateKey = (iso) => gameDateDayNumber(asText(iso));
 
-// The same date as a count of days, for "within a week of": proleptic
-// Gregorian, and setUTCFullYear takes the years Date.UTC would misread (a year
-// under 100, a year before 1).
-const dayNumber = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const year = Number(match[2]) * (match[1] ? -1 : 1);
-    const date = new Date(0);
-    date.setUTCFullYear(year, Number(match[3]) - 1, Number(match[4]));
-    const value = Math.round(date.getTime() / 86400000);
-    return Number.isFinite(value) ? value : null;
+// One line: null for a blank line or a # comment, { beat } for a beat, and
+// { problem } ("no-date" | "no-text") for a line the engine will not use.
+const readScriptedLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) return null;
+    const match = DATE_AT_START.exec(line);
+    if (!match || dateKey(match[1]) === null) return { problem: "no-date" };
+    const body = asText(match[2]);
+    if (!body) return { problem: "no-text" };
+    // The title is the first sentence, or the whole beat when it is one.
+    const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
+    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body } };
 };
 
 export const parseScriptedEvents = (text) => {
     const beats = [];
     for (const rawLine of asText(text).split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith("#")) continue;
-        const match = DATE_AT_START.exec(line);
-        if (!match || dateKey(match[1]) === null) continue;
-        const body = asText(match[2]);
-        if (!body) continue;
-        // The title is the first sentence, or the whole beat when it is one.
-        const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-        beats.push({ date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body });
+        const read = readScriptedLine(rawLine);
+        if (read?.beat) beats.push(read.beat);
     }
     return beats.sort((a, b) => dateKey(a.date) - dateKey(b.date));
+};
+
+// What the editor shows under the setting: how many beats the engine will
+// use, and every line it will not, as the author typed it. "passed" is a beat
+// no skip will reach: dated on or before `currentDate` (the game's date, or
+// the scenario's start), except that the day itself still counts while
+// `includeOrigin` (a game's first skip covers it). The same rule
+// scriptedBeatsInSpan applies when the skip runs.
+export const reviewScriptedEvents = (text, { currentDate = "", includeOrigin = false } = {}) => {
+    let count = 0;
+    const ignored = [];
+    const dated = dateKey(currentDate) !== null;
+    for (const rawLine of asText(text).split(/\r?\n/)) {
+        const read = readScriptedLine(rawLine);
+        if (!read) continue;
+        if (read.problem) {
+            ignored.push({ line: rawLine.trim(), problem: read.problem });
+            continue;
+        }
+        const reachable = !dated
+            || scriptedBeatsInSpan([read.beat], { originDate: currentDate, targetDate: "9999-12-31", includeOrigin }).length > 0;
+        if (reachable) count += 1;
+        else ignored.push({ line: rawLine.trim(), problem: "passed" });
+    }
+    return { count, ignored };
 };
 
 // The beats a period covers: after its origin (the day itself belongs to the
@@ -148,11 +167,11 @@ const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀
 export const SCRIPTED_MATCH_DAYS = 7;
 export const beatIsWritten = (beat, events) => {
     const needles = [...words(`${beat?.title} ${beat?.text}`)];
-    const beatDay = dayNumber(beat?.date);
+    const beatDay = dateKey(beat?.date);
     if (!needles.length || beatDay === null) return false;
     const needed = Math.min(3, Math.max(1, Math.ceil(needles.length / 3)));
     return asArray(events).some((event) => {
-        const eventDay = dayNumber(event?.date);
+        const eventDay = dateKey(event?.date);
         if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
         const haystack = words(`${event?.title} ${event?.description}`);
         let shared = 0;
@@ -246,6 +265,19 @@ export const applyTerritoryTempo = (events, { ceilingPerMonth, spanDays } = {}) 
 // description that lists nuclear programmes as a thing a polity can start.
 export const PRIORITY_RULES_HEADING = "[PRIORITY RULES — set by this scenario's author]";
 
+// The author's priority rules alone, without the share and the tempo (which
+// only a time skip is counted against). Every other task that writes the world
+// or speaks for a polity carries them too: a rule broken by a Projects entry, an
+// interactive event or a leader's reply is a world every later skip inherits.
+export const buildPriorityRulesBlock = (direction) => {
+    const rules = asText(direction?.priorityRules);
+    if (!rules) return "";
+    return `${PRIORITY_RULES_HEADING}\n`
+        + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
+        + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
+        + rules;
+};
+
 export const buildWorldDirectionDirective = (direction, { playerPolity = "", spanDays = 30 } = {}) => {
     if (!direction) return "";
     const player = asText(playerPolity) || "the player's polity";
@@ -268,14 +300,7 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
             + "Beyond that the engine withholds the entry and tells you. Write fronts that grind — a river line held, a siege that drags — rather than sweeps.",
         );
     }
-    const rules = asText(direction.priorityRules);
-    if (rules) {
-        parts.push(
-            `${PRIORITY_RULES_HEADING}\n`
-            + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
-            + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
-            + rules,
-        );
-    }
+    const rules = buildPriorityRulesBlock(direction);
+    if (rules) parts.push(rules);
     return parts.join("\n\n");
 };

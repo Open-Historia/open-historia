@@ -3,12 +3,13 @@
 // meta defaults, mirroring server/libraryStore.js. models.js re-exports all of
 // them, so callers keep importing from there.
 //
-// They live apart from models.js because this file imports nothing. models.js
-// imports ./generated/countryNames.js, which only exists once
-// scripts/seed-web-defaults.mjs has run, and CI runs the tests before any build.
-// A Node test that needs these values imports them from here; one that imported
-// models.js passed on any machine that had done a web build and failed on a
-// clean checkout. Keep it import-free (gameBundleParity.test.js checks).
+// They live apart from models.js because models.js once imported the web
+// build's gitignored country table (./generated/countryNames.js, written by
+// scripts/seed-web-defaults.mjs), so a Node test that imported it failed on a
+// clean checkout. models.js now reads the committed table instead and loads in
+// Node too, but tests and src/runtime/scenarioChanges.js import these from here,
+// and neither file may import anything under ./generated/
+// (gameBundleParity.test.js checks).
 
 export const DEFAULT_SCENARIO_ID = "default";
 export const DEFAULT_GAME_ID = "default";
@@ -17,8 +18,11 @@ export const BUILT_IN_SCENARIO_DEFAULT_DATE = "2016-01-01";
 // the owner rename. In short: it is the ONLY compatibility gate on a file strangers
 // swap, and an old build would otherwise accept a name-keyed bundle and resolve its
 // names down to codes, leaving the player owning nothing.
-export const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
-export const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
+// Files written before 2026-09-29 carry the project's earlier name; the pattern
+// reads them too (format 1 or 2 under any name), and every export says this one.
+export const SCENARIO_BUNDLE_SCHEMA = "open-historia-scenario-bundle/2";
+export const SCENARIO_BUNDLE_SCHEMA_PATTERN = /^[a-z][a-z0-9-]*-scenario-bundle(?:\/2)?$/;
+export const isScenarioBundleSchema = (schema) => typeof schema === "string" && SCENARIO_BUNDLE_SCHEMA_PATTERN.test(schema);
 export const SCENARIO_BUNDLE_VERSION = 2;
 export const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 export const COVER_IMAGE_ASSET_KEY = "cover";
@@ -74,7 +78,6 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "difficulty",
   "language",
   "mapCredit",
-  "notes",
   "ownerCodes",
   "polityOverrides",
   "politicalActors",
@@ -93,6 +96,9 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "regionSovereigntyOverrides",
   "simulationRules",
   "startingTimelineText",
+  // The scenario's pre-history (src/runtime/scenarioPrehistory.js): applied by
+  // the game the first time it is opened, then dropped from its world.
+  "prehistory",
 ];
 
 export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([

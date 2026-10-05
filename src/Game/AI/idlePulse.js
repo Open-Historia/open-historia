@@ -47,6 +47,28 @@ export const idlePulseUnitOps = (world, unitOps, player) => {
     .slice(0, 2);
 };
 
+// The intel event that reports a sighting in the log. Written by the model in
+// the player's language, so it is marked as the AI's: an event with no source is
+// read as the scenario's own text (gameState.js normalizeEventEntry), and the
+// translator sent every sighting off for translation into the language it was
+// already in (translator.js isAuthoredEvent).
+//
+// It carries the very ops it is reporting. They have already been applied to
+// the world and nothing re-applies an event's impacts from the log, so this is
+// not a second application — it is what lets the event camera fly to the
+// sighting instead of guessing from the prose.
+export const sightingEvent = (date, sighting, unitOps) => ({
+  date: clean(date),
+  title: clean(sighting?.title),
+  description: clean(sighting?.description),
+  importance: "minor",
+  kind: "intel",
+  playerRelated: true,
+  notable: false,
+  source: "ai",
+  impacts: { unitOps },
+});
+
 // A unit the pulse touched keeps the event it was detected with. The applier
 // stamps the event that last moved a unit onto it, and the pulse's event is not
 // in the log: pointing at it would take the "Detected" row off the unit's card
@@ -58,5 +80,47 @@ export const keepDetectedEvents = (before, after) => {
     units: (Array.isArray(after?.units) ? after.units : []).map((unit) => (unit?.eventId === IDLE_PULSE_EVENT_ID
       ? { ...unit, eventId: detected.get(unit.id) || "" }
       : unit)),
+  };
+};
+
+// ---- A quiet world ---------------------------------------------------------
+// Most pulses answer with nothing, and on a world nothing has touched since
+// they are likely to again: each is still a request. So a pulse that came back
+// empty makes the next one on the SAME state half as likely, and each further
+// empty answer halves it again; any change — a turn, a pulse that moved
+// something, a new event, a new message in an open chat — or any answer with
+// something in it restores the full chance. The answer is sampled, so a repeat
+// on the same prompt can still produce a note: this backs off, it never stops.
+
+// The most halvings: at worst a pulse keeps a thirty-second of its chance.
+export const IDLE_PULSE_MAX_BACKOFF = 5;
+
+// What the pulse sees that could change its answer.
+export const idlePulseFingerprint = ({ round = 0, tick = 0, eventCount = 0, chats = [] } = {}) => [
+  Number(round) || 0,
+  Number(tick) || 0,
+  Number(eventCount) || 0,
+  ...(Array.isArray(chats) ? chats : []).map((chat) => {
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+    return `${clean(chat?.id)}:${clean(messages[messages.length - 1]?.id) || messages.length}`;
+  }).sort(),
+].join("|");
+
+export const createIdlePulseBackoff = ({ maxHalvings = IDLE_PULSE_MAX_BACKOFF } = {}) => {
+  let fingerprint = "";
+  let empties = 0;
+  return {
+    // The share of a roll that passed which goes ahead on this state.
+    share: (current) => (current && current === fingerprint ? 0.5 ** empties : 1),
+    // What the pulse on this state answered.
+    note: (current, empty) => {
+      if (!empty || !current) {
+        fingerprint = "";
+        empties = 0;
+        return;
+      }
+      empties = current === fingerprint ? Math.min(maxHalvings, empties + 1) : 1;
+      fingerprint = current;
+    },
   };
 };

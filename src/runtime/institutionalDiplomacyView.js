@@ -5,6 +5,8 @@
 import { institutionStrategicPriority, institutionsForPolity, normalizeInstitutions, resolveInstitutionRecord } from "./institutions.js";
 import { institutionCanProposeAmendment, institutionCanTableProposal } from "./institutionalGovernance.js";
 
+const UNTITLED_PROPOSAL_LABEL = "Untitled proposal";
+
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -78,7 +80,7 @@ export const buildInstitutionProposalView = (institution, proposal, playerCountr
   return {
     id: clean(proposal?.id),
     type: clean(proposal?.type || "resolution"),
-    title: clean(proposal?.title || proposal?.id || "Untitled proposal"),
+    title: clean(proposal?.title || proposal?.id || UNTITLED_PROPOSAL_LABEL),
     summary: clean(proposal?.summary),
     status: lower(proposal?.status || "draft"),
     ruleLabel: voting ? ruleLabel(voting.rule) : "",

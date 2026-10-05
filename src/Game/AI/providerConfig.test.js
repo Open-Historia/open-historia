@@ -134,10 +134,10 @@ test("a fresh install starts with an empty Gemini Connection and the default Gem
 // game names one instead: it is what a blank OpenAI model means, and what a
 // player who was on OpenAI carries over.
 test("OpenAI has a default model of its own", () => {
-  assert.equal(config.OPENAI_DEFAULT_MODEL, "gpt-5.6-luna");
+  assert.equal(config.OPENAI_DEFAULT_MODEL, "gpt-6-luna");
   store.set("api_provider", "openai");
   store.set("openai_api_key", "sk-oldsettings");
-  assert.deepEqual(resolved().map(({ provider, model }) => [provider, model]), [["openai", "gpt-5.6-luna"]]);
+  assert.deepEqual(resolved().map(({ provider, model }) => [provider, model]), [["openai", "gpt-6-luna"]]);
 });
 
 // A list as a first launch set it up before the default list existed: one
@@ -230,7 +230,7 @@ test("a player whose calls go to another provider first keeps it first; only the
       { id: "conn_local", provider: "openai-compatible", name: "Local", endpoint: "http://localhost:1234/v1" },
     ],
     list: [
-      { id: "o1", connectionId: "conn_o", model: "gpt-5.6-luna" },
+      { id: "o1", connectionId: "conn_o", model: "gpt-6-luna" },
       { id: "g1", connectionId: "conn_blank", model: "gemini-3.8-flash" },
       { id: "g2", connectionId: "conn_blank", model: "gemini-3.7-flash" },
       { id: "local1", connectionId: "conn_local", model: "qwen3" },
@@ -240,7 +240,7 @@ test("a player whose calls go to another provider first keeps it first; only the
   });
   const list = config.getResolvedFallbackList();
   assert.deepEqual(list.map(({ provider, model }) => `${provider}:${model}`), [
-    "openai:gpt-5.6-luna",
+    "openai:gpt-6-luna",
     "gemini:gemini-3.5-flash-lite",
     "gemini:gemini-3.1-flash-lite",
     "openai-compatible:qwen3",
@@ -355,6 +355,29 @@ test("entry states are kept apart from the settings, and survive a reload", () =
 
   config.resetEntryState(entry.id);
   assert.equal(config.fallbackStateStore.get(entry.id), undefined, "the reset button");
+});
+
+test("switching a Connection to another provider leaves its key behind", () => {
+  const gemini = config.addConnection({ provider: "gemini", apiKey: "AIzaSECRETSECRETSECRET1234" });
+  config.updateConnection(gemini, { provider: "openai-compatible" });
+  let connection = config.getConnections().find((candidate) => candidate.id === gemini);
+  assert.equal(connection.provider, "openai-compatible");
+  assert.equal(connection.apiKey, "", "the Gemini key is never sent to the new endpoint");
+
+  // Between the two self-hosted kinds the key still goes to the same server.
+  const local = config.addConnection({ provider: "openai-compatible", endpoint: "http://192.168.1.5:4000/v1", apiKey: "sk-local" });
+  config.updateConnection(local, { provider: "anthropic-compatible" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-local");
+  assert.equal(connection.endpoint, "http://192.168.1.5:4000/v1");
+
+  // A patch that brings its own key keeps it, and other edits touch nothing.
+  config.updateConnection(local, { provider: "openai", apiKey: "sk-openai" });
+  config.updateConnection(local, { name: "Work" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-openai");
+  config.updateConnection(local, { provider: "openai" });
+  assert.equal(config.getConnections().find((candidate) => candidate.id === local).apiKey, "sk-openai", "the same provider again is no switch");
 });
 
 test("editing an Unusable entry or its Connection clears the mark, so the fix is tried at once", () => {
@@ -613,4 +636,57 @@ test("Political World generation and verification keep independent/inherited tas
   plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
   assert.equal(plan.preferredEntryId, verification);
   assert.equal(plan.implicit, false);
+});
+
+test("group chats, intelligence, demand checks and translation can have a model of their own", () => {
+  for (const key of ["chatActions", "intelligenceAssessment", "demandCheck", "translation"]) {
+    assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === key), key);
+  }
+  const [top] = config.getResolvedFallbackList();
+  const small = config.addEntry({ connectionId: top.connectionId, model: "small-model" });
+  config.setTaskPick("translation", small);
+  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, small);
+  config.setTaskPick("translation", "");
+  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, "");
+});
+
+test("a group chat starts on the Leader chat model until it is given its own", () => {
+  const [top] = config.getResolvedFallbackList();
+  const leaders = config.addEntry({ connectionId: top.connectionId, model: "leader-model" });
+  const councils = config.addEntry({ connectionId: top.connectionId, model: "council-model" });
+
+  assert.equal(config.resolveTaskFallbackEntries("chatActions").preferredEntryId, "", "no picks: the top of the list");
+
+  config.setTaskPick("diplomacy", leaders);
+  let plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, leaders);
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("chatActions", councils);
+  plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, councils);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("diplomacy").preferredEntryId, leaders, "and the leaders keep theirs");
+
+  config.setTaskPick("chatActions", "");
+  config.setTaskPick("diplomacy", "");
+});
+
+test("the Advisor Report has its own routing row and starts on the stat-sheet pick until it has one", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "countryBriefing"));
+
+  const [top] = config.getResolvedFallbackList();
+  const statSheet = config.addEntry({ connectionId: top.connectionId, model: "stat-sheet-model" });
+  const briefing = config.addEntry({ connectionId: top.connectionId, model: "briefing-model" });
+
+  config.setTaskPick("countryStatSheet", statSheet);
+  let plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, statSheet, "an old stat-sheet pick still covers the briefing");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("countryBriefing", briefing);
+  plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, briefing);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("countryStatSheet").preferredEntryId, statSheet, "the stat sheet never inherits back");
 });

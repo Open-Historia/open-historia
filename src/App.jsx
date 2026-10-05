@@ -22,6 +22,7 @@ import {
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
 import { prefetchGameplay } from "./Game/AI/gameplayLazy.js";
+import { isConstrainedDevice } from "./runtime/deviceProfile.js";
 
 const WorldShell = {
   backgroundColor: "#000",
@@ -57,11 +58,9 @@ function GameApp() {
   const [isTerrainEnabled, setIsTerrainEnabled] = useState(() => {
     const saved = localStorage.getItem("Terrain");
     if (saved !== null) return JSON.parse(saved);
-    const isMobile = typeof window !== "undefined" && (
-      window.innerWidth <= 768 ||
-      /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    ); // default to false for mobile, true for desktop
-    return !isMobile;
+    // Terrain is the map's most memory-hungry option: off to start with on the
+    // devices the rest of the map treats as short of memory (deviceProfile.js).
+    return !isConstrainedDevice();
   });
   // Key the map/UI on the active GAME id, not the library token. The token also
   // bumps on scenario/asset writes, so Apply & Play (which saves the scenario and

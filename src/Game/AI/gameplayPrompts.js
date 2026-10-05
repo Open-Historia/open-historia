@@ -43,7 +43,7 @@ MODES
 - world-intervention: Author a coherent multi-system intervention. Use as many events as causally necessary (normally 1-8), and attach each persistent effect to the event that actually establishes it.
 
 TRANSACTION RULES
-1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
+1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview. Then say what the administrator's request itself asks for, in whatever language it is written: requestedSubordination (true when it asks for one country to become another's puppet, satellite, protectorate or client; false when it asks to end or prevent one), requestedDate (the one exact date it names for the event as YYYY-MM-DD, a negative year for BC; empty when it names none or several) and requestedOngoingProcess (true when it describes an unresolved or changing multi-turn process). Native code holds your transaction to these.
 2. The decoded events array is the canonical historical narrative that will be added if the administrator applies this preview. Use 0-based eventIndexes in ledger operations and Stats patches to point into this transaction's decoded events array.
 2A. EXHAUSTIVE TERRITORY IS A SET CONTRACT ONLY WHEN TERRITORY ACTUALLY CHANGES. If the administrator asks to transfer/control/contest all/every/entire/whole territories, regions, states, provinces or lands, do NOT enumerate a representative handful of provinces in eventsJson. Put the semantic footprint in territorialScopesJson. A preservation statement is NOT a territorial change: phrases such as "keeps all of its territory", "retains its existing territory", or "all of its territory remains unchanged" require NO territorialScopes entry and NO region operation. baseCountries are the exact immutable rendered base geographies listed below, not the polity that currently owns them. Example: a request for all Baltic-state territory can name the three rendered base geographies for Estonia, Latvia and Lithuania once; native code then expands EVERY rendered region in those footprints into exact operations before Preview. Use kind=legal-transfer for legal sovereignty, kind=control for decisive de-facto control, and kind=contest for an active territorial contest. The event at eventIndex must narrate the same change. Avoid duplicating that scope with a partial manual region list.
 3. impacts.regionTransfers = LEGAL sovereignty only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. A unilateral declaration of independence, secession, uprising, revolution, civil war, or breakaway proclamation does NOT by itself transfer legal sovereignty. If a new polity is rebelling against its current sovereign and the conflict is still active, leave legal sovereignty with the prior sovereign and represent rebel gains with impacts.regionControlOps (contest/control). Only emit regionTransfers for the breakaway territory when the administrator explicitly establishes legal recognition/cession/settlement or another event in this same transaction clearly does so.
@@ -166,241 +166,102 @@ export const PROMPT_HELPER_DEFAULTS = DEFAULT_PROMPTS.helpers;
 export const PROMPT_SECTION_DEFINITIONS = [
   {
     description: "Diplomatic replies to the player and other chat participants.",
-    helpers: [
-      "PLAYER_POLITY",
-      "RESPONDING_POLITY_NAME",
-      "CHAT_PARTICIPANTS",
-      "THIS_CHAT_HISTORY",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION_NO_CITY",
-      "DIFFICULTY_DESCRIPTION_CHATS",
-      "ORIGIN_ROUND_DATE",
-    ],
     key: "leader",
     label: "Chat With User",
     type: "root",
   },
   {
     description: "Advisor answers for the side panel conversation.",
-    helpers: [
-      "PLAYER_POLITY",
-      "STARTING_ROUND_DATE",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION",
-      "PLAYER_ACTIONS_THIS_ROUND",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-      "ALL_ADVISOR_MESSAGES",
-      "PLAYER_POLITY_REGIONS",
-      "PLAYER_POLITY_BATTALION_SUMMARIES",
-    ],
     key: "advisor",
     label: "Advisor Chat",
     type: "root",
   },
   {
     description: "What a planted spy intercepts: the target's private diplomacy with other polities.",
-    helpers: [
-      "PLAYER_POLITY",
-      "ORIGIN_ROUND_DATE",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION",
-      "PREVIOUS_ROUND_EVENTS",
-    ],
     key: "spyIntercept",
     label: "Spy Intercept",
     type: "task",
   },
   {
     description: "A first reading of a polity's intelligence service, asked the moment that service matters.",
-    helpers: [
-      "PLAYER_POLITY",
-      "ORIGIN_ROUND_DATE",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION",
-      "PREVIOUS_ROUND_EVENTS",
-    ],
     key: "intelligenceAssessment",
     label: "Intelligence Assessment",
     type: "task",
   },
   {
     description: "Structured national statistics for the selected polity.",
-    helpers: [
-      "PLAYER_POLITY",
-      "ORIGIN_ROUND_DATE",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION",
-      "PREVIOUS_ROUND_EVENTS",
-    ],
     key: "countryStatSheet",
     label: "Country Stat Sheet",
     type: "task",
   },
   {
     description: "Action suggestion generation before the player asks for them.",
-    helpers: [
-      "PLAYER_POLITY",
-      "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "CONSOLIDATED_HISTORY",
-      "PLAYER_ACTIONS_THIS_ROUND",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-    ],
     key: "actions",
     label: "Action Suggestions",
     type: "task",
   },
   {
     description: "Manual time skip simulation.",
-    helpers: [
-      "PLAYER_POLITY",
-      "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "TARGET_ROUND_DATE",
-      "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "CONSOLIDATED_HISTORY",
-      "PLAYER_ACTIONS_THIS_ROUND",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-      "DIFFICULTY_DESCRIPTION_JUMP_FORWARD",
-    ],
     key: "jumpForward",
     label: "Time Skip",
     type: "task",
   },
   {
     description: "Automatic time skip that stops on the next notable event.",
-    helpers: [
-      "PLAYER_POLITY",
-      "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "TARGET_ROUND_DATE",
-      "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "CONSOLIDATED_HISTORY",
-      "PLAYER_ACTIONS_THIS_ROUND",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-      "DIFFICULTY_DESCRIPTION_JUMP_FORWARD",
-    ],
     key: "autoJumpForward",
     label: "Auto Time Skip",
     type: "task",
   },
   {
     description:
-      "Runs once when a new game with a World Before Round One briefing first opens: writes the backstory events that led up to the start date.",
-    helpers: [
-      "PLAYER_POLITY",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GRAND_MAP_DESCRIPTION_NO_CITY",
-      "STARTING_ROUND_DATE",
-    ],
+      "Writes a scenario's pre-game history when its designer clicks Generate in the Workshop's Pre-history tab: the backstory events that led up to the start date. A scenario made before scenarios kept one still runs it once, when a new game first opens.",
     key: "pregameHistory",
     label: "Pre-Game History",
     type: "task",
   },
   {
     description: "Convert raw freeform text into a structured game action.",
-    helpers: [
-      "PLAYER_POLITY",
-      "DESCRIPTION_ACTION_TEXT",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "PLAYER_ACTIONS_THIS_ROUND",
-      "GRAND_MAP_DESCRIPTION_NO_CITY",
-    ],
     key: "descriptionToAction",
     label: "Description To Action",
     type: "task",
   },
   {
     description: "Compress recent events and chats into continuity-safe summaries.",
-    helpers: [
-      "PLAYER_POLITY",
-      "EVENTS_TO_CONSOLIDATE",
-      "CHATS_TO_CONSOLIDATE",
-      "ORIGIN_ROUND_DATE",
-    ],
     key: "eventConsolidator",
     label: "Event Consolidator",
     type: "task",
   },
   {
     description: "Open the scene of an interactive event the player took up.",
-    helpers: [
-      "PLAYER_POLITY",
-      "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_INTERACTIVE_DATE",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "PLAYER_ACTIONS_THIS_ROUND",
-    ],
     key: "interactiveCreation",
     label: "Interactive Event Creation",
     type: "task",
   },
   {
     description: "Play one move of an interactive event.",
-    helpers: [
-      "PLAYER_POLITY",
-      "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_INTERACTIVE_DATE",
-      "INTERACTIVE_PREMISE_DESCRIPTION",
-      "INTERACTIVE_SIMULATION_HISTORY",
-      "RUNNING_INTERACTIVE_PERCENT",
-    ],
     key: "interactiveExecutor",
     label: "Interactive Event Execution",
     type: "task",
   },
   {
     description: "Turn a finished interactive event into a campaign event.",
-    helpers: [
-      "PLAYER_POLITY",
-      "RUNNING_INTERACTIVE_DATE",
-      "INTERACTIVE_PREMISE_DESCRIPTION",
-      "INTERACTIVE_SIMULATION_HISTORY",
-    ],
     key: "interactiveSummary",
     label: "Interactive Event Summary",
     type: "task",
   },
   {
     description: "The GM Console's previewable transaction planner (the live contract is native; this frozen copy is reference only).",
-    helpers: [
-      "PLAYER_POLITY",
-      "ORIGIN_ROUND_DATE",
-      "WORLD_BEFORE_ROUND_ONE_TEXT",
-      "HISTORICAL_PRESET_SIMULATION_RULES",
-      "GAME_MASTER_PLAYER_REQUEST",
-      "GRAND_MAP_DESCRIPTION_NO_CITY",
-      "CURRENT_UNITS",
-      "CURRENT_MAP_STRUCTURES",
-      "ALL_EVENTS_WITH_CONSOLIDATION",
-      "CHATS_NON_CONSOLIDATED_ROUNDS",
-    ],
     key: "gameMaster",
     label: "Game Master",
     type: "task",
   },
   {
     description: "An unprompted note between turns: while the game sits open, whether some polity has a live reason to write to the player, and the small movement of forces that rides on the same call. How often it is asked is the Features tab's idle diplomacy setting.",
-    helpers: [],
     key: "idleDiplomacy",
     label: "Idle Diplomacy",
     type: "task",
   },
 ];
-
-export const PROMPT_SECTION_BY_KEY = Object.fromEntries(
-  PROMPT_SECTION_DEFINITIONS.map((section) => [section.key, section]),
-);
 
 export const PROMPT_TASK_KEYS = Object.keys(PROMPT_TASK_DEFAULTS);
 

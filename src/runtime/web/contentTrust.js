@@ -8,15 +8,19 @@
 // Web build only (dynamically imported behind import.meta.env.VITE_OH_WEB from
 // assets.js), so none of this ships in the local download.
 
-import { fetchSignedJson } from "./trust.js";
+import { SIGNED_FETCH_TIMEOUT_MS, fetchSignedJson } from "./trust.js";
 import { hasScenarioPmtilesOverride } from "./libraryStore.js";
 
 // The signed node directory is served live by the registry Worker (it changes as
 // the admin accepts/pauses/bans nodes), so point at it via VITE_OH_DIRECTORY_URL
 // at build time. The content manifest ships with the build, so it defaults to
-// same-origin. Both are signature-verified regardless of where they're served.
+// the build's own folder: openhistoria.com serves the game under /play/, and a
+// root-absolute "/content-manifest.json" was the site's 404 page there, so the
+// manifest never loaded and nothing was verified (settingsStore.js resolves the
+// language packs the same way). Both are signature-verified regardless of where
+// they're served.
 const DIRECTORY_URL = import.meta.env.VITE_OH_DIRECTORY_URL || "/node-directory.json";
-const MANIFEST_URL = import.meta.env.VITE_OH_MANIFEST_URL || "/content-manifest.json";
+const MANIFEST_URL = import.meta.env.VITE_OH_MANIFEST_URL || `${import.meta.env.BASE_URL || "/"}content-manifest.json`;
 // Live node addresses (unsigned) — same origin as the signed directory.
 const LIVE_NODES_URL = DIRECTORY_URL.replace(/[^/]*$/, "nodes-live.json");
 
@@ -31,7 +35,12 @@ let liveNodesPromise = null;
 const loadSigned = async (url, empty) => {
   const { valid, data, reason } = await fetchSignedJson(url);
   if (!valid) {
-    if (reason !== "unsigned" && reason !== "missing-doc") {
+    if (reason === "missing-doc") {
+      // Quiet by design for a build that ships no such file, but said once: a
+      // manifest that silently never loads is how verification stayed off on
+      // the website with nothing to show for it.
+      console.info(`${url} was not found — map downloads are not checked against the signed manifest.`);
+    } else if (reason !== "unsigned") {
       console.warn(`Rejecting ${url}: ${reason} — using canonical origin instead.`);
     }
     return empty;
@@ -53,7 +62,8 @@ const loadManifest = () => {
 // directory's vetted ids so a node URL changing on restart needs no admin re-sign.
 const loadLiveUrls = () => {
   if (!liveNodesPromise) {
-    liveNodesPromise = fetch(LIVE_NODES_URL, { cache: "no-store" })
+    // Same deadline as the signed directory it is read beside: past it, no nodes.
+    liveNodesPromise = fetch(LIVE_NODES_URL, { cache: "no-store", signal: AbortSignal.timeout(SIGNED_FETCH_TIMEOUT_MS) })
       .then((r) => (r.ok ? r.json() : { nodes: [] }))
       .then((j) => j.nodes || [])
       .catch(() => []);

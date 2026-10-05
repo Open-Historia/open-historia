@@ -20,6 +20,7 @@
 // spy desks, the board) are entirely technical by design.
 
 import { readUnderTaskKey } from "./formerTaskKeys.js";
+import { SHIPPED_GUIDANCE_FINGERPRINTS } from "./shippedGuidance.js";
 
 const segment = (id, label, start, end, hint = "") => Object.freeze({ id, label, start, end, hint });
 
@@ -66,94 +67,78 @@ export const PROMPT_GUIDANCE = Object.freeze({
     jumpForward: Object.freeze([
       segment("role", "The simulator's role",
         "[Your Role]\nThe player is playing as the polity of ${PLAYER_POLITY}.",
-        "experience the EFFECTS of those actions and thereby change or simulate history.",
-        "Who simulates what."),
-      segment("history", "Historical, alt-historical or fictional",
-        "[Historical, Alt-Historical, or Fictional]",
-        "NEVER put words like (fictional) or (a-historical) in the title or description of any event.",
-        "How far the world may diverge from history."),
+        "Make the world feel alive, specific and consequential.",
+        "Who simulates what, and what the game is for."),
+      segment("history", "Real history, alternate history or fiction",
+        "[Real History Is the Default]",
+        "Never put words like (fictional) or (a-historical) in an event.",
+        "Real history as the default, where the game departs from it, and alternate or fictional worlds."),
       segment("difficulty", "How difficulty applies",
         "Difficulty is expressed in the difficulty of the player's LONG-TERM goals",
-        "game-specific context, and any alt-historical preparation the player built up.",
+        "Never write an event that ignores or forbids the attempt itself.",
         "What difficulty makes harder and what it never forbids."),
       segment("agency", "Player agency",
         "[Player Agency — critical]",
-        "always refer to the player's polity as ${PLAYER_POLITY}.",
+        "Always call the player's polity ${PLAYER_POLITY}, never \"the player\".",
         "Never acting for the player."),
       segment("orders", "What an order can do",
         "[What an Order Can Do]",
-        "not with 1939's under new dates.",
-        "Feasibility, the chain of authority, failure, and the pace of a war."),
+        "not the fall of a capital.",
+        "Outcomes, consent, means and authority, and the pace of a war."),
       segment("scope", "What to simulate and how much",
         "[What to Simulate]",
-        "and whenever an event warrants a region change, get that change right.",
-        "Breadth, event count per month, and consequences of the player's actions."),
+        "get that change exactly right.",
+        "Breadth, how many events, and the outcomes of the player's orders."),
       segment("reactions", "The world answers back",
         "[The World Answers Back]",
         "Bring the pressure to the player's door and stop there.",
-        "Other powers reacting on their own initiative, and how much of a jump is theirs."),
-      segment("flags", "Flags",
-        "[Flags]\nSome polities have flags, and flags sometimes change.",
-        "(such as Vichy France in a WWII game).",
-        "When flags change and how they are described."),
-      segment("quality", "Event quality",
-        "[Event Quality]\nEvery event is a headline, a description, and potentially map changes.",
-        "Only newsworthy events belong in the output.",
-        "Headlines, description lengths, quotes, filler and dates."),
-      segment("voice", "Event voice",
-        "[Event Voice]",
-        "rather than gesturing at \"the proposal\" or \"the plan.\"",
-        "Reporting instead of commenting: adjectives, attributed opinions, endings, atmosphere, intent."),
+        "Other powers acting on their own initiative, and answering the player's moves."),
+      segment("quality", "How an event is written",
+        "[How to Write an Event]",
+        "The fortress had held seven prisoners.",
+        "The headline and the story under it: specifics, length, quotes, what counts as an event."),
     ]),
     autoJumpForward: Object.freeze([
       segment("role", "The simulator's role",
         "[Your Role]\nThe player is playing as the polity of ${PLAYER_POLITY}.",
-        "always refer to the player as ${PLAYER_POLITY}.",
-        "Who simulates what."),
+        "Make the world feel alive, specific and consequential.",
+        "Who simulates what, and what the game is for."),
+      segment("history", "Real history, alternate history or fiction",
+        "[Real History Is the Default]",
+        "Never put words like (fictional) or (a-historical) in an event.",
+        "Real history as the default, where the game departs from it, and alternate or fictional worlds."),
       segment("difficulty", "How difficulty applies",
         "Difficulty is expressed in the difficulty of the player's LONG-TERM goals",
-        "with difficulty and with how realistic and logical the action is.",
+        "Never write an event that ignores or forbids the attempt itself.",
         "What difficulty makes harder and what it never forbids."),
       segment("agency", "Player agency",
         "[Player Agency — critical]",
-        "If the player chooses not to act, assume it was deliberate and simulate the world accordingly.",
+        "Always call the player's polity ${PLAYER_POLITY}, never \"the player\".",
         "Never acting for the player."),
       segment("orders", "What an order can do",
         "[What an Order Can Do]",
-        "not with 1939's under new dates.",
-        "Feasibility, the chain of authority, failure, and the pace of a war."),
+        "not the fall of a capital.",
+        "Outcomes, consent, means and authority, and the pace of a war."),
       segment("scope", "What to simulate",
         "[What to Simulate]",
-        "Never generate a duplicate or exact copy of an event that already exists.",
-        "Breadth and the consequences of the player's actions."),
+        "get that change exactly right.",
+        "Breadth and the outcomes of the player's orders."),
       segment("reactions", "The world answers back",
         "[The World Answers Back]",
         "Bring the pressure to the player's door and stop there.",
-        "Other powers reacting on their own initiative, and how much of a jump is theirs."),
+        "Other powers acting on their own initiative, and answering the player's moves."),
       segment("stopping", "Where the auto-jump stops",
-        "[Immersive Events — also stop for the great moments]",
+        "[Where the Auto-Jump Stops]",
         "A good game surprises the player and demands their engagement.",
         "Stopping for decisions and for the memorable moments."),
       segment("count", "How many events",
         "[How Many Events]",
-        "Stick to this VERY STRICTLY.",
+        "Only the stopping point decides where the list ends.",
         "The number of events per auto-jump."),
-      segment("quality", "Event quality",
-        "[Event Quality]\nEvery event is a headline, a description, and potentially map changes.",
-        "even in fictional and a-historical gamestates.",
-        "Headlines, descriptions and quotes."),
-      segment("voice", "Event voice",
-        "[Event Voice]",
-        "rather than gesturing at \"the proposal\" or \"the plan.\"",
-        "Reporting instead of commenting: adjectives, attributed opinions, endings, atmosphere, intent."),
-      segment("flags", "Flags",
-        "[Flags]\nSome polities have flags.",
-        "and a polity's flag changes when its regime changes.",
-        "When flags change and how they are described."),
-      segment("donot", "What not to write",
-        "[Do Not]",
-        "Only newsworthy events belong in the output.",
-        "Filler, meta events and mechanical spacing."),
+      segment("quality", "How an event is written",
+        "[How to Write an Event]",
+        "The fortress had held seven prisoners.",
+        "The headline and the story under it: specifics, length, quotes, what counts as an event."),
     ]),
     interactiveCreation: Object.freeze([
       segment("guidelines", "What makes a good interactive event",
@@ -290,6 +275,27 @@ export const buildGuidanceDefaults = (defaults) => ({
   ),
 });
 
+// A passage's fingerprint: cyrb53 (53 bits, base 36) of its text with the
+// whitespace collapsed, so a copy that went through a line-ending conversion
+// still matches.
+export const guidanceFingerprint = (text) => {
+  const source = String(text ?? "").replace(/\s+/g, " ").trim();
+  let h1 = 0xdeadbeef ^ source.length;
+  let h2 = 0x41c6ce57 ^ source.length;
+  for (let i = 0; i < source.length; i += 1) {
+    const code = source.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+};
+
+// Is this, word for word, a default passage some version of the game shipped,
+// in English or in a shipped translation (shippedGuidance.js)?
+export const isShippedGuidanceDefault = (text) => SHIPPED_GUIDANCE_FINGERPRINTS.has(guidanceFingerprint(text));
+
 // The edits a stored pack carries, normalised: known sections and segments
 // only, trimmed, with blanks and default-identical text dropped. A pack of any
 // other shape carries nothing — the old model stored whole prompts, technical
@@ -297,18 +303,29 @@ export const buildGuidanceDefaults = (defaults) => ({
 // every scenario and game runs the current defaults plus its guidance. A
 // renamed task's edits are read from its old key when its new one has none
 // (formerTaskKeys.js), and kept under the new one.
+//
+// A passage identical to a default that any version shipped is dropped too
+// (isShippedGuidanceDefault): it was copied into the pack, not written.
+// "Export all prompts" writes every passage, and a scenario that imported
+// such a file stored them all; kept, they would pin that version's defaults
+// in the scenario and in every game played from it after the game changed
+// them. Only stored packs are read this way: composePrompt takes whatever
+// passages it is given, the translated defaults included.
 export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
   const pack = isRecord(rawPack) ? rawPack : {};
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
+  const edits = (sectionKey, raw, defaults) => Object.fromEntries(
+    Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults)).filter(([, text]) => !isShippedGuidanceDefault(text)),
+  );
   const taskGuidance = {};
   for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) {
-    const bucket = normalizeSectionGuidance(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? null);
+    const bucket = edits(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? null);
     if (Object.keys(bucket).length) taskGuidance[key] = bucket;
   }
   return {
-    advisor: normalizeSectionGuidance("advisor", source.advisor, guidanceDefaults?.advisor ?? null),
-    leader: normalizeSectionGuidance("leader", source.leader, guidanceDefaults?.leader ?? null),
+    advisor: edits("advisor", source.advisor, guidanceDefaults?.advisor ?? null),
+    leader: edits("leader", source.leader, guidanceDefaults?.leader ?? null),
     tasks: taskGuidance,
   };
 };

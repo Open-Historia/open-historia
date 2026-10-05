@@ -35,14 +35,21 @@ export const verifyDetached = async (bytes, sigB64, keyid) => {
   return false;
 };
 
+// How long a signed document (and its .sig) may take, body included. The node
+// directory is fetched before anything can use a node — the website's Enter
+// button waits on it, and so does every map archive's fallback to the origin — so
+// a captive portal or a stalled request must end as "no nodes", not hang for ever.
+export const SIGNED_FETCH_TIMEOUT_MS = 4000;
+
 // Fetch a JSON manifest and its detached `.sig`, verify the signature over the
 // EXACT served bytes, and enforce keyid + freshness. Returns
 // { valid, data, reason }. valid=false ⇒ do not trust the manifest.
-export const fetchSignedJson = async (url) => {
+export const fetchSignedJson = async (url, { timeoutMs = SIGNED_FETCH_TIMEOUT_MS } = {}) => {
   try {
+    const signal = AbortSignal.timeout(timeoutMs);
     const [docResp, sigResp] = await Promise.all([
-      fetch(url, { cache: "no-store" }),
-      fetch(`${url}.sig`, { cache: "no-store" }),
+      fetch(url, { cache: "no-store", signal }),
+      fetch(`${url}.sig`, { cache: "no-store", signal }),
     ]);
     if (!docResp.ok) return { valid: false, data: null, reason: "missing-doc" };
     if (!sigResp.ok) return { valid: false, data: null, reason: "unsigned" };

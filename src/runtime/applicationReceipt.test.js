@@ -14,9 +14,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  RECEIPT_KIND_PLAYER_TITLES,
   RECEIPT_MAX_NOTES,
+  RECEIPT_NOTE_KINDS,
   RECEIPT_NOTE_MAX_CHARS,
   createApplicationReceipt,
+  describeReceiptForPlayer,
   firstComplaintLine,
   mergeReceipts,
   normalizeApplicationReceipt,
@@ -293,4 +296,31 @@ test("an answer kept although it fell short is said so, last, and without the wa
 test("a short note survives the save: it is a kind the normalizer knows", () => {
   const stored = normalizeApplicationReceipt({ applied: { events: 1 }, notes: [{ kind: "short", text: "You wrote 1 event." }, { kind: "gossip", text: "ignored" }] });
   assert.deepEqual(stored.notes, [{ kind: "short", text: "You wrote 1 event." }]);
+});
+
+test("the player sees the same notes, grouped under headings of their own", () => {
+  const receipt = createApplicationReceipt();
+  receipt.applied.events = 3;
+  noteReceipt(receipt, "short", "You wrote 3 events for 1 year that called for 6 to 12.");
+  noteReceipt(receipt, "dropped", "Event \"Fall of Kharkiv\": the region transfer of \"Kharkiv\" named no region on the map.");
+  noteReceipt(receipt, "withheld", "\"A quiet week\" — too routine to show.");
+  noteReceipt(receipt, "dropped", "The outreach chat \"Talks\" was not opened.");
+  const view = describeReceiptForPlayer(receipt);
+  assert.deepEqual(view.groups.map((group) => group.kind), ["withheld", "dropped", "short"], "in the rendering's order");
+  assert.equal(view.count, 4);
+  assert.equal(view.omitted, 0);
+  assert.equal(view.groups[1].title, RECEIPT_KIND_PLAYER_TITLES.dropped);
+  assert.equal(view.groups[1].notes.length, 2);
+  for (const group of view.groups) {
+    assert.doesNotMatch(group.title, /\byou\b|\bYOU\b|NOT/, "a player's heading is not an instruction to the model");
+  }
+  assert.equal(Object.keys(RECEIPT_KIND_PLAYER_TITLES).sort().join(), [...RECEIPT_NOTE_KINDS].sort().join(), "every kind has a heading");
+});
+
+test("a receipt with nothing to explain shows nothing", () => {
+  const receipt = createApplicationReceipt();
+  receipt.applied.events = 5;
+  assert.equal(describeReceiptForPlayer(receipt), null);
+  assert.equal(describeReceiptForPlayer(null), null);
+  assert.equal(describeReceiptForPlayer({ notes: [{ kind: "gossip", text: "x" }] }), null);
 });

@@ -289,7 +289,7 @@ test("CP4 real geometry: every accepted line path remains inside owner territory
   }
 });
 
-test("CP4.2 real geometry: Pax-style fixtures receive territorial baselines without country-specific rules", () => {
+test("CP4.2 real geometry: atlas-style fixtures receive territorial baselines without country-specific rules", () => {
   const owners = [
     "United States",
     "Canada",

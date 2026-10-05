@@ -203,8 +203,9 @@ export const createContextWindowMemory = (storage, { now = Date.now } = {}) => {
         if (Number.isFinite(known.limitTokens) && known.limitTokens > 0) {
             const room = known.limitTokens * CONTEXT_WINDOW_MARGIN - reserve;
             if (tokens > room) {
-                return `this request is about ${formatTokens(tokens)} tokens and the model's window is ${formatTokens(known.limitTokens)}`
-                    + (known.source === "declared" ? " (as set in its Connection)" : "");
+                return known.source === "declared"
+                    ? `this request is about ${formatTokens(tokens)} tokens and the window you set for this model is ${formatTokens(known.limitTokens)}`
+                    : `this request is about ${formatTokens(tokens)} tokens and the model's window is ${formatTokens(known.limitTokens)}`;
             }
             return "";
         }
@@ -220,7 +221,27 @@ export const createContextWindowMemory = (storage, { now = Date.now } = {}) => {
         writeJson(storage, CONTEXT_WINDOW_KEY, all);
     };
 
-    return { get, learn, declare, refusal, forget };
+    // What is remembered and still in force, for Settings → AI: null when
+    // nothing is, or when what was learned has lapsed (refusal ignores it too).
+    // `until` is when a learned window lapses; a declared one does not.
+    const remembered = (key) => {
+        const known = get(key);
+        if (!known || !(known.limitTokens > 0 || known.tooBigTokens > 0)) return null;
+        if (known.source === "declared") return { ...known, until: null };
+        const until = (Number(known.learnedAt) || 0) + (known.source === "stated" ? STATED_LIMIT_TTL_MS : SEEN_LIMIT_TTL_MS);
+        return until > now() ? { ...known, until } : null;
+    };
+
+    return { get, learn, declare, refusal, forget, remembered };
+};
+
+// What Settings → AI says about one model's window (remembered() above).
+// `formatDate` shows the day a learned window lapses.
+export const describeRememberedWindow = (known, { formatDate = (ms) => new Date(ms).toLocaleDateString() } = {}) => {
+    if (!known) return "Leave blank and the game learns this model's window from its own refusal. Set it only if you know it.";
+    if (known.source === "declared") return `You set this model's window to ${formatTokens(known.limitTokens)} tokens. A request too big for it is not sent to it.`;
+    if (known.limitTokens > 0) return `The model said its window is ${formatTokens(known.limitTokens)} tokens. A request too big for it is not sent to it until ${formatDate(known.until)}.`;
+    return `The model refused a request of about ${formatTokens(known.tooBigTokens)} tokens. One that big is not sent to it until ${formatDate(known.until)}.`;
 };
 
 // What the player is told when no entry can take the request, before anything
@@ -230,5 +251,6 @@ export const nothingFitsMessage = (refused, requestTokens) => {
         .map(({ label, reason }) => `${label}: ${reason}`)
         .join("; ");
     return `This request (about ${formatTokens(requestTokens)} tokens) does not fit any model in your Fallback list, so it was not sent. ${list}. `
-        + "A turn needs a model with a large context window (128K tokens or more is comfortable): pick one in Settings → AI, or shorten what the prompt carries.";
+        + "A turn needs a model with a large context window (128K tokens or more is comfortable): pick one in Settings → AI, or shorten what the prompt carries. "
+        + "If a model can now take more than it could, open its entry in Settings → AI and forget its window under \"This model only\".";
 };

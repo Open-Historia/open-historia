@@ -193,9 +193,13 @@ export const selectPoliticalGenerationTestPolities = (polities = [], count = 15)
   return selected;
 };
 
+// countryTags is the scenario's own tags.json (scenario details do not carry
+// it). Generation reads it through resolveCountryTags as baseCountryTags, so
+// the author's starting tags reach Round Zero as they reach the game.
 export const buildScenarioPoliticalGenerationInputs = (details, {
   mode = POLITICAL_WORLD_GENERATION_MODES.BALANCED,
   maxBatchSize = 8,
+  countryTags = null,
 } = {}) => {
   const world = details?.data?.world ?? {};
   const game = details?.data?.game ?? {};
@@ -217,6 +221,7 @@ export const buildScenarioPoliticalGenerationInputs = (details, {
     }),
     scenarioContext: scenarioContextFromDetails(details),
     contextByPolity: polityContextByKey(world, polities),
+    baseCountryTags: countryTags && typeof countryTags === "object" && !Array.isArray(countryTags) ? countryTags : null,
     maxBatchSize,
     // Normal Scenario Editor generation should establish a missing Round-Zero
     // numeric landscape before optional RICH/FULL enrichment on already-existing

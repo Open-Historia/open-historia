@@ -12,6 +12,12 @@ name: Build Android APK
 # content node any more. The community hub and the player's own AI provider are
 # the only network use. It used to be the website's bundle verbatim, and before
 # that a thin WebView pointed at a server the player ran themselves.
+#
+# This is the STABLE app, built from `main`. The beta app, "Open Historia Beta",
+# is built from `beta` by android-apk-beta.yml: a second app with its own id,
+# saves, icon, release (`android-beta`) and update feed, installed beside this
+# one. A dispatch from any other branch is refused below — that is how beta
+# code once reached the stable release (build 14, 2026-09-25).
 
 on:
   workflow_dispatch:
@@ -25,6 +31,16 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
+      # A dispatch run picks its own branch from a dropdown, and `beta` is in that
+      # dropdown too — a run from there would publish the beta's code as the stable
+      # app. A tag run is exempt: its ref is the tag, and the tag pattern says which
+      # line it came from.
+      - name: Refuse to dispatch this from anything but main
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'Open-Historia/open-historia' && github.ref_name != 'main'
+        run: |
+          echo "::error::The stable Android app is built from main. For the beta app run Build Android APK (Beta) from beta."
+          exit 1
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5

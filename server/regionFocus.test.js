@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mentionCount, nameVariants, selectFocusPowers } from "../src/Game/AI/regionFocus.js";
+import { isPendingAction, mentionCount, nameVariants, selectFocusPowers } from "../src/Game/AI/regionFocus.js";
 
 const owners = [
   { key: "united states of america", label: "United States of America", regions: 285 },
@@ -44,14 +44,31 @@ test("a pending action names the powers that matter most", () => {
     owners,
     player: "United States of America",
     actions: [
-      { title: "Arm Ukraine", description: "Ship Javelins to Kyiv and warn the Russian Federation against further annexation.", resolved: false },
-      { title: "Old business", description: "Trade talks with the Republic of Panama", resolved: true },
-      { title: "Loose talk", description: "Warn Russia too.", resolved: false },
+      { title: "Arm Ukraine", description: "Ship Javelins to Kyiv and warn the Russian Federation against further annexation.", status: "planned" },
+      { title: "Old business", description: "Trade talks with the Republic of Panama", status: "resolved" },
+      { title: "Loose talk", description: "Warn Russia too." },
     ],
   });
   assert.deepEqual(ranked.slice(0, 3).map((entry) => entry.label), ["United States of America", "Russian Federation", "Ukraine"]);
   assert.ok(ranked.find((entry) => entry.label === "Republic of Panama").reasons.length === 0, "a resolved action carries no weight");
   assert.equal(ranked.find((entry) => entry.label === "Russian Federation").score, 120 + 15, "\"Russia\" in prose did not count a second time: it is not a name on this map");
+});
+
+test("an order the last jump answered no longer earns focus", () => {
+  // settleOrders marks an answered order status "resolved"; nothing ever sets
+  // a `resolved` flag, so that is the field the ranking has to read.
+  const answered = { title: "Old business", description: "Trade talks with the Republic of Panama and the Republic of India", status: "resolved" };
+  const ranked = selectFocusPowers({
+    owners,
+    player: "United States of America",
+    actions: Array.from({ length: 30 }, () => answered),
+  });
+  assert.equal(ranked.find((entry) => entry.label === "Republic of Panama").reasons.length, 0);
+  assert.equal(ranked.find((entry) => entry.label === "Republic of India").reasons.length, 0);
+  assert.equal(isPendingAction(answered), false);
+  assert.equal(isPendingAction({ title: "Queued", status: "planned" }), true);
+  assert.equal(isPendingAction({ title: "Saved before statuses" }), true, "no status reads as planned, as normalizeActionEntry does");
+  assert.equal(isPendingAction(null), false);
 });
 
 test("belligerents, chat partners, event movers and claimants all outrank the rest", () => {

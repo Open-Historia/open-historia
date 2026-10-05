@@ -4,31 +4,31 @@
  */
 
 // Top editing toolbar. Tool selection is single-choice; the active tool drives
-// which OpenLayers interactions are mounted (see useEditorInteractions, later
-// phases). P1 wires Select + Pan; the geometry tools are shown but disabled until
-// their phases land, so the layout matches the official editor from the start.
+// which OpenLayers interactions are mounted (OlMap.jsx's interaction effect).
+// Every tool has its own glyph: on a phone there are no tooltips, so the icon
+// is all a player has to tell two tools apart.
 
 import { useEffect, useRef } from "react";
 import Icon from "./Icon.jsx";
 import { panelSurface, toolButton } from "./editorStyles.js";
 
 const TOOLS = [
-  { id: "select", icon: "select", label: "Select", enabled: true },
-  { id: "lasso", icon: "lasso", label: "Lasso select (drag to circle regions)", enabled: true },
-  { id: "pan", icon: "pan", label: "Pan", enabled: true },
+  { id: "select", icon: "select", label: "Select" },
+  { id: "lasso", icon: "lasso", label: "Lasso select (drag to circle regions)" },
+  { id: "pan", icon: "pan", label: "Pan" },
   { sep: true },
-  { id: "draw", icon: "split", label: "Draw region (click a border to trace along it)", enabled: true },
-  { id: "modify", icon: "modify", label: "Edit vertices (select regions first; snap + undo enabled)", enabled: true },
-  { id: "border", icon: "merge", label: "Shared border precision (select exactly 2 neighbouring regions)", enabled: true },
-  { id: "move", icon: "move", label: "Move", enabled: true },
-  { id: "delete", icon: "trash", label: "Delete (click a region)", enabled: true },
+  { id: "draw", icon: "split", label: "Draw region (click a border to trace along it)" },
+  { id: "modify", icon: "modify", label: "Edit vertices (select regions first; snap + undo enabled)" },
+  { id: "border", icon: "merge", label: "Shared border precision (select exactly 2 neighbouring regions)" },
+  { id: "move", icon: "move", label: "Move" },
+  { id: "delete", icon: "trash", label: "Delete (click a region)" },
   { sep: true },
-  { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)", enabled: true },
-  { id: "paint", icon: "paint", label: "Paint polity (click or drag across regions; one stroke = one undo)", enabled: true },
-  { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)", enabled: true },
-  { id: "marker", icon: "pin", label: "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)", enabled: true },
-  { id: "unit", icon: "unit", label: "Unit tool (click the map to place a starting unit, click a unit to edit it)", enabled: true },
-  { id: "feature-box", icon: "pin", label: "Box-select features (drag a rectangle over cities and features to select them all)", enabled: true },
+  { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)" },
+  { id: "paint", icon: "paint", label: "Paint polity (click or drag across regions; one stroke = one undo)" },
+  { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)" },
+  { id: "marker", icon: "pin", label: "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)" },
+  { id: "unit", icon: "unit", label: "Unit tool (click the map to place a starting unit, click a unit to edit it)" },
+  { id: "feature-box", icon: "boxSelect", label: "Box-select features (drag a rectangle over cities and features to select them all)" },
 ];
 
 // The CSS variable the side panels (Panel.jsx) read for their top edge, so a
@@ -98,10 +98,9 @@ const Toolbar = ({ activeTool, onToolChange, onFit, onUndo, onRedo, canUndo, can
           ) : (
             <button
               key={t.id}
-              title={t.enabled ? t.label : `${t.label} (coming soon)`}
-              disabled={!t.enabled}
-              onClick={() => t.enabled && onToolChange(t.id)}
-              style={toolButton(activeTool === t.id, !t.enabled)}
+              title={t.label}
+              onClick={() => onToolChange(t.id)}
+              style={toolButton(activeTool === t.id, false)}
             >
               <Icon name={t.icon} />
             </button>

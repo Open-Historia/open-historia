@@ -21,7 +21,7 @@
 // parameters (they can carry headers — only their size), and an endpoint only by
 // its host. Everything is redacted again as the file is built.
 import { isDebugLogEnabled, isDebugLogVerbose, registerSettingsSnapshot } from "./debugLog.js";
-import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, getMapSettingValue } from "./mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, getMapSettingValue, systemPrefersReducedMotion } from "./mapSettings.js";
 import { getStoredChatLanguage, getStoredLanguage, languageDisplayName } from "./i18n.js";
 import {
     AI_TASK_ROUTING,
@@ -35,6 +35,7 @@ import {
 } from "../Game/AI/providerConfig.js";
 import { isRatingEnabled, isTelemetryEnabled } from "../Game/AI/telemetry.js";
 import { requestDay, requestSettings } from "../Game/AI/requestBudget.js";
+import { deviceProfileForLog } from "./deviceProfile.js";
 
 const onOff = (value) => (value ? "on" : "off");
 
@@ -50,12 +51,21 @@ const storedBoolean = (key, fallback) => {
     }
 };
 
+// Stored on, lookups still run only while requests are not being saved
+// (gameplay.js lookupFunctionsEnabled), so the file says when they are not.
+const lookupFunctionsState = () => {
+    const on = getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+    return on && requestSettings.saveRequests() ? "on (inactive: Save AI requests)" : onOff(on);
+};
+
 registerSettingsSnapshot("Display", () => [
     ["UI language", languageDisplayName(getStoredLanguage())],
     ["AI chat language", languageDisplayName(getStoredChatLanguage())],
     ["Fullscreen", onOff(typeof document !== "undefined" && document.fullscreenElement)],
     // The umbrella switch: on exactly when both of the map's motion switches are.
     ["Reduce motion", onOff(getMapSetting(MAP_SETTING_KEYS.disableIdleRotation) && getMapSetting(MAP_SETTING_KEYS.disableEventCamera))],
+    // The OS setting, which holds all three motion switches on while it is.
+    ["System reduced motion", onOff(systemPrefersReducedMotion())],
 ]);
 
 registerSettingsSnapshot("Map", () => [
@@ -66,6 +76,9 @@ registerSettingsSnapshot("Map", () => [
     ["Hide country labels", onOff(getMapSetting(MAP_SETTING_KEYS.hideCountryLabels))],
     ["Disable idle globe rotation", onOff(getMapSetting(MAP_SETTING_KEYS.disableIdleRotation))],
     ["Disable camera movement during events", onOff(getMapSetting(MAP_SETTING_KEYS.disableEventCamera))],
+    // What decides the worker count, whole-archive warming, the regions parse
+    // hold and globe lighting: "map is slow" and "grey map" start here.
+    ["Performance mode", deviceProfileForLog()],
 ]);
 
 // Every entry of the Fallback list, in order, with the state it is in: "which
@@ -109,7 +122,7 @@ registerSettingsSnapshot("AI", () => {
         ["Model reasoning", onOff(getReasoningEnabled())],
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
-        ["AI lookup functions", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions))],
+        ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
         ["Record AI telemetry", onOff(isTelemetryEnabled())],
@@ -148,7 +161,10 @@ registerSettingsSnapshot("Network", async () => {
     const response = await fetch("/api/server/network", { cache: "no-store" });
     if (!response.ok) return null;
     const state = await response.json();
-    return [["Let other devices connect", `${onOff(state?.lanEnabled)}${state?.lockedByEnv ? " (set by OH_HOST)" : ""}`]];
+    return [
+        ["Let other devices connect", `${onOff(state?.lanEnabled)}${state?.lockedByEnv ? " (set by OH_HOST)" : ""}`],
+        ["Let other devices send AI calls through this server", `${onOff(state?.relayForLan)}${state?.relayLockedByEnv ? " (set by OH_ALLOW_REMOTE_RELAY)" : ""}`],
+    ];
 });
 
 registerSettingsSnapshot("Diagnostics", () => [

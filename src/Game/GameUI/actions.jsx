@@ -1,6 +1,7 @@
 /*! Open Historia — portions (panel sizing on small screens) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
@@ -16,11 +17,15 @@ import {
     writeWorldState,
 } from "../../runtime/gameState.js";
 import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
-import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { uiString } from "../../runtime/translator.js";
+import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
+import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 
 dayjs.extend(advancedFormat);
 
@@ -98,6 +103,49 @@ const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
 
 const saveActions = async (actions) => writeActionsState(actions);
 
+// Saves the diagnostics log with an AI failure attached at the top, or copies
+// the failure alone while logging is off (runtime/saveDebugLog.js), as the
+// advisor's report button does.
+const FailureReportButton = ({ buildIncident }) => {
+    const { busy, label, loggingOn, onClick } = useFailureReportButton({ buildIncident, copyIdleLabel: "Copy for a bug report" });
+    return (
+        <button
+        type="button"
+        className="oh-tap-row"
+        disabled={busy}
+        onClick={onClick}
+        title={loggingOn
+            ? "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
+            : "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."}
+        style={{ background: "none", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "6px", color: "#fde68a", cursor: busy ? "default" : "pointer", flexShrink: 0, fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}
+        >
+        {label}
+        </button>
+    );
+};
+
+// An amber line saying an AI answer is not the model's, with the report button
+// when there is something to report.
+const AiFailureNote = ({ children, incident }) => (
+    <div role="status" style={{ alignItems: "center", color: "rgba(253,186,116,0.9)", display: "flex", flexWrap: "wrap", fontSize: "0.72rem", gap: "0.4rem", lineHeight: "1.45" }}>
+    <span style={{ flex: "1 1 12rem", minWidth: 0 }}>{children}</span>
+    {incident && <FailureReportButton buildIncident={() => incident} />}
+    </div>
+);
+
+const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) => ({
+    kind,
+    title,
+    fields: [
+        ["Failure reason", reason || "(unknown)"],
+        ...(rawResponse ? [["Raw model response", rawResponse]] : []),
+    ],
+});
+
+// What the panel says when the queue could not be written.
+const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
+const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
+
 const createManualAction = (input) =>
 normalizeActionEntry({
     kind: "action",
@@ -115,7 +163,14 @@ normalizeActionEntry({
     status: "planned",
 });
 
-const ActionItem = ({ action, onDelete }) => {
+// A queued troop order whose deletion undoes what it did to the map (#368).
+const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
+
+// locked: an order that moved a unit on the map (unitRevert) cannot be deleted
+// while a turn runs, because deleting it moves the unit back, and the turn's
+// world write would put the unit where it was. Other orders can: the turn reads
+// the queue again before it writes it.
+const ActionItem = ({ action, onDelete, locked = false }) => {
     const [hovered, setHovered] = React.useState(false);
     // The ✕ appears with the pointer over the row. Nothing hovers on a touch
     // screen, so there it is always shown, or an order could never be deleted.
@@ -173,15 +228,16 @@ const ActionItem = ({ action, onDelete }) => {
         type="button"
         className="oh-tap"
         onClick={onDelete}
-        title="Delete action"
+        disabled={locked}
+        title={locked ? TURN_RUNNING_NOTE : "Delete action"}
         aria-label="Delete action"
         style={{
             alignItems: "center",
-            background: hovered ? "rgba(239,68,68,0.1)" : "none",
+            background: hovered && !locked ? "rgba(239,68,68,0.1)" : "none",
             border: "none",
             borderRadius: "6px",
-            color: hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
-            cursor: "pointer",
+            color: locked ? "rgba(255,255,255,0.18)" : hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
+            cursor: locked ? "not-allowed" : "pointer",
             display: "flex",
             flexShrink: 0,
             fontSize: "1rem",
@@ -250,22 +306,6 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     </div>
 );
 
-// Whether a turn is running, for the controls a turn's own world write would
-// overwrite. The flag is a synchronous counter (simulationStatus.js), so it is
-// polled while the panel is open, as the HUD polls it.
-const TURN_POLL_MS = 800;
-
-const useTurnRunning = (active) => {
-    const [running, setRunning] = React.useState(() => isSimulationBusy());
-    React.useEffect(() => {
-        if (!active) return undefined;
-        setRunning(isSimulationBusy());
-        const timer = window.setInterval(() => setRunning(isSimulationBusy()), TURN_POLL_MS);
-        return () => window.clearInterval(timer);
-    }, [active]);
-    return running;
-};
-
 const goalButtonStyle = (enabled, tone = "neutral") => ({
     background: tone === "primary" ? (enabled ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.07)") : "none",
     border: tone === "primary" ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.14)",
@@ -290,6 +330,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     const [saving, setSaving] = React.useState(false);
     const [error, setError] = React.useState("");
     const draftRef = React.useRef(null);
+    const isTouch = useTouchPrimary();
 
     React.useEffect(() => {
         if (!isOpen) {
@@ -345,7 +386,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     const canSave = !saving && !turnRunning && draft.trim() !== goal;
 
     const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (isComposerSendKey(event, { touch: isTouch })) {
             event.preventDefault();
             if (canSave) void save(draft);
         } else if (event.key === "Escape") {
@@ -374,6 +415,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
             placeholder="What is your government steering toward? e.g. Keep out of the war and grow the economy"
             rows={2}
             value={draft}
+            enterKeyHint="enter"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
             style={{
@@ -472,10 +514,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const gameDate = game.gameDate
         ? formatGameDateReadable(game.gameDate, "MMMM Do, YYYY") || dayjs(game.gameDate).format("MMMM Do, YYYY")
         : "the current date";
-    const [suggestions, setSuggestions] = React.useState([]);
-    const [queuedSuggestionIds, setQueuedSuggestionIds] = React.useState(() => new Set());
+    // The suggestions the game saved on the world (a time skip clears them), so
+    // reopening the panel shows them again without spending a request.
+    const suggestions = useRuntimeState("world", selectSavedSuggestions);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
+    // Why the last press of the suggestions button got no list at all, and, when
+    // it got the canned one instead, what the AI did (for the report button).
+    const [suggestionError, setSuggestionError] = React.useState("");
+    const [suggestionFallback, setSuggestionFallback] = React.useState(null);
+    // Why the last Improve left the text as typed: { reason, rawResponse }.
+    const [improveFailure, setImproveFailure] = React.useState(null);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const turnRunning = useTurnRunning(isOpen);
+    // Why the last change to the queue was not saved, until one is.
+    const [saveError, setSaveError] = React.useState("");
     const [isImproving, setIsImproving] = React.useState(false);
     // Holds the in-flight improve's AbortController so the button can stop it,
     // the same shape as the timeline jump's cancel (time.jsx jumpAbortRef).
@@ -497,8 +549,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         let cancelled = false;
         ensureActionsStyles();
-        setSuggestions([]);
         setHasRequestedSuggestions(false);
+        setSuggestionError("");
+        setSaveError("");
 
         // Actions created/edited from OUTSIDE this panel (the advisor, chatting in
         // its own drawer) used to be invisible here until the panel was closed and
@@ -528,14 +581,27 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         lastRoundRef.current = game.round;
     }, [isOpen, game.round]);
 
-    const persistActions = async (nextActions) => {
-        setActions(nextActions);
+    // Saves the list and says whether it was saved. The panel shows the new list
+    // only once it is: the time skip reads actions.json, not this panel, so an
+    // order shown as queued but never written would be dropped without a word.
+    // On a failure nothing is put back from this closure, because nothing was
+    // changed: the list on screen is still what the store holds, including
+    // anything the advisor or a unit move wrote meanwhile.
+    const persistActions = async (nextActions, failureNote = ORDER_NOT_SAVED) => {
         try {
             await saveActions(nextActions);
         } catch (error) {
             console.error("Failed to save actions:", error);
+            setSaveError(failureNote);
+            return false;
         }
+        setActions(nextActions);
+        setSaveError("");
+        return true;
     };
+
+    // A card's order already in the queue shows as queued, restored cards too.
+    const queuedSuggestionIds = React.useMemo(() => queuedActionIds(actions), [actions]);
 
     const submittedActions = React.useMemo(
         () =>
@@ -573,7 +639,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 setInputValue("");
                 return;
             }
-            await persistActions([...actions, nextAction]);
+            // Not saved: the order stays in the box to try again.
+            if (!(await persistActions([...actions, nextAction]))) return;
             // What the player told their country to do is half of "the series of
             // events they did" — a turn that goes wrong usually goes wrong
             // BECAUSE of an order, and the diagnostics log is unreadable without
@@ -583,6 +650,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 queued: actions.length + 1,
             });
             setInputValue("");
+            setImproveFailure(null);
         } finally {
             setIsSubmitting(false);
         }
@@ -595,11 +663,18 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         setIsImproving(true);
+        setImproveFailure(null);
         const controller = new AbortController();
         improveAbortRef.current = controller;
         try {
             const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal });
-            const improvedText = refined?.text || buildActionDisplayText(refined) || trimmed;
+            // The canned template is no improvement on what the player wrote:
+            // their text stays, and the panel says the AI failed.
+            if (refined?.source === "fallback") {
+                setImproveFailure({ reason: refined.fallbackReason, rawResponse: refined.rawResponse });
+                return;
+            }
+            const improvedText = refined?.action?.text || buildActionDisplayText(refined?.action) || trimmed;
             setInputValue(improvedText);
             inputRef.current?.focus();
         } catch (error) {
@@ -607,6 +682,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             // player typed exactly as it was.
             if (error?.name !== "AbortError") {
                 console.error("Failed to improve action:", error);
+                setImproveFailure({ reason: error?.message || String(error) });
             }
         } finally {
             improveAbortRef.current = null;
@@ -624,6 +700,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             await requestFromHost("unorder", { order: String(removed?.id || "") });
             return;
         }
+        if (movesUnit(removed) && isSimulationBusy()) return;
+        // Removed from the queue first: undoing the unit's move while the order
+        // stays in actions.json would leave the skip acting on a move the map no
+        // longer shows.
+        if (!(await persistActions(actions.filter((_, actionIndex) => actionIndex !== index), ORDER_NOT_REMOVED))) return;
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -638,7 +719,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         logDebugEvent("action", `Order removed: ${removed?.title || removed?.text || "(untitled)"}`, {
             reverted: Boolean(removed?.unitRevert && (removed.status ?? "planned") === "planned"),
         });
-        await persistActions(actions.filter((_, actionIndex) => actionIndex !== index));
     };
 
     const handleQueueSuggestion = async (action) => {
@@ -652,12 +732,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         if (inSharedGame()) {
             const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
             if (!answer.ok) return;
-        } else {
-            await persistActions([...actions, queuedAction]);
+        } else if (!(await persistActions([...actions, queuedAction]))) {
+            // Not saved: the card stays unqueued, so it can be tried again.
+            return;
         }
+        // Visible click feedback: the suggestion button flips to "✓ Queued"
+        // (queuedSuggestionIds, from the saved queue).
         logDebugEvent("action", `Suggested order queued: ${queuedAction.title || queuedAction.text || "(untitled)"}`);
-        // Visible click feedback: the suggestion button flips to "✓ Queued".
-        setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));
     };
 
     const refreshSuggestions = async () => {
@@ -667,26 +748,29 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         setHasRequestedSuggestions(true);
         setIsSuggesting(true);
+        setSuggestionError("");
         try {
-            const topics = await generateActionSuggestions({ force: true });
-            setSuggestions(topics);
-            setQueuedSuggestionIds(new Set());
+            // Saved on the world, which is where the list above reads it from.
+            const result = await generateActionSuggestions({ force: true });
+            setSuggestionFallback(result?.source === "fallback"
+                ? { reason: result.fallbackReason, rawResponse: result.rawResponse }
+                : null);
         } catch (error) {
             console.error("Failed to generate suggestions:", error);
-            setSuggestions([]);
+            setSuggestionError(error?.message || String(error));
         } finally {
             setIsSuggesting(false);
         }
     };
 
     const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (isComposerSendKey(event, { touch: isTouch })) {
             event.preventDefault();
             handleSubmit();
         }
     };
 
-    const suggestionButtonLabel = hasRequestedSuggestions
+    const suggestionButtonLabel = suggestions.length > 0
     ? (isSuggesting ? "Refreshing AI suggestions..." : "Refresh AI suggestions")
     : (isSuggesting ? "Loading AI suggestions..." : "Get AI suggestions");
 
@@ -780,7 +864,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // queued actions right from that conversation (see advisor.jsx), so this
         // is the more direct route into the same plan-the-turn workflow the AI
         // suggestions above offer.
-        onClick={() => onOpenAdvisor("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.")}
+        onClick={() => onOpenAdvisor(uiString("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue."))}
         style={{
             background: "rgba(255,255,255,0.05)",
             border: "1px solid rgba(255,255,255,0.2)",
@@ -850,10 +934,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 scrollbarWidth: "none",
             }}
             >
-            {hasRequestedSuggestions && !isSuggesting && suggestions.length === 0 && (
+            {suggestionError && !isSuggesting && (
+                <AiFailureNote incident={aiFailureIncident("suggestions-error", "AI suggestions failed", { reason: suggestionError })}>
+                {`The AI suggestions could not be generated: ${suggestionError}`}
+                </AiFailureNote>
+            )}
+            {!suggestionError && hasRequestedSuggestions && !isSuggesting && suggestions.length === 0 && (
                 <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.78rem", fontStyle: "italic", margin: 0 }}>
                 No AI suggestions generated yet.
                 </p>
+            )}
+            {suggestionsFellBack(suggestions) && !isSuggesting && (
+                <AiFailureNote incident={suggestionFallback ? aiFailureIncident("suggestions-fallback", "AI suggestions fell back", suggestionFallback) : null}>
+                The AI gave no usable suggestions, so these are generic ones.
+                </AiFailureNote>
             )}
             {suggestions.map((topic) => (
                 <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
@@ -889,11 +983,27 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             </p>
         )}
         {submittedActions.map(({ normalized, originalIndex }) => (
-            <ActionItem key={normalized.id || originalIndex} action={normalized} onDelete={() => handleDelete(originalIndex)} />
+            <ActionItem key={normalized.id || originalIndex} action={normalized} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
         ))}
         </div>
         </div>
         </div>
+
+        {improveFailure && (
+            <div style={{ padding: "0 1.25rem 0.5rem" }}>
+            <AiFailureNote incident={aiFailureIncident("improve-failed", "Improve action failed", improveFailure)}>
+            {improveFailure.reason
+                ? `Improve failed, so your text was left as you wrote it: ${improveFailure.reason}`
+                : "Improve failed, so your text was left as you wrote it."}
+            </AiFailureNote>
+            </div>
+        )}
+
+        {saveError && (
+            <div role="alert" style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.72rem", lineHeight: "1.45", padding: "0 1.25rem 0.5rem" }}>
+            {saveError}
+            </div>
+        )}
 
         <div
         style={{
@@ -912,6 +1022,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
         value={inputValue}
+        enterKeyHint="enter"
         onChange={(event) => setInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
         style={{

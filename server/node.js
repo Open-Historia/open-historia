@@ -1,9 +1,18 @@
 /*! Open Historia — content node © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// A stateless, content-addressed node that anyone can run to expand the network.
-// It serves ONLY hash-verified, read-only bytes — never player games, never AI
-// keys, never the client code. Files in the content directory are named by their
-// SHA-256; the browser client fetches by hash and re-verifies every byte, so a
-// malicious node can at worst force a retry (see src/runtime/contentTrust.js).
+// A MINIMAL DEVELOPMENT STUB of a content node, not the node software to run.
+// The real node — the one the README, the site and docs/conventions.md send
+// hosts to — is the separate Open-Historia/open-historia-node repository. It
+// also answers what the web client asks a node for beyond content: the probe
+// (/oh/v1/status), keeping and leaving a node (/oh/v1/ping, /oh/v1/leave) and
+// hub downloads (/oh/v1/hub), none of which are here. The client's
+// selectBestNode (src/runtime/web/nodeConnect.js) therefore drops this stub, so
+// it is only useful for exercising content-by-hash fetches by hand.
+//
+// What it does serve is ONLY hash-verified, read-only bytes — never player
+// games, never AI keys, never the client code. Files in the content directory
+// are named by their SHA-256; the browser client fetches by hash and re-verifies
+// every byte, so a malicious node can at worst force a retry (see
+// src/runtime/web/contentTrust.js).
 //
 // Run: OH_NODE_PORT=4400 OH_NODE_CONTENT_DIR=./node-content node server/node.js
 // Populate the content dir with: node scripts/populate-node.mjs

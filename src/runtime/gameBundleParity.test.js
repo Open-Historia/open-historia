@@ -12,9 +12,8 @@
 // export still succeeds, the import still succeeds, and one file quietly stops
 // carrying a piece of the campaign.
 //
-// What this does NOT cover: an actual round trip through the web store, which
-// needs an IndexedDB harness this repo does not have (no fake-indexeddb, no
-// existing test touches web/libraryStore.js). Nor whether web's `default`
+// What this does NOT cover: an actual round trip through the web store; that is
+// web/libraryStore.test.js, which runs the store over an in-memory idb.js. Nor whether web's `default`
 // scenario is the same world as desktop's — see .scratch/save-export-zip/spec.md §9.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -27,20 +26,30 @@ import {
   GAME_BUNDLE_DATA_KEYS,
   GAME_BUNDLE_SCHEMA,
   OPTIONAL_GAME_BUNDLE_KEYS,
+  SCENARIO_BUNDLE_SCHEMA,
+  SCENARIO_BUNDLE_SCHEMA_PATTERN,
   TEMPLATE_WORLD_OVERRIDE_KEYS,
+  isScenarioBundleSchema,
 } from "./web/storeConstants.js";
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const SERVER_STORE = readFileSync(path.join(HERE, "..", "..", "server", "libraryStore.js"), "utf-8");
 
-test("the web constants load without a web build", () => {
-  // This file imported web/models.js once, which imports the web build's
+test("the web store's constants and models load without a web build", async () => {
+  // This file imported web/models.js once, which imported the web build's
   // generated country table. It passed on every machine that had run a web build
   // and failed on CI's clean checkout, where the tests run before any build, so
-  // the beta installers stopped building. storeConstants.js is what a Node test
-  // can import, and only while it imports nothing itself.
-  const constants = readFileSync(path.join(HERE, "web", "storeConstants.js"), "utf-8");
-  assert.equal(/^\s*(import[\s{*"']|export\s*[*{])/m.test(constants), false, "storeConstants.js imports nothing");
+  // the beta installers stopped building. models.js now reads the committed
+  // table (src/runtime/generated/countryNames.js), so neither it nor
+  // storeConstants.js may import anything from the gitignored web/generated/.
+  for (const file of ["storeConstants.js", "models.js"]) {
+    const source = readFileSync(path.join(HERE, "web", file), "utf-8");
+    assert.equal(/from\s+["']\.\/generated\//.test(source), false, `${file} imports nothing from web/generated/`);
+  }
+  const models = await import("./web/models.js");
+  const registry = JSON.parse(readFileSync(path.join(HERE, "..", "..", "server", "country-names.json"), "utf-8"));
+  assert.deepEqual(models.COUNTRY_NAME_REGISTRY, registry, "the web store resolves owners by the same table as the server");
+  assert.equal(models.resolveOwnerRef("RUS", {}), registry.RUS);
 });
 
 // The server's copies are module-private, as they should be — read them out of
@@ -57,11 +66,21 @@ test("both stores write and accept the same schema string", () => {
   assert.ok(ACCEPTED_GAME_BUNDLE_SCHEMAS.has(GAME_BUNDLE_SCHEMA));
 });
 
-test("the schema carries this project's name, not the one it is an alternative to", () => {
-  // The scenario bundle's "pax-historia-scenario-bundle/2" is a frozen wire
-  // format kept for the bundles players already hold. A format minted now has no
-  // such debt, and nothing else of ours should be named after another product.
+test("the schemas carry this project's name, not the one it is an alternative to", () => {
   assert.match(GAME_BUNDLE_SCHEMA, /^open-historia-game-bundle\//);
+  assert.equal(SCENARIO_BUNDLE_SCHEMA, "open-historia-scenario-bundle/2");
+  assert.equal(SERVER_STORE.match(/const SCENARIO_BUNDLE_SCHEMA = "([^"]+)"/)?.[1], SCENARIO_BUNDLE_SCHEMA, "both stores write the same name");
+  assert.equal(SERVER_STORE.match(/const SCENARIO_BUNDLE_SCHEMA_PATTERN = (\/.+\/);/)?.[1], String(SCENARIO_BUNDLE_SCHEMA_PATTERN), "and read the same ones");
+});
+
+test("a scenario bundle written under an earlier name still imports; a newer format does not", () => {
+  assert.equal(isScenarioBundleSchema(SCENARIO_BUNDLE_SCHEMA), true);
+  // Format 2 and the unversioned format 1, under whatever name they were written.
+  assert.equal(isScenarioBundleSchema("earlier-name-scenario-bundle/2"), true);
+  assert.equal(isScenarioBundleSchema("earlier-name-scenario-bundle"), true);
+  assert.equal(isScenarioBundleSchema("open-historia-scenario-bundle/3"), false, "a format this build does not know");
+  assert.equal(isScenarioBundleSchema(GAME_BUNDLE_SCHEMA), false, "a game is not a scenario");
+  assert.equal(isScenarioBundleSchema(undefined), false);
 });
 
 test("both stores carry the same set of game data keys", () => {

@@ -210,6 +210,48 @@ test("a transfer we cannot place falls back to the polities that fought over it"
   near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.SOM);
 });
 
+test("a captured or contested region pins that region, not the country at war", () => {
+  const capture = {
+    title: "Ukraine loses ground",
+    description: "",
+    impacts: {
+      regionControlOps: [{ op: "control", regionId: "UKR.5_1", fromCode: "Ukraine", toCode: "Somalia" }],
+      polityChanges: [{ code: "Ukraine", name: "Ukraine" }],
+    },
+  };
+  near(deriveEventFocusBounds(capture, context), REGION_BOXES["UKR.5_1"]);
+
+  const contest = {
+    title: "Fighting in the south",
+    description: "",
+    impacts: { regionControlOps: [{ op: "contest", regionId: "UKR.9_1", actorCode: "Somalia", fromCode: "Ukraine" }] },
+  };
+  near(deriveEventFocusBounds(contest, context), REGION_BOXES["UKR.9_1"]);
+});
+
+test("a claim pins the claimed region", () => {
+  const event = {
+    title: "Somalia makes a claim",
+    description: "",
+    impacts: { regionClaims: [{ regionId: "IRL.7_1", claimantCode: "Somalia" }] },
+  };
+
+  near(deriveEventFocusBounds(event, context), REGION_BOXES["IRL.7_1"]);
+});
+
+test("a group spreading into regions frames those regions", () => {
+  const event = {
+    title: "The movement grows",
+    description: "",
+    impacts: { groupOps: [{ op: "take", name: "Western Front", regionIds: ["IRL.4_1", "IRL.7_1"] }] },
+  };
+  near(deriveEventFocusBounds(event, context), [[-10.2, 51.4], [-6.0, 54.2]]);
+
+  // A streamed card's looser shape names the same place.
+  const loose = { title: "A cell appears", description: "", impacts: { groupOps: [{ op: "create", group: "Cell", regionId: "UKR.5_1" }] } };
+  near(deriveEventFocusBounds(loose, context), REGION_BOXES["UKR.5_1"]);
+});
+
 test("unit and marker coordinates focus the spot the event names", () => {
   const event = {
     title: "Landing",

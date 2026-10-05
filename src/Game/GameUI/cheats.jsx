@@ -27,6 +27,7 @@ import {
     GROUP_DESCRIPTION_MAX,
     GROUP_NAME_MAX,
     GROUP_PALETTE,
+    MAX_GROUPS,
     defaultGroupColor,
     findGroupKey,
     groupRegions,
@@ -37,6 +38,10 @@ import {
     normalizeGroups,
 } from "../../runtime/groups.js";
 import { cityPopulationKey, hasPopulationByYear } from "../../runtime/cityPopulation.js";
+import { useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
+import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
+import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
@@ -54,6 +59,18 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { restorePointsFor } from "../../runtime/turnCommit.js";
+import { eventImpactCounts } from "../../runtime/eventImpactKeys.js";
+import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimeline.js";
+import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
+import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { createSerialQueue } from "../../runtime/serialQueue.js";
+import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
+import { polityNameInUse } from "../../runtime/gmPolityNames.js";
+import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
+// The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
+import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -93,6 +110,40 @@ const noteGmChange = async (kind, summary, step = null) => {
     }
 };
 
+// Through the event-impact seam, as the Region Inspector's edits and a
+// time skip's annexations go: the title moves, old claims are settled
+// and the sovereign is the new owner (runtime/gmAnnex.js).
+const annexByHand = (world, impacts, game) => applyEventImpactsToWorld({
+    world,
+    round: game?.round || 0,
+    events: [{
+        id: `admin-annex-${Date.now().toString(36)}`,
+        date: game?.gameDate || game?.startDate || "",
+        title: "Cheats annexation",
+        description: "Structured administrative annexation from the Cheats panel.",
+        importance: "minor",
+        kind: "world",
+        notable: false,
+        playerRelated: false,
+        impacts,
+        source: "manual-admin",
+    }],
+}).world;
+
+// Every region `source` holds, handed to `owner`: the Annex Country tool's
+// transfer, which the Puppet States tool's Annex hands its land to as well.
+// Each region's owner as the map shows it (runtime/gmAnnex.js): a hand-drawn
+// region carries its owner by name and no country code, so the code alone
+// matched nothing and reported success.
+// Returns how many regions moved; none moved writes nothing.
+const transferWholeCountry = async (source, owner, game) => {
+    const world = await readWorldState({ force: true });
+    const held = regionsHeldBy(await loadRegionCatalog(), { ...world.regionOwnershipOverrides }, source);
+    if (held.length === 0) return 0;
+    await writeWorldState(annexByHand(world, annexationImpacts(world, held.map((region) => ({ ...region, from: source })), owner), game));
+    return held.length;
+};
+
 const TOOLS = [
     { id: "master-ai", title: "GM Console", subtitle: "Master AI · AI-assisted world intervention and canonical changes", icon: "✦", badge: "AI" },
     { id: "reminders", title: "Simulation Reminders", subtitle: "Standing facts every AI in the game is told until you withdraw them — and what the next skip will hear", icon: "❖" },
@@ -105,6 +156,7 @@ const TOOLS = [
     { id: "add-country", title: "Add Country", subtitle: "Create a new polity for custom or fantasy campaigns", icon: "+", badge: "Advanced" },
     { id: "regions", title: "Region Inspector", subtitle: "Inspect control, sovereignty, claims, and region identity", icon: "▦" },
     { id: "groups", title: "Groups", subtitle: "Cartels, militias, outbreaks: groups that control an area without owning it, and what each is", icon: "⬡" },
+    { id: "puppets", title: "Puppet States", subtitle: "Protectorates, puppet states and client states: who answers to whom, how loyally, and ending it", icon: "⛓" },
     { id: "edit-feature", title: "Map Feature Editor", subtitle: "Inspect and edit runtime features and scenario cities", icon: "◉" },
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
@@ -126,7 +178,7 @@ const TOOL_GROUPS = [
         title: "Countries & Territory",
         subtitle: "Edit political actors, borders, and individual regions.",
         icon: "◇",
-        tools: ["edit-country", "annex-country", "annex-regions", "regions", "groups", "add-country"],
+        tools: ["edit-country", "annex-country", "annex-regions", "regions", "groups", "puppets", "add-country"],
     },
     {
         id: "military",
@@ -317,7 +369,10 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     // and map clicks route here instead of opening the region popup.
     const [clickMode, setClickMode] = useState(null);
     const clickHandlerRef = useRef(null);
+    const [enqueueClick] = useState(createSerialQueue);
     const isMobile = useIsMobile();
+    // The Puppet States tool exists only while the game has the ledger switched on.
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
 
     const refresh = async () => {
         try {
@@ -348,12 +403,17 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             return undefined;
         }
 
+        // One click at a time: each handler reads the world, changes it and
+        // writes it back, so a second click landing before the first had
+        // written overwrote it (two regions annexed in quick succession kept
+        // only the second). A click waits for the one before it.
         setRegionClickInterceptor((props) => {
-            clickHandlerRef.current?.(props);
+            const handler = clickHandlerRef.current;
+            if (handler) enqueueClick(() => handler(props)).catch((error) => console.warn("[cheats] a map click failed:", error));
             return true;
         });
         return () => setRegionClickInterceptor(null);
-    }, [clickMode]);
+    }, [clickMode, enqueueClick]);
 
     const beginClickMode = (label, handler) => {
         clickHandlerRef.current = handler;
@@ -486,6 +546,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
 
                         const entry = TOOLS.find((candidate) => candidate.id === toolId);
                         if (!entry) return null;
+                        if (toolId === "puppets" && !puppetStatesOn) return null;
                         return (
                             <button
                             key={entry.id}
@@ -541,20 +602,6 @@ const cleanEditorNumber = (value) => {
     return String(rounded);
 };
 
-const MAP_FEATURE_KINDS = [
-    { id: "city", label: "City / town", icon: "■" },
-    { id: "landmark", label: "Landmark", icon: "◆" },
-    { id: "military hq", label: "Military HQ", icon: "⌂" },
-    { id: "military base", label: "Military Base", icon: "⚔" },
-    { id: "fortress", label: "Fortification", icon: "▣" },
-    { id: "port", label: "Port", icon: "⚓" },
-    { id: "airfield", label: "Airfield", icon: "✈" },
-    { id: "industrial plant", label: "Industrial Site", icon: "⚙" },
-    { id: "embassy", label: "Embassy", icon: "◇" },
-    { id: "temporary marker", label: "Temporary", icon: "⌖" },
-    { id: "other", label: "Other", icon: "+" },
-];
-
 const MAP_FEATURE_STATUS_META = {
     planned: { label: "Planned", color: "#e4e4e7" },
     under_construction: { label: "Under construction", color: "#fcd34d" },
@@ -579,14 +626,6 @@ const notifyCitiesUpdated = () => {
     if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("oh:cities-updated"));
     }
-};
-
-const editorNumber = (value, { min = -Infinity, max = Infinity, label = "Value" } = {}) => {
-    if (value === "" || value === null || value === undefined) return null;
-    const number = Number(value);
-    if (!Number.isFinite(number)) throw new Error(`${label} must be a number.`);
-    if (number < min || number > max) throw new Error(`${label} must be between ${min} and ${max}.`);
-    return number;
 };
 
 const editorFieldStyle = {
@@ -662,15 +701,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 const gdp = Number(sheet?.economy?.gdp);
                 const perCapita = Number(sheet?.economy?.gdpPerCapita);
 
-                setBaseline({
-                    sheet,
-                    componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
-                    perCapita: Number.isFinite(perCapita) ? perCapita : null,
-                });
-                setPoliticsForm(politicalEditorStateFromWorld(world, target));
-                setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
-                setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
-                setForm({
+                const loadedPolitics = politicalEditorStateFromWorld(world, target);
+                const loadedForm = {
                     name: polity.name || nameOf.get(target) || target,
                     color,
                     capital: sheet?.capital || "",
@@ -695,7 +727,20 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     agriculture: sheet?.gdpBreakdown?.agriculture ?? "",
                     industry: sheet?.gdpBreakdown?.industry ?? "",
                     services: sheet?.gdpBreakdown?.services ?? "",
+                };
+                // What the form loaded with, so a Save writes only what the
+                // player changed (countryEditorStats.js).
+                setBaseline({
+                    sheet,
+                    componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
+                    perCapita: Number.isFinite(perCapita) ? perCapita : null,
+                    form: loadedForm,
+                    politics: loadedPolitics,
                 });
+                setPoliticsForm(loadedPolitics);
+                setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
+                setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
+                setForm(loadedForm);
             })
             .catch((error) => {
                 if (!cancelled) setStatus(`Failed: ${error.message}`);
@@ -816,8 +861,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
         const world = await readWorldState({ force: true });
         const existing = world.polityOverrides?.[target] ?? {};
-        const requestedName = String(form.name ?? "").trim();
-        const colorHex = String(form.color ?? "").trim();
+        // Only what the player changed since the form loaded: a turn may have
+        // moved the rest meanwhile, and writing the form back undid it.
+        const changed = changedEditorFields(form, baseline?.form);
+        const politicsChanged = editorStateChanged(politicsForm, baseline?.politics);
+        const requestedName = changed.has("name") ? String(form.name ?? "").trim() : "";
+        const colorHex = changed.has("color") ? String(form.color ?? "").trim() : "";
         const nextName = requestedName || existing.name || nameOf.get(target) || target;
         const aliases = [...new Set([
             ...(Array.isArray(existing.aliases) ? existing.aliases : []),
@@ -838,8 +887,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         // Political World v2 is the sole political authority. The editor writes
         // directly into world.politicalActors and never creates a parallel
         // "country politics" copy inside Stats. Hidden/derived PWv2 fields not
-        // exposed by this surface are preserved by the bridge.
-        const nextPoliticalActor = applyPoliticalEditorStateToWorld(world, target, politicsForm);
+        // exposed by this surface are preserved by the bridge. Left alone when
+        // the political form was not touched.
+        const nextPoliticalActor = politicsChanged ? applyPoliticalEditorStateToWorld(world, target, politicsForm) : null;
         setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
         setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
 
@@ -854,63 +904,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         };
 
         let nextSheet = world.countryStats?.[target] ?? null;
-        if (hasComponentBaseline) {
-            const populationM = editorNumber(form.populationM, { min: 0.001, max: 20000, label: "Population (millions)" });
-            const gdpB = editorNumber(form.gdpB, { min: 0.001, max: 1000000, label: "GDP (billions)" });
-            const stability = editorNumber(form.stability, { min: 0, max: 100, label: "Stability" });
-            const gdpGrowth = editorNumber(form.gdpGrowth, { min: -1000, max: 1000, label: "GDP growth" });
-            const inflation = editorNumber(form.inflation, { min: 0, max: 1000, label: "Inflation" });
-            const unemployment = editorNumber(form.unemployment, { min: 0, max: 100, label: "Unemployment" });
-            const publicDebt = editorNumber(form.publicDebt, { min: 0, max: 1000, label: "Public debt" });
-            const budgetBalance = editorNumber(form.budgetBalance, { min: -1000, max: 1000, label: "Budget balance" });
-
-            const indexPatch = {};
-            for (const [key, label] of [
-                ["sovereignty", "Sovereignty"],
-                ["foodAutonomy", "Food autonomy"],
-                ["energyAutonomy", "Energy autonomy"],
-                ["economicIndependence", "Economic independence"],
-                ["internalSecurity", "Internal security"],
-                ["internationalReputation", "International reputation"],
-            ]) {
-                const value = editorNumber(form[key], { min: 0, max: 100, label });
-                if (value != null) indexPatch[key] = value;
-            }
-
-            const agriculture = editorNumber(form.agriculture, { min: 0, max: 100, label: "Agriculture share" });
-            const industry = editorNumber(form.industry, { min: 0, max: 100, label: "Industry share" });
-            const services = editorNumber(form.services, { min: 0, max: 100, label: "Services share" });
-            const hasAnyBreakdown = [agriculture, industry, services].some((value) => value != null);
-            if (hasAnyBreakdown && [agriculture, industry, services].some((value) => value == null)) {
-                throw new Error("Set all three GDP-sector shares together.");
-            }
-
-            const patch = {
-                ...(String(form.capital ?? "").trim() ? { capital: String(form.capital).trim() } : {}),
-                ...(String(form.continent ?? "").trim() ? { continent: String(form.continent).trim() } : {}),
-                ...(String(nextPoliticalActor?.government?.form ?? "").trim() ? { government: String(nextPoliticalActor.government.form).trim() } : {}),
-                ...((nextPoliticalActor?.government?.headOfGovernment || nextPoliticalActor?.government?.headOfState || nextPoliticalActor?.leader)
-                    ? { leader: String(
-                        typeof (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader) === "string"
-                            ? (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)
-                            : (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)?.name || ""
-                    ).trim() }
-                    : {}),
-                ...(stability == null ? {} : { stability }),
-                ...(Object.keys(indexPatch).length ? { indices: indexPatch } : {}),
-                ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
-                economy: {
-                    ...(gdpB == null ? {} : { gdp: Math.round(gdpB * 1e9) }),
-                    ...(gdpGrowth == null ? {} : { gdpGrowth }),
-                    ...(inflation == null ? {} : { inflation }),
-                    ...(unemployment == null ? {} : { unemployment }),
-                    ...(publicDebt == null ? {} : { publicDebt }),
-                    ...(budgetBalance == null ? {} : { budgetBalance }),
-                    ...(String(form.currency ?? "").trim() ? { currency: String(form.currency).trim() } : {}),
-                },
-                ...(hasAnyBreakdown ? { gdpBreakdown: { agriculture, industry, services } } : {}),
-            };
-
+        const patch = hasComponentBaseline
+            ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor })
+            : null;
+        if (patch) {
             nextSheet = applyCountryStatPatchToWorld(world, target, patch);
             const reputation = Number(nextSheet?.indices?.internationalReputation);
             if (Number.isFinite(reputation)) {
@@ -1403,7 +1400,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                     {pairedField("Currency", "currency")}
                                     {pairedField("Continent / region", "continent")}
                                     {pairedField("Stability / 100", "stability", { type: "number", min: "0", max: "100", step: "1" })}
-                                    {pairedField("Inflation (%)", "inflation", { type: "number", min: "0", step: "0.1" })}
+                                    {pairedField("Inflation (%)", "inflation", { type: "number", min: "-1000", step: "0.1" })}
                                     {pairedField("Unemployment (%)", "unemployment", { type: "number", min: "0", max: "100", step: "0.1" })}
                                     {pairedField("Public debt (% GDP)", "publicDebt", { type: "number", min: "0", step: "0.1" })}
                                     {pairedField("Budget balance (% GDP)", "budgetBalance", { type: "number", step: "0.1" })}
@@ -1506,25 +1503,30 @@ const cleanEventText = (value) => String(value ?? "").replace(/\s+/g, " ").trim(
 // collapsing every run of whitespace turned an edited event into a single block
 // and threw the paragraphs away.
 const cleanEventBody = tidyProse;
+// A label for every impact array (EVENT_IMPACT_KEYS), so the "State-linked"
+// badge, the delete warning and the edit notice count all of them.
+const EVENT_IMPACT_LABELS = {
+    regionTransfers: "territory",
+    regionControlOps: "control",
+    regionClaims: "claims",
+    groupOps: "groups",
+    polityChanges: "polity",
+    politicalActorOps: "politics",
+    institutionLifecycleOps: "institutions",
+    unitOps: "units",
+    markerOps: "markers",
+    spyOps: "spies",
+    projectOps: "projects",
+    createdChats: "chats",
+    reports: "reports",
+    actionIds: "actions",
+};
 const eventImpactSummary = (event) => {
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-    const rows = [
-        ["polity", impacts.polityChanges],
-        ["territory", impacts.regionTransfers],
-        ["claims", impacts.regionClaims],
-        ["control", impacts.regionControlOps],
-        ["units", impacts.unitOps],
-        ["markers", impacts.markerOps],
-        ["chats", impacts.createdChats],
-        ["actions", impacts.actionIds],
-    ];
-    const populated = rows
-        .map(([label, value]) => [label, Array.isArray(value) ? value.length : 0])
-        .filter(([, count]) => count > 0);
+    const populated = eventImpactCounts(event);
     const count = populated.reduce((sum, [, value]) => sum + value, 0);
     return {
         count,
-        text: populated.map(([label, value]) => `${label} ${value}`).join(" · "),
+        text: populated.map(([key, value]) => `${EVENT_IMPACT_LABELS[key] || key} ${value}`).join(" · "),
     };
 };
 
@@ -1552,123 +1554,6 @@ const sortEventsChronologically = (events) => events
         return left.index - right.index;
     })
     .map(({ event }) => event);
-
-const eventDateLooksIso = (value) => isGameDate(cleanEventText(value));
-
-const historyEntryDate = (entry) => cleanEventText(entry?.toDate || entry?.date || entry?.fromDate);
-
-const historyEntryCoversDate = (entry, date) => {
-    const wanted = cleanEventText(date);
-    if (!wanted) return false;
-    const from = cleanEventText(entry?.fromDate || entry?.date || entry?.toDate);
-    const to = cleanEventText(entry?.toDate || entry?.date || entry?.fromDate);
-    if (eventDateLooksIso(wanted) && eventDateLooksIso(from) && eventDateLooksIso(to)) {
-        const low = from <= to ? from : to;
-        const high = from <= to ? to : from;
-        return wanted >= low && wanted <= high;
-    }
-    return wanted === cleanEventText(entry?.date) || wanted === to || wanted === from;
-};
-
-const isManualTimelineEvent = (event) => {
-    const source = cleanEventText(event?.source).toLowerCase();
-    const id = cleanEventText(event?.id).toLowerCase();
-    return source === "manual" || id.startsWith("event-manual-");
-};
-
-// Manual Exact Events live in the same canonical event ledger as AI events, but the
-// visible Events panel is turn-oriented: time.jsx renders only IDs referenced by
-// world.simulationHistory. Keep manual events linked there without advancing a turn,
-// changing the game date, or applying any gameplay-state effects.
-const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
-    const world = worldInput && typeof worldInput === "object" ? { ...worldInput } : {};
-    const manualEvents = (Array.isArray(eventsInput) ? eventsInput : [])
-        .filter((event) => isManualTimelineEvent(event) && cleanEventText(event?.id) && cleanEventText(event?.date));
-    const manualIds = new Set(manualEvents.map((event) => cleanEventText(event.id)));
-    const knownEventIds = new Set((Array.isArray(eventsInput) ? eventsInput : []).map((event) => cleanEventText(event?.id)).filter(Boolean));
-
-    let changed = false;
-    let history = (Array.isArray(world.simulationHistory) ? world.simulationHistory : []).map((entry) => ({
-        ...entry,
-        eventIds: Array.isArray(entry?.eventIds) ? [...entry.eventIds] : [],
-    }));
-
-    // First remove every manual ID from prior links. This makes date edits deterministic
-    // and prevents duplicate links if the editor is opened repeatedly.
-    history = history
-        .map((entry) => {
-            const before = entry.eventIds;
-            const after = before.filter((id) => {
-                const normalizedId = cleanEventText(id);
-                if (manualIds.has(normalizedId)) return false;
-                if (normalizedId.toLowerCase().startsWith("event-manual-") && !knownEventIds.has(normalizedId)) return false;
-                return true;
-            });
-            if (after.length !== before.length) changed = true;
-            return after.length === before.length ? entry : { ...entry, eventIds: after };
-        })
-        .filter((entry) => {
-            if (entry.eventIds.length) return true;
-            const source = cleanEventText(entry?.source).toLowerCase();
-            const mode = cleanEventText(entry?.mode).toLowerCase();
-            // Manual and GM-authored history entries exist only to make their linked
-            // canonical events visible in time.jsx. If the Event Editor deletes the
-            // event, remove the empty history shell too; structured world effects are
-            // deliberately left untouched.
-            if (
-                source === "manual" ||
-                mode === "manual-event" ||
-                source === "gm-console" ||
-                mode === "game-master"
-            ) {
-                changed = true;
-                return false;
-            }
-            return true;
-        });
-
-    const orderedManual = [...manualEvents].sort((a, b) => compareGameDates(cleanEventText(a.date), cleanEventText(b.date)));
-
-    for (const event of orderedManual) {
-        const eventId = cleanEventText(event.id);
-        const date = cleanEventText(event.date);
-        let targetIndex = history.findIndex((entry) => historyEntryCoversDate(entry, date));
-
-        if (targetIndex >= 0) {
-            const ids = history[targetIndex].eventIds;
-            if (!ids.some((id) => cleanEventText(id) === eventId)) {
-                history[targetIndex] = { ...history[targetIndex], eventIds: [...ids, eventId] };
-                changed = true;
-            }
-            continue;
-        }
-
-        const manualRecord = {
-            date,
-            eventIds: [eventId],
-            fallbackReason: "",
-            fromDate: date,
-            mode: "manual-event",
-            plannedActions: [],
-            round: Math.max(0, Math.trunc(Number(game?.round) || 0)),
-            source: "manual",
-            summary: `Manual exact event: ${cleanEventText(event?.title) || "Untitled event"}`,
-            toDate: date,
-        };
-
-        let insertAt = history.findIndex((entry) => {
-            const entryDate = historyEntryDate(entry);
-            return eventDateLooksIso(date) && eventDateLooksIso(entryDate) && compareGameDates(date, entryDate) > 0;
-        });
-        if (insertAt < 0) insertAt = history.length;
-        history.splice(insertAt, 0, manualRecord);
-        changed = true;
-    }
-
-    return changed
-        ? { changed: true, world: { ...world, simulationHistory: history } }
-        : { changed: false, world };
-};
 
 const eventBadgeStyle = (tone = "rgba(255,255,255,0.55)") => ({
     background: "rgba(255,255,255,0.05)",
@@ -2039,7 +1924,9 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     const load = async () => {
         const next = await readEventsState({ force: true });
         const list = Array.isArray(next) ? next : [];
-        await syncVisibleTimeline(list);
+        // A turn being generated writes the world too; the repair waits for
+        // the next open or save rather than race it.
+        if (!isSimulationBusy()) await syncVisibleTimeline(list);
         await refreshReactionQueue();
         setEvents(list);
         return list;
@@ -2070,15 +1957,37 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 .then(([nextEvents]) => setEvents(Array.isArray(nextEvents) ? nextEvents : []))
                 .catch(() => {});
         };
+        // A time skip (or anything else) that writes the ledger while the
+        // editor is open shows up in the list at once.
+        const onRuntimeJson = (event) => {
+            if (event?.detail?.url !== JSON_URLS.events) return;
+            readEventsState()
+                .then((nextEvents) => setEvents(Array.isArray(nextEvents) ? nextEvents : []))
+                .catch(() => {});
+        };
         window.addEventListener("oh:event-outreach-evaluated", refresh);
         window.addEventListener("oh:event-outreach-queue-changed", refresh);
+        window.addEventListener("oh:runtime-json-updated", onRuntimeJson);
         return () => {
             window.removeEventListener("oh:event-outreach-evaluated", refresh);
             window.removeEventListener("oh:event-outreach-queue-changed", refresh);
+            window.removeEventListener("oh:runtime-json-updated", onRuntimeJson);
         };
     }, []);
 
-    const persist = async (nextEvents) => {
+    // One add, edit or delete (runtime/eventEditorRows.js), applied to the
+    // ledger as it is now rather than to this view's copy of it: writing the
+    // copy back erased every event written since the editor opened. Refused
+    // while a turn is being generated, since the turn writes the ledger too.
+    const persist = async (change) => {
+        if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
+        const freshRaw = await readEventsState({ force: true });
+        const fresh = Array.isArray(freshRaw) ? freshRaw : [];
+        const nextEvents = applyEventRowChange(fresh, change);
+        if (!nextEvents) {
+            setEvents(fresh);
+            throw new Error("That event is no longer in the record. The list has been refreshed.");
+        }
         const ordered = sortEventsChronologically(nextEvents);
         await writeEventsState(ordered);
         const persistedRaw = await readEventsState({ force: true });
@@ -2448,7 +2357,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                     source: "manual",
                                     title,
                                 };
-                                const persisted = await persist([...(events ?? []), nextEvent]);
+                                const persisted = await persist({ add: nextEvent });
                                 const persistedEvent = persisted.find((event) => eventReactionIdentity(event) === eventReactionIdentity(nextEvent)) || nextEvent;
                                 if (createForm.allowNpcReactions) {
                                     await syncReactionQueueForEvent(persistedEvent, true);
@@ -2518,6 +2427,13 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                         : 0;
                     const pendingReactionSeconds = pendingReaction ? Math.max(0, Math.ceil(pendingReactionMs / 1000)) : 0;
                     const reactionResult = cleanEventText(event?.npcReaction?.result).toLowerCase();
+                    // A reaction whose request failed is tried again a few times, then
+                    // given up (AI/eventReactionRetry.js): say so rather than showing a
+                    // countdown that starts over as if it were still on its way.
+                    const pendingReactionAttempts = Math.max(0, Math.trunc(Number(pendingReaction?.attempts) || 0));
+                    const pendingReactionError = cleanEventText(pendingReaction?.lastError);
+                    const failedReactionAttempts = Math.max(0, Math.trunc(Number(event?.npcReaction?.attempts) || 0));
+                    const failedReactionError = cleanEventText(event?.npcReaction?.lastError);
                     return (
                         <div key={editorKey} style={{ ...editorFieldStyle, borderColor: isEditing ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.1)", padding: "0.55rem 0.6rem" }}>
                             <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
@@ -2540,7 +2456,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                 : `Delete “${event.title || "this event"}” from canonical history?`;
                                             if (!window.confirm(warning)) return;
                                             void runBusy(async () => {
-                                                await persist((events ?? []).filter((_, index) => index !== sourceIndex));
+                                                await persist({ shown: event, index: sourceIndex, remove: true });
                                                 await syncReactionQueueForEvent(event, false);
                                                 await noteGmChange("timeline", `Deleted the event "${cleanEventText(event.title) || "untitled"}"${cleanEventText(event.date) ? ` (${cleanEventText(event.date)})` : ""} from the record${impact.count ? "; what it changed on the map was left as it is" : ""}.`);
                                                 if (editingKey === editorKey) setEditingKey(null);
@@ -2572,18 +2488,30 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                             )}
                             {pendingReaction && !isEditing && (
                                 <div style={{ alignItems: "center", background: "rgba(16,185,129,0.055)", border: "1px solid rgba(52,211,153,0.18)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
-                                    <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35 }}>
-                                        NPCs may react after the grace window. Editing this event before delivery changes what they evaluate. Delivery check in {pendingReactionSeconds}s.
-                                    </div>
+                                    {pendingReactionAttempts > 0 ? (
+                                        <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35, minWidth: 0, overflowWrap: "anywhere" }}>
+                                            <div>
+                                                {pendingReactionAttempts === 1
+                                                    ? `The reaction request failed once. Trying again in ${pendingReactionSeconds}s.`
+                                                    : `The reaction request failed ${pendingReactionAttempts} times. Trying again in ${pendingReactionSeconds}s.`}
+                                            </div>
+                                            {pendingReactionError && <div style={{ color: "rgba(254,202,202,0.72)", marginTop: "0.15rem" }}>{`Last error: ${pendingReactionError}`}</div>}
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35 }}>
+                                            NPCs may react after the grace window. Editing this event before delivery changes what they evaluate. Delivery check in {pendingReactionSeconds}s.
+                                        </div>
+                                    )}
                                     <button
                                         type="button"
                                         className="oh-tap-row"
                                         disabled={busy}
                                         onClick={() => runBusy(async () => {
-                                            const next = (events ?? []).map((entry, index) => index === sourceIndex
-                                                ? { ...entry, npcReaction: { ...(entry?.npcReaction || {}), enabled: false } }
-                                                : entry);
-                                            const persisted = await persist(next);
+                                            const persisted = await persist({
+                                                shown: event,
+                                                index: sourceIndex,
+                                                update: (entry) => ({ ...entry, npcReaction: { ...(entry?.npcReaction || {}), enabled: false } }),
+                                            });
                                             const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event)) || event;
                                             await syncReactionQueueForEvent(persistedEvent, false);
                                             return "Pending NPC reaction cancelled. The event remains canonical.";
@@ -2591,6 +2519,36 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                         style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.62rem", padding: "0.3rem 0.45rem" }}
                                     >
                                         Cancel delivery
+                                    </button>
+                                </div>
+                            )}
+                            {!pendingReaction && !isEditing && reactionResult === "failed" && (
+                                <div style={{ alignItems: "center", background: "rgba(127,29,29,0.13)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
+                                    <div style={{ color: "rgba(254,202,202,0.78)", fontSize: "0.61rem", lineHeight: 1.35, minWidth: 0, overflowWrap: "anywhere" }}>
+                                        <div>
+                                            {failedReactionAttempts > 1
+                                                ? `The reaction request failed ${failedReactionAttempts} times, so it was given up. No chat message was sent.`
+                                                : "The reaction request failed, so it was given up. No chat message was sent."}
+                                        </div>
+                                        {failedReactionError && <div style={{ marginTop: "0.15rem" }}>{`Last error: ${failedReactionError}`}</div>}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="oh-tap-row"
+                                        disabled={busy}
+                                        onClick={() => runBusy(async () => {
+                                            // A fresh request, as if the reaction had just been switched on.
+                                            const next = (events ?? []).map((entry, index) => index === sourceIndex
+                                                ? { ...entry, npcReaction: { enabled: true } }
+                                                : entry);
+                                            const persisted = await persist(next);
+                                            const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
+                                            if (persistedEvent) await syncReactionQueueForEvent(persistedEvent, true, { restart: true });
+                                            return "NPC reaction queued again. It is checked after the grace window.";
+                                        })}
+                                        style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.62rem", padding: "0.3rem 0.45rem" }}
+                                    >
+                                        Retry
                                     </button>
                                 </div>
                             )}
@@ -2662,13 +2620,17 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                 const wasEnabled = Boolean(event?.npcReaction?.enabled);
                                                 const enabled = Boolean(editForm.allowNpcReactions);
                                                 const deliberatelyReenabled = enabled && !wasEnabled;
-                                                const nextReaction = enabled
+                                                // Built on the row as it is in the ledger now, so a
+                                                // reaction result that landed meanwhile is kept.
+                                                const nextReaction = (entry) => (enabled
                                                     ? deliberatelyReenabled
                                                         ? { enabled: true }
-                                                        : { ...(event?.npcReaction || {}), enabled: true }
-                                                    : { ...(event?.npcReaction || {}), enabled: false };
-                                                const next = (events ?? []).map((entry, index) => index === sourceIndex
-                                                    ? {
+                                                        : { ...(entry?.npcReaction || {}), enabled: true }
+                                                    : { ...(entry?.npcReaction || {}), enabled: false });
+                                                const persisted = await persist({
+                                                    shown: event,
+                                                    index: sourceIndex,
+                                                    update: (entry) => ({
                                                         ...entry,
                                                         date,
                                                         description,
@@ -2677,11 +2639,10 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                         notable: Boolean(editForm.notable),
                                                         playerRelated: Boolean(editForm.playerRelated),
                                                         quote: quote || null,
-                                                        npcReaction: nextReaction,
+                                                        npcReaction: nextReaction(entry),
                                                         title,
-                                                    }
-                                                    : entry);
-                                                const persisted = await persist(next);
+                                                    }),
+                                                });
                                                 const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
                                                 if (persistedEvent) {
                                                     await syncReactionQueueForEvent(persistedEvent, enabled, { restart: deliberatelyReenabled });
@@ -2809,7 +2770,11 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
         const clash = findGroupKey(groups, name);
         if (!selected) {
             if (clash) throw new Error(`There is already a group called ${clash}.`);
-            await applyOps([{ op: "create", name, description, color }]);
+            const next = await applyOps([{ op: "create", name, description, color }]);
+            // Checked on the result, not counted beforehand: the create is dropped
+            // at the cap, and the note must never tell the next skip a group exists
+            // that the map and the prompts do not have.
+            if (!findGroupKey(next.groups, name)) throw new Error(`A game holds at most ${MAX_GROUPS} groups; erase one first.`);
             await noteGmChange("groups", `Created the group ${name} by hand${description ? ` — ${description.slice(0, 160)}` : ""}.`);
             setSelected(name);
             return `${name} created. Give it an area: Edit the area on the map.`;
@@ -2993,6 +2958,269 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
     );
 };
 
+// The puppet ledger (world.puppets) by hand, at no AI request: every change is
+// one of the ledger's own verbs, run as the GM Console runs them
+// (puppetStatesTool.js), and noted for the next time skip. Annex ends the
+// arrangement, then hands the land over through the Annex Country transfer.
+const PUPPET_FORM_DEFAULTS = { overlord: "", puppet: "", kind: "satellite", secrecy: "open", loyalty: 50 };
+
+const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy, setStatus }) => {
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
+    const [world, setWorld] = useState(null);
+    // null: the list; "": a new arrangement; otherwise the row being edited.
+    const [editing, setEditing] = useState(null);
+    const [form, setForm] = useState(PUPPET_FORM_DEFAULTS);
+    const [armed, setArmed] = useState("");
+
+    useEffect(() => {
+        readWorldState({ force: true })
+            .then((next) => setWorld(next ?? {}))
+            .catch(() => setWorld({}));
+        const onWorldUpdated = (event) => {
+            if (event?.detail?.world) setWorld(event.detail.world);
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
+    }, []);
+
+    const rows = useMemo(() => gmPuppetRows(world), [world]);
+    const keyOf = (row) => `${row.overlord}→${row.puppet}`;
+    const kindName = (kind) => capitalize(puppetKindLabel(kind || "client"));
+    const loyaltyNumber = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Math.round(Number(value)))) : 50);
+    const current = editing ? rows.live.find((row) => keyOf(row) === editing) ?? null : null;
+
+    const apply = async (change) => {
+        const latest = await readWorldState({ force: true });
+        // Only an install asks whether the puppet still holds land, and it asks
+        // of the regions this map renders, as the GM Console does.
+        let regionCatalog = [];
+        if (change.op === "install") {
+            const [{ filterToRenderedRegions }, catalog] = await Promise.all([
+                import("../AI/promptContext.js"),
+                loadRegionCatalog().catch(() => []),
+            ]);
+            regionCatalog = filterToRenderedRegions(catalog, latest);
+        }
+        const result = applyGmPuppetChange(latest, change, {
+            regionCatalog,
+            date: game?.gameDate || game?.startDate || "",
+            round: game?.round || 0,
+        });
+        if (result.error) throw new Error(result.error);
+        if (!result.summary) return false;
+        await writeWorldState(result.world);
+        setWorld(result.world);
+        await noteGmChange("puppets", result.summary);
+        return true;
+    };
+
+    const startNew = () => {
+        setEditing("");
+        setForm(PUPPET_FORM_DEFAULTS);
+        setArmed("");
+        setStatus("");
+    };
+    const openRow = (row) => {
+        setEditing(keyOf(row));
+        setForm({ overlord: row.overlord, puppet: row.puppet, kind: row.kind || "client", secrecy: row.secrecy === "covert" ? "covert" : "open", loyalty: loyaltyNumber(row.loyalty) });
+        setArmed("");
+        setStatus("");
+    };
+    const backToList = () => {
+        setEditing(null);
+        setArmed("");
+        setStatus("");
+    };
+
+    const save = () => runBusy(async () => {
+        if (editing === "") {
+            await apply({ op: "install", ...form });
+            setEditing(null);
+            const nameOf = (code) => polities.find((polity) => polity.code === code)?.name || code;
+            return `${nameOf(form.puppet)} now answers to ${nameOf(form.overlord)} as its ${puppetKindLabel(form.kind)}.`;
+        }
+        if (!current) throw new Error("That arrangement has ended since you opened it.");
+        const changed = await apply({ op: "edit", overlord: current.overlord, puppet: current.puppet, kind: form.kind, loyalty: form.loyalty });
+        return changed ? `Saved ${current.overlord}'s hold on ${current.puppet}.` : "Nothing to change.";
+    });
+
+    const reveal = () => runBusy(async () => {
+        await apply({ op: "reveal", overlord: current.overlord, puppet: current.puppet });
+        return `${current.overlord}'s hold on ${current.puppet} is public now.`;
+    });
+
+    const release = () => runBusy(async () => {
+        const { overlord, puppet } = current;
+        await apply({ op: "release", overlord, puppet });
+        setEditing(null);
+        setArmed("");
+        return `${puppet} is free of ${overlord}.`;
+    });
+
+    // The ledger first, then the land, through the Annex Country transfer.
+    const annex = () => runBusy(async () => {
+        const { overlord, puppet } = current;
+        await apply({ op: "annex", overlord, puppet });
+        setEditing(null);
+        setArmed("");
+        const count = await transferWholeCountry(puppet, overlord, game);
+        if (!count) return `${puppet} no longer answers to ${overlord} as a puppet, but no regions were found under its name: move its land with Annex Country.`;
+        await noteGmChange("territory", `Annexed the whole of ${puppet} into ${overlord} by hand (${count} regions).`);
+        return count === 1
+            ? `${puppet} annexed into ${overlord} (1 region). The map updates within a few seconds.`
+            : `${puppet} annexed into ${overlord} (${count} regions). The map updates within a few seconds.`;
+    });
+
+    const statusLine = status && (
+        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        {status}
+        </div>
+    );
+
+    if (!puppetStatesOn) {
+        return (
+            <>
+            {header(meta.title, meta.subtitle)}
+            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+                Puppet states are switched off for this game. Turn them back on in the scenario or game editor (Features) to edit them here.
+            </div>
+            </>
+        );
+    }
+
+    const loyalty = loyaltyNumber(form.loyalty);
+    const rowButton = (row) => (
+        <button
+            key={keyOf(row)}
+            type="button"
+            className="oh-tap-row"
+            onClick={() => openRow(row)}
+            style={{ ...buttonStyle, alignItems: "flex-start", display: "flex", flexDirection: "column", gap: "0.15rem", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
+        >
+            <span style={{ fontWeight: 750, overflowWrap: "anywhere" }}>{row.overlord} → {row.puppet}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontWeight: 500 }}>
+                {`${kindName(row.kind)} · ${row.secrecy === "covert" ? "Covert" : "Openly known"} · Loyalty ${loyaltyNumber(row.loyalty)}`}
+            </span>
+        </button>
+    );
+
+    return (
+        <>
+        {header(meta.title, meta.subtitle)}
+        <div style={{ overflowY: "auto", paddingRight: "0.08rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.17)", borderRadius: 10, color: "#e4e4e7", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.55rem 0.65rem" }}>
+                A puppet stays a separate country with its own land; its overlord directs it. The rules are the ledger's: one overlord each, no puppet holds puppets of its own, and a secret once public stays public. The next time skip is told of each change.
+            </div>
+
+            {editing === null && (
+                <>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem", marginTop: "0.55rem" }}>
+                    {world === null ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>Loading…</div>
+                    ) : rows.live.length === 0 ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No country is anyone's puppet now.</div>
+                    ) : rows.live.map(rowButton)}
+                </div>
+                <button type="button" className="oh-tap-row" disabled={busy || world === null} onClick={startNew} style={{ ...primaryButtonStyle, marginTop: "0.55rem", width: "100%" }}>
+                    New puppet state
+                </button>
+                {rows.ended.length > 0 && (
+                    <details style={{ marginTop: "0.55rem" }}>
+                        <summary style={{ color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.7rem" }}>{`Ended arrangements (${rows.ended.length})`}</summary>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem" }}>
+                            {rows.ended.map((row, index) => (
+                                <div key={`${keyOf(row)}-${index}`} style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", overflowWrap: "anywhere" }}>
+                                    {`${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`}
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
+                </>
+            )}
+
+            {editing !== null && (
+                <>
+                <button type="button" className="oh-tap-row" onClick={backToList} style={{ ...buttonStyle, marginTop: "0.55rem" }}>
+                    ← All puppet states
+                </button>
+                <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                    <div style={editorSectionLabelStyle}>{editing === "" ? "New puppet state" : `${form.overlord} → ${form.puppet}`}</div>
+                    {editing === "" && (
+                        <>
+                        <label style={labelStyle}>Overlord</label>
+                        <PolitySelect polities={polities} value={form.overlord} onChange={(overlord) => setForm({ ...form, overlord })} placeholder="Pick the overlord…" />
+                        <label style={labelStyle}>Puppet</label>
+                        <PolitySelect polities={polities} value={form.puppet} onChange={(puppet) => setForm({ ...form, puppet })} placeholder="Pick the puppet…" />
+                        </>
+                    )}
+                    <label style={labelStyle}>Kind</label>
+                    <select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })} style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}>
+                        {PUPPET_KIND_OPTIONS.map((option) => <option key={option.id} value={option.id} style={{ background: "#18181b", color: "#fff" }}>{option.label}</option>)}
+                    </select>
+                    {editing === "" && (
+                        <>
+                        <label style={labelStyle}>Known</label>
+                        <select value={form.secrecy} onChange={(event) => setForm({ ...form, secrecy: event.target.value })} style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}>
+                            {PUPPET_SECRECY_OPTIONS.map((option) => <option key={option.id} value={option.id} style={{ background: "#18181b", color: "#fff" }}>{option.label}</option>)}
+                        </select>
+                        </>
+                    )}
+                    <label style={labelStyle}>Loyalty</label>
+                    <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                        <input type="range" min="0" max="100" value={loyalty} onChange={(event) => setForm({ ...form, loyalty: Number(event.target.value) })} style={{ flex: 1 }} aria-label="Loyalty" />
+                        <span style={{ fontSize: "0.76rem", textAlign: "right", width: "2rem" }}>{loyalty}</span>
+                    </div>
+                    {loyalty < PUPPET_COUP_LOYALTY && (
+                        <div style={{ color: "#fbbf24", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.3rem" }}>
+                            This low, the puppet starts plotting against its overlord.
+                        </div>
+                    )}
+                    {current?.secrecy === "covert" && (
+                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.3rem" }}>
+                            Covert: only the two of them know, until someone's spies find out.
+                        </div>
+                    )}
+                    <button type="button" className="oh-tap-row" disabled={busy || (editing === "" && (!form.overlord || !form.puppet))} onClick={save} style={{ ...primaryButtonStyle, marginTop: "0.6rem", width: "100%" }}>
+                        {editing === "" ? "Make it a puppet state" : "Save"}
+                    </button>
+                </div>
+
+                {current && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.55rem" }}>
+                        {current.secrecy === "covert" && (
+                            <button type="button" className="oh-tap-row" disabled={busy} onClick={reveal} style={{ ...buttonStyle, width: "100%" }}>
+                                Make it public
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            className="oh-tap-row"
+                            disabled={busy}
+                            onClick={() => (armed === "release" ? release() : setArmed("release"))}
+                            style={{ ...buttonStyle, width: "100%" }}
+                        >
+                            {armed === "release" ? `Release ${current.puppet} — click again to confirm` : "Release"}
+                        </button>
+                        <button
+                            type="button"
+                            className="oh-tap-row"
+                            disabled={busy}
+                            onClick={() => (armed === "annex" ? annex() : setArmed("annex"))}
+                            style={{ ...buttonStyle, borderColor: "rgba(248,113,113,0.5)", color: "#fca5a5", width: "100%" }}
+                        >
+                            {armed === "annex" ? `Annex ${current.puppet} and all its land into ${current.overlord} — click again to confirm` : "Annex"}
+                        </button>
+                    </div>
+                )}
+                </>
+            )}
+            {statusLine}
+        </div>
+        </>
+    );
+};
+
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
@@ -3119,8 +3347,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setFields({});
         setTarget("");
         if (tool === "roll-back-turn") {
-            readJson(JSON_URLS.snapshots, { defaultValue: [], force: true })
-                .then((list) => setItems(Array.isArray(list) ? list : []))
+            // Not one saved for a turn whose write then failed: it is at the
+            // current round, and would be listed as the most recent turn.
+            Promise.all([
+                // The cached archive, shared (gameplay.js loadRollbackSnapshots):
+                // a forced read with a copy re-parsed and deep-copied all of it.
+                readJson(JSON_URLS.snapshots, { defaultValue: [], clone: false }),
+                // Unread, the round is unknown and every restore point is listed.
+                readJson(JSON_URLS.game, { force: true }).catch(() => null),
+            ])
+                .then(([list, game]) => setItems(restorePointsFor(Array.isArray(list) ? list : [], { round: game ? game.round || 1 : undefined })))
                 .catch(() => setItems([]));
         }
         if (tool === "edit-feature" || tool === "add-feature" || tool === "clear-features") {
@@ -3153,6 +3389,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 game={game}
                 runBusy={runBusy}
                 beginClickMode={beginClickMode}
+                setStatus={setStatus}
+            />
+        );
+    }
+
+    if (tool === "puppets") {
+        return (
+            <PuppetStatesView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                game={game}
+                polities={polities}
+                runBusy={runBusy}
                 setStatus={setStatus}
             />
         );
@@ -3226,26 +3477,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
         const puppetUpdates = Array.isArray(transaction?.puppetUpdates) ? transaction.puppetUpdates : [];
         const outreach = Array.isArray(transaction?.diplomaticOutreach) ? transaction.diplomaticOutreach : [];
-        const impactCounts = events.reduce((acc, event) => {
-            const impacts = event?.impacts ?? {};
-            acc.territory += (Array.isArray(impacts.regionTransfers) ? impacts.regionTransfers.length : 0)
-                + (Array.isArray(impacts.regionClaims) ? impacts.regionClaims.length : 0);
-            acc.polities += Array.isArray(impacts.polityChanges) ? impacts.polityChanges.length : 0;
-            acc.politics += Array.isArray(impacts.politicalActorOps) ? impacts.politicalActorOps.length : 0;
-            acc.units += Array.isArray(impacts.unitOps) ? impacts.unitOps.length : 0;
-            acc.markers += Array.isArray(impacts.markerOps) ? impacts.markerOps.length : 0;
-            acc.chats += Array.isArray(impacts.createdChats) ? impacts.createdChats.length : 0;
-            return acc;
-        }, { territory: 0, polities: 0, politics: 0, units: 0, markers: 0, chats: 0 });
-
-        const eventOps = (field) => events.flatMap((event, eventIndex) =>
-            (Array.isArray(event?.impacts?.[field]) ? event.impacts[field] : []).map((op, opIndex) => ({
-                ...op,
-                _eventIndex: eventIndex,
-                _eventTitle: event?.title || `Event ${eventIndex}`,
-                _opIndex: opIndex,
-            }))
-        );
+        // Every impact family is counted and listed (gmPreviewOps.js): one
+        // with no section of its own goes under "Other operations". Control
+        // and project operations have chips of their own, so they are taken
+        // out of the territory and other counts rather than shown twice.
+        const sectionCounts = countImpactOps(events);
+        const controlCount = collectImpactOps(events, "regionControlOps").length;
+        const projectCount = collectImpactOps(events, "projectOps").length;
+        const impactCounts = {
+            ...sectionCounts,
+            territory: sectionCounts.territory - controlCount,
+            control: controlCount,
+            projects: projectCount,
+            other: sectionCounts.other - projectCount,
+        };
+        const eventOps = (field) => collectImpactOps(events, field);
         const transferOps = eventOps("regionTransfers");
         const claimOps = eventOps("regionClaims");
         const controlOps = eventOps("regionControlOps");
@@ -3254,6 +3500,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const unitOps = eventOps("unitOps");
         const markerOps = eventOps("markerOps");
         const eventChats = eventOps("createdChats");
+        const groupOps = eventOps("groupOps");
+        const institutionOps = eventOps("institutionLifecycleOps");
+        const otherFamilies = otherImpactFamilies(events);
 
         const compactJson = (value) => {
             try { return JSON.stringify(value); } catch { return String(value ?? ""); }
@@ -3453,17 +3702,22 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.6rem" }}>
                             {countChip("events", events.length)}
                             {countChip("territory", impactCounts.territory)}
+                            {countChip("control", impactCounts.control)}
+                            {countChip("groups", impactCounts.groups)}
                             {countChip("polities", impactCounts.polities)}
                             {countChip("politics", impactCounts.politics)}
+                            {countChip("institutions", impactCounts.institutions)}
                             {countChip("stats", statPatches.length)}
                             {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
                             {countChip("markers", impactCounts.markers)}
+                            {countChip("projects", impactCounts.projects)}
                             {countChip("wars", warUpdates.length)}
                             {countChip("relations", relationUpdates.length)}
                             {countChip("agreements", agreementUpdates.length)}
                             {countChip("subordinations", puppetUpdates.length)}
                             {countChip("chats", impactCounts.chats + outreach.length)}
+                            {impactCounts.other > 0 && countChip("other", impactCounts.other)}
                         </div>
 
                         {events.length > 0 && (
@@ -3661,6 +3915,61 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     })}
                                 </div>
                             )}
+
+                            {groupOps.length > 0 && (
+                                <div data-gm-group-ops="true">
+                                    {subsectionTitle("Groups", groupOps.length, "world.groups")}
+                                    {groupOps.map((entry, index) => {
+                                        const regions = Array.isArray(entry.regionIds) ? entry.regionIds : [];
+                                        return (
+                                            <div key={`group-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                    {String(entry.op || "update").toUpperCase()} · {entry.name || "Unnamed group"}{entry.newName ? ` → ${entry.newName}` : ""}
+                                                </strong>
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                {regions.length > 0 ? <div style={{ marginTop: "0.12rem" }}>{`Regions: ${regions.join(", ")}`}</div> : null}
+                                                {entry.description ? <div style={{ color: "rgba(255,255,255,0.44)", marginTop: "0.12rem" }}>{entry.description}</div> : null}
+                                                {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {institutionOps.length > 0 && (
+                                <div data-gm-institution-ops="true">
+                                    {subsectionTitle("Institutions", institutionOps.length, "world.institutions")}
+                                    {institutionOps.map((entry, index) => (
+                                        <div key={`institution-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                {String(entry.op || "update").toUpperCase()} · {entry.name || entry.institutionId || "Unknown institution"}
+                                            </strong>
+                                            <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                            <div style={{ marginTop: "0.12rem" }}>
+                                                {entry.targetPolity
+                                                    ? `Actor: ${entry.actorPolity || "—"} · Target: ${entry.targetPolity}`
+                                                    : `Actor: ${entry.actorPolity || "—"}`}
+                                            </div>
+                                            {entry.reason || entry.terms ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.reason || entry.terms}</div> : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {otherFamilies.map(({ field, ops }) => (
+                                <div key={`other-${field}`} data-gm-other-ops={field}>
+                                    {subsectionTitle("Other operations", ops.length, field)}
+                                    {ops.map((entry, index) => (
+                                        <div key={`other-${field}-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || entry.operation || "operation").toUpperCase()}</strong>
+                                            <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                            <div style={{ color: "rgba(255,255,255,0.5)", marginTop: "0.14rem" }}>
+                                                {compactJson(Object.fromEntries(Object.entries(entry).filter(([key]) => !key.startsWith("_"))))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
 
                             {storylineUpdates.length > 0 && (
                                 <div>
@@ -4248,35 +4557,27 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     || COUNTRY_NAMES[clickedGid0]
                                     || clickedGid0;
                                 if (!source || source === owner) return;
-                                const catalog = await loadRegionCatalog();
-                                let count = 0;
-                                for (const region of catalog) {
-                                    const code = String(region.countryCode || "");
-                                    const effective = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
-                                    if (effective === source) {
-                                        overrides[region.id] = owner;
-                                        count += 1;
-                                    }
+                                const count = await transferWholeCountry(source, owner, game);
+                                if (count === 0) {
+                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`);
+                                    return;
                                 }
-                                for (const [regionId, code] of Object.entries(world.regionOwnershipOverrides)) {
-                                    if (code === source) overrides[regionId] = owner;
-                                }
-                                await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
                                 setStatus(`${nameOf(source)} annexed into ${nameOf(owner)} (${count} regions). The map updates within a few seconds.`);
                             } else {
                                 if (!props.GID_1) return;
-                                const previous = overrides[String(props.GID_1)];
-                                overrides[String(props.GID_1)] = owner;
-                                await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
-                                if (previous !== owner) {
+                                const regionId = String(props.GID_1);
+                                const label = String(props.NAME_1 || props.GID_1);
+                                const from = regionOwnerNow({ id: regionId, country: props.owner, countryCode: props.GID_0 || props.gid0 }, overrides);
+                                if (from !== owner) {
+                                    await writeWorldState(annexByHand(world, annexationImpacts(world, [{ id: regionId, name: label, from }], owner), game));
                                     await noteGmChange("territory", "", {
                                         group: `regions→${owner}`,
                                         template: `Moved {items} to ${nameOf(owner)} by hand.`,
-                                        item: String(props.NAME_1 || props.GID_1),
+                                        item: label,
                                     });
                                 }
-                                setStatus(`${props.NAME_1 || props.GID_1} → ${nameOf(owner)}. Keep clicking, or press Done.`);
+                                setStatus(`${label} → ${nameOf(owner)}. Keep clicking, or press Done.`);
                             }
                         } catch (error) {
                             setStatus(`Failed: ${error.message}`);
@@ -4298,19 +4599,22 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     }
 
     if (tool === "add-country") {
-        const adding = true;
-        const applyCountry = () => runBusy(async () => {
-            const name = (fields.name ?? "").trim();
+        const createCountry = () => runBusy(async () => {
             // One naming scheme, no codes: the country's NAME is its identifier.
-            const code = adding ? name : (target || "").trim();
+            const code = (fields.name ?? "").trim();
             const colorHex = (fields.color ?? "").trim();
-            if (!code) throw new Error(adding ? "Give the country a name." : "Pick a country first.");
+            if (!code) throw new Error("Give the country a name.");
+            // A name in use anywhere — an override, a map owner, a stock
+            // country on the map — is refused, not merged into (gmPolityNames.js):
+            // changing a country is the Country Editor's job.
+            const { polities: mapPolities } = await loadPolities();
             const world = await readWorldState({ force: true });
-            const existing = world.polityOverrides?.[code] ?? {};
+            if (polityNameInUse(world, code, mapPolities)) {
+                throw new Error(`${code} already exists. Use the Country Editor to change it.`);
+            }
             const nextOverride = {
-                ...existing,
                 code,
-                name: name || existing.name || code,
+                name: code,
                 ...(hexToRgb(colorHex) ? { color: colorHex.startsWith("#") ? colorHex : `#${colorHex}` } : null),
             };
             await writeWorldState({
@@ -4322,27 +4626,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 const colors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
                 await writeJson(JSON_URLS.colors, { ...colors, [code]: rgb }, { pretty: true });
             }
-            if (adding && !world.polityOverrides?.[code]) {
-                await noteGmChange("polity", `Created the polity ${nextOverride.name} by hand; it holds no land until it is given some.`);
-            }
+            await noteGmChange("polity", `Created the polity ${nextOverride.name} by hand; it holds no land until it is given some.`);
             await refresh();
-            return adding
-                ? `${nextOverride.name} created. Use Annex Country or Annex Regions to give it territory.`
-                : `${nextOverride.name} updated. The map picks up colors within a few seconds.`;
+            return `${nextOverride.name} created. Use Annex Country or Annex Regions to give it territory.`;
         });
 
         return (
             <>
             {header(meta.title, meta.subtitle)}
             <div style={{ overflowY: "auto" }}>
-            {!adding && (
-                <>
-                <label style={labelStyle}>Country</label>
-                <PolitySelect polities={polities} value={target} onChange={(code) => { setTarget(code); setFields({}); }} />
-                </>
-            )}
             <label style={labelStyle}>Name</label>
-            <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} placeholder={adding ? "Atlantis" : nameOf(target)} />
+            <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} placeholder="Atlantis" />
             <label style={labelStyle}>Color (hex)</label>
             <div style={{ alignItems: "center", display: "flex", gap: "0.45rem" }}>
             <input style={{ ...inputStyle, width: "8rem" }} value={fields.color ?? ""} onChange={(event) => setFields({ ...fields, color: event.target.value })} placeholder="#a1a1aa" />
@@ -4354,8 +4648,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             style={{ background: "none", border: "none", cursor: "pointer", height: "2.1rem", padding: 0, width: "2.6rem" }}
             />
             </div>
-            <button type="button" className="oh-tap-row" disabled={busy} onClick={applyCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
-            {adding ? "Create country" : "Save changes"}
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={createCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
+            Create country
             </button>
             {statusLine}
             </div>
@@ -5079,7 +5373,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                                     <label style={labelStyle}>Feature type</label>
                                     {/* Two across on a phone, where a third of the card could
-                                        not hold "Fortification" or "Industrial Site". */}
+                                        not hold "Research facility" or "Industrial plant". */}
                                     <div style={{ display: "grid", gap: "0.28rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(3, minmax(0, 1fr))" }}>
                                     {MAP_FEATURE_KINDS.map((kind) => (
                                         <button key={kind.id} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, kind: kind.id })} style={choiceButton(fields.kind === kind.id)}>

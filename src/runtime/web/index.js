@@ -4,7 +4,8 @@
 //
 // Accounts and encrypted sync used to be wired up here. The project no longer
 // stores player saves — games live in this browser and in the desktop app's own
-// data dir — so there is nothing to sign in to and nothing to sync.
+// data dir — so there is nothing to sign in to and nothing to sync. A sign-in
+// left over from before is dropped at boot (retiredAccount.js).
 // Dynamically imported behind import.meta.env.VITE_OH_WEB, so none of this — nor
 // the stores it pulls in — is bundled into the local download.
 
@@ -13,6 +14,11 @@ import { ensureSeeded } from "./libraryStore.js";
 import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
 import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
+import { forgetRetiredAccount } from "./retiredAccount.js";
+import { setBootTranslations } from "./bootTexts.js";
+import { loadShippedPack } from "./settingsStore.js";
+import { kvGet } from "./idb.js";
+import { DEFAULT_LANGUAGE, getStoredLanguage, hasShippedPack } from "../i18n.js";
 
 // Everything the player owns lives in this origin's storage: the games and
 // scenarios in IndexedDB, and — on the website — the ~215MB of map archives in
@@ -36,12 +42,37 @@ const requestPersistentStorage = async () => {
   }
 };
 
+// The home page, its demo notice and the Android boot screen are drawn before the
+// game (and its translator) starts, so they read their text from the player's
+// shipped language pack themselves (bootTexts.js). The language is the one
+// Settings stored: mirrored in localStorage, else the ui-settings row. A
+// language without a shipped pack stays English here, and the translator
+// handles it once the game is up, as it does everywhere else. Bounded, so a
+// slow pack fetch only costs the first screen its translation.
+const BOOT_LANGUAGE_WAIT_MS = 1500;
+const loadBootLanguage = async () => {
+  try {
+    let code = getStoredLanguage();
+    if (code === DEFAULT_LANGUAGE) code = (await kvGet("ui-settings", {}))?.language || DEFAULT_LANGUAGE;
+    if (!hasShippedPack(code)) return;
+    const pack = await Promise.race([
+      loadShippedPack(code),
+      new Promise((resolve) => setTimeout(() => resolve(null), BOOT_LANGUAGE_WAIT_MS)),
+    ]);
+    setBootTranslations(pack);
+  } catch {
+    /* English it is */
+  }
+};
+
 export const installWebBackend = async () => {
   // The Android app paints its boot screen FIRST, before the seeding below. The
   // native splash comes down the moment the WebView has a document, and a white
   // gap where it was is most of the difference between an app and a web page in a
   // shell. Everything after this point is the same on both.
   const boot = isNativeApp() ? showNativeBoot({ local: Boolean(import.meta.env.VITE_OH_NATIVE) }) : null;
+  const bootLanguage = loadBootLanguage();
+  if (boot) bootLanguage.then(() => boot.relabel());
 
   // Seed the default scenario before any /api call, then intercept.
   try {
@@ -51,6 +82,7 @@ export const installWebBackend = async () => {
   }
   installWebApiRouter();
   requestPersistentStorage();
+  forgetRetiredAccount();
 
   // Home page: connect to the best content node on entry.
   // Once the player has entered this tab session, just connect in the background.
@@ -72,8 +104,10 @@ export const installWebBackend = async () => {
       } else {
         connectBestNode().then((node) => boot.settle(node)).catch(() => boot.settle(null));
       }
-    } else if (shouldShowHome()) showHomePage();
-    else connectBestNode().catch(() => {});
+    } else if (shouldShowHome()) {
+      await bootLanguage;
+      showHomePage();
+    } else connectBestNode().catch(() => {});
   } catch (error) {
     if (boot) boot.settle(null);
     console.warn("Home page failed:", error.message);

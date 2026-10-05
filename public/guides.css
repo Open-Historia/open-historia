@@ -172,6 +172,21 @@ li {
   text-align: center;
 }
 
+/* A wide table scrolls inside its own box on a phone rather than widening the page. */
+.table-scroll {
+  overflow-x: auto;
+  margin: 1rem 0 2rem;
+}
+
+.table-scroll .comparison-table {
+  margin: 0;
+  min-width: 32rem;
+}
+
+.table-scroll .comparison-table td {
+  vertical-align: top;
+}
+
 .comparison-table {
   width: 100%;
   border-collapse: collapse;

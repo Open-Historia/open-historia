@@ -60,10 +60,13 @@ export const buildAdvisorPoliticalDiplomacyContext = ({ world = {}, playerPolity
       }
     });
 
-  const institutionLifecycleCases = institutionLifecycleCasesForPolity(world, polity, { pendingOnly: true })
-    .slice(0, 12);
+  // All of them: the formatter shows what fits and counts the rest, so a case
+  // left out is still said to exist.
+  const institutionLifecycleCases = institutionLifecycleCasesForPolity(world, polity, { pendingOnly: true });
 
-  const threadContexts = (Array.isArray(chats) ? chats : []).slice(0, 18).map((chat) => {
+  // The first 18 are read; the rest are counted, for the brief's "N more" line.
+  const allChats = Array.isArray(chats) ? chats : [];
+  const threadContexts = allChats.slice(0, 18).map((chat) => {
     const lifecycle = Boolean(chat?.lifecycleInstitutionId && Array.isArray(chat?.lifecycleCaseIds) && chat.lifecycleCaseIds.length);
     const council = Boolean(chat?.institutionId && !lifecycle);
     const participants = (Array.isArray(chat?.countries) ? chat.countries : [])
@@ -90,5 +93,7 @@ export const buildAdvisorPoliticalDiplomacyContext = ({ world = {}, playerPolity
     institutionViews,
     institutionLifecycleCases,
     threadContexts,
+    threadCount: allChats.filter((chat) => String(chat?.id || "").trim()
+      && ((Array.isArray(chat?.countries) && chat.countries.length) || chat?.institutionId || chat?.lifecycleInstitutionId)).length,
   });
 };

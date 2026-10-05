@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { estimateNativePowerScore, powerTierForPolity, preparePowerStatusForGlobalCalibration, refreshPowerStatus, seedPowerBaselineScore, seedPowerTier } from "./powerStatus.js";
+import { estimateNativePowerScore, powerTierForPolity, refreshPowerStatus, refreshPowerStatusForTurn, seedPowerBaselineScore, seedPowerTier } from "./powerStatus.js";
 
 const makePeerWorld = () => ({
   polityOverrides: {
@@ -266,36 +266,6 @@ test("countryStats-only ghost identities never enter native power reference or r
   assert.equal(refreshed.powerStatus.byPolity["Legacy France"], undefined);
 });
 
-test("global recalibration staging drops generated ghost rows and preserves only authored canonical overrides", () => {
-  const world = {
-    polityOverrides: {
-      Alpha: { name: "Alpha", aliases: ["A"], status: "active" },
-      Beta: { name: "Beta", status: "active" },
-    },
-    ownerCodes: ["Alpha", "Beta"],
-    politicalActors: { byPolity: {} },
-    countryStats: {
-      Alpha: {},
-      Beta: {},
-      "Stock Germany": {},
-    },
-    powerStatus: {
-      schemaVersion: 1,
-      byPolity: {
-        Alpha: { polityKey: "Alpha", tier: "major-power", score: 90, baselineScore: 85, basis: "generated-relative-baseline" },
-        Beta: { polityKey: "Beta", tier: "regional-power", score: 60, baselineScore: 60, basis: "authored" },
-        "Stock Germany": { polityKey: "Stock Germany", tier: "major-power", score: 95, baselineScore: 95, basis: "generated-relative-baseline" },
-      },
-    },
-  };
-
-  const staged = preparePowerStatusForGlobalCalibration(world, ["Alpha", "Beta"]);
-  assert.deepEqual(Object.keys(staged.powerStatus.byPolity), ["Beta"]);
-  assert.equal(staged.powerStatus.byPolity.Beta.basis, "authored");
-  assert.equal(staged.powerStatus.byPolity.Alpha, undefined, "old generated baselines must not anchor their own replacement");
-  assert.equal(staged.powerStatus.byPolity["Stock Germany"], undefined, "derived/legacy ghost must be discarded");
-});
-
 test("dense ordinary institution membership raises leverage/strategic weight but cannot promote sovereign power tier", () => {
   let world = {
     polityOverrides: { Small: { status: "active" } },
@@ -384,4 +354,18 @@ test("current war relevance changes strategic activity without rewriting materia
   assert.ok(record.strategicActivityScore > 0);
   assert.ok(record.strategicWeight > 45);
   assert.equal(record.tier, "minor-power");
+});
+
+test("the per-turn refresh moves tiers through hysteresis, and leaves a world with no power ledger alone", () => {
+  let world = seedPowerTier(makePeerWorld(), "Testland", "minor-power", { basis: "authored", date: "2014-01-01", round: 1 });
+  world = refreshPowerStatusForTurn(world, { date: "2014-02-01", round: 2 });
+  assert.equal(powerTierForPolity(world, "Testland"), "minor-power");
+  assert.equal(world.powerStatus.byPolity.Testland.candidateTier, "major-power");
+  world = refreshPowerStatusForTurn(world, { date: "2014-03-01", round: 3 });
+  assert.equal(powerTierForPolity(world, "Testland"), "major-power");
+
+  const bare = makePeerWorld();
+  assert.equal(refreshPowerStatusForTurn(bare, { date: "2014-02-01", round: 2 }), bare);
+  const empty = { ...makePeerWorld(), powerStatus: { schemaVersion: 1, byPolity: {} } };
+  assert.equal(refreshPowerStatusForTurn(empty, { date: "2014-02-01", round: 2 }), empty);
 });

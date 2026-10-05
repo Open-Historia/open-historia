@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { politicalImpactCompletenessIssue, validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import {
+  politicalImpactCompletenessIssue,
+  politicalImpactCompletenessIssues,
+  validatePoliticalImpactCompleteness,
+} from "./politicalImpactCompleteness.js";
 
 const event = (title, description = "", ops = []) => ({
   title, description, impacts: { politicalActorOps: ops },
@@ -387,4 +391,76 @@ test("a coalition label without stable governing party ids does not count as can
   ), { world });
 
   assert.equal(issue?.kind, "government-governing-force");
+});
+
+// --- Ordinary prose is not a change of government ---
+// Each of these once cost a whole re-request, and on the final attempt the
+// canned fallback in place of the generated history.
+
+const PROSE_THAT_CHANGES_NO_GOVERNMENT = [
+  ["New Rail Link Inaugurated", "The prime minister cuts the ribbon on the new line."],
+  ["Digital Revolution Reshapes Korean Industry", "Robotics spread through the country's factories."],
+  ["Restoration of Notre-Dame Completed", "The cathedral reopens after five years of work."],
+  ["President Names New Ambassador", "The president named a new ambassador to Japan."],
+  ["President Named New Ambassador to France", "The appointment fills a post left vacant in spring."],
+  ["Former President Carter Dies", "The former president died at his home aged 100."],
+  ["Opposition Calls for Early Elections", "Protests grow; police hold demonstrators in the capital."],
+  ["Government to Hold Elections in May", "The cabinet sets the date for the vote."],
+  ["Poll Shows Ruling Party Would Win Majority in Upcoming Election", "The survey puts the opposition far behind."],
+  ["Election Law Passed by Large Majority", "Parliament adopts the new rules for campaigning."],
+  ["Coalition Forces Enter Baghdad", "US-led coalition troops enter the city after heavy fighting."],
+  ["Coalition Partners Agree on Budget", "The governing coalition agrees a spending plan."],
+  ["Failed Coup Attempt Crushed in Ankara", "Loyal troops thwart the coup within hours."],
+  ["New Ambassador Sworn In", "The ambassador was sworn in at the foreign ministry."],
+  ["New Government Programme Launched", "A new government programme for housing starts in April."],
+  ["Police Hold Protesters After Election Rally", "Dozens are detained outside the party offices."],
+  ["Elections to Be Held in May", "The electoral commission publishes the calendar."],
+  ["Election Debate Held on State TV", "The candidates clash over pensions."],
+  ["Party Names Tusk Prime Minister Candidate", "The campaign begins in Gdansk."],
+];
+
+for (const [title, description] of PROSE_THAT_CHANGES_NO_GOVERNMENT) {
+  test(`"${title}" needs no politicalActorOps`, () => {
+    assert.equal(politicalImpactCompletenessIssue(event(title, description)), null);
+  });
+}
+
+const PROSE_THAT_CHANGES_A_GOVERNMENT = [
+  ["Prime Minister Jaan Poska Resigns", "", "leadership"],
+  ["Parliament Names New Prime Minister", "", "leadership"],
+  ["Scholz Elected Chancellor", "", "leadership"],
+  ["King Dies; Crown Prince Proclaimed King", "", "leadership"],
+  ["Military Overthrows President", "", "regime"],
+  ["Army Seizes Power in Coup", "", "regime"],
+  ["Monarchy Restored in Spain", "The restoration of the monarchy ends the republic.", "regime"],
+  ["Liberals Leave the Governing Coalition", "", "coalition"],
+  ["Coalition Collapses in Rome", "", "coalition"],
+  ["Germany Holds Federal Elections", "Voters head to the polls.", "election"],
+  ["Parliamentary Elections Held in Poland", "", "election"],
+  ["Party Wins Majority in Parliamentary Elections", "", "election"],
+  ["Sejm Elects Andrzej Duda as President", "", "leadership"],
+  ["King Appoints Smith Prime Minister", "", "leadership"],
+  ["Monarchy Restored in Spain", "", "regime"],
+  ["Election Results Hand Labour a Majority", "", "election"],
+  ["New Cabinet Sworn In", "", "government"],
+  ["Biden Sworn In as President", "", "government"],
+];
+
+for (const [title, description, kind] of PROSE_THAT_CHANGES_A_GOVERNMENT) {
+  test(`"${title}" still needs its politicalActorOps`, () => {
+    assert.equal(politicalImpactCompletenessIssue(event(title, description))?.kind, kind);
+  });
+}
+
+test("every offending event is reported with its index, not only the first", () => {
+  const issues = politicalImpactCompletenessIssues({ events: [
+    event("Coalition Collapses in Rome"),
+    event("New Rail Link Inaugurated"),
+    event("Prime Minister Jaan Poska Resigns"),
+  ] });
+  assert.deepEqual(issues.map((issue) => [issue.index, issue.kind, issue.title]), [
+    [0, "coalition", "Coalition Collapses in Rome"],
+    [2, "leadership", "Prime Minister Jaan Poska Resigns"],
+  ]);
+  assert.equal(validatePoliticalImpactCompleteness({ events: [event("Coalition Collapses in Rome")] }), issues[0].message);
 });

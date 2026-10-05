@@ -1,6 +1,7 @@
 /*! Open Historia Continuum — resumable Political World v2 orchestration */
 
 import { materializeScenarioCanon } from "../../../runtime/scenarioCanon.js";
+import { compareGameDates, isCanonicalGameDate } from "../../../runtime/gameDates.js";
 import { resolveScenarioHistoryAuthority } from "../../../runtime/scenarioHistoryAuthority.js";
 import { isFinitePowerScore, refreshPowerStatus } from "../../../runtime/powerStatus.js";
 import { initializePoliticalDispositionsForWorld } from "../../../runtime/politicalDisposition.js";
@@ -10,6 +11,7 @@ import {
   buildPoliticalWorldInputFingerprint,
   checkpointMatchesInput,
   createPoliticalWorldV2Checkpoint,
+  grantPoliticalWorldV2ModelCalls,
   setCheckpointQuality,
 } from "./checkpoint.js";
 import { runSimplePoliticalWorldV2 } from "./simpleRunner.js";
@@ -27,10 +29,6 @@ const clone = (value) => {
   if (value == null || typeof value !== "object") return value;
   if (typeof structuredClone === "function") return structuredClone(value);
   return JSON.parse(JSON.stringify(value));
-};
-const dateKey = (value) => {
-  const match = clean(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match ? Number(`${match[1]}${match[2]}${match[3]}`) : null;
 };
 
 const activePolityKeys = (polities = []) => array(polities)
@@ -51,10 +49,8 @@ const temporalVerificationRequiredFor = (world, scenarioDate) => {
   // round-zero-only exact-date verification may use external/reference canon on
   // the target date itself, so retain the future-date safeguard.
   if (authority.referenceAuthority === "round-zero-only") {
-    const scenarioKey = dateKey(scenarioDate);
-    const today = new Date();
-    const todayKey = Number(`${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, "0")}${String(today.getUTCDate()).padStart(2, "0")}`);
-    return Boolean(scenarioKey && scenarioKey <= todayKey);
+    const today = new Date().toISOString().slice(0, 10);
+    return isCanonicalGameDate(scenarioDate) && compareGameDates(scenarioDate, today) <= 0;
   }
 
   return false;
@@ -160,8 +156,30 @@ export const bootstrapPoliticalWorldV2StagedWorld = ({ inputs } = {}) => {
   };
 };
 
+// One run per scenario at a time. Two runs over one checkpoint each save their
+// own copy and the last save wins, so a Resume pressed while an earlier run is
+// still going (or still winding down after Cancel or leaving the tab) is
+// refused rather than started beside it.
+const runningScenarioIds = new Set();
 
-export const generateOrResumePoliticalWorldV2 = async ({
+export const POLITICAL_WORLD_V2_ALREADY_RUNNING = "POLITICAL_WORLD_V2_ALREADY_RUNNING";
+
+export const generateOrResumePoliticalWorldV2 = async (options = {}) => {
+  const id = clean(options?.scenarioId);
+  if (id && runningScenarioIds.has(id)) {
+    const error = new Error("Political World generation is already running for this scenario. Wait for it to pause or finish, then try again.");
+    error.code = POLITICAL_WORLD_V2_ALREADY_RUNNING;
+    throw error;
+  }
+  if (id) runningScenarioIds.add(id);
+  try {
+    return await runPoliticalWorldV2(options);
+  } finally {
+    if (id) runningScenarioIds.delete(id);
+  }
+};
+
+const runPoliticalWorldV2 = async ({
   scenarioId,
   inputs,
   qualityMode = "canonical",
@@ -175,7 +193,7 @@ export const generateOrResumePoliticalWorldV2 = async ({
   const id = clean(scenarioId);
   const scenarioDate = clean(inputs?.scenarioDate);
   if (!id) throw new Error("Political World v2 requires a scenario id.");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(scenarioDate)) throw new Error("Political World v2 requires the canonical saved scenario date.");
+  if (!isCanonicalGameDate(scenarioDate)) throw new Error("Political World v2 requires the canonical saved scenario date.");
 
   const inputFingerprint = buildPoliticalWorldInputFingerprint({
     scenarioId: id,
@@ -240,15 +258,19 @@ export const generateOrResumePoliticalWorldV2 = async ({
     }
   }
 
+  // Returns the save's persistence marker, which the runner checks before
+  // spending another call; the panel warns when the save was not durable.
   const persistAndReport = async (next, summary = null) => {
-    await savePoliticalWorldV2Checkpoint(next);
+    const saved = await savePoliticalWorldV2Checkpoint(next);
     const resolvedSummary = summary || summarizePoliticalWorldV2Worklist({ checkpoint: next, inputs });
     onProgress?.({
       checkpoint: clone(next),
       summary: resolvedSummary,
       quality: clone(next.quality || {}),
       runningJob: clone(next.currentTask || null),
+      persistence: clone(saved?.persistence || null),
     });
+    return saved?.persistence;
   };
 
   checkpoint = await runSimplePoliticalWorldV2({
@@ -274,12 +296,13 @@ export const generateOrResumePoliticalWorldV2 = async ({
     checkpoint.pauseReason = "";
     checkpoint.currentTask = null;
   }
-  await savePoliticalWorldV2Checkpoint(checkpoint);
+  const saved = await savePoliticalWorldV2Checkpoint(checkpoint);
   onProgress?.({
     checkpoint: clone(checkpoint),
     summary: summarizePoliticalWorldV2Worklist({ checkpoint, inputs }),
     quality: clone(checkpoint.quality || {}),
     runningJob: null,
+    persistence: clone(saved?.persistence || null),
   });
   return checkpoint;
 };
@@ -319,6 +342,10 @@ export const applyPoliticalWorldV2Checkpoint = ({
 
 export const discardPoliticalWorldV2Checkpoint = (scenarioId) => clearPoliticalWorldV2Checkpoint(scenarioId);
 
+// The way out of a run paused at its lifetime ceiling: raise it one bounded,
+// recorded step and save, so Resume continues the paid work.
+export const grantPoliticalWorldV2Calls = (checkpoint) => savePoliticalWorldV2Checkpoint(grantPoliticalWorldV2ModelCalls(checkpoint));
+
 export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = {}) => ({
   schemaVersion: 2,
   kind: "political-world-v2-diagnostic",
@@ -332,6 +359,7 @@ export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = 
     pauseReason: clean(checkpoint?.pauseReason),
     modelCalls: Number(checkpoint?.modelCalls) || 0,
     totalModelCallCeiling: Number(checkpoint?.totalModelCallCeiling) || 0,
+    ceilingGrants: clone(checkpoint?.ceilingGrants || []),
     modelCallsByType: clone(checkpoint?.modelCallsByType || {}),
     modelCallsByStage: clone(checkpoint?.modelCallsByStage || {}),
     qualityMode: clean(checkpoint?.qualityMode),

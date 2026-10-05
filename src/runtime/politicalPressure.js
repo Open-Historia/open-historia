@@ -265,17 +265,3 @@ export const advancePoliticalPressureBatch = ({ actorsByPolity = {}, signalsByPo
     changedPolities: Object.keys(patchesByPolity).length,
   };
 };
-
-export const politicalPressureDebugSummary = (state) => {
-  const normalized = normalizePoliticalPressureState(state);
-  return Object.entries(normalized.issues)
-    .sort(([, left], [, right]) => right.salience - left.salience)
-    .slice(0, 8)
-    .map(([issue, value]) => ({
-      issue,
-      salience: value.salience,
-      lean: value.lean,
-      strain: value.strain,
-      momentum: value.momentum,
-    }));
-};

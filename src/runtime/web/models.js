@@ -3,8 +3,17 @@
 // server/libraryStore.js (meta defaults/readers, country canonicalization, seed
 // builders, snapshot detection, asset-key sets). Web build only.
 
-import COUNTRY_NAME_REGISTRY from "./generated/countryNames.js";
+// The committed client copy of server/country-names.json (scripts/
+// generate-country-tables.mjs), the same table the map editor reads.
+import COUNTRY_NAME_REGISTRY from "../generated/countryNames.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
+import {
+  fetchableHubOrigin,
+  hubOriginAfterWrite,
+  normalizeHubOrigin,
+  normalizeHubPublished,
+  normalizeHubReviews,
+} from "../../../server/hubProvenance.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
   DEFAULT_GAME_META,
@@ -16,8 +25,7 @@ import {
 } from "./storeConstants.js";
 import { cloneJson } from "./util.js";
 
-// The constants themselves live in storeConstants.js, which imports nothing, so
-// Node tests can load them without a web build; see there.
+// The constants themselves live in storeConstants.js; see there.
 export * from "./storeConstants.js";
 
 // --- Country reference resolution (mirrors server/libraryStore.js) ---
@@ -196,20 +204,15 @@ export const readStoredImageContentType = (value) =>
     ? value.trim().toLowerCase()
     : null;
 
-// Hub-import provenance (server/libraryStore.js normalizeHubOrigin twin): the
-// post's issue number + the exact bundle URL imported. A post whose current
-// bundleUrl differs from this has an update (attachment URLs are immutable —
-// a new upload gets a new URL).
-export const normalizeHubOrigin = (raw) => {
-  if (!raw || typeof raw !== "object") return null;
-  const postId = Number(raw.postId);
-  const bundleUrl = String(raw.bundleUrl ?? "").trim();
-  if (!Number.isFinite(postId) || postId <= 0 || !bundleUrl) return null;
-  return {
-    bundleUrl,
-    postId,
-    syncedAt: String(raw.syncedAt ?? "").trim() || nowIso(),
-  };
+// Hub provenance: the post a scenario was downloaded from (the exact bundle URL
+// imported, and whether it was edited since), the player's own post, and the
+// suggestions reviewed. Shared with the desktop store, so the two never differ.
+export {
+  fetchableHubOrigin,
+  hubOriginAfterWrite,
+  normalizeHubOrigin,
+  normalizeHubPublished,
+  normalizeHubReviews,
 };
 
 export const normalizePlayCount = (raw) => {
@@ -232,6 +235,8 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
+    hubPublished: normalizeHubPublished(raw?.hubPublished),
+    hubReviews: normalizeHubReviews(raw?.hubReviews),
     id: scenarioId,
     name,
     playCount: normalizePlayCount(raw?.playCount),
@@ -246,6 +251,10 @@ export const readGameMeta = (gameId, raw = {}) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
   return {
     accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
+    // Server twin: hidden from the library, intact in storage. Read here or the
+    // catalog never shows it, and every later meta write (which starts from
+    // this) would unarchive the game.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? nowIso(),
     description,

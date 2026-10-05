@@ -15,7 +15,7 @@ This working clone (`work-repo`) has several remotes configured — useful to kn
 | Remote | URL | Role |
 |--------|-----|------|
 | `upstream` | `github.com/Open-Historia/open-historia` | The canonical org repo. PRs land here; this is "the repo". |
-| `origin` | `github.com/Arkniem/pax-historia-2` | Maintainer's personal working fork. |
+| `origin` | the maintainer's personal fork on GitHub (`Arkniem`) | Maintainer's personal working fork. |
 | `beta` | `github.com/Arkniem/Open-Historia-Beta` | Beta staging fork. |
 | `ltfork` | `github.com/lt20202122/open-historia` | A contributor fork. |
 
@@ -37,14 +37,16 @@ The repo ships to players through **rolling per-channel GitHub Releases**, drive
 
 | Branch | Built by | Produces |
 |--------|----------|----------|
-| `main` | `.github/workflows/app-bundle.yml` | `Open-Historia.zip` on the **`app-stable`** release (stable desktop bundle). |
+| `main` | `.github/workflows/desktop-installer.yml` | The Windows, macOS and Linux installers (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`) and their update feeds on the **`desktop-stable`** release (run from the Actions tab, or push a `desktop-v*` tag). |
 | `main` | `.github/workflows/deploy-site.yml` | Deploys **openhistoria.com** (Cloudflare Pages) via `npm run build:site`. |
-| `beta` | `.github/workflows/app-bundle.yml` | `Open-Historia.zip` on the **`app-beta`** release. |
-| (any) `mobile/**` change | `.github/workflows/android-apk.yml` | `open-historia.apk` on the **`android`** release (run from the Actions tab, or push an `android-v*` tag). |
+| `beta` | `.github/workflows/desktop-beta.yml` | The "Open Historia Beta" installers on the **`desktop-beta`** pre-release, a separate app beside the stable one (run from the Actions tab on `beta`, or push a `desktop-beta-v*` tag). |
+| `main` | `.github/workflows/android-apk.yml` | `open-historia.apk` on the **`android`** release (run from the Actions tab on `main`, or push an `android-v*` tag). |
+| `beta` | `.github/workflows/android-apk-beta.yml` | `open-historia-beta.apk` on the **`android-beta`** pre-release (run from the Actions tab on `beta`, or push an `android-beta-v*` tag). |
+| PRs into `beta`/`main`, pushes to `beta` | `.github/workflows/tests.yml` | Runs `npm test`; publishes nothing. |
 
-`app-bundle.yml` runs on **every push to `main` and `beta`**, so the download never goes stale (`.github/workflows/app-bundle.yml:13-15`). It picks the channel from `github.ref_name`: `main → app-stable`, else `app-beta` (`app-bundle.yml:57-68`).
+No installer is built on a push: each release is cut by a dispatch or a tag. The installers carry the client prebuilt and the server inside Electron; the world map is not packaged and downloads on first launch (`electron/main.cjs` runs `scripts/fetch-map-assets.mjs --ensure`). The zip bundle and its `Launch`/`Update` scripts (`app-bundle.yml`, the `app-stable`/`app-beta` releases) were retired in `b34a0e38`.
 
-`deploy-site.yml` skips its build for `**.md`, `mobile/**`, and `.github/**` changes (docs/app can't change what the site serves) and refuses to deploy any file over Cloudflare Pages' 25 MiB limit (`deploy-site.yml:21-27`, `:58-68`).
+`deploy-site.yml` skips its build for `**.md`, `mobile/**`, and `.github/**` changes (docs/app can't change what the site serves) and refuses to deploy any file over Cloudflare Pages' 25 MiB limit (`deploy-site.yml`).
 
 There is also an **`alpha`** staging branch and a large number of feature branches (typically a `feature`, `feature-alpha`, `feature-beta`, `feature-main` family per change). Feature work is developed on a topic branch, staged, then merged toward the release channels. When in doubt about the target branch for a PR, ask the maintainer rather than guessing — the channel topology (dev → alpha → beta → main) is maintainer-managed.
 
@@ -99,7 +101,7 @@ Almost every source file (~111 across `src/`, `server/`, `scripts/`) opens with 
  */
 ```
 
-Even config, workflows, and `.gitattributes` carry the banner (`.github/workflows/*.yml:1`, `vite.config.ts:1`, `eslint.config.js` excepted). **When you add a new file, add a banner** in the same style with a short parenthetical describing the file's role. When you edit an existing file, keep its banner.
+Even config, workflows, and `.gitattributes` carry the banner (`.github/workflows/*.yml`, `vite.config.ts`, `eslint.config.js` excepted). **When you add a new file, add a banner** in the same style with a short parenthetical describing the file's role. When you edit an existing file, keep its banner.
 
 The whole project — including the map editor and its tooling — is licensed **AGPL-3.0-or-later** under the top-level `LICENSE`. The previous MIT carve-out for `src/Editor/`, `scripts/extract-regions.mjs`, and `server/mapEditorStore.js` was retired when the project relicensed; `src/Editor/LICENSE` no longer exists. Third-party code retains its own license — Azgaar's Fantasy Map Generator, vendored into `fmg/dist`, is MIT.
 
@@ -107,10 +109,10 @@ The whole project — including the map editor and its tooling — is licensed *
 
 The single most distinctive convention: **comments explain *why*, name the trap, and often cite the failure mode** — not what the next line literally does. They are frequently multi-sentence and read like short design notes. Representative examples worth imitating:
 
-- `vite.config.ts:7-23` — a full paragraph on why the pmtiles are dropped from the bundle, including that "the trap is that it only fires on a machine that has actually played."
-- `server/security.js:1-4`, `:11-14` — the banner explains *why* the helpers are split out (unit-testable without the server), and each function comment states the exact attack it blocks ("Rejects `../`, a path separator (including the `%2f` Express decodes back into `/`)…").
-- `.github/workflows/deploy-site.yml:5-15` — explains *why* CI deploys the site rather than connecting Pages to the repo, and the map-binary trap it sidesteps.
-- `server/ownerMigration.test.js:3-7` — notes fixtures are "TRANSCRIBED FROM THE REAL SHIPPED DATA, not invented."
+- `vite.config.ts` — a full paragraph on why the pmtiles are dropped from the bundle, including that "the trap is that it only fires on a machine that has actually played."
+- `server/security.js` — the banner explains *why* the helpers are split out (unit-testable without the server), and each function comment states the exact attack it blocks ("Rejects `../`, a path separator (including the `%2f` Express decodes back into `/`)…").
+- `.github/workflows/deploy-site.yml` — explains *why* CI deploys the site rather than connecting Pages to the repo, and the map-binary trap it sidesteps.
+- `server/ownerMigration.test.js` — notes fixtures are "TRANSCRIBED FROM THE REAL SHIPPED DATA, not invented."
 
 Match this: when you write a non-obvious line, leave a comment that would stop the next person from "fixing" it back into a bug.
 
@@ -120,13 +122,13 @@ Match this: when you write a non-obvious line, leave a comment that would stop t
 |------|--------|-------|
 | ESLint 9 (flat config) | `eslint.config.js` | Runs on `**/*.{ts,tsx}` with `js.configs.recommended`, `typescript-eslint`, `react-hooks`, and `react-refresh` (Vite). `dist` is globally ignored. Run: `npm run lint`. |
 | TypeScript 5.9 | `tsconfig*.json` | `.ts`/`.tsx` are type-checked and linted; much of the game UI is `.jsx` (not strictly typed). Both coexist. |
-| React 19 + React Compiler | `vite.config.ts:77-82` | The build enables `babel-plugin-react-compiler`. Don't hand-write memoization that fights the compiler; follow the Rules of Hooks (react-hooks lint enforces this). |
+| React 19 + React Compiler | `vite.config.ts` | The build enables `babel-plugin-react-compiler`. Don't hand-write memoization that fights the compiler; follow the Rules of Hooks (react-hooks lint enforces this). |
 
 Note ESLint only targets `.ts`/`.tsx` — the many `.jsx`/`.js` files are not linted by the current config, so rely on review and the comment culture there.
 
 ### Line endings
 
-`.gitattributes` forces **LF** on `*.sh` and `*.command` — "CRLF breaks bash on Linux/macOS." Keep the launcher scripts LF; don't let an editor rewrite them to CRLF.
+`.gitattributes` forces **LF** on `*.sh` and `*.command` — "CRLF breaks bash on Linux/macOS." Keep any shell script LF; don't let an editor rewrite it to CRLF.
 
 ---
 
@@ -161,7 +163,7 @@ node server/server.js   # terminal 1 — the API/server on :3000
 npm run dev             # terminal 2 — Vite dev server (HMR)
 ```
 
-Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the editor's save/load and the game's runtime endpoints work under HMR. You need the Express server running alongside `vite` — the dev server alone has no backend.
+Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts`), so the editor's save/load and the game's runtime endpoints work under HMR. You need the Express server running alongside `vite` — the dev server alone has no backend.
 
 ### Other run/build scripts (`package.json:scripts`)
 
@@ -172,15 +174,15 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the 
 | `npm run build` | `vite build` → `dist/` (the desktop client). |
 | `npm run build:web` | Web build → `dist-web/` (base `/`). See [Web build](web-build.md). |
 | `npm run build:site` | Web build at base `/play/` + `scripts/assemble-site.mjs` (landing page at `/`, game at `/play/`) → `dist-site/`. |
-| `npm run build:mobile-server` | `scripts/build-mobile-server.mjs` — assembles the in-process Node server the Android app embeds (nodejs-mobile). |
+| `npm run build:android` | Web-style build with `--mode android` → `dist-android/`, the Android app's bundle (the app has no server; see [mobile.md](mobile.md)). |
 | `npm run lint` | ESLint over the repo. |
 | `npm run preview` / `preview:web` | Serve a built bundle for inspection. |
 
-`--mode web` builds the browser-playable website; **any other mode builds the local/desktop app** (`vite.config.ts:63-64`). The web flag is compiled to a literal (`import.meta.env.VITE_OH_WEB`) so Rollup dead-code-eliminates the web runtime out of the desktop build (`vite.config.ts:66-76`).
+`--mode web` builds the browser-playable website; **any other mode builds the local/desktop app** (`vite.config.ts`). The web flag is compiled to a literal (`import.meta.env.VITE_OH_WEB`) so Rollup dead-code-eliminates the web runtime out of the desktop build (`vite.config.ts`).
 
-### The desktop launcher scripts
+### The desktop app
 
-`Launch Open Historia.{bat,command,sh}` are the player-facing entry points: they check Node, run `scripts/fetch-map-assets.mjs`, `npm install`, `npm run build`, and start the server. `Update Open Historia.*` re-pulls while preserving saves/scenarios/map data. Keep them LF (§5).
+Players install the Electron app from the `desktop-stable` release (§2); there are no launcher or update scripts any more. `npm run dist:win` (and the other `dist:*` scripts) builds an installer locally the way `desktop-installer.yml` does. The app downloads the world map on first launch with `scripts/fetch-map-assets.mjs` and, on Windows and Linux, updates itself from its release's `latest*.yml` feed (`electron-updater`): opening the app installs a waiting update before the game window opens (`electron/launchUpdate.cjs`; see [delivery-and-deploy.md §11.1](delivery-and-deploy.md#111-how-an-installed-game-updates)).
 
 ---
 
@@ -188,17 +190,29 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the 
 
 ```bash
 npm test
-# => node --test "server/**/*.test.js"
+# => node --test "server/**/*.test.js" "src/**/*.test.js"
 ```
 
-Tests use the **built-in Node test runner** (`node --test`) with `node:assert/strict` — **no test framework, no extra deps**. They target the server's pure, dependency-light helpers (they run without booting the server):
+Tests use the **built-in Node test runner** (`node --test`) with `node:assert/strict` — **no test framework, no extra deps**. Both globs run: the server's modules and the client's (`src/`), several hundred test files between them. `.github/workflows/tests.yml` runs the same `npm test` on every pull request into `beta` or `main` and every push to `beta`, and `desktop-beta.yml` runs it before it builds. A test sits **beside its module** as `<module>.test.js` (or `<module>.<topic>.test.js`), and the globs pick it up automatically. For example:
 
 | Test file | Covers |
 |-----------|--------|
 | `server/security.test.js` | Path containment, the CSRF/origin guard, HTTP range parsing, the hub host allowlist (`server/security.js`). |
 | `server/ownerMigration.test.js` | The owner-code → owner-name resolver, with fixtures transcribed from real shipped scenario data (`server/ownerMigration.js`). |
+| `src/Game/AI/turnReview.test.js` | The after-skip review prompt and the answer taken apart (`turnReview.js`). |
+| `src/Game/AI/repairCall.test.js` | The world-repair call's time limits (`repairCall.js`, which imports `idleDeadline.js`). |
+| `src/runtime/gameState.unitMotion.test.js` | How far a unit moves in a turn (`gameState.js` + `unitMotion.js`). |
 
-Convention when adding tests: colocate a `*.test.js` next to the module under `server/`, keep the tested functions **pure** so they need no server, and prefer real transcribed fixtures over invented ones (`server/ownerMigration.test.js:3-7`). The `server/**/*.test.js` glob picks them up automatically. The client (`src/`) has no automated test suite; render-path changes are verified by actually booting the app.
+**The rule every test depends on: a tested module, and everything it imports, must load under plain Node.** No bundler runs first, so a test cannot import, directly or through another module:
+
+- `src/Game/AI/gameplay.js` or `src/Game/AI/main.jsx` (JSX, and the whole game behind them);
+- any `.jsx` file;
+- a module that reads `import.meta.env.X` unguarded when it loads — `import.meta.env` exists only under Vite, so such a module must read it as `import.meta.env?.X`, as `promptContext.js` does for `CITY_SEED_URL`;
+- anything under `src/runtime/web/generated/`, which is gitignored build output.
+
+Importing other plain modules is fine: `repairCall.js` imports `idleDeadline.js`, and `gameState.js` imports many other runtime modules. So logic that needs a test belongs in a plain module the big file imports (as `turnReview.js`, `nativeUnitDirector.js` or `runtime/territoryBasis.js` are for `gameplay.js`), not inside `gameplay.js` itself. Keep the tested functions **pure** where you can, so they need no server and no browser, and prefer real transcribed fixtures over invented ones (`server/ownerMigration.test.js`).
+
+Some tests read a source file as text and match it (`fs.readFileSync(... "gameplay.js")` and a regex) to guard an architectural rule, such as "server/ never imports src/" (`server/serverImports.test.js`). Those pin the shape of the code, not what it does; they do not replace a behavioural test that calls the function. Render-path changes still have to be checked by booting the app.
 
 ---
 
@@ -208,14 +222,14 @@ These strings are wired into external contracts (release assets players download
 
 | Identifier | Where | Why it's frozen |
 |-----------|-------|-----------------|
-| **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
-| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
-| **`android`** (rolling release tag) | `android-apk.yml:74-76` | The APK is republished to this single rolling release; the app updates itself from it. |
-| **`app-stable` / `app-beta`** (release tags) | `app-bundle.yml:57-68` | The `Open-Historia.zip` download tags for the two desktop channels. |
-| **`Open-Historia.zip`** (bundle asset name) | `app-bundle.yml:54,84`; README | The one-download full app; linked by name. |
+| **The Android application id** (Capacitor `appId`) | `mobile/capacitor.config.json` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
+| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from the project's earlier name on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
+| **`android`** (rolling release tag) | `android-apk.yml` | The APK is republished to this single rolling release; the app updates itself from it. |
+| **`desktop-stable` / `desktop-beta`** (release tags) | `package.json` `build.publish`, `electron-builder.beta.yml` `publish`, `desktop-installer.yml`, `desktop-beta.yml` | The installed apps read their update feed (`latest*.yml`) from these URLs, which are baked into every install; the README links `desktop-stable`. |
+| **Installer asset names** (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, and the `Open-Historia-Beta-*` set) | `artifactName` in `package.json` `build` and `electron-builder.beta.yml`; `latest.json` in both desktop workflows | The update feeds and `latest.json` name them, and the README and site link them by name. |
 | **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
-| **`app.paxhistoria`** (Capacitor `hostname`) | `mobile/capacitor.config.json:7` | The WebView origin the Android app serves under. |
-| **`Build: N`** convention | `android-apk.yml:32-35,72` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
+| **The Android WebView host** (Capacitor `hostname`) | `mobile/capacitor.config.json` | The WebView origin the Android app serves under. |
+| **`Build: N`** convention | `android-apk.yml` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
 
 When a map file legitimately changes, you upload a *new* asset and update its `sha256`/`bytes` in `scripts/map-assets.json` — you don't rename the contract-facing names.
 

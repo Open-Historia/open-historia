@@ -58,21 +58,6 @@ export const TERRITORY_BASIS_DESCRIPTION =
   + "claim, threat and raid do NOT move the map: a claim is recorded as a dispute instead.";
 export const TERRITORY_BASIS_DESCRIPTION_SHORT = "Why control changes; same words and meaning as regionTransfers.basis.";
 
-// What the jump is told, appended at call time beside [Map Truth]. It sits with
-// the vocabulary so the two cannot drift, and says what the engine will DO with
-// the answer — a model told only "fill this in" fills it in to please.
-export const TERRITORY_BASIS_DIRECTIVE =
-  "[Why the Land Moves]\n"
-  + "Every impacts.regionTransfers entry and every impacts.regionControlOps entry with op=control carries a \"basis\": the one word for WHY that land changes hands. "
-  + `It is one of: ${TERRITORY_BASIS_MOVES_MAP.join(", ")} (these move the map), or ${TERRITORY_BASIS_NO_CONTROL.join(", ")} (these do not).\n`
-  + "Choose by what actually happened on the ground by the event's date, not by what was announced. "
-  + "A proclamation, a decree, a parliament's vote to annex land its army does not hold, a government-in-exile's title: that is basis \"claim\". "
-  + "An ultimatum or a demand is \"threat\". A bombardment, a raid, a column that passed through and left is \"raid\". "
-  + "\"annexation\" is only for land the annexing power ALREADY holds and administers; \"occupation\" is only for ground that is physically held.\n"
-  + "The engine reads it. A \"claim\" is recorded as that polity's claim and the region shows as disputed instead of changing hands; a \"threat\" or a \"raid\" changes nothing on the map. "
-  + "Labelling a declaration honestly costs you nothing — the dispute appears on the map and the story continues from there — "
-  + "while labelling it as a transfer paints a border that does not exist and every later turn inherits the error.";
-
 const MOVES_MAP = new Set(TERRITORY_BASIS_MOVES_MAP);
 const NO_CONTROL = new Set(TERRITORY_BASIS_NO_CONTROL);
 

@@ -53,16 +53,28 @@ test("a short jump stays a single segment", () => {
   assert.deepEqual(planJumpSegments(0), [0]);
 });
 
-// Three quarters should ask for about what one nine-month call asked for.
+// A month of history holds a dozen or more newsworthy developments; the bands
+// asked for five to seven until 2026-09-26.
+test("a period asks for as many events as it holds", () => {
+  assert.deepEqual(eventCountRangeForDays(0.25), [1, 2]);
+  assert.deepEqual(eventCountRangeForDays(7), [3, 6]);
+  assert.deepEqual(eventCountRangeForDays(30), [10, 15]);
+  assert.deepEqual(eventCountRangeForDays(90), [16, 22]);
+  assert.deepEqual(eventCountRangeForDays(180), [22, 30]);
+  assert.deepEqual(eventCountRangeForDays(365), [28, 36]);
+});
+
+// Three quarters should ask for about what one nine-month call asked for: each
+// segment asks for its share of the whole jump.
 test("segmented event counts land near the single-call count", () => {
   const [wholeMin, wholeMax] = eventCountRangeForDays(270);
   const spans = planJumpSegments(270);
-  const min = spans.reduce((sum, span) => sum + eventCountRangeForDays(span)[0], 0);
-  const max = spans.reduce((sum, span) => sum + eventCountRangeForDays(span)[1], 0);
+  const min = spans.reduce((sum, span) => sum + segmentEventRange(span, 0, { totalDays: 270 })[0], 0);
+  const max = spans.reduce((sum, span) => sum + segmentEventRange(span, 0, { totalDays: 270 })[1], 0);
 
-  assert.deepEqual([wholeMin, wholeMax], [29, 37]);
-  assert.ok(min >= wholeMin - 2 && min <= wholeMin + 4, `segment floor ${min} vs ${wholeMin}`);
-  assert.ok(max >= wholeMax - 2 && max <= wholeMax + 4, `segment ceiling ${max} vs ${wholeMax}`);
+  assert.deepEqual([wholeMin, wholeMax], [28, 36]);
+  assert.ok(min >= wholeMin - 2 && min <= wholeMin + 2, `segment floor ${min} vs ${wholeMin}`);
+  assert.ok(max >= wholeMax - 2 && max <= wholeMax + 2, `segment ceiling ${max} vs ${wholeMax}`);
 });
 
 // Fourteen queued orders must raise the floor once across the jump, not once per
@@ -70,7 +82,7 @@ test("segmented event counts land near the single-call count", () => {
 test("the queued-order floor is a per-segment share, not the whole queue", () => {
   const spans = planJumpSegments(270);
   const share = Math.ceil(14 / spans.length);
-  const total = spans.reduce((sum, span) => sum + segmentEventRange(span, share)[0], 0);
+  const total = spans.reduce((sum, span) => sum + segmentEventRange(span, share, { totalDays: 270 })[0], 0);
   assert.ok(total <= 37, `a split jump demanded ${total} events`);
 });
 
@@ -97,8 +109,9 @@ test("a single-segment jump keeps its wording, plus the storyline contract", () 
 
   assert.equal(
     message,
-    'Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must '
-    + "contain between 29 and 37 events (this jump covers 9 months), with their dates spread across the skipped period. "
+    "Simulate everything that happens in the world from the Origin Date to the target date. Return JSON only. "
+    + 'The "events" array must contain between 29 and 37 events (this jump covers 9 months) '
+    + "— as many as the period really holds — dated where they fall across it. "
     + STORYLINE_INSTRUCTION,
   );
   assert.ok(!/segment/i.test(message));
@@ -195,6 +208,27 @@ test("segments merge into one round's result", () => {
   assert.equal(merged.stopDate, "2287-11-23");
   assert.equal(merged.diplomaticOutreach.length, 1);
   assert.equal(merged.clearActions, true);
+});
+
+// Every skip is built from this merge, segmented or not: a ledger family it
+// leaves out never reaches the apply. Puppet changes once were.
+test("every segment's ledger records ride into the merged round, in order", () => {
+  const merged = mergeSegmentPayloads([
+    {
+      events: [{ id: "s1-e1", title: "Minsk" }],
+      puppetUpdates: [{ id: "puppet-update-0", op: "install", overlord: "Russia", puppet: "Belarus", eventIds: ["s1-e1"] }],
+      warUpdates: [{ id: "war-1", op: "start", eventIds: ["s1-e1"] }],
+    },
+    {
+      events: [{ id: "s2-e1", title: "Minsk again" }],
+      puppetUpdates: [{ id: "puppet-update-0", op: "loyalty", overlord: "Russia", puppet: "Belarus", loyalty: 30, eventIds: ["s2-e1"] }],
+      agreementUpdates: "update~pact~a~b~~~1~note",
+    },
+  ]);
+  assert.deepEqual(merged.puppetUpdates.map((update) => update.op), ["install", "loyalty"]);
+  assert.equal(merged.warUpdates.length, 1);
+  assert.deepEqual(merged.agreementUpdates, ["update~pact~a~b~~~1~note"], "a raw line is kept as a line");
+  assert.deepEqual(mergeSegmentPayloads([{ events: [] }]).puppetUpdates, []);
 });
 
 test("the final segment has the last word on whether orders resolved", () => {

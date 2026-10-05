@@ -80,7 +80,9 @@ test("the old read-then-write pattern loses updates; the queued one does not", a
   // What the engine did: read, wait on something slow, write the old copy back.
   const stale = (async () => {
     const world = await readWorldState({ force: true });
-    await new Promise((resolve) => setTimeout(resolve, 20)); // the model call
+    // Long next to a timer tick: a 1 ms timer can take 15 ms on Windows, and the
+    // control needs the stale write to land after the player's for certain.
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the model call
     await writeWorldState({ ...world, notes: `${world.notes}[stale]` });
   })();
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -91,7 +93,7 @@ test("the old read-then-write pattern loses updates; the queued one does not", a
 
   reset();
   const queued = (async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20)); // the model call, done first
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the model call, done first
     await mutateWorldState((world) => ({ ...world, notes: `${world.notes}[engine]` }));
   })();
   await new Promise((resolve) => setTimeout(resolve, 5));

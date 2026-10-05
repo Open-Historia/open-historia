@@ -5,10 +5,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   APP_UPDATE_SETTLED_STATES,
+  LAUNCH_UPDATE_ATTEMPT_LIMIT,
+  LAUNCH_UPDATE_WINDOW_MS,
   describeUpdateFailure,
   isUpdateAvailable,
   isUpdateSettled,
+  launchUpdateAttempts,
   parseUpdateManifest,
+  recordLaunchUpdateAttempt,
+  shouldUpdateAtLaunch,
   toBuild,
 } from "./appUpdate.js";
 
@@ -107,4 +112,35 @@ test("describeUpdateFailure clips a stack-trace-sized reason", () => {
   const text = describeUpdateFailure("x".repeat(400));
   assert.ok(text.length < 200, text.length);
   assert.ok(text.endsWith("…."), text.slice(-5));
+});
+
+// Opening the game updates it; the banner is for an update found while it is open.
+test("the first check after the page opens updates the game", () => {
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 900, build: "b2", stored: null }), true);
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 900, build: 16, stored: undefined }), true);
+});
+test("a later check, or a first one that came back late, shows the banner instead", () => {
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: false, elapsedMs: 900, build: "b2", stored: null }), false);
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: LAUNCH_UPDATE_WINDOW_MS + 1, build: "b2", stored: null }), false);
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: NaN, build: "b2", stored: null }), false);
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 900, build: "", stored: null }), false);
+});
+test("a build that did not take at launch twice is left to the banner", () => {
+  let stored = null;
+  for (let attempt = 0; attempt < LAUNCH_UPDATE_ATTEMPT_LIMIT; attempt += 1) {
+    assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 10, build: 16, stored }), true);
+    stored = recordLaunchUpdateAttempt(stored, 16);
+  }
+  assert.equal(launchUpdateAttempts(stored, 16), LAUNCH_UPDATE_ATTEMPT_LIMIT);
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 10, build: 16, stored }), false);
+  // The number and the string name the same build.
+  assert.equal(launchUpdateAttempts(stored, "16"), LAUNCH_UPDATE_ATTEMPT_LIMIT);
+  // A newer build gets its own tries.
+  assert.equal(shouldUpdateAtLaunch({ firstCheck: true, elapsedMs: 10, build: 17, stored }), true);
+  assert.equal(recordLaunchUpdateAttempt(stored, 17), JSON.stringify({ build: "17", attempts: 1 }));
+});
+test("an unreadable record counts as no attempts", () => {
+  for (const stored of [null, undefined, "", "{", "null", "[]", '{"build":"16","attempts":"x"}', '{"build":"16","attempts":-3}']) {
+    assert.equal(launchUpdateAttempts(stored, 16), 0, String(stored));
+  }
 });

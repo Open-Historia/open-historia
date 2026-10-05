@@ -45,6 +45,19 @@ test("structured messages strip only a redundant exact leading speaker label", (
     );
 });
 
+test("speech that merely starts with the speaker's name and a dash is left whole", () => {
+    for (const line of [
+        "France-German friendship is the bedrock of Europe.",
+        "France — as it always has — stands with its allies.",
+        "France - as it always has - stands with its allies.",
+    ]) {
+        assert.equal(stripRedundantChatSpeakerPrefix(line, "France"), line);
+    }
+    // A spaced dash with no closing aside is still a label.
+    assert.equal(stripRedundantChatSpeakerPrefix("France — we stand with our allies.", "France"), "we stand with our allies.");
+    assert.equal(stripRedundantChatSpeakerPrefix("France:we stand with our allies.", "France"), "we stand with our allies.");
+});
+
 test("an action is read from what the model writes, and refused when it is not one", () => {
     assert.deepEqual(normalizeChatAction({ type: "send_message", actorName: "France", content: "We propose talks." }),
         { type: "send_message", actorName: "France", content: "We propose talks." });

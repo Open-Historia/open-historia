@@ -4,7 +4,8 @@
 // of the map's costs land all at once: the regions file parsed by two readers,
 // a burst of tile workers, the globe's lighting redrawn on every frame of a
 // drag. On a constrained device those are staggered or throttled (Nations.jsx,
-// Map/mapLibreSetup.js, GlobeEffects.jsx); everywhere else they run flat out.
+// Map/mapLibreSetup.js, GlobeEffects.jsx), and 3D Terrain starts off until
+// the player turns it on (App.jsx); everywhere else they run flat out.
 //
 // Constrained is any of: the Android app; a touch-only screen (nothing can
 // hover and the pointer is a finger: a phone or a tablet, in any browser); a
@@ -14,7 +15,8 @@
 //
 // localStorage "oh_device_profile" = "constrained" or "full" overrides the
 // guess: for trying the phone path on a desktop, or giving a strong tablet the
-// fast one. Decided once per page load, so every caller agrees.
+// fast one. Settings > Map > Performance mode writes it. Decided once per page
+// load, so every caller agrees; a change applies after a reload.
 import { isNativeBuild } from "./native/bridge.js";
 
 export const DEVICE_PROFILE_OVERRIDE_KEY = "oh_device_profile";
@@ -49,11 +51,55 @@ const readSignals = () => {
   };
 };
 
-let constrained = null;
+// The signals the page loaded with, and what they decided.
+let loaded = null;
 
 export const isConstrainedDevice = () => {
-  if (constrained === null) constrained = classifyDevice(readSignals());
-  return constrained;
+  if (loaded === null) {
+    const signals = readSignals();
+    loaded = { signals, constrained: classifyDevice(signals) };
+  }
+  return loaded.constrained;
+};
+
+// The override as stored: "constrained", "full", or "" for the guess.
+export const getDeviceProfileOverride = () => {
+  const stored = readSignals().override;
+  return stored === "constrained" || stored === "full" ? stored : "";
+};
+
+export const setDeviceProfileOverride = (value) => {
+  try {
+    if (value === "constrained" || value === "full") globalThis.localStorage?.setItem(DEVICE_PROFILE_OVERRIDE_KEY, value);
+    else globalThis.localStorage?.removeItem(DEVICE_PROFILE_OVERRIDE_KEY);
+  } catch {
+    // Storage blocked: the guess stands.
+  }
+};
+
+// Which signal decided, in classifyDevice's order, for the Logging file.
+export const deviceProfileReason = ({ native = false, touchOnly = false, deviceMemoryGb = null, override = "" } = {}) => {
+  if (override === "constrained" || override === "full") return "override";
+  if (native) return "Android app";
+  if (touchOnly) return "touch-only screen";
+  const memory = Number(deviceMemoryGb);
+  if (deviceMemoryGb != null && Number.isFinite(memory) && memory > 0) return `${memory} GB of memory reported`;
+  return "memory not reported";
+};
+
+// "low memory (touch-only screen)": the profile this page is running with and
+// why, plus what a reload would change it to when the override has changed.
+export const describeDeviceProfile = ({ running, now = running } = {}) => {
+  const name = (constrained) => (constrained ? "low memory" : "full");
+  const current = classifyDevice(running);
+  const next = classifyDevice(now);
+  const text = `${name(current)} (${deviceProfileReason(running)})`;
+  return next === current ? text : `${text}; ${name(next)} after a reload`;
+};
+
+export const deviceProfileForLog = () => {
+  isConstrainedDevice();
+  return describeDeviceProfile({ running: loaded.signals, now: readSignals() });
 };
 
 // MapLibre's worker pool and how many tiles and images it fetches and decodes at
@@ -72,3 +118,18 @@ export const mapRuntimeLimits = ({ hardwareThreads, constrained = false } = {}) 
     parallelImageRequests: Math.min(24, Math.max(16, threads * 2)),
   };
 };
+
+// The map's two large archives, regions (~101 MB) and countries (~60 MB), are
+// downloaded whole in the background at startup, hashed against the signed
+// content manifest and kept in memory, so every later tile is a memory read
+// (runtime/preload.js). A browser on a phone does not do that: the downloads
+// land, and are hashed (a second copy each), just as the loading screen hands
+// over to the map, which is when the tile workers and the regions parse peak
+// too. That was the moment iOS Safari killed the tab ("A problem repeatedly
+// occurred"). There the map reads the archives over HTTP range requests, a
+// tile at a time, as it does anyway until a warm finishes; the opening screen
+// needs one 40 KB tile of each. The Android app still loads them whole: its
+// APK assets cannot be range-read (wholeFileSource.js), and it ships the
+// trimmed z8 archives.
+export const warmsWholeMapArchives = ({ native = isNativeBuild(), constrained = isConstrainedDevice() } = {}) =>
+  native || !constrained;

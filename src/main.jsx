@@ -1,5 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { installAppHeight } from "./runtime/mobileUi.js";
+import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
+import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
+import { isGenerating } from "./Game/AI/simulationStatus.js";
 import { startTranslator } from "./runtime/translator.js";
 import {
     installDebugLogCapture,
@@ -7,6 +10,7 @@ import {
     setDebugLogContext,
     withConsoleCaptureMuted,
 } from "./runtime/debugLog.js";
+import { buildLabel } from "./runtime/buildLabel.js";
 // Registers the Logging file's settings snapshot (every setting's current value).
 import "./runtime/settingsLog.js";
 import App from "./App.jsx";
@@ -14,7 +18,12 @@ import { installRemoteRuntime } from "./multiplayer/client/remoteRuntime.js";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 
+// The website and the local server (a normal browser tab that can be installed
+// as an app) register public/sw.js. The Android app does not: mobile/scripts/
+// stage-www.mjs leaves sw.js out of the APK as website-only, so registering it
+// there was a 404 and a "registration failed" line opening every phone's log.
 const registerServiceWorker = () => {
+    if (import.meta.env.VITE_OH_NATIVE) return;
     if (!import.meta.env.DEV && "serviceWorker" in navigator) {
         window.addEventListener("load", () => {
             navigator.serviceWorker.register("/sw.js").catch((error) => {
@@ -42,6 +51,12 @@ const mount = () => {
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
     registerServiceWorker();
+    // The Android app rests in the background once nothing is being generated
+    // (runtime/native/backgroundPause.js).
+    if (import.meta.env.VITE_OH_NATIVE) installNativeBackgroundPause(isGenerating);
+    // After Android stopped the page's renderer and the app built the page again,
+    // the diagnostics log says so (runtime/native/rendererRestart.js).
+    if (import.meta.env.VITE_OH_NATIVE) void reportRendererRestart();
 };
 
 // Before anything else runs, so the diagnostics log in Settings covers the whole
@@ -50,7 +65,7 @@ const mount = () => {
 // console the packaged app has no way to open.
 installDebugLogCapture();
 setDebugLogContext({
-    build: import.meta.env.VITE_OH_WEB ? "web" : (import.meta.env.DEV ? "dev" : "desktop/local"),
+    build: buildLabel(import.meta.env),
     language: typeof navigator !== "undefined" ? navigator.language : "",
 });
 logDebugEvent("app", "Open Historia started.");

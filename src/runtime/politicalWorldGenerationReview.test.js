@@ -160,6 +160,13 @@ test("scenario generation inputs use saved scenario canon and bounded polity-spe
   assert.ok(!inputs.polities.some((entry) => entry.polityKey === "Former Republic"), "dissolved polities are historical state, not current generation targets");
 });
 
+test("scenario generation inputs carry the scenario's own country tags as base tags", () => {
+  const tags = { "Kingdom of Poland": ["monarchist", "authoritarian"] };
+  assert.deepEqual(buildScenarioPoliticalGenerationInputs(scenarioDetails, { countryTags: tags }).baseCountryTags, tags);
+  assert.equal(buildScenarioPoliticalGenerationInputs(scenarioDetails).baseCountryTags, null);
+  assert.equal(buildScenarioPoliticalGenerationInputs(scenarioDetails, { countryTags: ["not", "a", "map"] }).baseCountryTags, null);
+});
+
 const validProposal = ({ polityKey = "Kingdom of Poland", actorPatch } = {}) => ({
   schemaVersion: 1,
   polityKey,

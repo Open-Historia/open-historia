@@ -7,7 +7,7 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobi
 
 const COUNTRY_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 
-const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
+const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd, mapRef, requestedTarget = "", onConsumeTarget }) => {
   const [isResizing, setIsResizing] = useState(false);
   const [handleHover, setHandleHover] = useState(false);
   const isMobile = useIsMobile();
@@ -99,7 +99,7 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       </div>
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        <StatsPane active={open} />
+        <StatsPane active={open} mapRef={mapRef} requestedTarget={requestedTarget} onConsumeTarget={onConsumeTarget} />
       </div>
     </div>
   );

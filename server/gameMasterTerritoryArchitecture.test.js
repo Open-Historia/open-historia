@@ -28,7 +28,12 @@ test("GM Preview primes the compact scenario catalog from its one authoritative 
   const end = source.indexOf("// Without a catalog", start);
   assert.ok(start >= 0 && end > start);
   const branch = source.slice(start, end);
-  assert.match(branch, /readJson\(JSON_URLS\.regionsGeojson/);
+  // One read per validation pass, shared by both resolver calls and the
+  // placement gazetteer (createRenderedRegionsReader).
+  assert.match(branch, /await \(renderedRegions \?\? createRenderedRegionsReader\(\)\)\(\)/);
+  const readerStart = source.indexOf("const createRenderedRegionsReader");
+  assert.ok(readerStart >= 0);
+  assert.match(source.slice(readerStart, source.indexOf("const resolveRegionTransfers", readerStart)), /readJson\(JSON_URLS\.regionsGeojson/);
   assert.match(branch, /primeCustomRegionCatalog\(renderedRegionsGeojson/);
   assert.match(branch, /renderedCatalog\.length > 0\s*\? \[\]\s*:\s*await loadRegionCatalog/s,
     "stock/merged catalog work should be fallback-only when rendered scenario geography exists");
@@ -77,7 +82,8 @@ test("GM Apply distinguishes same-prose corrections by canonical effects", async
 test("GM exact approved events bypass ordinary prose-only write de-dup", async () => {
   const source = await sourceText(gameplayPath);
   const start = source.indexOf("export const applyGameMasterPreview");
-  const end = source.indexOf("export const applyGameMasterCommand", start);
+  // Up to the next thing declared after it (the event-reaction helpers).
+  const end = source.indexOf("const eventReactionKey = ", start);
   assert.ok(start >= 0 && end > start, "GM Apply must exist");
   const apply = source.slice(start, end);
   // One journaled generation, all of it or none: there is no restore write
@@ -100,9 +106,9 @@ test("event writer has an explicit exact-GM preservation path without weakening 
 });
 
 test("GM lifecycle identity does not treat stock geography or mapRefs as political existence", async () => {
-  const source = await readFile(new URL("../src/Game/AI/gameplay.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/Game/AI/gameMasterValidation.js", import.meta.url), "utf8");
   const start = source.indexOf("const resolveGameMasterLifecycleIdentity");
-  const end = source.indexOf("const buildGameMasterActivePolitySet", start);
+  const end = source.indexOf("// The AI authors the CURRENT regime/display name", start);
   assert.ok(start >= 0 && end > start, "GM lifecycle resolver must exist");
   const branch = source.slice(start, end);
   assert.match(branch, /allowStockBase:\s*false/);
@@ -118,9 +124,9 @@ test("same-transaction polity creation outranks pre-existing mapRefs during terr
 });
 
 test("GM state-mutation comparisons reject mapRefs as political identity evidence", async () => {
-  const source = await sourceText(gameplayPath);
+  const source = await readFile(new URL("../src/Game/AI/gameMasterValidation.js", import.meta.url), "utf8");
   const start = source.indexOf("const gameMasterCanonicalPolityKey");
-  const end = source.indexOf("const validateGameMasterStatPatches", start);
+  const end = source.indexOf("const gameMasterEventHasCanonicalEffects", start);
   assert.ok(start >= 0 && end > start);
   assert.match(source.slice(start, end), /allowMapRefs:\s*false/);
 });

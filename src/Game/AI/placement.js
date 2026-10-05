@@ -50,6 +50,14 @@ export const distanceKm = (a, b) => {
 const wrapLng = (lng) => ((((lng + 180) % 360) + 360) % 360) - 180;
 const clampLat = (lat) => Math.max(-89.9, Math.min(89.9, lat));
 
+// Halfway between two points the short way round: across the antimeridian,
+// Fiji and Samoa meet in the Pacific, not off Angola.
+const midpoint = (a, b) => {
+    const [westLng, eastLng] = a[0] <= b[0] ? [a[0], b[0]] : [b[0], a[0]];
+    const lng = eastLng - westLng > 180 ? wrapLng((westLng + 360 + eastLng) / 2) : (a[0] + b[0]) / 2;
+    return [lng, (a[1] + b[1]) / 2];
+};
+
 // bearing in compass degrees: 0 north, 90 east.
 export const offsetPoint = (point, bearingDegrees, km) => {
     const radians = (bearingDegrees * Math.PI) / 180;
@@ -406,7 +414,7 @@ const resolveReading = (reading, gazetteer, seed) => {
         const first = positionOf(gazetteer.find(reading.first), seed);
         const second = positionOf(gazetteer.find(reading.second), seed);
         if (!first || !second) return null;
-        return done([(first[0] + second[0]) / 2, (first[1] + second[1]) / 2], "between", gazetteer, `between ${reading.first} and ${reading.second}`);
+        return done(midpoint(first, second), "between", gazetteer, `between ${reading.first} and ${reading.second}`);
     }
 
     const thing = gazetteer.find(reading.name, { exact: Boolean(reading.exact) });

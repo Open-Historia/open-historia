@@ -17,8 +17,9 @@
 // reportDelivery.js) — a letter in the thread with its sender, a stolen secret
 // in the Spies tab, a published text or the player's own paper on the event
 // that produced it. The narrator (the simulation) sees every report; a viewer
-// sees those addressed to a polity it speaks for (AI/audience.js
-// audienceSeesScoped) — the player's advisor, a leader in a chat.
+// sees those addressed to a polity it speaks for, and those its agents stole
+// (AI/audience.js audienceSeesReport) — the player's advisor, a leader in a
+// chat.
 //
 // Reports arrive on events, as impacts (impacts.reports): `create` writes one,
 // `share` widens who holds it. They never move the map: anything that changed
@@ -209,11 +210,12 @@ export const applyReportOps = (reports, ops, { eventId = "", date = "", round = 
     return { reports: next, created, shared, rejected };
 };
 
-// The reports one audience may read, newest first. `sees(visibleTo)` is the
-// audience rule (audienceSeesScoped bound to the audience).
+// The reports one audience may read, newest first. `sees(report)` is the
+// audience rule (AI/audience.js audienceSeesReport bound to the audience): the
+// documents it holds, the published ones, and those its agents stole.
 export const reportsFor = (reports, sees) => {
     const list = normalizeReports(reports);
-    const allowed = typeof sees === "function" ? list.filter((report) => sees(report.visibleTo)) : list;
+    const allowed = typeof sees === "function" ? list.filter((report) => sees(report)) : list;
     return [...allowed].reverse();
 };
 
@@ -221,26 +223,24 @@ export const reportsFor = (reports, sees) => {
 // bounded, so the simulator can widen one it can name and never contradicts
 // one it wrote. `sees` scopes it to the audience; the narrator sees all.
 //
-// Who stole a copy is the narrator's alone: with `sees` set (a viewer) it is
-// never shown — a holder must not learn from its own file that it was read.
-export const describeReportsForPrompt = (reports, { sees = null, limit = 12, bodyChars = 160, heading = "[Reports on File]" } = {}) => {
+// Who stole a copy is the narrator's alone: with `sees` set (a viewer) the
+// thieves are never named — a holder must not learn from its own file that it
+// was read. The one exception is the viewer's own theft: `stolen(report)` says
+// whether the viewer came by it through its agents (audienceStoleReport), and
+// that copy is marked as obtained covertly, so it is never cited as though its
+// holders had shared it.
+export const describeReportsForPrompt = (reports, { sees = null, stolen: stolenByViewer = null, limit = 12, bodyChars = 160, heading = "[Reports on File]" } = {}) => {
     const list = reportsFor(reports, sees).slice(0, limit);
     if (!list.length) return "";
     const narrator = typeof sees !== "function";
     const lines = list.map((report) => {
         const holders = report.visibleTo === null ? "public" : `held by ${report.visibleTo.join(", ")}`;
         const sender = report.from ? ` · from ${report.from}` : "";
-        const stolen = narrator && report.interceptedBy?.length ? ` · a copy stolen by ${report.interceptedBy.join(", ")}` : "";
+        const stolen = narrator
+            ? (report.interceptedBy?.length ? ` · a copy stolen by ${report.interceptedBy.join(", ")}` : "")
+            : (typeof stolenByViewer === "function" && stolenByViewer(report) ? " · obtained covertly by your agents; its holders do not know you have it" : "");
         const body = clip(report.body.replace(/\s+/g, " "), bodyChars);
         return `- ${report.id} · "${report.title}"${report.dateline ? ` (${report.dateline})` : ""} · ${holders}${sender}${stolen}: ${body}`;
     });
     return `${heading}\n${lines.join("\n")}`;
 };
-
-// What the simulator is told about writing them. Short; it rides on every jump.
-export const REPORT_VOICE_DIRECTIVE = [
-    "[Reports — documents, not summaries]",
-    "An event is public: everyone reads the timeline. What only some governments know goes in a REPORT on the event (impacts.reports, op create): a secret pact or protocol, a private letter between leaders, an intelligence assessment, an ultimatum's full text, a treaty's articles. Write the document itself, in its own voice — first person for a letter or a cable, numbered Articles for a treaty, FROM / TO / SUBJECT / DATE for an intelligence report, a signature where one belongs; the title is the document's own heading, and dateline its date.",
-    "visibleTo lists the polities that hold it, by their full names; leave it empty only for a document genuinely published to all. from names the polity whose document it is — who wrote or sent it. Widen an existing report with op share and its id when it reaches more hands, with from naming the holder who passed it on.",
-    "The hard boundary: anything that moved the map — a border, a unit, a structure — is observable and stays in the public event. A report never carries impacts, and the public event describes only the observable surface of what the report contains.",
-].join("\n");
