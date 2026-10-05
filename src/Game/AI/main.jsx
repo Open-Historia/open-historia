@@ -2596,11 +2596,6 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // skip reports what it cost): both are for the request budget below.
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
-        // Developer/evaluation harness hooks. They are stripped here and never
-        // reach a provider. __forceEntryId pins one exact Fallback-list entry so
-        // paired A/B runs cannot silently compare different models. __capture
-        // receives the exact request/response metrics even when telemetry is off.
-        __capture: capture = null, __forceEntryId: forceEntryId = "",
         requestKind = PLAYER_REQUEST, onRequest: observeRequest = null,
         ...providerOpts
     } = opts;
@@ -2611,32 +2606,12 @@ export async function callAI(systemPrompt, history, opts = {}) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
 
-    const resolvedRouting = resolveTaskFallbackEntries(providerOpts.taskKey);
-    let entries = resolvedRouting.entries;
-    let preferredEntryId = resolvedRouting.preferredEntryId;
-    const pinnedId = String(forceEntryId ?? "").trim();
-    if (pinnedId) {
-        const pinned = entries.find((entry) => entry.id === pinnedId);
-        if (!pinned) throw new Error(`The selected AI entry (${pinnedId}) is no longer in the Fallback list.`);
-        entries = [pinned];
-        preferredEntryId = pinned.id;
-    }
+    const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
     const firstChoice = entries.find((entry) => entry.id === preferredEntryId) ?? entries[0];
     const provider = firstChoice?.provider ?? "(none)";
     const label = logLabel || "AI call";
     const startedAt = Date.now();
-    if (capture && typeof capture === "object") {
-        capture.startedAt = startedAt;
-        capture.taskKey = providerOpts.taskKey ?? (logLabel || "direct");
-        capture.requestedEntryId = pinnedId || preferredEntryId || firstChoice?.id || "";
-        capture.systemPrompt = systemPrompt;
-        capture.history = Array.isArray(history)
-            ? history.map((entry) => ({ role: entry?.role, parts: Array.isArray(entry?.parts) ? entry.parts.map((part) => ({ text: String(part?.text ?? "") })) : [] }))
-            : [];
-        capture.userMessage = Array.isArray(history) ? String(history.at(-1)?.parts?.[0]?.text ?? "") : "";
-        capture.requests = [];
-    }
     // Telemetry (Settings → AI debug console): one record per call — prompt,
     // answer, model, usage, latency — in memory and, while recording is on, in
     // IndexedDB. A task-runner call is judged by its validator afterwards, so
@@ -2679,7 +2654,6 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // than per call — one callAI can be many requests. The ledger must never
     // cost a call its answer.
     const noteRequest = (status) => {
-        if (capture && typeof capture === "object") capture.requests?.push(status);
         try {
             // The generation's own count, for the AI debug console.
             attachRequestOutcome(record, status);
@@ -2766,10 +2740,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         usage = sumUsage(usage, reported);
                     },
                     // The model the provider actually resolved (overrides, discovery).
-                    onModel: (model) => {
-                        if (record) record.model = String(model ?? "");
-                        if (capture && typeof capture === "object") capture.model = String(model ?? "");
-                    },
+                    onModel: (model) => { if (record) record.model = String(model ?? ""); },
                 }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
                     label,
                     provider: entry.provider,
@@ -2796,28 +2767,12 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(usage ?? {}),
         }, { verbose: true });
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
-        const capturedRawResponse = typeof result === "string"
-            ? result
-            : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : "");
         finishAiRecord(record, {
             ok: true,
-            rawResponse: capturedRawResponse,
+            rawResponse: typeof result === "string"
+                ? result
+                : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : ""),
         });
-        if (capture && typeof capture === "object") {
-            capture.ok = true;
-            capture.endedAt = Date.now();
-            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
-            capture.firstByteMs = timer.firstByteMs;
-            capture.provider = answeredBy?.provider || firstChoice?.provider || "";
-            capture.entryId = answeredBy?.id || firstChoice?.id || "";
-            capture.entryLabel = answeredBy?.label || firstChoice?.label || "";
-            capture.model = capture.model || answeredBy?.model || firstChoice?.model || "";
-            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
-            capture.lookupRounds = lookupRounds;
-            capture.lookupCalls = lookupCalls;
-            capture.rawResponse = capturedRawResponse;
-            capture.viaToolCall = Boolean(result?.toolInput);
-        }
         return result;
     } catch (error) {
         // NOT verbose-only. A call that failed is the thing a bug report is most
@@ -2833,14 +2788,6 @@ export async function callAI(systemPrompt, history, opts = {}) {
             { verbose: cancelled });
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
-        if (capture && typeof capture === "object") {
-            capture.ok = false;
-            capture.endedAt = Date.now();
-            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
-            capture.firstByteMs = timer.firstByteMs;
-            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
-            capture.error = cancelled ? "cancelled" : String(error?.message || error);
-        }
         throw error;
     }
 }
@@ -3345,55 +3292,25 @@ async function buildAdvisorSystemPrompt() {
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
-    // Evaluation-only seams. stateOverride must already be the player-visible
-    // frozen snapshot; politicalWorldOverride is read ONLY by the Political
-    // Decision Context projection, so sensitivity tests cannot accidentally
-    // change unrelated world-summary inputs. Normal gameplay passes neither.
-    stateOverride = null,
-    politicalContextMode = "normal",
-    politicalWorldOverride = null,
-    promptCapture = null,
     decisionFocusText = "",
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
     // "- [object Object]", and every leader was told that was the table.
     const participantList = countries.map(participantName).filter(Boolean).map((name) => `- ${name}`).join("\n");
-    let savedGame;
-    let actionData;
-    let savedChats;
-    let savedWorld;
-    let savedEvents;
-    let advisorData;
-    let gameData;
-    let chatData;
-    let worldData;
-    let eventData;
-    if (stateOverride && typeof stateOverride === "object") {
-        savedGame = stateOverride.game || {};
-        actionData = Array.isArray(stateOverride.actions) ? stateOverride.actions : [];
-        savedChats = Array.isArray(stateOverride.chats) ? stateOverride.chats : [];
-        savedWorld = stateOverride.world || {};
-        savedEvents = Array.isArray(stateOverride.events) ? stateOverride.events : [];
-        advisorData = Array.isArray(stateOverride.advisor) ? stateOverride.advisor : [];
-        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = {
-            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
-        });
-    } else {
-        [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
-            readJson(JSON_URLS.game, { defaultValue: {} }),
-            readJson(JSON_URLS.actions, { defaultValue: [] }),
-            readJson(JSON_URLS.chat, { defaultValue: [] }),
-            readJson(JSON_URLS.world, { defaultValue: {} }),
-            readJson(JSON_URLS.events, { defaultValue: [] }),
-            readJson(JSON_URLS.advisor, { defaultValue: [] }),
-        ]);
-        // A leader answering the player mid-reveal speaks from the world the player
-        // has been shown (runtime/unseenEvents.js), not the one the turn finished.
-        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
-            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
-        }));
-    }
+    const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
+        readJson(JSON_URLS.game, { defaultValue: {} }),
+        readJson(JSON_URLS.actions, { defaultValue: [] }),
+        readJson(JSON_URLS.chat, { defaultValue: [] }),
+        readJson(JSON_URLS.world, { defaultValue: {} }),
+        readJson(JSON_URLS.events, { defaultValue: [] }),
+        readJson(JSON_URLS.advisor, { defaultValue: [] }),
+    ]);
+    // A leader answering the player mid-reveal speaks from the world the player
+    // has been shown (runtime/unseenEvents.js), not the one the turn finished.
+    const { game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
+        game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
+    });
 
     // A leader only knows the conversations they are actually in. The leader
     // prompt carries the recent chat history, and this used to hand it EVERY
@@ -3470,24 +3387,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         playerCountry: playerCountry || gameData?.country || "",
         decisionFocusText,
     });
-    const basePoliticalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
-    const evaluationPoliticalDecision = politicalWorldOverride
-        ? buildDiplomaticPoliticalContext({
-            world: politicalWorldOverride,
-            speakingAs: speaker,
-            playerCountry: playerCountry || gameData?.country || "",
-            decisionFocusText,
-        })
-        : null;
-    const politicalSection = politicalContextMode === "omit"
-        ? ""
-        : evaluationPoliticalDecision?.text
-            ? `\n\n${evaluationPoliticalDecision.text}`
-            : basePoliticalSection;
-    if (promptCapture && typeof promptCapture === "object") {
-        promptCapture.politicalContextText = politicalSection;
-        promptCapture.speaker = speaker;
-    }
+    const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
     // When the player leads a group rather than a country (runtime/groups.js), the
     // leader answering it knows what it is dealing with.
@@ -3781,8 +3681,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 }
 
 // Build the exact one-off diplomatic request without sending it or touching the
-// module-level live-chat history. The Political World A/B lab uses this so both
-// arms see one frozen transcript and differ only in the bounded political block.
+// module-level live-chat history.
 export async function buildDiplomaticEvaluationRequest({
     playerMessage,
     speakingAs,
@@ -3790,17 +3689,9 @@ export async function buildDiplomaticEvaluationRequest({
     playerCountry,
     priorMessages = [],
     chatId = "",
-    stateOverride = null,
-    politicalContextMode = "normal",
-    politicalWorldOverride = null,
 } = {}) {
-    const promptCapture = {};
     const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
         chatId,
-        stateOverride,
-        politicalContextMode,
-        politicalWorldOverride,
-        promptCapture,
         decisionFocusText: playerMessage,
     });
 
@@ -3826,8 +3717,6 @@ export async function buildDiplomaticEvaluationRequest({
     return {
         systemPrompt,
         history: historyWithInstruction,
-        politicalContextText: promptCapture.politicalContextText || "",
-        speaker: promptCapture.speaker || speakingAs || "",
     };
 }
 

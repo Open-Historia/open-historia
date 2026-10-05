@@ -345,7 +345,7 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill, isVotingRuleUnspecified } from "./institutionGovernanceRetry.js";
 import {
   autonomousInstitutionBallotDirective,
@@ -363,7 +363,6 @@ import {
 import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
-  applyInstitutionLifecycleChatBatchCore,
   applyInstitutionLifecycleImpactBatchCore,
   buildInstitutionLifecycleDecisionContext,
   commitInstitutionLifecycleChatBatch,
@@ -2726,23 +2725,12 @@ const runJsonTask = async (taskKey, {
   // complete event this attempt has produced, and an empty list when an attempt
   // begins. A preview only, through no validator. Only a time skip passes it.
   onPartialEvents = null,
-  // Evaluation harness: pin every attempt to one exact Fallback-list entry and
-  // expose the assembled prompt plus per-attempt transport metrics. Ordinary
-  // gameplay leaves both unset.
-  forceEntryId = "",
-  capture = null,
   // The prompt pack, when it is not the active game's: a scenario's, for a task
   // run in the Workshop (generateScenarioPrehistory).
   promptPack = null,
 }) => {
   const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
-  if (capture && typeof capture === "object") {
-    capture.taskKey = taskKey;
-    capture.systemPrompt = systemPrompt;
-    capture.userMessage = String(userMessage ?? "");
-    capture.attempts = [];
-  }
 
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
@@ -2909,8 +2897,6 @@ const runJsonTask = async (taskKey, {
       // Telemetry: the record for THIS attempt comes back through the sink, so
       // the validation outcome below lands on the call that produced it.
       const attemptSink = {};
-      const transportCapture = {};
-      if (capture && typeof capture === "object") capture.attempts.push(transportCapture);
       // One reader per attempt: a rejected attempt's events leave the panel when the next starts.
       const streamed = [];
       const eventReader = typeof onPartialEvents === "function"
@@ -2968,8 +2954,6 @@ const runJsonTask = async (taskKey, {
           staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
-          __capture: transportCapture,
-          __forceEntryId: forceEntryId,
           ...(requestKind ? { requestKind } : {}),
           ...(typeof onRequest === "function" ? { onRequest } : {}),
           // The arguments as they assemble (streamAssembly.js). A lookup round's
@@ -8277,7 +8261,7 @@ const getWorldDirectorWorker = () => {
   }
 };
 
-const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8, additionalActors = []) => {
+const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8) => {
   const out = [];
   const seen = new Set();
   const push = (value) => {
@@ -8292,7 +8276,6 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   // can matter to history, but the prompt below explicitly keeps that evidence
   // separate from authority to invent a sovereign player choice.
   push(playerPolity);
-  for (const actor of normalizeArray(additionalActors)) push(actor);
 
   for (const storyline of normalizeArray(analysis?.attentionStorylines)) {
     for (const participant of normalizeArray(storyline?.participants)) push(participant);
@@ -8306,8 +8289,8 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   return out;
 };
 
-const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity, additionalActors = [] }) => {
-  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8, additionalActors);
+const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity }) => {
+  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8);
   if (!actorPolities.length) return "";
 
   const set = buildBoundedPoliticalDecisionContextSet(world, {
@@ -12246,11 +12229,6 @@ export const runChatActionBatch = async ({
   budget = null,
   spender = "",
   onRequest = null,
-  // Developer Political World A/B lab. A frozen bundle keeps both arms on the
-  // exact same campaign snapshot; only the explicit Political Decision Context
-  // projection may be omitted/overridden. dryRun keeps formal Council actions
-  // inside an in-memory governance application and never persists them.
-  evaluation = null,
   // The campaign this round belongs to. The institution commits below carry
   // it, so the store refuses them if the player switched saves while the model
   // was answering. Read here, before the model call, when not given: game.json
@@ -12262,15 +12240,10 @@ export const runChatActionBatch = async ({
   // post-turn autonomous ballot is different: it is world simulation and must
   // see the just-committed canonical proposal/ballot state even before the
   // timeline reveal has finished animating.
-  const frozenBundle = evaluation?.bundleOverride && typeof evaluation.bundleOverride === "object"
-    ? evaluation.bundleOverride
-    : null;
-  const readBundle = frozenBundle || (useCanonicalState
+  const readBundle = useCanonicalState
     ? await readGameStateBundle({ force: true })
-    : await readSeenGameStateBundle({ force: true }));
-  const bundle = frozenBundle
-    ? { ...readBundle, savedGame: readBundle.savedGame || readBundle.game, unseen: readBundle.unseen ?? new Set() }
-    : useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
+    : await readSeenGameStateBundle({ force: true });
+  const bundle = useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
   const unseen = bundle.unseen ?? new Set();
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
@@ -12401,9 +12374,8 @@ export const runChatActionBatch = async ({
     `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
   ].join("\n");
 
-  const politicalContextWorld = evaluation?.politicalWorldOverride || bundle.world;
   const focusInstitution = stored.institutionId
-    ? resolveInstitutionRecord(politicalContextWorld, stored.institutionId)
+    ? resolveInstitutionRecord(bundle.world, stored.institutionId)
     : null;
   const focusProposal = normalizeString(institutionProposalId)
     ? Object.values(focusInstitution?.proposals || {}).find((proposal) => regionKey(proposal?.id) === regionKey(institutionProposalId)) || null
@@ -12416,17 +12388,9 @@ export const runChatActionBatch = async ({
     normalizeString(autonomousBallotWork?.proposalTitle),
     lifecycleResponseRequested ? normalizeString(institutionLifecyclePrompt) : "",
   ].filter(Boolean).join("\n");
-  const evaluationPriorityActors = normalizeArray(evaluation?.additionalPoliticalActors)
-    .map(normalizeString)
-    .filter((name) => name && aiParticipants.some((participant) => regionKey(participant) === regionKey(name)));
-  const politicalActorOrder = evaluation
-    ? [...evaluationPriorityActors, ...aiParticipants]
-      .filter((name, index, rows) => rows.findIndex((candidate) => regionKey(candidate) === regionKey(name)) === index)
-    : aiParticipants;
   const politicalContextOptions = {
     // Keep the normal one-request group-diplomacy projection byte-for-byte on
-    // the established participant order. Evaluation may override only the actor
-    // ordering so a selected sensitivity actor survives the bounded Council set.
+    // the established participant order.
     actorPolities: aiParticipants,
     counterpartByActor: Object.fromEntries(aiParticipants.map((name) => [name, player])),
     maxActors: formalBusinessRequested ? 32 : 6,
@@ -12438,21 +12402,11 @@ export const runChatActionBatch = async ({
       pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
       perceptions: 3, relations: 2, agreements: 2, wars: 2, institutions: 6,
     },
-    ...(evaluation ? {
-      actorPolities: politicalActorOrder,
-      counterpartByActor: Object.fromEntries(politicalActorOrder.map((name) => [name, player])),
-    } : {}),
   };
-  const politicalDecisionSet = evaluation?.politicalContextMode === "omit"
-    ? { text: "" }
-    : buildBoundedPoliticalDecisionContextSet(politicalContextWorld, politicalContextOptions);
+  const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, politicalContextOptions);
   const politicalDecisionPrompt = politicalDecisionSet.text
     ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
     : "";
-  if (evaluation?.capture && typeof evaluation.capture === "object") {
-    evaluation.capture.politicalContextText = politicalDecisionPrompt;
-    evaluation.capture.aiParticipants = [...aiParticipants];
-  }
 
   // Each AI participant also sees only the documents its own government can read.
   // One-request group diplomacy contains several governments in one model call,
@@ -12493,7 +12447,6 @@ export const runChatActionBatch = async ({
     signal,
     userMessage: [
       normalizeString(catchUp),
-      normalizeString(evaluation?.sharedDirective),
       playerMessage
         ? `${player} has just said: ${playerMessage}`
         : formalBusinessRequested && autonomousBallotWork
@@ -12529,8 +12482,6 @@ export const runChatActionBatch = async ({
     ...(requestKind ? { requestKind } : {}),
     ...(budget ? { budget, spender: spender || "institutionBallots" } : {}),
     ...(typeof onRequest === "function" ? { onRequest } : {}),
-    ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-    ...(evaluation?.capture ? { capture: evaluation.capture.task || (evaluation.capture.task = {}) } : {}),
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
@@ -12569,33 +12520,19 @@ export const runChatActionBatch = async ({
   let formalRejected = [];
   let lifecycleRejected = [];
   if (stored.institutionId && !lifecycleGovernanceThread) {
-    committedInstitution = evaluation?.dryRun
-      ? applyInstitutionalChatGovernanceBatch({
-        world: bundle.world,
-        chats: bundle.chats,
-        events: bundle.events,
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-      })
-      : await commitInstitutionalChatGovernanceBatch({
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
+    committedInstitution = await commitInstitutionalChatGovernanceBatch({
+      institutionId: stored.institutionId,
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      formalActions: partitioned.formal,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     // An AI sponsor's submit refused only for want of a charter voting rule
     // gets the one-time rule backfill and one more try
-    // (institutionGovernanceRetry.js). Never in an evaluation's dry run.
-    const stalledSubmit = evaluation?.dryRun
-      ? null
-      : normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
+    // (institutionGovernanceRetry.js).
+    const stalledSubmit = normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
     if (stalledSubmit?.command) {
       const expectedGameId = normalizeString(bundle.game?.id || bundle.game?.gameId);
       try {
@@ -12620,49 +12557,17 @@ export const runChatActionBatch = async ({
     }
     formalRejected = committedInstitution.rejected || [];
   } else if (stored.lifecycleInstitutionId && lifecycleActions.length) {
-    if (evaluation?.dryRun) {
-      // Evaluation must remain observational even if a future caller points it at
-      // an invitation/accession negotiation. Mirror the lifecycle commit's pure
-      // core application on scratch state rather than touching canonical storage.
-      const scratchChats = normalizeChats(bundle.chats).map((entry) => {
-        if (normalizeString(entry?.id) !== normalizeString(stored.id)) return entry;
-        return normalizeChatEntry({
-          ...entry,
-          lifecycleInstitutionId: stored.lifecycleInstitutionId,
-          lifecycleCaseIds: stored.lifecycleCaseIds || [],
-          events: [...normalizeArray(entry?.events), ...outcome.events],
-        }) || entry;
-      });
-      const scratchLifecycle = applyInstitutionLifecycleChatBatchCore({
-        world: bundle.world,
-        chats: scratchChats,
-        events: normalizeEvents(bundle.events),
-        playerCountry: player,
-        date: turnTime,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleActions,
-      });
-      const scratchWorld = nextCursors && typeof nextCursors === "object" && Object.keys(nextCursors).length
-        ? { ...scratchLifecycle.world, chatKnowledgeCursors: { ...(scratchLifecycle.world?.chatKnowledgeCursors || {}), ...nextCursors } }
-        : scratchLifecycle.world;
-      committedLifecycle = {
-        ...scratchLifecycle,
-        world: scratchWorld,
-        channel: normalizeChats(scratchLifecycle.chats).find((entry) => normalizeString(entry?.id) === normalizeString(stored.id)) || null,
-      };
-    } else {
-      committedLifecycle = await commitInstitutionLifecycleChatBatch({
-        chatId: stored.id,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleCaseIds: stored.lifecycleCaseIds || [],
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        lifecycleActions,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
-    }
+    committedLifecycle = await commitInstitutionLifecycleChatBatch({
+      chatId: stored.id,
+      institutionId: stored.lifecycleInstitutionId,
+      lifecycleCaseIds: stored.lifecycleCaseIds || [],
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      lifecycleActions,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     lifecycleRejected = committedLifecycle.rejected || [];
   }
 
@@ -13288,7 +13193,6 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 });
 
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
-  const evaluation = context?.evaluation && typeof context.evaluation === "object" ? context.evaluation : null;
   const {
     bundle,
     dateStep,
@@ -13402,20 +13306,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
         `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
       );
-      const politicalDecisionContext = evaluation?.politicalContextMode === "omit"
-        ? ""
-        : buildWorldInitiativePoliticalDecisionContext({
-          world: evaluation?.politicalWorldOverride || ledgerWorld,
-          analysis: worldInitiative.analysis,
-          playerPolity: normalizeString(bundle.game?.country),
-          additionalActors: evaluation?.additionalPoliticalActors || [],
-        });
-      let evaluationSegmentCapture = null;
-      if (evaluation?.capture && typeof evaluation.capture === "object") {
-        if (!Array.isArray(evaluation.capture.segments)) evaluation.capture.segments = [];
-        evaluationSegmentCapture = { segmentIndex, politicalContextText: politicalDecisionContext };
-        evaluation.capture.segments.push(evaluationSegmentCapture);
-      }
+      const politicalDecisionContext = buildWorldInitiativePoliticalDecisionContext({
+        world: ledgerWorld,
+        analysis: worldInitiative.analysis,
+        playerPolity: normalizeString(bundle.game?.country),
+      });
       // What the player has going on across THIS segment's window, and the
       // block that tells the simulator about it (playerFocus.js). Written with
       // the code-appended directives, where an author's guidance cannot reach it.
@@ -13462,12 +13357,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         lookups: buildTaskLookups(segmentBundle),
         // The skip itself always runs; asking again is what the budget weighs.
         ...jumpTaskOptions(state.requests, "jump"),
-        ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-        ...(evaluationSegmentCapture ? { capture: evaluationSegmentCapture.task || (evaluationSegmentCapture.task = {}) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || segmentCount > 1
+        ...(segmentCount > 1
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: showEvents } : {}),
@@ -13476,7 +13369,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext, buildSegmentInstruction({
+        userMessage: [lastTurnReceipt, gmChangeNarration, politicalDecisionContext, buildSegmentInstruction({
           mode,
           segmentIndex,
           segmentCount,
@@ -13674,9 +13567,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   } catch (error) {
     // A deliberate cancel must still cancel.
     if (signal?.aborted || error?.name === "AbortError") throw error;
-    // A/B evaluation is observational. Never replace a failed arm with canned
-    // history and never create resumable pending-jump state in the live game.
-    if (evaluation) throw error;
     const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
 
     // The request fits no model the player has (contextWindow.js): canned events
@@ -13732,7 +13622,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // for the whole skip, never per segment; a failed repair leaves it overdue.
   // Outside the try on purpose: nothing here may hold the turn as a failed
   // segment, and a repair never throws except on the player's Cancel.
-  if (!evaluation) await repairSkipStorylineMotion({ context, state, signal });
+  await repairSkipStorylineMotion({ context, state, signal });
 };
 
 // ---- What a time skip spends ---------------------------------------------------
@@ -14526,17 +14416,14 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null } = {}) => {
-  const evaluationMode = evaluation && typeof evaluation === "object";
-  // Starting a fresh LIVE turn abandons any jump still held on a failed segment.
-  // The A/B lab is observational and must not touch any live pending/simulation
-  // state, even when one of its candidate generations fails.
-  if (!evaluationMode) {
-    discardPendingProjectsJump();
-    discardPendingJumpSegment();
-    discardParkedTurn();
-    beginSimulation();
-  }
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal } = {}) => {
+  // Starting a fresh turn abandons any jump still held on a failed segment. Its
+  // state was captured against a world snapshot this one is about to re-read, so
+  // applying it later would write a turn built on stale ground.
+  discardPendingProjectsJump();
+  discardPendingJumpSegment();
+  discardParkedTurn();
+  beginSimulation();
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
   // and counted into one log line when the skip lands. The request count comes
   // from the skip's budget once there is one.
@@ -14544,11 +14431,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = withDiplomaticLedgerMigration(
-    evaluationMode && evaluation.bundleOverride
-      ? evaluation.bundleOverride
-      : await readGameStateBundle({ force: true }),
-  );
+  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
@@ -14610,8 +14493,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     baseColors,
     bundle,
     // Stamped here, at the read, not at the write minutes later.
-    campaignId: evaluationMode ? "political-world-ab-eval" : activeCampaignId(),
-    evaluation: evaluationMode ? evaluation : null,
+    campaignId: activeCampaignId(),
     dateStep,
     mode,
     originDate,
@@ -14649,34 +14531,18 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // What this skip may spend and what it has spent (requestBudget.js): one
     // request where it can be, never more than the cap, while requests are
     // being saved.
-    requests: evaluationMode
-      ? { saving: false, budget: createJumpBudget({ cap: 999, unlimited: true }), used: 0, refused: 0 }
-      : createJumpRequests({
-        segments: segmentCount,
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
-      }),
+    requests: createJumpRequests({
+      segments: segmentCount,
+      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
+    }),
     phases,
   };
   budgetForPhases = jumpState.requests;
 
   await runJumpSegments({ context: jumpContext, onEvents, onProgress, signal, state: jumpState });
-  if (evaluationMode) {
-    // Return the validated candidate round exactly where normal gameplay would
-    // begin its apply/review pipeline. Nothing below this point is persisted.
-    const payload = mergeSegmentPayloads(jumpState.segmentPayloads, { targetDate });
-    return {
-      evaluation: true,
-      payload,
-      events: normalizeArray(payload?.events),
-      generation: jumpState.generation,
-      requests: { used: jumpState.requests?.used || 0, refused: jumpState.requests?.refused || 0 },
-      originDate,
-      targetDate,
-    };
-  }
   return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
   } finally {
-    if (!evaluationMode) endSimulation();
+    endSimulation();
   }
 };
 
