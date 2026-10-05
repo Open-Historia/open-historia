@@ -242,6 +242,35 @@ test("a relation update that names an unresolvable polity is rejected", () => {
   assert.match(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), /could not resolve both polities/);
 });
 
+// The war ledger's reading of prose, found beside it (a player's log,
+// 2026-10-05: warUpdates answered with "### Обновления войн:" and a sentence
+// saying nothing had changed). The same words in relationUpdates were a
+// relation between a polity called "Нет изменений." and nobody.
+test("prose where the relation records go is not a record: nothing is rejected and nothing is dropped", () => {
+  for (const relationUpdates of ["none", "No changes.", "Нет изменений.", "### Обновления отношений:\nНет изменений."]) {
+    assert.deepEqual(decodeRelationUpdates(relationUpdates), [], relationUpdates);
+    const strict = { events: alliance(), relationUpdates, agreementUpdates: "" };
+    assert.equal(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }), "", relationUpdates);
+    const salvaged = { events: alliance(), relationUpdates, agreementUpdates: "" };
+    assert.deepEqual(salvageDiplomaticLedgerPayload(salvaged, { world }), [], `nothing to tell the next prompt about ${relationUpdates}`);
+  }
+  assert.deepEqual(decodeRelationUpdates(["No changes.", "France~Russia~70~friendly~1~Alliance concluded"]).map((update) => update.a), ["France"], "as an array of lines too");
+});
+
+test("prose beside a real relation record costs only itself", () => {
+  const candidate = {
+    events: alliance(),
+    relationUpdates: "### Relations:\nFrance~Russia~70~friendly~1~Alliance concluded\nNo other changes.",
+    agreementUpdates: "",
+  };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "");
+  const decoded = decodeRelationUpdates(candidate.relationUpdates);
+  assert.deepEqual(decoded.map((update) => [update.a, update.b, update.score]), [["France", "Russia", 70]]);
+  // A line that IS a record is still judged as one.
+  const wrong = { events: alliance(), relationUpdates: "No changes.\nFrance~Atlantis~-40~strained~1~Dispute", agreementUpdates: "" };
+  assert.match(validateDiplomaticLedgerPayload(wrong, { world, allowNativeBinding: true }), /could not resolve both polities: "France" \/ "Atlantis"/);
+});
+
 test("a later record on the same pair replaces the score; an unbound record is dropped on apply", () => {
   const events = alliance();
   const seeded = applyDiplomaticUpdates({

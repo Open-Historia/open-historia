@@ -524,6 +524,15 @@ const GENERATED_RELATION_UPDATE_ID_RE = /^relation-update-\d+$/i;
 
 const decodeRelationLine = (line, index) => {
   const text = String(line ?? "");
+  // A relation is at least A~B~score. A line with no "~" names no pair: it is
+  // prose where the records go ("No changes.", "none", a Markdown heading). It
+  // used to be read as a relation between a polity called "No changes." and
+  // nobody, which a strict attempt refused ("could not resolve both
+  // polities") and asked the whole answer again for, and which the salvage
+  // pass dropped by name into the model's next prompt. The war ledger had the
+  // same reading and has the same rule (nativeWarLedger.js); an agreement or
+  // puppet line that names no operation was always passed over.
+  if (!text.includes(SEP)) return null;
   let rawParts = text.split(SEP);
 
   // A relation's generated update id is transport bookkeeping, NOT a polity.
@@ -603,7 +612,7 @@ export const decodeRelationUpdates = (value) => {
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodeRelationLine(line, index))
-    .filter((entry) => entry.a || entry.b || entry.summary)
+    .filter((entry) => entry && (entry.a || entry.b || entry.summary))
     .slice(0, MAX_RELATION_UPDATES_PER_PASS);
 };
 
