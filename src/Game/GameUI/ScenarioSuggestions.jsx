@@ -575,7 +575,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     let alive = true;
     (async () => {
       try {
-        const next = source?.suggestion ?? await readSuggestionFile(await downloadHubFile(source.ref.zipUrl));
+        const next = source?.suggestion ?? await readSuggestionFile(await downloadHubFile(source.ref.zipUrl, { copy: false }));
         // Kept by the caller, so coming back from the Workshop does not
         // download the file again.
         if (!source?.suggestion) onLoaded?.(next);

@@ -12,6 +12,7 @@
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { looksLikeZip, unzipBundle, zipBundle } from "./bundleZip.js";
 import { bytesToBase64 } from "./bundleFiles.js";
+import { fetchHubFile } from "./hubFiles.js";
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
@@ -67,9 +68,10 @@ const bytesToDataUrl = (bytes, mime) => `data:${mime || "image/png"};base64,${by
 
 // ---- hub fetch through the CORS proxy -------------------------------------
 // The proxy passes the upstream content type through, so JSON/geojson come back
-// as text and images as bytes; callers pick the accessor they need.
+// as text and images as bytes; callers pick the accessor they need. A post's
+// file comes from its copy in the hub's releases when there is one (hubFiles.js).
 const fetchHubResponse = async (url) => {
-  const r = await fetch(`/api/hub/file?url=${encodeURIComponent(url)}`);
+  const r = await fetchHubFile(url);
   if (!r.ok) {
     const p = await r.json().catch(() => ({}));
     throw new Error(p.error || `Download failed (HTTP ${r.status}).`);

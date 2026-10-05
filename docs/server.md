@@ -132,8 +132,6 @@ A 403 from anywhere but the machine running the server. Nothing in the app calls
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`; anything else, such as the page's `{ scene: "none" }` goodbye, clears it); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/discordPresence.js` |
 | GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256. A download over 200 MB (`HUB_MAX_BUNDLE_BYTES`) is refused with `413` from its `Content-Length`, or as it passes the cap while being streamed to disk (never held in memory). The cache is capped at 1 GB (`HUB_CACHE_MAX_BYTES`, `server/hubCache.js`): past it the entries used longest ago go first (a hit counts as a use), and leftover `.tmp` downloads are swept at startup | `isAllowedHubUrl` (`server/security.js`), `hubCachePaths`, `saveCappedBody` (`server/hubCache.js`) |; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`)
 | GET / DELETE | `/api/hub/cache` | How much the download cache holds (`{ files, bytes }`), and emptying it (Settings → Advanced → Storage → "Clear download cache"); downloads in progress are left alone | `hubCacheUsage` / `clearHubCache` (`server/hubCache.js`) |
-| POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | route handler |
-| GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | route handler |
 
 ### Map editor, flags, basemaps
 | Method | Path | Purpose | Handler |
@@ -371,7 +369,6 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js`) |
 | `OH_ALLOW_REMOTE_RELAY` | unset | `=1` lets devices other than this computer use `/api/ai/relay`. Overrides and locks the Settings switch (`relayForLan` in `network-settings.json`) |
 | `OH_ALLOWED_HOSTS` | unset | Comma-separated host names the server also answers to, beyond IP addresses, `localhost` and this computer's name (a name behind a reverse proxy, a LAN DNS name); `*` turns the Host guard off |
-| `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js`) |
 | `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
 | `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |
 

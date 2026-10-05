@@ -170,25 +170,22 @@ const route = async (request, url) => {
 
   if (domain === "hub") {
     const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
-    // Community bundle downloads (/api/hub/file?url=…): prefer the connected
-    // content node — it fetches the GitHub-hosted bundle server-side and returns
-    // it with CORS, offloading the central hub proxy — and fall back to the Worker
-    // if there's no node or it can't serve it. Other hub calls (import-counts,
-    // import-log) stay on the Worker.
-    if (segments[0] === "file" && method === "GET") {
-      const node = getConnected();
-      if (node && node.url && !node.origin) {
-        try {
-          const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
-          if (r.ok) return r;
-        } catch { /* node down/unsupported → fall through to the Worker */ }
-      }
+    // Community bundle downloads (/api/hub/file?url=…) are the only hub call
+    // there is: prefer the connected content node — it fetches the GitHub-hosted
+    // bundle server-side and returns it with CORS, offloading the central hub
+    // proxy — and fall back to the Worker if there's no node or it can't serve
+    // it. Import counts are read from the hub's own index (runtime/hubFiles.js),
+    // straight from GitHub; the Worker's import counter is no longer called.
+    if (segments[0] !== "file" || method !== "GET") return errorResponse(`Unknown hub endpoint: ${url.pathname}`, 404);
+    const node = getConnected();
+    if (node && node.url && !node.origin) {
+      try {
+        const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
+        if (r.ok) return r;
+      } catch { /* node down/unsupported → fall through to the Worker */ }
     }
     if (!base) return errorResponse("Community hub proxy is not configured.", 502);
-    const target = `${base}/hub/${segments.join("/")}${url.search}`;
-    if (method !== "POST") return fetch(target, { method });
-    // Import counters are anonymous: the Worker dedups them by IP.
-    return fetch(target, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx.body ?? {}) });
+    return fetch(`${base}/hub/file${url.search}`, { method });
   }
 
   return errorResponse(`Unknown web-mode endpoint: ${url.pathname}`, 404);

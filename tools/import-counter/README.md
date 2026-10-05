@@ -1,64 +1,37 @@
-# Scenario import counter
+# Scenario import counter (retired)
 
-A tiny Cloudflare Worker that counts how many people import each community
-scenario. The game server pings it once per install on a successful import (see
-`server/server.js` → `/api/hub/import-log`), so you get real import numbers even
-for scenarios GitHub can't count (issue attachments), deduped so one person
-re-importing doesn't inflate the total.
+A scenario's import count is now **how many times its file has been downloaded from the
+community hub's releases**, as GitHub counts it. A workflow in the hub repository
+([Open-Historia/Open-historia-scenarios](https://github.com/Open-Historia/Open-historia-scenarios))
+adds the downloads up and writes them to `index.json` on its `hub-index` branch, and the game
+reads that file itself (`src/runtime/hubFiles.js`). Nothing is reported by the game any more.
 
-Dedup is server-side, per scenario:
-- **Website** (import forwarded by the registry Worker): once per **account _and_
-  IP** — a signed-in import marks both, and a later hit is skipped if either the
-  account or the IP was already seen for that scenario.
-- **App / anonymous web**: once per **IP** (there is no account).
+This Worker used to keep the counts in Cloudflare KV. Each import was a write and each read of
+`/counts` a KV `list()`, and the free plan's daily KV allowance was spent within hours of every
+day; from then until midnight UTC it answered `KV list() limit exceeded for the day` and nobody
+saw any counts.
 
-Raw IPs are never stored — they're hashed with `HASH_SALT`. The real browser IP
-and account token are trusted only when the caller proves it's the registry
-Worker via `FORWARD_SECRET`; direct callers can only spend their own IP.
+## What it does now
 
-It runs on Cloudflare's free tier (Workers + KV) — no card required for the free
-plan, no server to keep alive.
+Game builds from before the change still call it, so it still answers them, from the hub's
+index, in the shapes they expect, and stores nothing:
 
-## Deploy (one time)
+- `GET /counts` → `{ "<post number>": { "count": n }, ... }`
+- `GET /count/<post number>` → `{ "id": "...", "count": n }`
+- `POST /hit` → accepted and ignored (the download the import made is what counted it)
 
-1. **Install Wrangler** (Cloudflare's CLI) and log in:
-   ```
-   npm install -g wrangler
-   wrangler login
-   ```
+It reads no KV, hashes no address and keeps nothing about who called. The `IMPORTS` binding in
+`wrangler.toml` is unused: it and the namespace can be deleted once nobody needs the old
+numbers, which are already carried in the hub's counts (`data/legacy-import-counts.json` in the
+hub repository holds what each post had reached on 2026-10-05).
 
-2. **Create the KV namespace** and copy the printed id:
-   ```
-   cd tools/import-counter
-   wrangler kv namespace create IMPORTS
-   ```
-   Paste the `id` it prints into `wrangler.toml` (replace `PASTE_KV_NAMESPACE_ID`).
+## Deploy
 
-3. **Deploy:**
-   ```
-   wrangler deploy
-   ```
-   Wrangler prints the Worker URL, e.g. `https://oh-import-counter.<your-subdomain>.workers.dev`.
+It rides the site deploy from `main` (docs/delivery-and-deploy.md §6.1), or by hand:
 
-4. **Point the app at it.** Set the URL as the game server's `OH_IMPORT_COUNTER_URL`
-   environment variable, **or** send it to me and I'll bake it in as the default
-   so every player's app reports to it. Until this is set, the import ping is a
-   silent no-op (nothing breaks).
+```
+cd tools/import-counter
+wrangler deploy
+```
 
-## Viewing the numbers
-
-- All scenarios:  `https://<your-worker-url>/counts`
-- One scenario:   `https://<your-worker-url>/count/<hub-issue-number>`
-
-`id` is the scenario's hub issue number, so `/count/42` is the imports of the
-scenario posted as issue #42.
-
-## Notes
-
-- Counts live in each KV key's metadata, so `/counts` is a single list call and
-  stays inside the free-tier subrequest limit.
-- This is an anonymous counter: like any client-side metric it *can* be inflated
-  by someone calling `/hit` directly. The per-install dedupe on the game server
-  handles ordinary repeat-imports; treat the numbers as "roughly how many people
-  imported," not audited figures. If you later want stronger guarantees, the
-  Worker is the place to add a shared secret or rate limiting.
+Once the builds that call it are no longer in use, the Worker can be deleted altogether.

@@ -601,15 +601,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // the player edits it the link stays, marked edited, so they can suggest
       // their changes back to the post (server/hubProvenance.js).
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // Nothing is reported anywhere: the download of the post's file from the
+      // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
-      // Best-effort: tell the server this import succeeded so it can count it
-      // (once per install) on the hub's self-hosted import counter. Never blocks
-      // or fails the import — fire and forget.
-      fetch("/api/hub/import-log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
-      }).catch(() => {});
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
