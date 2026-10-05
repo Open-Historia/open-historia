@@ -162,6 +162,21 @@ test("main.cjs runs the launch update before the server and stops for an install
   assert.match(main, /return autoUpdater;\n\};/, "installAutoUpdater hands boot() the updater");
 });
 
+// Every installer keeps one name on a rolling release, so the block map
+// electron-updater takes for the installed version's is the new one. A player's
+// log: old and new block-map addresses the same file, "To download: 0 KB (0%)",
+// then "Cannot download differentially, fallback to full download: Error:
+// sha512 checksum mismatch", on every update.
+test("an update is downloaded in full: no differential download is tried", () => {
+  const main = fs.readFileSync(path.join(ROOT, "electron/main.cjs"), "utf8").replace(/\r\n/g, "\n");
+  const setup = main.slice(main.indexOf("const setupAutoUpdater = () => {"), main.indexOf("const installAutoUpdater = () => {"));
+  assert.match(setup, /autoUpdater\.autoDownload = false;\n(?: *\/\/[^\n]*\n)* *autoUpdater\.disableDifferentialDownload = true;\n/);
+  // The reason it cannot work: no installer's name carries its version.
+  const build = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build;
+  const beta = fs.readFileSync(path.join(ROOT, "electron-builder.beta.yml"), "utf8");
+  assert.doesNotMatch(`${JSON.stringify(build)}\n${beta.replace(/^\s*#.*$/gm, "")}`, /artifactName[^\n,}]*\$\{version\}/);
+});
+
 test("the setup window can show the update and offer to open the game now", () => {
   const preload = fs.readFileSync(path.join(ROOT, "electron/preload.cjs"), "utf8");
   const page = fs.readFileSync(path.join(ROOT, "electron/setup.html"), "utf8");
