@@ -76,7 +76,7 @@ test("the grid groups every region exactly once by the centre of its extent", ()
 });
 
 test("the staged union finds exactly what one direct union finds, including a crack on a chunk boundary that no single chunk encloses", () => {
-  const direct = enclosedGapGeoms(grid.map((region) => region.geom), { maxWidth: 500 });
+  const direct = enclosedGapGeoms(grid.map((region) => region.geom), { maxWidth: BORDER_CLEANUP.maxWidth });
   assert.equal(direct.length, 1);
   assert.ok(direct[0].width > 19 && direct[0].width < 21, `the crack is ~20 m wide, got ${direct[0].width}`);
 
@@ -84,9 +84,9 @@ test("the staged union finds exactly what one direct union finds, including a cr
   const buckets = bucketRegions(plan, grid, (region) => region.geom.getExtent());
   const partials = buckets.map((bucket) => unionAllGeoms(bucket.map((region) => region.geom)));
   for (const partial of partials) {
-    assert.equal(enclosedGapsOfUnion(partial, { maxWidth: 500 }).length, 0, "no chunk on its own encloses the crack");
+    assert.equal(enclosedGapsOfUnion(partial, { maxWidth: BORDER_CLEANUP.maxWidth }).length, 0, "no chunk on its own encloses the crack");
   }
-  const staged = enclosedGapsOfUnion(unionAllGeoms(partials), { maxWidth: 500 });
+  const staged = enclosedGapsOfUnion(unionAllGeoms(partials), { maxWidth: BORDER_CLEANUP.maxWidth });
   assert.deepEqual(staged.map(key), direct.map(key), "the union of the chunk unions has the same holes as one union of everything");
   assert.equal(enclosedGapsOfUnion(null).length, 0);
 });
@@ -94,19 +94,58 @@ test("the staged union finds exactly what one direct union finds, including a cr
 test("overlaps are a pairwise check that does not depend on chunks", () => {
   const a = grid.find((region) => region.id === "1,2").geom;
   const b = grid.find((region) => region.id === "2,2").geom;
-  const pieces = overlapGeoms(a, b, { maxWidth: 500 });
+  const pieces = overlapGeoms(a, b, { maxWidth: BORDER_CLEANUP.maxWidth });
   assert.equal(pieces.length, 1);
   assert.ok(pieces[0].width > 28 && pieces[0].width < 31, `the sliver is ~30 m wide, got ${pieces[0].width}`);
   assert.equal(overlapGeoms(a, b, { maxWidth: 10 }).length, 0, "wider than the tolerance is left alone");
-  assert.equal(overlapGeoms(a, b, { maxWidth: 500, minWidth: 31 }).length, 0, "narrower than the floor is left alone");
-  assert.equal(overlapGeoms(a, b, { maxWidth: 500, minWidth: 2 }).length, 1, "the sweep's 2 m floor keeps a real sliver");
+  assert.equal(overlapGeoms(a, b, { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: 31 }).length, 0, "narrower than the floor is left alone");
+  assert.equal(overlapGeoms(a, b, { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: 2 }).length, 1, "the sweep's 2 m floor keeps a real sliver");
 });
 
 test("the save-time floor ignores cracks too narrow to be anything but rounding noise", () => {
   const geoms = grid.map((region) => region.geom);
-  assert.equal(enclosedGapGeoms(geoms, { maxWidth: 500, minWidth: 25 }).length, 0, "a 20 m crack is below a 25 m floor");
-  assert.equal(enclosedGapGeoms(geoms, { maxWidth: 500, minWidth: BORDER_CLEANUP.minWidth }).length, 1, "and above the sweep's 2 m floor");
+  assert.equal(enclosedGapGeoms(geoms, { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: 25 }).length, 0, "a 20 m crack is below a 25 m floor");
+  assert.equal(enclosedGapGeoms(geoms, { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth }).length, 1, "and above the sweep's 2 m floor");
   assert.ok(BORDER_CLEANUP.minWidth >= 1 && BORDER_CLEANUP.minWidth < 10, "the floor is about the size of the save's coordinate rounding");
+});
+
+// The width. A defect is as wide as twice its area over its perimeter: its
+// real width when it is long and thin, half its diameter when it is round.
+// Two 30 km blocks with a slot between them, closed at both ends by a cap, is
+// the crack between regions the sweep is for; a pond is the same test on a
+// hole that is not a crack, and the sweep cannot tell them apart.
+const slotBetweenBlocks = (slot) => [
+  new Polygon([[[0, 0], [10000, 0], [10000, 30000], [0, 30000], [0, 0]]]),
+  new Polygon([[[10000 + slot, 0], [30000, 0], [30000, 30000], [10000 + slot, 30000], [10000 + slot, 0]]]),
+  new Polygon([[[10000, 0], [10000 + slot, 0], [10000 + slot, 5000], [10000, 5000], [10000, 0]]]),
+  new Polygon([[[10000, 25000], [10000 + slot, 25000], [10000 + slot, 30000], [10000, 30000], [10000, 25000]]]),
+];
+const blockWithPond = (side) => [new Polygon([
+  [[0, 0], [30000, 0], [30000, 30000], [0, 30000], [0, 0]],
+  [[5000, 5000], [5000, 5000 + side], [5000 + side, 5000 + side], [5000 + side, 5000], [5000, 5000]],
+])];
+
+test("the sweep repairs cracks and slivers up to 1.5 km wide, and what that takes with it", () => {
+  assert.equal(BORDER_CLEANUP.maxWidth, 1500, "1.5 km, in metres of the map projection");
+  const sweep = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  const crack = enclosedGapGeoms(slotBetweenBlocks(1200), sweep);
+  assert.equal(crack.length, 1, "a 1.2 km crack between two regions is filled");
+  assert.ok(crack[0].width > 1100 && crack[0].width < 1200, `20 km long, it measures nearly its real width, got ${crack[0].width}`);
+  assert.equal(enclosedGapGeoms(slotBetweenBlocks(1200), { ...sweep, maxWidth: 500 }).length, 0, "which the old 500 m limit left open");
+  assert.equal(enclosedGapGeoms(slotBetweenBlocks(1700), sweep).length, 0, "a 1.7 km one is not a crack any more");
+  // Round holes count as half as wide as they are across.
+  assert.equal(enclosedGapGeoms(blockWithPond(8000), sweep).length, 0, "a lake 8 km across is left alone");
+  assert.equal(enclosedGapGeoms(blockWithPond(2000), sweep).length, 1, "a pond 2 km across counts as 1 km wide and is filled: what must stay empty has to be a region");
+  assert.equal(enclosedGapGeoms(blockWithPond(2000), { ...sweep, maxWidth: 500 }).length, 0, "the old limit left that one too");
+  // The same for overlaps: one block reaching 1.2 km into the other.
+  const [west, east] = slotBetweenBlocks(-1200);
+  const sliver = overlapGeoms(west, east, sweep);
+  assert.equal(sliver.length, 1, "a 1.2 km overlap is trimmed");
+  assert.equal(overlapGeoms(west, east, { ...sweep, maxWidth: 500 }).length, 0);
+  // With no width given, geometry.js looks as far as the sweep does.
+  assert.equal(enclosedGapGeoms(slotBetweenBlocks(1200)).length, 1);
+  assert.equal(enclosedGapGeoms(slotBetweenBlocks(1700)).length, 0);
+  assert.equal(overlapGeoms(west, east).length, 1);
 });
 
 test("the loading screen reports each phase in plain words with a bar that only moves forward", () => {
@@ -133,10 +172,11 @@ test("the loading screen reports each phase in plain words with a bar that only 
 test("the note after a save says what changed, that nothing did, or that the cleanup was skipped", () => {
   assert.equal(
     describeCleanupResult({ changed: false, regionCount: 4848 }),
-    `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across 4,848 regions.`,
+    "Borders checked: no cracks or slivers between 2 m and 1.5 km across 4,848 regions.",
   );
   assert.equal(describeCleanupResult({ changed: true, gaps: 1, overlaps: 2, affectedRegions: 3, passes: 1 }), "Borders cleaned: 1 crack filled and 2 slivers trimmed across 3 regions.");
-  assert.equal(describeCleanupResult({ changed: true, gaps: 98, overlaps: 57, affectedRegions: 140, passes: 2 }), "Borders cleaned in 2 passes: 98 cracks filled and 57 slivers trimmed across 140 regions.");
+  // The built-in map's own first save.
+  assert.equal(describeCleanupResult({ changed: true, gaps: 106, overlaps: 59, affectedRegions: 152, passes: 2 }), "Borders cleaned in 2 passes: 106 cracks filled and 59 slivers trimmed across 152 regions.");
   assert.match(describeCleanupResult(null, "boom"), /^Border cleanup was skipped \(boom\); the map was saved as it is\.$/);
   assert.equal(describeCleanupResult(null), "");
 });
@@ -194,7 +234,7 @@ test("merging stays within the budget: one union when it fits, pairs of neighbou
   const one = await mergeWithinBudget(geoms, { union: whole.union, budget: 1000 });
   assert.equal(one.length, 1);
   assert.equal(whole.calls.length, 1, "everything fits: the one call the sweep always made");
-  assert.deepEqual(enclosedGapsOfUnion(one[0], { maxWidth: 500 }).map(key), enclosedGapGeoms(geoms, { maxWidth: 500 }).map(key));
+  assert.deepEqual(enclosedGapsOfUnion(one[0], { maxWidth: BORDER_CLEANUP.maxWidth }).map(key), enclosedGapGeoms(geoms, { maxWidth: BORDER_CLEANUP.maxWidth }).map(key));
 
   const tight = spyUnion(12);
   const parts = await mergeWithinBudget(geoms, { union: tight.union, budget: 12, between: noWait });
@@ -239,11 +279,11 @@ test("the gap search on the grid finds the crack on the chunk boundary, and neve
     geometryOf: (region) => region.geom,
     gapsOf: enclosedGapsOfUnion,
     isCovered: (point) => grid.some((region) => region.geom.intersectsCoordinate(point)),
-    maxWidth: 500,
+    maxWidth: BORDER_CLEANUP.maxWidth,
     minWidth: 0,
     between: noWait,
   };
-  const direct = enclosedGapGeoms(grid.map((region) => region.geom), { maxWidth: 500 }).map(key);
+  const direct = enclosedGapGeoms(grid.map((region) => region.geom), { maxWidth: BORDER_CLEANUP.maxWidth }).map(key);
   let chunks = 0;
   let done = 0;
   const whole = await findEnclosedGaps(grid, { ...options, union: unionAllGeoms, onChunks: (n) => { chunks = n; }, onChunk: (i) => { done = i; } });
@@ -257,17 +297,28 @@ test("the gap search on the grid finds the crack on the chunk boundary, and neve
   }
 });
 
+// The built-in map, and one union of all of it built the way the sweep first
+// built it: a union per chunk, then one union of the chunk results. Made once,
+// for the two tests that read it.
+let builtIn = null;
+const builtInMap = () => {
+  if (!builtIn) {
+    const text = fs.readFileSync(new URL("../../server/seed/default/regions.geojson", import.meta.url), "utf8");
+    const features = new GeoJSON().readFeatures(JSON.parse(text), { featureProjection: "EPSG:3857" }).filter((f) => f.getGeometry());
+    const source = new VectorSource({ features });
+    const plan = planTopologyChunks(source.getExtent(), features.length);
+    const partials = bucketRegions(plan, features, (f) => f.getGeometry().getExtent())
+      .map((bucket) => unionAllGeoms(bucket.map((f) => f.getGeometry())))
+      .filter(Boolean);
+    builtIn = { features, source, plan, whole: unionAllGeoms(partials) };
+  }
+  return builtIn;
+};
+
 test("the built-in map: exactly the gaps the one-union sweep found, and within a small budget nothing false and no call over it", async () => {
-  const text = fs.readFileSync(new URL("../../server/seed/default/regions.geojson", import.meta.url), "utf8");
-  const features = new GeoJSON().readFeatures(JSON.parse(text), { featureProjection: "EPSG:3857" }).filter((f) => f.getGeometry());
-  const source = new VectorSource({ features });
-  const plan = planTopologyChunks(source.getExtent(), features.length);
+  const { features, source, plan, whole } = builtInMap();
   const tolerances = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
-  // The sweep as it was: one union per chunk, then one union of the chunk results.
-  const partials = bucketRegions(plan, features, (f) => f.getGeometry().getExtent())
-    .map((bucket) => unionAllGeoms(bucket.map((f) => f.getGeometry())))
-    .filter(Boolean);
-  const before = enclosedGapsOfUnion(unionAllGeoms(partials), tolerances).map(key);
+  const before = enclosedGapsOfUnion(whole, tolerances).map(key);
   assert.ok(before.length > 50, `the stock map has its known cracks (${before.length})`);
   const options = {
     plan,
@@ -289,6 +340,50 @@ test("the built-in map: exactly the gaps the one-union sweep found, and within a
   for (const hole of parts.holes) assert.ok(before.includes(key(hole)), "a crack found in parts is one the whole map has");
 });
 
+// What 1.5 km takes on the built-in map, and what it must leave alone. The
+// limit was 500 m, which left eight cracks behind, 501 to 977 m: each a
+// triangle where two or three regions of one country had the border they share
+// simplified differently (358 km of the Wyoming–Montana line, nowhere wider
+// than 900 m, is the longest). Above them the map has nothing until 4,402 m
+// (one more triangle, between Kamchatka and Magadan), and the narrowest water
+// it leaves as a hole, the lower Uruguay river, measures 7,031 m; no two
+// regions overlap by more than 930 m (East and West Antarctica). So the limit
+// sits in an empty band. A revision of the map that puts a lake or an enclave
+// inside it shows here, before a save fills it in.
+test("the built-in map at 1.5 km: the cracks 500 m left behind are filled, and no water or region is within reach", () => {
+  const { features, source, whole } = builtInMap();
+  const { maxWidth, minWidth } = BORDER_CLEANUP;
+  const holes = enclosedGapsOfUnion(whole, { maxWidth: Infinity, minWidth });
+  const filled = holes.filter((hole) => hole.width <= maxWidth);
+  const left = holes.filter((hole) => hole.width > maxWidth);
+  const beyondOldLimit = filled.filter((hole) => hole.width > 500);
+  assert.equal(beyondOldLimit.length, 8, "eight cracks between 500 m and 1.5 km");
+  for (const hole of beyondOldLimit) {
+    assert.equal(vertexCountOf(hole.geom), 4, `a ${Math.round(hole.width)} m crack is a triangle, not a shoreline`);
+  }
+  const widestFilled = Math.max(...filled.map((hole) => hole.width));
+  const narrowestLeft = Math.min(...left.map((hole) => hole.width));
+  assert.ok(widestFilled < 1000, `the widest crack filled is ${Math.round(widestFilled)} m`);
+  assert.ok(narrowestLeft > 4000, `the narrowest hole left alone is ${Math.round(narrowestLeft)} m`);
+  const water = left.filter((hole) => vertexCountOf(hole.geom) > 4);
+  assert.ok(water.length >= 10, "the lakes, lagoons and the Caspian are holes, and stay");
+  assert.ok(Math.min(...water.map((hole) => hole.width)) > 7000, "the narrowest of them is over 7 km");
+
+  // The overlaps: every piece two neighbouring regions share, however wide.
+  const order = new Map(features.map((feature, index) => [feature, index]));
+  const pieces = [];
+  for (let i = 0; i < features.length; i += 1) {
+    const geom = features[i].getGeometry();
+    for (const other of source.getFeaturesInExtent(geom.getExtent())) {
+      if (order.get(other) > i) pieces.push(...overlapGeoms(geom, other.getGeometry(), { maxWidth: Infinity, minWidth }));
+    }
+  }
+  assert.ok(pieces.length > 50, `the stock map has its known slivers (${pieces.length})`);
+  const beyond = pieces.filter((piece) => piece.width > 500);
+  assert.equal(beyond.length, 1, "one sliver between 500 m and 1.5 km");
+  assert.ok(beyond[0].width < 1000, `and nothing wider: ${Math.round(beyond[0].width)} m is the widest piece two regions share`);
+});
+
 test("the Workshop's save runs this search, with the budget on overlaps and gap targets too", () => {
   const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
   const sweep = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
@@ -307,6 +402,30 @@ test("the Workshop's save runs this search, with the budget on overlaps and gap 
   assert.ok(sweep.includes("stopped = \"error\";") && sweep.includes("finishTopologyEdit(edit)"), "an error ends the search but keeps and finishes the edit");
   const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
   assert.ok(mapEditor.includes("stopRequested: () => cleanupStopRef.current") && mapEditor.includes("<BorderCleanupOverlay state={borderCleanup} onStop="), "the loading screen's Save now reaches the sweep");
+  assert.ok(mapEditor.includes("maxWidth: BORDER_CLEANUP.maxWidth,"), "at the sweep's own width");
+});
+
+// The save is the only thing that repairs borders. The Topology panel, which
+// ran the same repair on a selection at a width the author chose, was removed:
+// its chip, its file, the selection repair it called and the two messages
+// that sent a failed merge to it. A merge from a branch that still has the
+// panel would bring parts of it back; this is where that shows.
+test("only the save repairs borders: no Topology panel, and a merge that fails points to the save", () => {
+  const read = (name) => fs.readFileSync(new URL(name, import.meta.url), "utf8");
+  assert.ok(!fs.existsSync(new URL("./TopologyPanel.jsx", import.meta.url)), "the panel's file is gone");
+  const mapEditor = read("./MapEditor.jsx");
+  const bottomBar = read("./BottomBar.jsx");
+  const olMap = read("./OlMap.jsx");
+  assert.ok(!mapEditor.includes("TopologyPanel") && !mapEditor.includes("openPanel === \"topology\""), "MapEditor mounts no such panel");
+  assert.ok(!bottomBar.includes("\"topology\"") && !bottomBar.includes("label=\"Topology\""), "the bottom bar has no chip for it");
+  assert.ok(!/topology panel/i.test(olMap + mapEditor + read("./BorderCleanupOverlay.jsx")), "nothing on screen sends the player to it");
+  assert.equal(olMap.split("Borders are repaired when the map is saved into its scenario").length - 1, 2, "a merge and a border removal that fail both point to the save");
+  assert.ok(!/\brepairTopology\b/.test(olMap), "the selection-scoped repair is gone with its only caller");
+  const api = olMap.slice(olMap.indexOf("onReady?.({"), olMap.indexOf("replaceRegionsFromImport:"));
+  assert.ok(api.includes("repairTopologyEverywhere,"), "the Workshop is handed the save-time sweep");
+  assert.ok(!api.includes("analyzeTopology") && !api.includes("clearTopologyDiagnostics"), "and nothing of the panel's");
+  // The Shared border tool keeps its own check after each edit, at its own width.
+  assert.ok(olMap.includes("analyzeTopologyRef.current?.(pair.map((f) => f.getId()), { maxWidth: 100 })"));
 });
 
 // Time. A map with one 41,000-vertex sea zone held the old sweep for tens of
@@ -416,7 +535,7 @@ test("the note after a save says when a map was too detailed to check in one pie
   );
   assert.equal(
     describeCleanupResult({ changed: false, regionCount: 12, parts: 1, skippedPairs: 1 }),
-    `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across 12 regions. 1 pair of very large neighbouring regions was not compared.`,
+    "Borders checked: no cracks or slivers between 2 m and 1.5 km across 12 regions. 1 pair of very large neighbouring regions was not compared.",
   );
   assert.ok(describeCleanupResult({ ...base, skippedPairs: 4 }).endsWith(" 4 pairs of very large neighbouring regions were not compared."));
 });

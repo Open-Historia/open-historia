@@ -12,6 +12,7 @@
 import polygonClipping from "polygon-clipping";
 import Polygon from "ol/geom/Polygon.js";
 import MultiPolygon from "ol/geom/MultiPolygon.js";
+import { BORDER_CLEANUP } from "./topologySweep.js";
 
 const ringArea = (ring) => {
   let a = 0;
@@ -210,15 +211,17 @@ export const unionAllGeoms = (geoms) => {
 };
 
 // Return enclosed holes in the UNION of the supplied regions. These are the
-// safest automatic "gap" class: because the void is fully enclosed by selected
-// land, filling it cannot accidentally pave over an open coastline/ocean inlet.
+// safest automatic "gap" class: because the void is fully enclosed by the
+// regions, filling it cannot accidentally pave over an open coastline/ocean inlet.
 // `width` is a conservative narrowness proxy (2A/P); long hairline cracks remain
-// eligible even when their total area is not tiny.
+// eligible even when their total area is not tiny. `maxWidth` is the save-time
+// sweep's unless the caller gives its own (the Shared border tool's check
+// looks at 100 m).
 export const enclosedGapGeoms = (geoms, options) => enclosedGapsOfUnion(unionAllGeoms(geoms), options);
 
 // The same for a union already computed: the save-time sweep builds the whole
 // map's union in stages (topologySweep.js) and reads its holes once.
-export const enclosedGapsOfUnion = (unioned, { maxWidth = 500, minWidth = 0 } = {}) => {
+export const enclosedGapsOfUnion = (unioned, { maxWidth = BORDER_CLEANUP.maxWidth, minWidth = 0 } = {}) => {
   if (!unioned) return [];
   const out = [];
   for (const poly of asMultiPolygonCoords(unioned)) {
@@ -233,12 +236,13 @@ export const enclosedGapsOfUnion = (unioned, { maxWidth = 500, minWidth = 0 } = 
   return out.sort((a, b) => a.width - b.width || a.area - b.area);
 };
 
-// Split a pairwise overlap into individual polygon candidates so diagnostics can
-// highlight them. The caller decides which region wins; repair is deliberately
-// deterministic and selection-scoped rather than guessing campaign semantics.
-// `minWidth` (the save-time sweep) drops defects too narrow to be anything
-// but coordinate-rounding noise; the panel's default of 0 keeps everything.
-export const overlapGeoms = (a, b, { maxWidth = 500, minWidth = 0 } = {}) => {
+// Split a pairwise overlap into its separate pieces, so each can be marked on
+// the map (the Shared border tool's check) or trimmed (the save-time sweep).
+// The caller decides which region wins; the rule is deliberately deterministic
+// rather than a guess at campaign semantics. `minWidth` (the sweep's 2 m) drops
+// defects too narrow to be anything but coordinate-rounding noise; the default
+// of 0 keeps everything.
+export const overlapGeoms = (a, b, { maxWidth = BORDER_CLEANUP.maxWidth, minWidth = 0 } = {}) => {
   const hit = intersectionGeom(a, b);
   if (!hit) return [];
   const out = [];
