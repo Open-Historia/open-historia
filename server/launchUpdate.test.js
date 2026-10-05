@@ -192,3 +192,18 @@ test("the stable app's update screen offers the beta, opened in the player's bro
   const mapMode = page.slice(page.indexOf("const showMapDownload"), page.indexOf("window.ohSetup.onUpdate("));
   assert.match(mapMode, /beta\.hidden = true;/);
 });
+
+// The Android app's update cover (AppUpdateBanner.jsx) makes the same offer.
+test("the stable Android app's update cover offers the Android beta", () => {
+  const banner = fs.readFileSync(path.join(ROOT, "src/runtime/AppUpdateBanner.jsx"), "utf8");
+  assert.match(
+    banner,
+    /const ANDROID_BETA_APK = "https:\/\/github\.com\/Open-Historia\/open-historia\/releases\/download\/android-beta\/open-historia-beta\.apk";/,
+  );
+  assert.match(banner, /const offerBeta = isApp && APP_TRACK !== "beta";/, "the stable app only: not the beta, not the website");
+  assert.match(banner, /\{offerBeta \? \(/);
+  assert.match(banner, /onClick=\{openBetaDownload\}/);
+  // Only while the update downloads: the offer sits in the cover's download stage.
+  const cover = banner.slice(banner.indexOf("if (launch) {"));
+  assert.ok(cover.indexOf("Not now") < cover.indexOf("{offerBeta ? ("), "after the cover's own button");
+});
