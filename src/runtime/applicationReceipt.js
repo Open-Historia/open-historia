@@ -98,6 +98,18 @@ export const noteReceipt = (receipt, kind, text) => {
   receipt.notes.push({ kind, text: line });
 };
 
+// The ids a note quotes back, each cut to a short token and a long list to its
+// first few. An "id" is whatever the model wrote in that field, and a malformed
+// record's can be a whole sentence, or an instruction of the model's own
+// ("Reply ONLY with a valid JSON object…"). A note is read next turn as the
+// engine's word, so it carries enough of an id to recognise it and no more.
+export const RECEIPT_ID_MAX_CHARS = 48;
+export const quoteReceiptIds = (ids, { limit = 6, maxChars = RECEIPT_ID_MAX_CHARS } = {}) => {
+  const list = array(ids).map((id) => clip(id, maxChars)).filter(Boolean);
+  const shown = list.slice(0, limit).join(", ");
+  return list.length > limit ? `${shown} and ${list.length - limit} more` : shown;
+};
+
 // Folds a finished draft into the turn's receipt. A segment's validator may run
 // several times before its answer is accepted; only the accepted run's draft is
 // merged, so a rejected attempt's drops never reach the record.
