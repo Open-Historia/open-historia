@@ -171,3 +171,24 @@ test("the setup window can show the update and offer to open the game now", () =
   assert.match(page, /window\.ohSetup\.updateLater\(\)/);
   assert.match(page, /id="later"/);
 });
+
+// The stable app's update screen offers the beta; the beta's own never does.
+test("the stable app's update screen offers the beta, opened in the player's browser", () => {
+  const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
+  const main = read("electron/main.cjs");
+  const preload = read("electron/preload.cjs");
+  const page = read("electron/setup.html");
+  assert.match(main, /send: \(payload\) => sendToSetup\("setup:update", \{ \.\.\.payload, betaOffer: !IS_BETA \}\)/, "offered by the stable build only");
+  assert.match(main, /ipcMain\.handle\("setup:open-beta", \(\) => shell\.openExternal\(BETA_DOWNLOAD_URL\)\)/);
+  const url = /const BETA_DOWNLOAD_URL = process\.platform === "win32"\s*\? "([^"]+)"\s*: "([^"]+)";/.exec(main);
+  assert.ok(url, "the beta's address is a constant in main.cjs");
+  assert.equal(url[1], "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe");
+  assert.equal(url[2], "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta");
+  assert.match(preload, /openBeta: \(\) => ipcRenderer\.invoke\("setup:open-beta"\)/);
+  assert.match(page, /<div class="beta" id="beta" hidden>/, "hidden until the app says to offer it");
+  assert.match(page, /beta\.hidden = !betaOffer;/);
+  assert.match(page, /window\.ohSetup\.openBeta\(\)/);
+  // The map download is not an update: no beta offer there.
+  const mapMode = page.slice(page.indexOf("const showMapDownload"), page.indexOf("window.ohSetup.onUpdate("));
+  assert.match(mapMode, /beta\.hidden = true;/);
+});
