@@ -61,6 +61,19 @@ export const BATCH_MAX_CHARS = 6000;
 export const BATCH_MIN_STRINGS = 30;
 const SCAN_DEBOUNCE_MS = 350;
 const MAX_CONSECUTIVE_FAILURES = 3;
+// How long the queue rests after that many failures in a row: a provider
+// hiccup is usually over in a minute.
+export const FAILURE_PAUSE_MS = 60 * 1000;
+// How long it rests when NOTHING in the Fallback list can answer (no key, a
+// rejected key, no entry at all). Asking again a minute later cannot work:
+// the list is as it was. A player's log showed it trying anyway, three calls
+// and a warning every minute for as long as the game was open. So the rests
+// grow, a minute, then five, then half an hour at a time, and the queue
+// starts again by itself the moment the list can answer (onFallbackChanged).
+export const UNAVAILABLE_PAUSES_MS = Object.freeze([60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000]);
+// A key is typed a character at a time, and every character is a change to the
+// list: look again once the typing has stopped.
+const FALLBACK_SETTLE_MS = 3000;
 const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-description", "alt"];
 
 // Elements whose text is user-authored, machine-formatted, or must stay
@@ -89,6 +102,13 @@ let inFlight = false;
 let stopped = false;
 let cooldownUntil = 0;
 let failureCount = 0;
+// Nothing in the Fallback list could answer: how many times running, the
+// reason already written to the log (it is said once, not at every look), and
+// whether that is what the queue is resting for.
+let unavailableCount = 0;
+let unavailableSaid = "";
+let waitingForFallback = false;
+let fallbackSettleTimer = null;
 let observer = null;
 let scanTimer = null;
 let persistTimer = null;
@@ -483,6 +503,45 @@ export const planTranslationBatch = (strings, { maxStrings = BATCH_MAX_STRINGS, 
 // Shrinks on failure, recovers on success (see BATCH_MIN_STRINGS).
 let batchStrings = BATCH_MAX_STRINGS;
 
+// What a failed batch does to the queue. Pure, so the rule can be tested
+// without a DOM or a provider.
+//
+// Two kinds of failure, told apart by the error the Fallback list's runner
+// throws (AI/fallbackRunner.js `fallbackUnavailable`):
+//
+// - Nothing in the list can answer. One failure settles it, so the queue rests
+//   at once, without the two further calls a hiccup is allowed, and for longer
+//   each time running (UNAVAILABLE_PAUSES_MS). When every entry is Spent the
+//   runner knows when the first comes back, and the rest lasts until then: a
+//   call before it only goes to models that have said they are out. The batch
+//   is not made smaller: its size was never the trouble, and the first request
+//   after the fix would carry an eighth of what it could.
+// - Anything else is a hiccup: the next call follows at once with a smaller
+//   batch, and the third failure running rests the queue for a minute.
+//
+// `failures` and `unavailable` are the counts so far; the answer carries the
+// new ones, when the queue may next ask (`pauseUntil`, 0 for at once) and
+// whether to halve the batch.
+export const planTranslationPause = ({ error, failures = 0, unavailable = 0, now = Date.now() } = {}) => {
+  const nothingCanAnswer = error?.fallbackUnavailable;
+  if (nothingCanAnswer) {
+    const before = Math.max(0, Math.trunc(Number(unavailable)) || 0);
+    const rest = UNAVAILABLE_PAUSES_MS[Math.min(before, UNAVAILABLE_PAUSES_MS.length - 1)];
+    const firstBack = Number(nothingCanAnswer.nextResetAt);
+    return {
+      kind: "unavailable",
+      pauseUntil: Math.max(now + rest, Number.isFinite(firstBack) ? firstBack : 0),
+      failures: 0,
+      unavailable: before + 1,
+      shrink: false,
+    };
+  }
+  if (failures + 1 >= MAX_CONSECUTIVE_FAILURES) {
+    return { kind: "paused", pauseUntil: now + FAILURE_PAUSE_MS, failures: 0, unavailable: 0, shrink: true };
+  }
+  return { kind: "retry", pauseUntil: 0, failures: failures + 1, unavailable: 0, shrink: true };
+};
+
 const processQueue = async () => {
   if (inFlight || stopped || pending.size === 0 || Date.now() < cooldownUntil) {
     return;
@@ -494,21 +553,41 @@ const processQueue = async () => {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
       const batch = planTranslationBatch(pending, { maxStrings: batchStrings });
+      // Whatever this call's own marks on the list set off is not news to it.
+      waitingForFallback = false;
       const result = await translateBatch(batch)
         .then((translations) => ({ translations }))
         .catch((error) => ({ error }));
       if (result.error) {
-        batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
-        failureCount += 1;
-        if (failureCount >= MAX_CONSECUTIVE_FAILURES) {
+        const plan = planTranslationPause({ error: result.error, failures: failureCount, unavailable: unavailableCount });
+        failureCount = plan.failures;
+        unavailableCount = plan.unavailable;
+        if (plan.shrink) batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
+        // A call that failed some other way reached further than the list did
+        // last time, so the list's old complaint is news again if it returns.
+        if (plan.kind !== "unavailable") unavailableSaid = "";
+        if (plan.pauseUntil) {
           // Back off instead of giving up for the session: a provider hiccup
           // shouldn't leave the rest untranslated forever.
-          failureCount = 0;
-          cooldownUntil = Date.now() + 60000;
-          console.warn(
-            `[i18n] translation paused for 60s after repeated failures (${result.error?.message || "unknown"}). ` +
-            `Check the AI provider settings; untranslated text stays in English meanwhile.`,
-          );
+          cooldownUntil = plan.pauseUntil;
+          const reason = result.error?.message || "unknown";
+          if (plan.kind === "unavailable") {
+            waitingForFallback = true;
+            // Once per reason: the list is looked at again from time to time,
+            // and it saying the same thing again is not a new problem.
+            if (reason !== unavailableSaid) {
+              unavailableSaid = reason;
+              console.warn(
+                `[i18n] translation is waiting for a model that can answer: ${/[.!?]$/.test(reason) ? reason : `${reason}.`} ` +
+                `It starts again when the Fallback list can answer; untranslated text stays in English meanwhile.`,
+              );
+            }
+          } else {
+            console.warn(
+              `[i18n] translation paused for 60s after repeated failures (${reason}). ` +
+              `Check the AI provider settings; untranslated text stays in English meanwhile.`,
+            );
+          }
           if (progressEl) {
             progressEl.remove();
             progressEl = null;
@@ -517,6 +596,8 @@ const processQueue = async () => {
       } else {
         if (batchStrings < BATCH_MAX_STRINGS) batchStrings = BATCH_MAX_STRINGS;
         failureCount = 0;
+        unavailableCount = 0;
+        unavailableSaid = "";
         batch.forEach((source, index) => {
           const translated = typeof result.translations[index] === "string"
             ? result.translations[index].trim()
@@ -540,6 +621,50 @@ const processQueue = async () => {
     inFlight = false;
     updateProgress();
   }
+};
+
+// ---- the Fallback list changed ----
+
+// Whether anything in the Fallback list could answer a translation right now,
+// as its runner would judge it, without asking a model: an entry that has its
+// key or its address, and one that is neither Spent nor Unusable. Late
+// imports, like translateBatch's: the queue only waits after a call, so they
+// are loaded.
+const fallbackCanAnswer = async () => {
+  try {
+    const [{ fallbackAvailability }, { fallbackStateStore, isFallbackListConfigured, resolveTaskFallbackEntries }] = await Promise.all([
+      import("../Game/AI/fallbackRunner.js"),
+      import("../Game/AI/providerConfig.js"),
+    ]);
+    if (!isFallbackListConfigured()) return false;
+    const { entries } = resolveTaskFallbackEntries("translation");
+    return fallbackAvailability({ entries, store: fallbackStateStore }).canAnswer;
+  } catch {
+    return false; // the queue still looks again when its rest is over
+  }
+};
+
+// providerConfig.js fires "ai:fallback-changed" for anything a Settings row
+// shows: an edit, a mark, an answer. While the queue rests because nothing
+// could answer, that is the news it is resting for: a key typed in, an entry
+// added, a model that answered some other call. It is a different list now, so
+// the rests start from the shortest again.
+const onFallbackChanged = () => {
+  if (!waitingForFallback || stopped) return;
+  clearTimeout(fallbackSettleTimer);
+  fallbackSettleTimer = setTimeout(async () => {
+    if (!waitingForFallback || stopped || inFlight) return;
+    if (!(await fallbackCanAnswer())) return;
+    if (!waitingForFallback || stopped || inFlight) return;
+    waitingForFallback = false;
+    unavailableCount = 0;
+    cooldownUntil = 0;
+    if (pending.size > 10) {
+      showProgress();
+      updateProgress();
+    }
+    void processQueue();
+  }, FALLBACK_SETTLE_MS);
 };
 
 // ---- content ----
@@ -818,6 +943,7 @@ export const startTranslator = () => {
     window.addEventListener("oh:active-game-changed", () => {
       void collectAndTranslate();
     });
+    window.addEventListener("ai:fallback-changed", onFallbackChanged);
     await collectAndTranslate();
   })();
 };
@@ -827,6 +953,7 @@ export const stopTranslator = () => {
   translatorActive = false;
   observer?.disconnect();
   clearTimeout(scanTimer);
+  clearTimeout(fallbackSettleTimer);
   progressEl?.remove();
   progressEl = null;
 };
