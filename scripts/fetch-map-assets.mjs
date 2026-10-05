@@ -12,6 +12,7 @@
 // Usage:
 //   node scripts/fetch-map-assets.mjs            # verify sha256, re-fetch anything that differs
 //   node scripts/fetch-map-assets.mjs --ensure   # faster: only fetch files that are missing / wrong size
+//   ... --progress                               # also print `@progress {"asset","received","total"}` lines while downloading
 //
 // Manifest paths are relative to the current directory, except that the server
 // reads its folders from OH_ASSETS_DIR and OH_DATA_DIR when they are set, and so
@@ -24,7 +25,7 @@
 // update. On any problem it warns and leaves the existing file in place.
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { readFile, writeFile, stat, mkdir, rename, unlink } from "node:fs/promises";
+import { open, readFile, stat, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +55,25 @@ export const resolveAssetTarget = (assetPath, { root, assetsDir = "", dataDir = 
   return target.startsWith(base + path.sep) ? target : null;
 };
 
+// Streams a response body into `file`, hashing as it arrives, so a 100 MB
+// archive is never held in memory whole. Resolves with the SHA-256.
+const streamToFile = async (body, file, onBytes) => {
+  const hash = createHash("sha256");
+  const out = await open(file, "w");
+  let received = 0;
+  try {
+    for await (const chunk of body) {
+      hash.update(chunk);
+      await out.write(chunk);
+      received += chunk.byteLength;
+      onBytes(received);
+    }
+  } finally {
+    await out.close();
+  }
+  return hash.digest("hex");
+};
+
 // Makes the files on disk match `manifest`. Resolves with the counts; never
 // throws for a single file.
 export const syncMapAssets = async ({
@@ -62,6 +82,9 @@ export const syncMapAssets = async ({
   assetsDir = "",
   dataDir = "",
   ensure = false,
+  progress = false,
+  progressEveryMs = 250,
+  now = Date.now,
   fetchImpl = globalThis.fetch,
   log = console.log,
   warn = console.error,
@@ -98,14 +121,27 @@ export const syncMapAssets = async ({
     const mb = (asset.bytes / 1e6).toFixed(asset.bytes >= 1e7 ? 0 : 1);
     log(`  downloading ${asset.asset} (${mb} MB)...`);
     const tmp = `${dst}.download`;
+    // --progress: the desktop setup window turns these lines into its bar
+    // (electron/main.cjs), at most one every progressEveryMs plus the first and
+    // the last, so a slow link still moves it and a fast one does not flood it.
+    let lastReport = -Infinity;
+    const report = (received, force = false) => {
+      if (!progress) return;
+      const at = now();
+      if (!force && at - lastReport < progressEveryMs) return;
+      lastReport = at;
+      log(`@progress ${JSON.stringify({ asset: asset.asset, received, total: asset.bytes })}`);
+    };
     try {
       const res = await fetchImpl(url, { redirect: "follow" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (sha256(buf) !== asset.sha256) throw new Error("checksum mismatch");
+      if (!res.body) throw new Error("empty response");
       await mkdir(path.dirname(dst), { recursive: true });
-      await writeFile(tmp, buf);
+      report(0, true);
+      const got = await streamToFile(res.body, tmp, report);
+      if (got !== asset.sha256) throw new Error("checksum mismatch");
       await rename(tmp, dst);
+      report(asset.bytes, true);
       downloaded += 1;
     } catch (error) {
       warn(`  [warn] could not download ${asset.asset} (${error.message}); the map may not display.`);
@@ -143,6 +179,7 @@ const main = async () => {
     assetsDir: process.env.OH_ASSETS_DIR || "",
     dataDir: process.env.OH_DATA_DIR || "",
     ensure: process.argv.includes("--ensure"),
+    progress: process.argv.includes("--progress"),
   });
 };
 
