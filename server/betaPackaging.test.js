@@ -111,6 +111,23 @@ test("latest.json offers files electron-builder actually produces", () => {
   }
 });
 
+test("an update is downloaded in full, because every build is published under one name", () => {
+  // electron-updater's differential download compares the installed build's
+  // block map with the new one's, and looks each up by the installer's file
+  // name. That name carries no version here, and the release it sits on is a
+  // fixed tag, so both lookups fetch the NEW build's block map: a player's log
+  // showed "To download: 0 KB (0%)", then a sha512 mismatch on the installer it
+  // assembled out of the old one, and only then the full download.
+  for (const name of [value(block(builderYml, "nsis"), "artifactName"), packageJson.build.nsis.artifactName]) {
+    assert.doesNotMatch(name, /\$\{(?:version|buildVersion)\}/, "a versioned installer name is what a differential download needs");
+  }
+  assert.match(
+    mainCjs,
+    /autoUpdater\.autoDownload = false;\r?\n(?:\s*\/\/[^\n]*\n)*\s*autoUpdater\.disableDifferentialDownload = true;/,
+    "the updater would try a differential download that can never succeed",
+  );
+});
+
 test("the workflow publishes the feed files electron-updater reads", () => {
   // Without latest*.yml at the tag, `publish` in the config points at nothing:
   // the banner still appears, pressing update fails, and nothing in CI notices.

@@ -222,6 +222,12 @@ const setupAutoUpdater = () => {
   // The banner decides when to download — a player on a metered connection
   // should not have ~100MB pulled out from under them by opening the game.
   autoUpdater.autoDownload = false;
+  // Every installer is published under one fixed name on a rolling release, so
+  // the "old" block map electron-updater fetches for a differential download is
+  // the new one: it concludes nothing changed, assembles the old installer
+  // again, fails the checksum and only then downloads in full. Go straight to
+  // the full download.
+  autoUpdater.disableDifferentialDownload = true;
   // If they download but never press Restart, it installs on the next quit
   // instead of being thrown away.
   autoUpdater.autoInstallOnAppQuit = true;
