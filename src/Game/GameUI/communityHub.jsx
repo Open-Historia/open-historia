@@ -224,7 +224,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status,
         <div
           title={post.official ? "Official: posted by a hub maintainer (verified by GitHub, not by the title)" : undefined}
           style={{
-            // The OFFICIAL badge marks a verified post (hub-owner). A random poster writing
+            // The OFFICIAL badge marks a post made by a team member (the hub's owner or a collaborator). A random poster writing
             // "official" in their title stays white.
             color: post.official ? "#e4e4e7" : "#fff",
             fontSize: "0.95rem",
@@ -765,7 +765,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
               Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
-              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a verified post.</span>
+              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a post made by a team member of the game.</span>
             </div>
             <div style={{ flex: 1 }} />
             <input
