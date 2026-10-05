@@ -20,6 +20,7 @@ import {
     getEntryStatus,
     getFallbackList,
     getProviderMeta,
+    getProviderSettings,
     getRateLimitPolicy,
     getReasoningEnabled,
     getRecentModels,
@@ -31,6 +32,7 @@ import {
     removeEntry,
     resetEntryState,
     setRateLimitPolicy,
+    setProviderField,
     setReasoningEnabled,
     setTaskPick,
     updateConnection,
@@ -673,6 +675,7 @@ const ensureConnectionId = (connections) => connections[0]?.id ?? addConnection(
 const ConnectionFields = ({ connection, sharedBy = 1 }) => {
     const set = (field) => (value) => updateConnection(connection.id, { [field]: value });
     const selfHosted = providerSetupRequirement(connection.provider) === "endpoint";
+    const isCodex = connection.provider === "chatgpt-codex" || connection.provider === "chatgpt-plan";
     const meta = getProviderMeta(connection.provider);
     return (
         <>
@@ -694,14 +697,23 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
             />
         )}
-        <SettingsInput
-        label={selfHosted ? "API key (optional)" : `${meta.label} API key`}
-        type="password"
-        value={connection.apiKey}
-        onChange={set("apiKey")}
-        placeholder={selfHosted ? "Leave empty if your server needs none" : `Paste ${meta.label} API key`}
-        helperText={`Stored only in this browser.${sharedBy > 1 ? ` Shared by ${sharedBy} entries in your list.` : ""}`}
-        />
+        {!isCodex && (
+            <SettingsInput
+            label={selfHosted ? "API key (optional)" : `${meta.label} API key`}
+            type="password"
+            value={connection.apiKey}
+            onChange={set("apiKey")}
+            placeholder={selfHosted ? "Leave empty if your server needs none" : `Paste ${meta.label} API key`}
+            helperText={`Stored only in this browser.${sharedBy > 1 ? ` Shared by ${sharedBy} entries in your list.` : ""}`}
+            />
+        )}
+        {isCodex && (
+            <div style={{ ...helperStyle, marginBottom: "0.85rem" }}>
+            {connection.provider === "chatgpt-plan"
+                ? "Connect with Sign in with ChatGPT and use your ChatGPT plan. No API key is required."
+                : "ChatGPT Codex uses the Codex CLI login on this PC. No OpenAI API key or usage-based API billing is used."}
+            </div>
+        )}
         <SettingsInput
         label="Custom parameters (JSON)"
         multiline
@@ -721,6 +733,194 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
             </>
         )}
         </>
+    );
+};
+
+// Codex App Server reports Unix timestamps in seconds, while the shared
+// Fallback formatter consumes JavaScript milliseconds. Accept either unit so a
+// future App Server change cannot silently turn a real reset into an epoch-time
+// clock such as "02:10".
+const formatCodexResetTime = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "unknown";
+    return formatResetTime(numeric < 1e12 ? numeric * 1000 : numeric);
+};
+
+// Codex is the one provider whose model catalogue and account state come from
+// the local Codex App Server rather than an API endpoint. Keep this status card
+// next to the Fallback entry so the selected entry remains the single source of
+// truth for the model, while the effort preference stays shared across Codex
+// calls (the App Server accepts it as a per-turn option).
+const CodexStatus = ({ entry, provider = "chatgpt-codex" }) => {
+    const official = provider === "chatgpt-plan";
+    const apiBase = official ? "/api/ai/chatgpt" : "/api/ai/codex";
+    const [status, setStatus] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+    const [effort, setEffort] = useState(() => getProviderSettings(provider).effort || "");
+
+    const loadStatus = async (quiet = false) => {
+        if (!quiet) setLoading(true);
+        setError("");
+        try {
+            const response = await fetch(`${apiBase}/status`, { cache: "no-store" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || `Codex status failed (${response.status})`);
+            setStatus(data);
+        } catch (loadError) {
+            setStatus(null);
+            setError(loadError?.message || String(loadError));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadStatus();
+        // This panel is mounted only for a Codex Fallback entry.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [entry.id, provider]);
+
+    useEffect(() => {
+        if (!official || !status?.pendingLogin) return;
+        const timer = setInterval(() => { void loadStatus(true); }, 2500);
+        return () => clearInterval(timer);
+        // Poll only while the system browser is completing authorization.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [official, status?.pendingLogin]);
+
+    const authAction = async (action, body = {}) => {
+        setError("");
+        try {
+            const response = await fetch(`${apiBase}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "ChatGPT connection operation failed.");
+            await loadStatus();
+            if (action === "logout" && !data.revoked) setError("Local credentials were cleared. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings / Usage.");
+        } catch (failure) { setError(failure?.message || "ChatGPT connection operation failed."); }
+    };
+
+    const selectedModel = status?.models?.find((model) => model.id === entry.model)
+        ?? status?.models?.find((model) => model.id === status.defaultModel)
+        ?? status?.models?.[0]
+        ?? null;
+    const efforts = selectedModel?.supportedReasoningEfforts ?? [];
+
+    useEffect(() => {
+        if (!status?.models?.length) return;
+        const preferred = status.models.find((model) => model.id === entry.model)
+            ?? status.models.find((model) => model.id === status.defaultModel)
+            ?? status.models[0];
+        if (preferred?.id && preferred.id !== entry.model) {
+            updateEntry(entry.id, { model: preferred.id });
+        }
+        const configuredEffort = getProviderSettings(provider).effort || effort;
+        const nextEffort = preferred?.supportedReasoningEfforts?.find((item) => item.value === configuredEffort)?.value
+            ?? preferred?.supportedReasoningEfforts?.find((item) => item.value === "medium")?.value
+            ?? preferred?.defaultReasoningEffort
+            ?? preferred?.supportedReasoningEfforts?.[0]?.value
+            ?? "";
+        if (nextEffort && nextEffort !== configuredEffort) {
+            setProviderField(provider, "effort", nextEffort);
+            setEffort(nextEffort);
+            window.dispatchEvent(new Event("ai:fallback-changed"));
+        }
+    }, [entry.id, entry.model, effort, status, provider]);
+
+    const changeModel = (modelId) => {
+        updateEntry(entry.id, { model: modelId });
+        const model = status?.models?.find((candidate) => candidate.id === modelId);
+        const available = model?.supportedReasoningEfforts ?? [];
+        const nextEffort = available.find((item) => item.value === effort)?.value
+            ?? available.find((item) => item.value === "medium")?.value
+            ?? model?.defaultReasoningEffort
+            ?? available[0]?.value
+            ?? "";
+        if (nextEffort !== effort) {
+            setProviderField(provider, "effort", nextEffort);
+            setEffort(nextEffort);
+            window.dispatchEvent(new Event("ai:fallback-changed"));
+        }
+    };
+
+    const changeEffort = (value) => {
+        setEffort(value);
+        setProviderField(provider, "effort", value);
+        window.dispatchEvent(new Event("ai:fallback-changed"));
+    };
+
+    return (
+        <div style={{ marginBottom: "0.85rem", padding: "0.7rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.18)", border: "1px solid rgba(255,255,255,0.08)", fontSize: "0.76rem", lineHeight: 1.55 }}>
+        <div data-no-translate style={{ fontWeight: 700, marginBottom: "0.25rem" }}>{official ? "ChatGPT (Sign in)" : "ChatGPT Codex"}</div>
+        {official && (
+            <div data-no-translate style={{ marginBottom: "0.5rem" }}>
+            <div>ChatGPT account for Open Historia</div>
+            {status?.profiles?.length > 0 && <select aria-label="ChatGPT connection" value={status.account?.activeId ?? ""} onChange={(event) => authAction("account", { id: event.target.value })} disabled={status.pendingLogin} style={inputStyle}>
+                <option value="" disabled>Select a connection</option>
+                {status.profiles.map((profile) => <option style={{ color: "black" }} key={profile.id} value={profile.id}>{profile.label} {profile.maskedEmail || ""}</option>)}
+            </select>}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+            <button type="button" disabled={loading || status?.pendingLogin} onClick={() => authAction("login", { reconsent: true })} style={smallButtonStyle}>Continue with ChatGPT</button>
+            <button type="button" disabled={loading || status?.pendingLogin} onClick={() => authAction("login", { newProfile: true })} style={smallButtonStyle}>Add an account</button>
+            {status?.pendingLogin && <button type="button" onClick={() => authAction("login/cancel")} style={smallButtonStyle}>Cancel sign-in</button>}
+            {status?.account?.loggedIn && <button type="button" onClick={() => authAction("logout")} style={smallButtonStyle}>Sign out</button>}
+            <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer" style={{ ...smallButtonStyle, textDecoration: "none" }}>Manage ChatGPT usage</a>
+            </div>
+            {status?.pendingLogin && <div>Complete authorization in this PC's system browser.</div>}
+            {status?.loginError && <div style={{ color: "#fca5a5" }}>{status.loginError}</div>}
+            <div style={helperStyle}>Manage connections on the host PC. Private-LAN access requires explicit server configuration. Manage app limits and credit permissions in ChatGPT Settings / Usage.</div>
+            </div>
+        )}
+        {official && status?.welcomeRequired && <div data-no-translate role="dialog" aria-modal="true" aria-label="Uses your ChatGPT plan" style={{ position: "fixed", inset: 0, zIndex: 15000, display: "grid", placeItems: "center", padding: "1rem", background: "rgba(0,0,0,0.7)" }}>
+            <div style={{ background: "#202123", color: "white", padding: "1.5rem", borderRadius: "12px", maxWidth: "28rem" }}>
+            <h3>Uses your ChatGPT plan</h3>
+            <p>Text and scenario generation through this connection uses your ChatGPT plan. Manage app limits and credit permissions in ChatGPT Settings / Usage.</p>
+            <button type="button" onClick={() => authAction("welcome")} style={smallButtonStyle}>Got it</button>
+            </div>
+        </div>}
+        {loading && <div>{official ? "Checking the ChatGPT connection…" : "Checking the local Codex login…"}</div>}
+        {!loading && error && <div style={{ color: "#fca5a5" }}>{error}</div>}
+        {!loading && status && (
+            <>
+            <div>
+            ChatGPT: <strong>{status.account?.loggedIn ? "Logged in" : "Not logged in"}</strong>
+            {status.account?.planType ? ` (${status.account.planType})` : ""}
+            {status.account?.maskedEmail ? ` · ${status.account.maskedEmail}` : ""}
+            </div>
+            <div>Codex CLI: {status.cliVersion || "unknown"}</div>
+            {official && <div data-no-translate>{status.account?.planUsageEnabled ? "ChatGPT plan enabled" : "ChatGPT plan permission required"} · Check usage in ChatGPT Settings / Usage.</div>}
+            {status.rateLimits?.primary && (
+                <div>{status.rateLimits.primary.windowDurationMins / 60}h usage: {status.rateLimits.primary.usedPercent}% · resets {formatCodexResetTime(status.rateLimits.primary.resetsAt)}</div>
+            )}
+            {status.rateLimits?.secondary && (
+                <div>{status.rateLimits.secondary.windowDurationMins / 1440}d usage: {status.rateLimits.secondary.usedPercent}% · resets {formatCodexResetTime(status.rateLimits.secondary.resetsAt)}</div>
+            )}
+            </>
+        )}
+        <button type="button" onClick={() => loadStatus()} disabled={loading} style={{ ...smallButtonStyle, marginTop: "0.5rem", cursor: loading ? "wait" : "pointer" }}>
+        {official ? "Refresh ChatGPT status" : "Refresh Codex status"}
+        </button>
+        <div style={{ marginTop: "0.7rem" }}>
+        <label style={labelStyle}>Model</label>
+        {status?.models?.length ? (
+            <select data-no-translate value={selectedModel?.id ?? ""} onChange={(event) => changeModel(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            {status.models.map((model) => <option key={model.id} value={model.id} style={{ color: "black" }}>{model.displayName || model.id}</option>)}
+            </select>
+        ) : status ? (
+            <div data-no-translate="" style={helperStyle}>{official ? status.account?.planUsageEnabled ? "No models are available for this account." : "Sign in with ChatGPT to select a model." : "No models are available for this ChatGPT account."}</div>
+        ) : (
+            <SettingsInput label="" value={entry.model} onChange={(value) => updateEntry(entry.id, { model: value })} placeholder="Model id" helperText="The Codex model list appears after the local App Server is reachable." />
+        )}
+        <div data-no-translate="" style={helperStyle}>{official ? "Models come from the signed-in account catalog, including older models. Reasoning options are read from current model metadata." : "All non-hidden models and reasoning options come from the current Codex environment."}</div>
+        </div>
+        <div style={{ marginTop: "0.7rem" }}>
+        <label style={labelStyle}>Reasoning effort</label>
+        <select data-no-translate value={efforts.some((item) => item.value === effort) ? effort : (efforts[0]?.value ?? "")} disabled={!efforts.length} onChange={(event) => changeEffort(event.target.value)} style={{ ...inputStyle, cursor: efforts.length ? "pointer" : "not-allowed" }}>
+        {efforts.map((item) => <option key={item.value} value={item.value} style={{ color: "black" }}>{item.value}</option>)}
+        </select>
+        <div style={helperStyle}>Values supported by the selected model. Medium is selected when available.</div>
+        </div>
+        </div>
     );
 };
 
@@ -748,16 +948,20 @@ const EntryEditor = ({ entry, connections, entries }) => {
             </div>
         )}
         {connection && <ConnectionFields connection={connection} sharedBy={sharedBy} />}
-        <SettingsInput
-        label="Model"
-        value={entry.model}
-        onChange={set("model")}
-        suggestions={suggestions}
-        placeholder={provider === "gemini" ? GEMINI_DEFAULT_CHAIN[0] : provider === "openai" ? OPENAI_DEFAULT_MODEL : provider.startsWith("anthropic") ? "claude-haiku-4-5" : "Model id"}
-        helperText={provider === "openai-compatible"
-            ? "Leave blank to auto-pick a chat-capable model from the server's /models."
-            : "Leave blank to use the built-in default."}
-        />
+        {provider === "chatgpt-codex" || provider === "chatgpt-plan" ? (
+            <CodexStatus key={`${entry.id}:${provider}`} entry={entry} provider={provider} />
+        ) : (
+            <SettingsInput
+            label="Model"
+            value={entry.model}
+            onChange={set("model")}
+            suggestions={suggestions}
+            placeholder={provider === "gemini" ? GEMINI_DEFAULT_CHAIN[0] : provider === "openai" ? OPENAI_DEFAULT_MODEL : provider.startsWith("anthropic") ? "claude-haiku-4-5" : "Model id"}
+            helperText={provider === "openai-compatible"
+                ? "Leave blank to auto-pick a chat-capable model from the server's /models."
+                : "Leave blank to use the built-in default."}
+            />
+        )}
         <details style={{ marginBottom: "0.4rem" }}>
         <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem", ...(touch ? TOUCH_SUMMARY : null) }}>This model only</summary>
         <SettingsInput

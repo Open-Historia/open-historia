@@ -36,6 +36,7 @@ const TUTORIAL_EMBED_URL = `https://www.youtube-nocookie.com/embed/${TUTORIAL_VI
 const AI_STUDIO_KEY_URL = "https://aistudio.google.com/app/apikey";
 
 const MODEL_PLACEHOLDERS = {
+  "chatgpt-codex": "Blank uses the current Codex default",
   // Blank keeps the default list: the default model first, its backup behind it.
   gemini: `Blank: ${GEMINI_DEFAULT_CHAIN[0]}, ${GEMINI_DEFAULT_CHAIN[1]} as backup`,
   anthropic: "claude-haiku-4-5",
@@ -128,10 +129,11 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
   // what the video needs instead, and show it when the network is back.
   const online = useBrowserOnline();
   const modelListId = useId();
+  const usesCodexLogin = provider === "chatgpt-codex" || provider === "chatgpt-plan";
   const selfHosted = providerSetupRequirement(provider) === "endpoint";
   const meta = getProviderMeta(provider);
   const recentModels = useMemo(() => getRecentModels(provider), [provider]);
-  const canSave = selfHosted ? endpoint.trim().length > 0 : apiKey.trim().length > 0;
+  const canSave = usesCodexLogin || (selfHosted ? endpoint.trim().length > 0 : apiKey.trim().length > 0);
   const isMobile = useIsMobile();
   const isTouch = useTouchPrimary();
   const leaving = usePresenceLeaving();
@@ -143,6 +145,8 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
   const choose = (next) => {
     setProvider(next);
     setError("");
+    setModel("");
+    setApiKey("");
     setEndpoint(ENDPOINT_PLACEHOLDERS[next] && providerSetupRequirement(next) === "endpoint" ? ENDPOINT_PLACEHOLDERS[next] : "");
   };
 
@@ -212,7 +216,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
           Until it is set, time skips fall back to canned events and the advisor cannot answer. Paste your details below and you are ready to play.
         </div>
 
-        <div
+        {!usesCodexLogin && <div
           style={{
             background: "rgba(255,255,255,0.04)",
             border: "1px solid rgba(255,255,255,0.09)",
@@ -266,7 +270,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
               Show the video tutorial
             </button>
           )}
-        </div>
+        </div>}
 
         <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.95rem" }}>
           <div>
@@ -309,7 +313,13 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
               </div>
             </div>
           )}
-          <div>
+          {usesCodexLogin ? (
+            <div style={helperStyle}>
+              {provider === "chatgpt-plan"
+                ? "Connect with Sign in with ChatGPT in Settings > AI. Uses your ChatGPT plan; no API key is required."
+                : "ChatGPT Codex uses this PC's Codex login. Choose a model and reasoning effort in Settings > AI; no API key is required."}
+            </div>
+          ) : <div>
             <label htmlFor={`${modelListId}-key`} style={labelStyle}>{selfHosted ? "API key (optional)" : `${meta.label} API key`}</label>
             <input
               id={`${modelListId}-key`}
@@ -323,7 +333,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
               style={inputStyle}
             />
             <div style={helperStyle}>Stored only in this browser. It is sent to {meta.label} and nowhere else.</div>
-          </div>
+          </div>}
           <div>
             <label htmlFor={`${modelListId}-model`} style={labelStyle}>Model (optional)</label>
             <input

@@ -3,6 +3,7 @@
  *  host allowlist. Kept separate so they can be unit-tested (security.test.js)
  *  without spinning up the server. */
 import path from "path";
+import net from "node:net";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -25,6 +26,69 @@ export const isLoopbackAddress = (addr) => {
   if (!addr) return false;
   const a = String(addr).replace(/^::ffff:/i, "");
   return a === "::1" || a === "127.0.0.1" || /^127\./.test(a);
+};
+
+// True for addresses that should only be reachable on a private/local network.
+// This deliberately excludes public IPs. IPv4-mapped IPv6 addresses are
+// unwrapped because Node commonly reports LAN clients as ::ffff:192.168.x.x.
+export const isPrivateNetworkAddress = (addr) => {
+  if (!addr) return false;
+  const value = String(addr).replace(/^::ffff:/i, "").split("%")[0];
+  if (isLoopbackAddress(value)) return true;
+
+  if (net.isIP(value) === 4) {
+    const octets = value.split(".").map(Number);
+    return (
+      octets[0] === 10 ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168) ||
+      (octets[0] === 169 && octets[1] === 254)
+    );
+  }
+
+  if (net.isIP(value) === 6) {
+    const lower = value.toLowerCase();
+    return lower.startsWith("fc") || lower.startsWith("fd") || /^fe[89ab]/.test(lower);
+  }
+  return false;
+};
+
+// Codex is normally PC-only. A dedicated launcher can opt into private-LAN
+// access, but requests must still come from the app's own origin. This keeps
+// ChatGPT credentials in the server process and prevents unrelated web pages
+// or public clients from spending the user's Codex allowance.
+export const codexRequestAllowed = ({ method, remoteAddress, origin, host, allowPrivateLan = false }) => {
+  const remoteAllowed =
+    isLoopbackAddress(remoteAddress) ||
+    (allowPrivateLan && isPrivateNetworkAddress(remoteAddress));
+  if (!remoteAllowed) return { allowed: false, reason: "remote-address" };
+
+  // A hostile DNS name can resolve to loopback. Trust only explicit local
+  // addresses, not an attacker-controlled Host that happens to match Origin.
+  try {
+    const hostname = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "");
+    if (hostname !== "localhost" && !isLoopbackAddress(hostname)
+      && !(allowPrivateLan && isPrivateNetworkAddress(hostname))) {
+      return { allowed: false, reason: "untrusted-host" };
+    }
+  } catch {
+    return { allowed: false, reason: "invalid-host" };
+  }
+
+  if (!origin) {
+    if (isLoopbackAddress(remoteAddress)) return { allowed: true, reason: "loopback-no-origin" };
+    return SAFE_METHODS.has(String(method || "").toUpperCase())
+      ? { allowed: true, reason: "lan-safe-method" }
+      : { allowed: false, reason: "lan-origin-required" };
+  }
+
+  try {
+    return new URL(origin).host === host
+      ? { allowed: true, reason: "same-origin" }
+      : { allowed: false, reason: "cross-origin" };
+  } catch {
+    return { allowed: false, reason: "invalid-origin" };
+  }
 };
 
 // Decide whether a state-changing request may proceed (CSRF / drive-by guard).

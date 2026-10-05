@@ -6,6 +6,7 @@ import {
     getEntryStatus,
     getRateLimitPolicy,
     getReasoningEnabled,
+    getProviderSettings,
     getResolvedFallbackList,
     getTaskPick,
     providerSupportsModelDiscovery,
@@ -1670,6 +1671,91 @@ async function callOpenAICompatible(systemPrompt, history, opts = {}) {
     });
 }
 
+async function callChatGPTCodex(systemPrompt, history, opts = {}) {
+    const provider = opts.entrySettings?.provider === "chatgpt-plan" ? "chatgpt-plan" : "chatgpt-codex";
+    const configured = getProviderSettings(provider);
+    const settings = opts.entrySettings?.provider === provider
+        ? { ...configured, ...opts.entrySettings }
+        : configured;
+    const model = String(settings.model ?? "").trim();
+    const effort = String(configured.effort ?? "").trim();
+    const hasDeadline = Object.prototype.hasOwnProperty.call(opts, "deadline");
+    const timeoutMs = hasDeadline
+        ? (Number.isFinite(opts.deadline) ? Math.max(1, opts.deadline - Date.now()) : 0)
+        : undefined;
+    const controller = new AbortController();
+    const relayAbort = () => controller.abort(opts.signal?.reason);
+    if (opts.signal?.aborted) relayAbort();
+    else opts.signal?.addEventListener("abort", relayAbort, { once: true });
+
+    try {
+        const response = await fetch(provider === "chatgpt-plan" ? "/api/ai/chatgpt/generate" : "/api/ai/codex/generate", {
+            method: "POST",
+            headers: {
+                "Accept": "application/x-ndjson",
+                "Content-Type": "application/json",
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+                systemPrompt,
+                history,
+                model: model || null,
+                effort: effort || null,
+                ...(opts.tool?.schema ? { outputSchema: opts.tool.schema } : {}),
+                ...(timeoutMs === undefined ? {} : { timeoutMs }),
+            }),
+        });
+
+        if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            throw new Error(extractErrorMessage(payload, `ChatGPT Codex request failed (${response.status})`));
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("ChatGPT Codex progress stream is unavailable.");
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let result = null;
+        let streamedText = "";
+
+        const consumeLine = (line) => {
+            if (!line.trim()) return;
+            const event = JSON.parse(line);
+            if (event.type === "progress") {
+                if (!opts.tool && event.progress?.kind === "writing" && typeof event.progress.delta === "string") {
+                    streamedText += event.progress.delta;
+                    try { opts.onChunk?.(event.progress.delta, streamedText); } catch { /* UI callback must not break generation */ }
+                }
+            }
+            if (event.type === "result") result = event.result;
+            if (event.type === "error") throw new Error(event.error?.message || "ChatGPT Codex generation failed.");
+        };
+
+        while (true) {
+            const { done, value } = await reader.read();
+            buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            lines.forEach(consumeLine);
+            if (done) break;
+        }
+        consumeLine(buffer);
+
+        if (typeof result?.text !== "string" || !result.text.trim()) {
+            throw new Error("ChatGPT Codex response did not contain text.");
+        }
+        const text = result.text.trim();
+        if (!opts.tool) return text;
+        try {
+            return { rawText: text, toolInput: JSON.parse(text) };
+        } catch {
+            return { rawText: text, toolInput: null };
+        }
+    } finally {
+        opts.signal?.removeEventListener("abort", relayAbort);
+    }
+}
+
 // Anthropic REQUIRES max_tokens and 400s if it exceeds the model's ceiling (the error
 // states that ceiling). Since the output cap was removed on purpose, request the model's
 // maximum: start high, and on that 400 learn + cache the model's real ceiling so later
@@ -2159,6 +2245,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
 function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
     switch (provider) {
+    case "chatgpt-plan":
+    case "chatgpt-codex":
+        return callChatGPTCodex(systemPrompt, history, providerOpts);
     case "openai":
         return callOpenAI(systemPrompt, history, providerOpts);
     case "anthropic":
