@@ -347,8 +347,8 @@ export const filterProjects = (projects, {
 
     if (wantedStatuses.length && !wantedStatuses.includes(asText(project.status))) return false;
 
-    // Tag chips are OR-ed, not AND-ed: picking "military" and "naval" means "show
-    // me either", which is what a player clicking two chips on a short list
+    // Ticked tags are OR-ed, not AND-ed: picking "military" and "naval" means
+    // "show me either", which is what a player ticking two tags in the menu
     // means. AND-ing them mostly produces an empty board.
     if (wantedTags.length) {
       const own = asArray(project.tags).map((tag) => asText(tag).toLowerCase());
@@ -371,7 +371,7 @@ export const filterProjects = (projects, {
 };
 
 // The tag vocabulary actually present on the board, most-used first, so the
-// filter chips reflect this campaign rather than a fixed list. Open-vocabulary
+// Tags menu reflects this campaign rather than a fixed list. Open-vocabulary
 // tags (see countryTags.js) mean there is no other way to know what exists.
 export const collectProjectTags = (projects) => {
   const counts = new Map();
