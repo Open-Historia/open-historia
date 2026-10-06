@@ -206,6 +206,12 @@ test("a download that fails its checksum leaves nothing behind and is reported",
     manifest: { owner: "o", repo: "r", release: "map-data", assets: [asset] },
     root: dir,
     progress: true,
+    // A clock that stands still: no progress line falls due while the bytes
+    // arrive, so the only line that could say "received 5" is the one printed
+    // for a finished file. On the real clock a slow disk let 250 ms pass
+    // between the first line and the bytes, and that ordinary progress line
+    // failed the check below whenever the whole suite ran at once.
+    now: () => 0,
     fetchImpl: async () => new Response("wrong"),
     log: (line) => lines.push(line),
     warn: (line) => warnings.push(line),
@@ -300,11 +306,12 @@ test("a file the shared folder already holds is left alone, and one it holds wro
   fs.writeFileSync(install.shared("regions.pmtiles"), "regions archive");
   const stamp = new Date(Date.now() - 60_000);
   fs.utimesSync(install.shared("regions.pmtiles"), stamp, stamp);
+  const written = fs.statSync(install.shared("regions.pmtiles")).mtimeMs;
   // And a download of this one that stopped part-way.
   fs.writeFileSync(install.shared("cities.pmtiles"), "citi");
 
   assert.deepEqual(install.relocateOwnFolderMap(), ["cities.pmtiles"]);
-  assert.equal(fs.statSync(install.shared("regions.pmtiles")).mtimeMs, stamp.getTime(), "the stable app's file was not touched");
+  assert.equal(fs.statSync(install.shared("regions.pmtiles")).mtimeMs, written, "the stable app's file was not touched");
   assert.equal(fs.existsSync(install.own("public/assets/regions.pmtiles")), true, "and the beta's copy of it is still its own");
   assert.equal(fs.readFileSync(install.shared("cities.pmtiles"), "utf8"), "cities archive");
   assert.deepEqual(install.missingAssets(), []);
