@@ -22,6 +22,7 @@ import {
     createContextWindowMemory,
     estimateTokens,
     nothingFitsMessage,
+    outputLimitFor,
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
@@ -269,9 +270,11 @@ function parseCustomParams(raw, providerLabel) {
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             return parsed;
         }
-        console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
+        if (providerLabel) console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
     } catch (error) {
-        console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
+        // No label: a second reading of the same field (the request's log
+        // line), which the provider path has already warned about.
+        if (providerLabel) console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
     }
 
     return {};
@@ -1419,6 +1422,8 @@ async function callOpenAIStyleChatCompletions({
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
             : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
+        const outputLimit = outputLimitFor({ maxTokens, customParams: requestCustomParams, localEndpoint: streamLocalEndpoint });
+        const localOutputLimit = outputLimit.source === "local" ? outputLimit.tokens : 0;
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
         // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
@@ -1472,6 +1477,12 @@ async function callOpenAIStyleChatCompletions({
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
                     : {}),
+                // The exception: a local server. With no limit in the request
+                // it applies its own, and koboldcpp's cuts a turn's JSON off
+                // about a thousand tokens in (contextWindow.js
+                // LOCAL_OUTPUT_LIMIT_TOKENS says why this number and no more).
+                // Only where neither the caller nor the entry named one.
+                ...(localOutputLimit ? { [tokenLimitField]: localOutputLimit } : {}),
                 ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
@@ -2514,6 +2525,20 @@ const conversationShape = (systemPrompt, history) => ({
 
 const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 
+// The output limit a request to this entry carries, for the request's log line
+// (contextWindow.js outputLimitFor; callOpenAIStyleChatCompletions works out
+// the same for the request itself). Only the OpenAI-style paths take a limit
+// from the entry's custom parameters as it stands, and only a self-hosted one
+// can be a local server.
+const entryOutputLimit = (entry, maxTokens) => {
+    const openAiStyle = entry?.provider === "openai" || entry?.provider === "openai-compatible";
+    return outputLimitFor({
+        maxTokens,
+        customParams: openAiStyle ? parseCustomParams(entry.customParams) : null,
+        localEndpoint: entry?.provider === "openai-compatible" && isLocalEndpoint(normalizeEndpoint(entry.endpoint)),
+    });
+};
+
 // Lookup rounds (lookupTools.js, toolTurns.js). A structured task may hand
 // callAI `lookups: { tools, execute, maxRounds?, onRound? }`: the lookup
 // functions are declared beside the task's output function, and when the model
@@ -2822,7 +2847,16 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ),
             attempt: (entry, { canFallBack, onChunk }) => {
                 if (record) record.provider = entry.provider;
-                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, callShape, { verbose: true });
+                // The output limit is the entry's as much as the call's: its
+                // custom parameters can name one, and a local server is given
+                // one where nobody did (entryOutputLimit).
+                const limit = entryOutputLimit(entry, providerOpts.maxTokens);
+                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, {
+                    ...callShape,
+                    maxTokens: limit.source === "local" ? `${limit.tokens} (the game's limit for a local server)`
+                        : limit.source === "custom" ? `${limit.tokens} (the entry's custom parameters)`
+                        : callShape.maxTokens,
+                }, { verbose: true });
                 return runWithLookups(lookups, history, (roundHistory, roundOpts) => {
                     // Open from here until this round's answer is in or has
                     // failed: one request, or several when the provider path
@@ -2888,7 +2922,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
             if (debugSink && typeof debugSink === "object") debugSink.stoppedAtOutputLimit = true;
             logDebugEvent("ai-call", `${label}: ${answeredBy.label} stopped at its output limit; the answer may be cut short.`, {
                 replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
-                maxTokens: providerOpts.maxTokens ?? "(not set by the task)",
+                maxTokens: entryOutputLimit(answeredBy, providerOpts.maxTokens).tokens || "(none sent: the provider's own)",
                 ...(usage?.outputTokens ? { outputTokens: usage.outputTokens } : {}),
             });
         }

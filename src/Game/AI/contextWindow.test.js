@@ -8,11 +8,14 @@ import assert from "node:assert/strict";
 
 import {
     CONTEXT_WINDOW_MARGIN,
+    DEFAULT_ANSWER_RESERVE_TOKENS,
+    LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
     describeRememberedWindow,
     estimateTokens,
     nothingFitsMessage,
+    outputLimitFor,
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
@@ -186,4 +189,32 @@ test("when nothing fits, the message names every entry and what to do", () => {
     assert.match(message, /was not sent/);
     assert.match(message, /Settings → AI/);
     assert.match(message, /forget its window/);
+});
+
+// --- the output limit a local server is asked for ---
+//
+// A request with no limit gets the server's own, and koboldcpp's cut a
+// player's answers off about a thousand tokens in, mid-word, time after time.
+
+test("a local server is asked for the answer reserve when nobody named a limit", () => {
+    assert.deepEqual(outputLimitFor({ localEndpoint: true }), { tokens: 4096, source: "local" });
+    assert.equal(LOCAL_OUTPUT_LIMIT_TOKENS, DEFAULT_ANSWER_RESERVE_TOKENS, "what the preflight already keeps for the answer, and no more");
+    assert.deepEqual(outputLimitFor({ maxTokens: undefined, customParams: {}, localEndpoint: true }), { tokens: 4096, source: "local" });
+    // A hosted provider keeps its own maximum: nothing is sent.
+    assert.deepEqual(outputLimitFor({ localEndpoint: false }), { tokens: 0, source: "" });
+    assert.deepEqual(outputLimitFor(), { tokens: 0, source: "" });
+});
+
+test("a limit somebody named is theirs: the task's, and above it the entry's own", () => {
+    // The advisor's cap, local server or not.
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192, localEndpoint: true }), { tokens: 8192, source: "task" });
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192 }), { tokens: 8192, source: "task" });
+    // The entry's custom parameters are merged into the request last, so they win.
+    assert.deepEqual(outputLimitFor({ customParams: { max_tokens: 12000 }, localEndpoint: true }), { tokens: 12000, source: "custom" });
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192, customParams: { max_tokens: 2048 } }), { tokens: 2048, source: "custom" });
+    assert.deepEqual(outputLimitFor({ customParams: { max_completion_tokens: "6000" }, localEndpoint: true }), { tokens: 6000, source: "custom" });
+    // Custom parameters that name no limit, or not a usable one, change nothing.
+    assert.deepEqual(outputLimitFor({ customParams: { temperature: 0.7 }, localEndpoint: true }), { tokens: 4096, source: "local" });
+    assert.deepEqual(outputLimitFor({ customParams: { max_tokens: 0 }, localEndpoint: true }), { tokens: 4096, source: "local" });
+    assert.deepEqual(outputLimitFor({ maxTokens: "nonsense", customParams: null }), { tokens: 0, source: "" });
 });
