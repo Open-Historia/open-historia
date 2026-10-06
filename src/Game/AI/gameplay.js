@@ -416,6 +416,7 @@ import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normali
 import {
   EMPTY_RESPONSE_BODY_NOTE,
   NO_RESPONSE_BODY_NOTE,
+  RESPONSE_CUT_SHORT_REMARK,
   assertNoTurnRunning,
   beginSimulation,
   discardPendingJumpSegment,
@@ -2839,6 +2840,10 @@ const runJsonTask = async (taskKey, {
   // The call found no model whose context window takes this request
   // (contextWindow.js): kept so a time skip can refuse rather than go canned.
   let tooBigForEveryModel = null;
+  // The task ended on a connection that closed while the answer was arriving
+  // (providerErrors.js connectionClosedError): the report below says that, not
+  // that the request never got an answer.
+  let connectionClosed = false;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3360,6 +3365,7 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
+    connectionClosed = actualError?.connectionClosed === true;
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -3438,9 +3444,10 @@ const runJsonTask = async (taskKey, {
   // No body at all is itself the diagnosis, so say so instead of leaving the
   // field empty and letting the report guess it is an old turn. The marker
   // goes in the same field the raw text uses, so it survives the reload path
-  // (applySimulationResult → world.json) with no extra plumbing.
+  // (applySimulationResult → world.json) with no extra plumbing. A connection
+  // that closed mid-answer has its own marker: the request did get through.
   const rawResponse = capturedRawText
-    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : connectionClosed ? RESPONSE_CUT_SHORT_REMARK : NO_RESPONSE_BODY_NOTE);
   if (capturedRawText) {
     console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
   } else {

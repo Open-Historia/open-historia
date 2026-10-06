@@ -276,6 +276,43 @@ describe("AI relay", () => {
     const { error } = await response.json();
     assert.match(error, /ECONNREFUSED/);
   });
+
+  // A 502 is also what a gateway in front of a busy model answers, and the game
+  // waits fifteen seconds and asks such a gateway again. A player's local model
+  // went down mid-turn and every call after it did exactly that, twice, before
+  // reporting the server as "busy". The relay now says which 502 this is.
+  test("an endpoint that cannot be reached is marked, so the game does not wait on it as busy", async () => {
+    const deadPort = await freePort();
+    const port = await startServer();
+    const response = await relay(port, `http://127.0.0.1:${deadPort}/v1/chat/completions`);
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("x-oh-relay"), "unreachable");
+
+    // What the game makes of it (src/Game/AI/relayResponse.js).
+    const { isRelayUnreachable, relayUnreachableReason } = await import("../src/Game/AI/relayResponse.js");
+    assert.equal(isRelayUnreachable(response), true);
+    assert.equal(await relayUnreachableReason(response), "ECONNREFUSED");
+
+    const again = await relay(port, `http://127.0.0.1:${deadPort}/v1/chat/completions`);
+    const body = await again.json();
+    assert.equal(body.unreachable, true);
+    assert.equal(body.code, "ECONNREFUSED");
+  });
+
+  test("an endpoint's own 502 is relayed as it came, unmarked: that one is a busy gateway", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Bad gateway: the model is loading" } }));
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("x-oh-relay"), null);
+    const { isRelayUnreachable } = await import("../src/Game/AI/relayResponse.js");
+    assert.equal(isRelayUnreachable(response), false);
+    assert.equal((await response.json()).error.message, "Bad gateway: the model is loading");
+  });
 });
 
 // The full chain a self-hosted model's answer actually travels: a local server

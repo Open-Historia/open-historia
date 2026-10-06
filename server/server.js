@@ -259,7 +259,10 @@ ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
 
-const sendError = (res, statusCode, error) => {
+// `extra`: fields to send beside the message, for a caller that has to tell
+// one failure from another without reading the words (the AI relay marks an
+// endpoint it could not connect to).
+const sendError = (res, statusCode, error, extra = undefined) => {
   const message = error instanceof Error ? error.message : String(error);
   // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
   // puts the real cause on error.cause — which is the difference between a
@@ -281,7 +284,7 @@ const sendError = (res, statusCode, error) => {
     message: reported,
     data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
   });
-  res.status(statusCode).json({ error: reported });
+  res.status(statusCode).json({ error: reported, ...extra });
 };
 
 // An optional asset a scenario or game simply does not have — its stats sheet,
@@ -1107,7 +1110,11 @@ const relaySettingState = () => ({
   relayLockedByEnv: ALLOW_REMOTE_RELAY,
 });
 // Marks the relay's own refusal, so the page can tell it from an AI endpoint
-// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal).
+// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal). And,
+// with the value "unreachable", a 502 that means the relay could not connect to
+// the endpoint at all, so the page can tell that from a gateway's own 502: the
+// game waits and asks a busy gateway again, and must not do that to a server
+// that is not running (isRelayUnreachable).
 const RELAY_REFUSED_HEADER = "X-OH-Relay";
 const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
@@ -1204,7 +1211,13 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         signal: controller.signal,
         lookup: relayLookup,
       }, resolve);
-      upstreamRequest.on("error", reject);
+      // Whatever fails before the endpoint has answered is the connection's
+      // (refused, no such host, reset, a broken handshake), and is said so
+      // below; a throw from building the request is not, and is left alone.
+      upstreamRequest.on("error", (error) => {
+        if (error && typeof error === "object") error.relayCouldNotConnect = true;
+        reject(error);
+      });
       upstreamRequest.end(body);
     });
 
@@ -1272,7 +1285,21 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, error?.code === RELAY_BLOCKED_CODE ? 400 : 502, error);
+      if (error?.code === RELAY_BLOCKED_CODE) {
+        sendError(res, 400, error);
+      } else if (error?.relayCouldNotConnect) {
+        // Still a 502, for anything that reads only the status; the header and
+        // the two fields say it is the connection, not a busy gateway. `code`
+        // is what the player needs to see: ECONNREFUSED is a server that is not
+        // running, ENOTFOUND an address that is wrong.
+        res.setHeader(RELAY_REFUSED_HEADER, "unreachable");
+        sendError(res, 502, error, {
+          unreachable: true,
+          code: String(error.code || error.cause?.code || error.errors?.[0]?.code || ""),
+        });
+      } else {
+        sendError(res, 502, error);
+      }
     } else if (res.headersSent) {
       cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {

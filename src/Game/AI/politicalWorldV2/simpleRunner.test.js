@@ -162,6 +162,24 @@ test("a task that throws after its answer came back counts an attempt; a failed 
   assert.equal(providerDown.modelCalls, 1);
 });
 
+// The words a dead connection has in the request path (AI/providerErrors.js):
+// each must still read as the provider being unavailable, not as a task error.
+test("a connection that closed mid-answer, or a server that could not be reached, pauses as unavailable", async () => {
+  for (const message of [
+    "The connection closed before the model finished its answer.",
+    "http://localhost:5001 could not be reached (ENOTFOUND). Check that the AI server is running and that its address in Settings → AI is right.",
+  ]) {
+    const result = await runSimplePoliticalWorldV2({
+      checkpoint: withUncoveredInstitution(),
+      inputs,
+      maxModelCalls: 5,
+      callModel: async () => { throw new Error(message); },
+    });
+    assert.equal(result.pauseReason, "provider-unavailable", message);
+    assert.equal(result.attempts["institution-membership-resolution:pact"], undefined);
+  }
+});
+
 test("the real executor marks a failed provider call so the run pauses without penalizing the target", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

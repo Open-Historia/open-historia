@@ -27,7 +27,7 @@ import {
 } from "./contextWindow.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
-import { isRelayRefusal, withRelayCutoffHint } from "./relayResponse.js";
+import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
@@ -46,20 +46,26 @@ import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
     classifyProviderFailure,
+    connectionClosedError,
     contextWindowMessage,
+    couldNotBeReached,
     describeHtmlErrorPage,
     errorPayloadText,
+    extractErrorMessage,
+    isBrokenBodyError,
     isBusyErrorPayload,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isUnreachableError,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
+    unreachableServerError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
@@ -208,16 +214,8 @@ async function readErrorPayload(response) {
     }
 }
 
-function extractErrorMessage(payload, fallback) {
-    if (!payload) return fallback;
-    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
-    if (payload.error?.message) return payload.error.message;
-    if (payload.message) return payload.message;
-    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
-        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
-    }
-    return fallback;
-}
+// extractErrorMessage (what a failed response's body says) lives in
+// providerErrors.js with the rest of the error reading, where it is tested.
 
 // The body of a reply that claimed success. A 200 carrying a web page (a gateway
 // landing page, a proxy's error screen) used to surface as JSON.parse's
@@ -508,6 +506,11 @@ function isLocalEndpoint(url) {
 // relay refuses this device outright, the endpoint is no longer pinned to it,
 // so the next call tries direct again rather than going straight back to a
 // refusal (the model may allow this site by then; or the relay may).
+//
+// And when the relay could not connect to the endpoint at all, that is thrown
+// here as the failure it is, the way fetch() itself fails on a server that is
+// not there: the relay's 502 used to reach the provider paths as a busy
+// gateway's, and each waited fifteen seconds to ask a dead server again.
 const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) => {
     const response = await fetch("/api/ai/relay", {
         method: "POST",
@@ -516,6 +519,9 @@ const relayFetch = async (url, { method = "POST", headers = {}, payload, signal 
         signal,
     });
     if (isRelayRefusal(response)) relayOnlyOrigins.delete(endpointOrigin(url));
+    if (isRelayUnreachable(response)) {
+        throw unreachableServerError(endpointOrigin(url), (await relayUnreachableReason(response)) || String(response.status));
+    }
     return withRelayCutoffHint(response, signal);
 };
 
@@ -836,10 +842,8 @@ const waitingCannotFix = (failure) => failure.kind === "unusable" || failure.kin
 
 // A server the browser could not reach at all (a local model that is not
 // running, the network down) is busy for the Fallback list: worth skipping for a
-// minute, and worth trying again after. Matched on the browsers' own wording, so
-// a TypeError from a bug in this file is never mistaken for one.
-const UNREACHABLE_TEXT = /failed to fetch|fetch failed|networkerror|load failed|network request failed/i;
-const isUnreachableError = (error) => error instanceof TypeError && UNREACHABLE_TEXT.test(String(error.message));
+// minute, and worth trying again after. isUnreachableError and isBrokenBodyError
+// (providerErrors.js) read the browsers' own wording for it.
 
 // An entry that is missing what its provider needs cannot answer until the
 // player edits it — the same as a rejected key.
@@ -908,7 +912,7 @@ async function resolveConfiguredModel(provider, { entrySettings, endpoint = "", 
         // with no models needs the player.
         throw providerFailureError(
             `Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`,
-            isUnreachableError(error) ? { kind: "busy", reason: "could not be reached" } : { kind: "unusable", reason: "no model found on the server" },
+            isUnreachableError(error) ? couldNotBeReached() : { kind: "unusable", reason: "no model found on the server" },
         );
     }
 }
@@ -2551,10 +2555,19 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
 }
 
 // A call that failed without the provider saying why, because it never reached
-// the provider at all (isUnreachableError).
+// the provider at all (isUnreachableError), or lost it partway through the
+// answer. The second reads as what it is: "network error" told the player
+// nothing, and the same break seen through the relay keeps the relay's own
+// words (relayResponse.js) and gets the same mark.
 const asUnreachable = (error, signal) => {
     if (error?.providerFailure || signal?.aborted || error?.name === "AbortError") return error;
-    if (isUnreachableError(error)) error.providerFailure = { kind: "busy", reason: "could not be reached" };
+    if (isBrokenBodyError(error)) return connectionClosedError(error);
+    if (error?.message === RELAY_CUT_OFF_MESSAGE) {
+        error.providerFailure = couldNotBeReached();
+        error.connectionClosed = true;
+    } else if (isUnreachableError(error)) {
+        error.providerFailure = couldNotBeReached();
+    }
     return error;
 };
 
