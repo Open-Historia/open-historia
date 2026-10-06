@@ -92,14 +92,16 @@ import {
     readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 import {
+    answerLookupCalls,
+    answeredLookupKeys,
     anthropicMessagesFromHistory,
     appendLookupRound,
     carriedRoundCount,
     carryLookupRound,
     createLookupCarry,
-    describeLookupCall,
     flattenLookupRounds,
     geminiContentsFromHistory,
+    lookupCallKey,
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
     lookupCallsFromOpenAI,
@@ -2537,7 +2539,13 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 // Answered rounds are kept on `carry` (toolTurns.js): the next attempt — the
 // next Fallback entry, or the task's retry — starts with them and only the rest
 // of the round budget, rather than asking again what was already answered.
-async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null }) {
+//
+// A lookup the model repeats, with the arguments it already had answered, is
+// not answered a second time (toolTurns.js answerLookupCalls): it is told its
+// answer is above, and every request of the task after that offers only the
+// output function, this attempt's and the next one's (`carry.outputOnly`).
+// `outputToolName` is named in what the repeat is told; a chat has none.
+async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
     const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
@@ -2547,9 +2555,12 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
         logDebugEvent("ai-call", `${label}: ${provider} starts with ${carried} lookup round${carried === 1 ? "" : "s"} already answered.`, undefined, { verbose: true });
     }
     let conversation = withCarriedRounds(baseHistory, carry);
+    // Every call this task has already had answered, on this attempt or an earlier one.
+    const answeredKeys = answeredLookupKeys(carry?.rounds);
+    let outputOnly = carry?.outputOnly === true;
     let roundStartedAt = Date.now();
     for (let round = 0; ; round += 1) {
-        const requireOutputTool = carried + round >= maxRounds;
+        const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
         const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
@@ -2566,33 +2577,25 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
             return answer;
         }
         const elapsedMs = Date.now() - roundStartedAt;
-        const results = [];
-        const answered = [];
-        for (const call of calls) {
-            const startedAt = Date.now();
-            let response;
-            try {
-                response = await lookups.execute(call.name, call.args);
-            } catch (error) {
-                response = { error: String(error?.message || error) };
-            }
-            if (response == null || typeof response !== "object" || Array.isArray(response)) response = { result: response ?? null };
-            results.push({ id: call.id, name: call.name, response });
-            answered.push({
-                name: call.name,
-                args: call.args,
-                label: describeLookupCall(call),
-                response: JSON.stringify(response),
-                ms: Date.now() - startedAt,
-                error: typeof response.error === "string" && response.error.length > 0,
-            });
-        }
+        const { results, answered, repeated } = await answerLookupCalls(calls, {
+            execute: lookups.execute,
+            answeredKeys,
+            outputToolName,
+        });
+        for (const call of calls) answeredKeys.add(lookupCallKey(call));
         // Always logged: the calls and what they cost, one line. The full
         // arguments and answers ride along only in detailed mode.
         logDebugEvent("ai-call", `${label}: lookup round ${round + 1} on ${provider}: ${answered.map((entry) => entry.label).join("; ")}.`, {
-            answers: answered.map((entry) => `${entry.name} ${entry.error ? "ERROR " : ""}${entry.response.length} chars`).join("; "),
+            answers: answered.map((entry) => (entry.repeated
+                ? `${entry.name} REPEATED, not answered again`
+                : `${entry.name} ${entry.error ? "ERROR " : ""}${entry.response.length} chars`)).join("; "),
             modelMs: elapsedMs,
         });
+        if (repeated && !outputOnly) {
+            outputOnly = true;
+            if (carry && typeof carry === "object") carry.outputOnly = true;
+            logDebugEvent("ai-call", `${label}: ${provider} asked a lookup it already had the answer to; from here it is offered only ${outputToolName || "its answer"}.`);
+        }
         logDebugEvent("ai-call", `${label}: lookup round ${round + 1} in full.`, answered.map((entry) => ({
             call: entry.label, args: entry.args, response: entry.response,
         })), { verbose: true });
@@ -2853,6 +2856,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                     label,
                     provider: entry.provider,
                     carry: lookupCarry,
+                    outputToolName: providerOpts.tool?.name || "",
                     onRound: ({ round, calls, elapsedMs }) => {
                         lookupRounds = round;
                         lookupCalls += calls.length;
