@@ -313,3 +313,75 @@ test("a geocoded extent is fitted unless it wraps most of the globe", () => {
   assert.equal(geocodedPlaceFraming(wrapped).zoom, 4);
   assert.equal(geocodedPlaceFraming(photon("Somewhere", "cafe")).zoom, 9);
 });
+
+// --- a world that named its places in another script ---
+//
+// The search box finds the places a world made for itself: the structures the
+// AI built, the cities it renamed, a scenario's own countries, its groups and
+// units. A game played in Russian names them in Russian, and its player types
+// in Russian. A name and a query were both folded to a-z0-9, so both were
+// empty: the query searched for nothing, and nothing so named could have been
+// found.
+const otherScripts = buildLocalPlaceEntries({
+  markers: [
+    { id: "m1", name: "Береговая батарея «Утёс»", kind: "fortification", ownerCode: "Russian Federation", lng: 33.4, lat: 44.6 },
+    { id: "m2", name: "Верфь Левиафан", kind: "shipyard", ownerCode: "Russian Federation", lng: 33.5, lat: 44.62 },
+    { id: "m3", name: "Fort Ross", kind: "fortification", ownerCode: "United States", lng: -123.2, lat: 38.5 },
+    { id: "m4", name: "旅顺口要塞", kind: "fortification", ownerCode: "China", lng: 121.2, lat: 38.8 },
+  ],
+  cities: [
+    { name: "Saint Petersburg", lng: 30.3, lat: 59.9, tier: 3, capital: false, population: 5_000_000 },
+    { name: "Volgograd", lng: 44.5, lat: 48.7, tier: 2, capital: false, population: 1_000_000 },
+  ],
+  polities: [{ owner: "Новороссия", lng: 37.8, lat: 48 }],
+  cityRenames: { "saint petersburg": "Петроград", volgograd: "Сталинград" },
+  groups: [{ group: "Донецкое ополчение", lng: 37.9, lat: 48.1, regions: 2 }],
+  units: [{ id: "u1", name: "Отряд кораблей Черноморского флота", type: "naval", ownerCode: "Russian Federation", lng: 33.2, lat: 44.8 }],
+});
+const found = (query, limit = 4) => names(searchLocalPlaces(otherScripts, query, limit));
+
+test("a query in Cyrillic finds the structures, cities, countries, groups and units named in Cyrillic", () => {
+  assert.deepEqual(found("батарея"), ["Береговая батарея «Утёс»"]);
+  assert.deepEqual(found("ВЕРФЬ"), ["Верфь Левиафан"], "case folds in any script");
+  assert.deepEqual(found("утес"), ["Береговая батарея «Утёс»"], "and so do accents: ё is е to a search");
+  assert.deepEqual(found("Петроград"), ["Петроград"], "a city by the name it was given");
+  assert.deepEqual(found("Сталин"), ["Сталинград"], "from the start of its name");
+  assert.deepEqual(found("Новороссия"), ["Новороссия"]);
+  assert.deepEqual(found("ополчение"), ["Донецкое ополчение"]);
+  assert.deepEqual(found("Черноморского"), ["Отряд кораблей Черноморского флота"]);
+  assert.deepEqual(found("крепость"), [], "what nothing is called is not found");
+});
+
+test("and in Chinese", () => {
+  assert.deepEqual(found("旅顺"), ["旅顺口要塞"]);
+  assert.deepEqual(found("要塞"), ["旅顺口要塞"]);
+  assert.deepEqual(found("东京"), []);
+});
+
+test("a query in Latin letters finds what it always found", () => {
+  assert.deepEqual(found("fort"), ["Fort Ross"]);
+  assert.deepEqual(found("saint pet"), ["Петроград"], "a renamed city still answers to the name the map knew");
+  assert.deepEqual(found(""), []);
+  assert.deepEqual(found("   "), []);
+  assert.deepEqual(found("!!!"), [], "punctuation alone is still no query");
+  assert.equal(normalizePlaceText("  Санкт-Петербург! "), "санкт петербург");
+});
+
+// The geocoder answers a query typed in Cyrillic or Japanese in that script.
+// Folded to a-z0-9 every such name was the same empty name: a place's region
+// was taken for a repeat of its own name and left off, and every city in the
+// answer was "the same place" as the first, so one result was shown.
+test("geocoded places named in another script keep their region and are each shown", () => {
+  const results = [
+    photon("Москва", "city", { state: "Москва", country: "Россия" }),
+    photon("Тула", "city", { state: "Тульская область", country: "Россия" }),
+    photon("Казань", "city", { state: "Татарстан", country: "Россия" }),
+    photon("Казань", "city", { state: "Татарстан", country: "Россия" }),
+    photon("東京", "city", { country: "日本" }),
+    photon("大阪", "city", { country: "日本" }),
+  ];
+  assert.deepEqual(formatGeocodedPlace(results[0]), { primary: "Москва", region: "Россия" }, "its own name is not repeated above it");
+  assert.deepEqual(formatGeocodedPlace(results[1]), { primary: "Тула", region: "Тульская область, Россия" });
+  assert.deepEqual(formatGeocodedPlace(results[4]), { primary: "東京", region: "日本" });
+  assert.deepEqual(dedupeGeocodedPlaces(results).map((feature) => feature.properties.name), ["Москва", "Тула", "Казань", "東京", "大阪"]);
+});
