@@ -92,7 +92,7 @@ The manifest that `fetch-map-assets.mjs` reads. Note the **name/namespace split*
 
 Root keys: `owner: "Open-Historia"`, `repo: "open-historia"`, `release: "map-data"`. Download URL is `https://github.com/<owner>/<repo>/releases/download/<release>/<asset>`.
 
-**Namespacing gotcha:** the client always requests the *stable* path (e.g. `regions-seed.geojson`), while the release stores a *versioned* name (`regions-seed-z8.geojson`). The manifest is the only bridge. If a new zoom generation is uploaded under a new release name but the manifest's `sha256`/`bytes` aren't bumped, clients keep the old bytes; conversely a stable client name can silently point at a stale release generation. **When a map file changes: upload the new asset AND update its `sha256` + `bytes` in the manifest.** When it is the stock world's regions that change (a new `regions-seed`), also run `node scripts/build-stock-region-ids.mjs`: the map editor tells a stock region from a region of the map's own by its id being in `src/runtime/generated/stockRegionIds.js` ([Map editor](map-editor.md), **What a save reads**), and a region the table does not know is swept and marked as reshaped on a first save.
+**Namespacing gotcha:** the client always requests the *stable* path (e.g. `regions-seed.geojson`), while the release stores a *versioned* name (`regions-seed-z8.geojson`). The manifest is the only bridge. If a new zoom generation is uploaded under a new release name but the manifest's `sha256`/`bytes` aren't bumped, clients keep the old bytes; conversely a stable client name can silently point at a stale release generation. **When a map file changes: upload the new asset AND update its `sha256` + `bytes` in the manifest.**
 
 ### The built-in scenario seed (`server/seed/default`)
 
@@ -348,7 +348,6 @@ Scenarios and saves keep **storing** the flagcdn address (`flagImageUrlFromGid`,
 | `src/runtime/web/contentTrust.js` | Web-build hash-verified content-node fetch |
 | `scripts/fetch-map-assets.mjs` | Sync a local tree to the `map-data` Release (the desktop app runs it on launch; run it by hand after a clone) |
 | `scripts/map-assets.json` | The Release manifest (paths, versioned asset names, sha256, bytes) |
-| `scripts/build-stock-region-ids.mjs` | Writes `src/runtime/generated/stockRegionIds.js`, the id of every region of the stock world (3,662, the desktop and web copies together), from `regions-seed.geojson`; `--check` says whether the table is what the files give |
 | `mobile/scripts/stage-map-assets.mjs` | The Android build's variant → downloads the files in `mobile/map-assets.android.json` into `mobile/map-cache/` for the APK |
 | `server/server.js` | Express `/api/runtime/{json,pmtiles}` routes |
 | `server/libraryStore.js` | Server-side asset resolution (scenario override → data-dir → bundle) |
