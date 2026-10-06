@@ -191,6 +191,165 @@ export const vertexCountOf = (geom) => {
   return flat.length / (geom.getStride?.() || 2);
 };
 
+// A region's boundary, for asking which of its segments pass near a point
+// (which regions are on a hole's rim, which neighbour a crack touches most).
+// The segments are taken sixteen at a time in the order the rings run, each
+// run in a box, and the boxes packed into a tree sixteen to a node after
+// sorting the runs along a Z-order curve, so an island's runs sit together
+// however the rings were listed. All of it is typed arrays over the
+// geometry's own flat coordinates.
+//
+// It was an R-tree holding an object for every segment, 470 bytes each.
+// Nothing had measured that on a map the sweep could not get through: once
+// the default world's unions went through (2.47 million segments, 25,000
+// holes along every coast, each asking for its neighbours' boundaries), the
+// indexes of its regions held 1.1 GB, the sweep's heap peaked at 2.7 GB, and
+// a run held to 1 GB died. These hold 14 MB for the same regions (6 bytes a
+// segment), are built in 0.1 s where the R-trees took 2.8 s, and answer the
+// same questions with the same segments.
+//
+// `flat` is x, y, x, y, …; `ends` the offset each ring ends at (OpenLayers'
+// getEnds(), or getEndss() flattened). `near(x, y, reach)` hands back, as
+// [[x1, y1], [x2, y2]] pairs, every segment whose own box meets the square of
+// half-side `reach` about the point: exactly what the R-tree answered.
+// `offsetsNear` hands back the same segments by the offset each starts at.
+export const indexBoundary = (flat, ends, stride = 2) => {
+  const RUN = 16;
+  const FAN = 16;
+  let runCount = 0;
+  let from = 0;
+  for (const end of ends) {
+    const segments = Math.max(0, (end - from) / stride - 1);
+    runCount += Math.ceil(segments / RUN);
+    from = end;
+  }
+  if (!runCount) return { size: 0, near: () => [], offsetsNear: () => [] };
+  const first = new Uint32Array(runCount);
+  const length = new Uint8Array(runCount);
+  const runBoxes = new Float64Array(runCount * 4);
+  let size = 0;
+  let run = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  from = 0;
+  for (const end of ends) {
+    const lastPoint = end - stride;
+    for (let at = from; at < lastPoint; at += RUN * stride) {
+      const stop = Math.min(lastPoint, at + RUN * stride);
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (let i = at; i <= stop; i += stride) {
+        const x = flat[i];
+        const y = flat[i + 1];
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      first[run] = at;
+      length[run] = (stop - at) / stride;
+      runBoxes.set([x0, y0, x1, y1], run * 4);
+      size += length[run];
+      run += 1;
+      if (x0 < minX) minX = x0;
+      if (y0 < minY) minY = y0;
+      if (x1 > maxX) maxX = x1;
+      if (y1 > maxY) maxY = y1;
+    }
+    from = end;
+  }
+  // The runs in Z-order of their box centres (16 bits a side, interleaved).
+  const spread = (value) => {
+    let v = value & 0xffff;
+    v = (v | (v << 8)) & 0x00ff00ff;
+    v = (v | (v << 4)) & 0x0f0f0f0f;
+    v = (v | (v << 2)) & 0x33333333;
+    v = (v | (v << 1)) & 0x55555555;
+    return v;
+  };
+  const scaleX = maxX > minX ? 65535 / (maxX - minX) : 0;
+  const scaleY = maxY > minY ? 65535 / (maxY - minY) : 0;
+  let keys = new Uint32Array(runCount);
+  for (let i = 0; i < runCount; i += 1) {
+    const cx = ((runBoxes[i * 4] + runBoxes[i * 4 + 2]) / 2 - minX) * scaleX;
+    const cy = ((runBoxes[i * 4 + 1] + runBoxes[i * 4 + 3]) / 2 - minY) * scaleY;
+    keys[i] = (spread(Math.floor(cx)) | (spread(Math.floor(cy)) << 1)) >>> 0;
+  }
+  const order = new Uint32Array(runCount);
+  for (let i = 0; i < runCount; i += 1) order[i] = i;
+  order.sort((a, b) => keys[a] - keys[b] || a - b);
+  // Only the order is kept (the comparator above would hold the keys with it).
+  keys = null;
+  // Level 0 is the runs in that order; each level above boxes FAN of the one
+  // below, until one node's worth is left.
+  const levels = [{ offset: 0, count: runCount }];
+  let nodes = runCount;
+  for (let count = runCount; count > FAN;) {
+    count = Math.ceil(count / FAN);
+    levels.push({ offset: nodes, count });
+    nodes += count;
+  }
+  const boxes = new Float64Array(nodes * 4);
+  for (let i = 0; i < runCount; i += 1) boxes.set(runBoxes.subarray(order[i] * 4, order[i] * 4 + 4), i * 4);
+  for (let level = 1; level < levels.length; level += 1) {
+    const below = levels[level - 1];
+    const here = levels[level];
+    for (let i = 0; i < here.count; i += 1) {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      const stop = Math.min(below.count, (i + 1) * FAN);
+      for (let child = i * FAN; child < stop; child += 1) {
+        const at = (below.offset + child) * 4;
+        if (boxes[at] < x0) x0 = boxes[at];
+        if (boxes[at + 1] < y0) y0 = boxes[at + 1];
+        if (boxes[at + 2] > x1) x1 = boxes[at + 2];
+        if (boxes[at + 3] > y1) y1 = boxes[at + 3];
+      }
+      boxes.set([x0, y0, x1, y1], (here.offset + i) * 4);
+    }
+  }
+  const top = levels.length - 1;
+  const stack = [];
+  const offsetsNear = (x, y, reach) => {
+    const qx0 = x - reach;
+    const qy0 = y - reach;
+    const qx1 = x + reach;
+    const qy1 = y + reach;
+    const found = [];
+    stack.length = 0;
+    for (let i = levels[top].count - 1; i >= 0; i -= 1) stack.push(top, i);
+    while (stack.length) {
+      const index = stack.pop();
+      const level = stack.pop();
+      const at = (levels[level].offset + index) * 4;
+      if (boxes[at] > qx1 || boxes[at + 2] < qx0 || boxes[at + 1] > qy1 || boxes[at + 3] < qy0) continue;
+      if (level > 0) {
+        const stop = Math.min(levels[level - 1].count, (index + 1) * FAN);
+        for (let child = stop - 1; child >= index * FAN; child -= 1) stack.push(level - 1, child);
+        continue;
+      }
+      let i = first[order[index]];
+      for (let left = length[order[index]]; left > 0; left -= 1, i += stride) {
+        const ax = flat[i];
+        const ay = flat[i + 1];
+        const bx = flat[i + stride];
+        const by = flat[i + stride + 1];
+        if ((ax < bx ? ax : bx) > qx1 || (ax > bx ? ax : bx) < qx0 || (ay < by ? ay : by) > qy1 || (ay > by ? ay : by) < qy0) continue;
+        found.push(i);
+      }
+    }
+    return found;
+  };
+  const near = (x, y, reach) => offsetsNear(x, y, reach).map((i) => [[flat[i], flat[i + 1]], [flat[i + stride], flat[i + stride + 1]]]);
+  return { size, near, offsetsNear };
+};
+
 // A bucket too heavy for one union, split into pieces that are not: halved at
 // the median of its regions' extent centres along the longer side, again and
 // again, so each piece is a compact patch of neighbours. A single region
@@ -345,11 +504,12 @@ const distanceToSegment = (p, a, b) => {
 // to every region that meets there, one that touches the hole at that single
 // point included. `segmentsNear(point, reach)` hands back the region's
 // boundary segments around a point, as [a, b] pairs (the Workshop reads them
-// from the region's R-tree). A hole of a union is made of its regions' own
-// boundaries, so the distance is zero; the metre is the save's rounding.
-// (polygon-clipping joins edges that lie in one straight line, so where two
-// regions share such a side end to end only the one at its middle is seen
-// there. That can only count too few regions, which leaves a hole alone.)
+// from the region's index, indexBoundary above). A hole of a union is made of
+// its regions' own boundaries, so the distance is zero; the metre is the
+// save's rounding. (polygon-clipping joins edges that lie in one straight
+// line, so where two regions share such a side end to end only the one at its
+// middle is seen there. That can only count too few regions, which leaves a
+// hole alone.)
 export const holdsRim = (ring, segmentsNear, tolerance = 1) => {
   for (let i = 1; i < ring.length; i += 1) {
     const middle = [(ring[i - 1][0] + ring[i][0]) / 2, (ring[i - 1][1] + ring[i][1]) / 2];

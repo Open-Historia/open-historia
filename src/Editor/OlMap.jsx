@@ -37,8 +37,7 @@ import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
-import RBush from "ol/structs/RBush.js";
-import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, isSliver, leftAloneTally, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, indexBoundary, isSliver, leftAloneTally, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1182,36 +1181,29 @@ const OlMap = ({
       return [];
     };
 
-    // A region's boundary segments in an R-tree, so the touch score below can
+    // A region's boundary segments in an index, so the touch score below can
     // ask for the segments near a point instead of walking every segment of
     // the region for every point — a 40,000-vertex sea zone is a neighbour of
-    // every crack on its coast, and used to be walked whole for each one.
+    // every crack on its coast, and used to be walked whole for each one. The
+    // index is typed arrays over the geometry's own coordinates
+    // (topologySweep.js indexBoundary): the R-tree it replaces held 1.1 GB
+    // for the default world's regions.
     const buildBoundaryIndex = (regionGeom) => {
-      const extents = [];
-      const segments = [];
-      for (const ring of geometryRings(regionGeom)) {
-        for (let j = 1; j < ring.length; j += 1) {
-          const a = ring[j - 1];
-          const b = ring[j];
-          extents.push([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
-          segments.push([a, b]);
-        }
-      }
-      const index = new RBush();
-      if (segments.length) index.load(extents, segments);
-      return index;
+      const type = regionGeom?.getType?.();
+      const ends = type === "Polygon" ? regionGeom.getEnds() : type === "MultiPolygon" ? regionGeom.getEndss().flat() : [];
+      return indexBoundary(ends.length ? regionGeom.getFlatCoordinates() : [], ends, regionGeom?.getStride?.() || 2);
     };
 
     // How many of up to 80 points along the gap's ring lie within epsilon of
     // the region's boundary: the neighbour that touches the gap most takes it.
     const boundaryTouchScore = (gapGeom, boundaryIndex, epsilon) => {
       const gapRing = geometryRings(gapGeom)[0] || [];
-      if (!gapRing.length || !boundaryIndex || boundaryIndex.isEmpty()) return 0;
+      if (!gapRing.length || !boundaryIndex || !boundaryIndex.size) return 0;
       const step = Math.max(1, Math.floor(gapRing.length / 80));
       let score = 0;
       for (let i = 0; i < gapRing.length; i += step) {
         const p = gapRing[i];
-        const near = boundaryIndex.getInExtent([p[0] - epsilon, p[1] - epsilon, p[0] + epsilon, p[1] + epsilon]);
+        const near = boundaryIndex.near(p[0], p[1], epsilon);
         for (const [a, b] of near) {
           if (pointSegmentDistance(p, a, b) <= epsilon) {
             score += 1;
@@ -1275,7 +1267,7 @@ const OlMap = ({
         for (const feature of regionSource.getFeaturesInExtent(row.geom.getExtent())) {
           if (!selectedSet.has(feature)) continue;
           const index = boundaryIndexOf(feature);
-          if (holdsRim(ring, ([x, y], reach) => index.getInExtent([x - reach, y - reach, x + reach, y + reach]))) holders += 1;
+          if (holdsRim(ring, ([x, y], reach) => index.near(x, y, reach))) holders += 1;
           if (holders > 1) break;
         }
         return holders;

@@ -29,6 +29,7 @@ import {
   findEnclosedGaps,
   holdsRim,
   hotspotsOf,
+  indexBoundary,
   isSliver,
   leftAloneTally,
   mergeWithinBudget,
@@ -165,7 +166,7 @@ test("the sweep repairs cracks and slivers up to 1.5 km wide, and what that take
 // in San Marino kept 0.1 of its 1.3 km²).
 //
 // A region's boundary segments around a point, the slow way: the Workshop
-// reads them from the region's R-tree.
+// reads them from the region's index (indexBoundary, tested below).
 const boundaryNear = (geom) => {
   const segments = [];
   const polys = geom.getType() === "Polygon" ? [geom.getCoordinates()] : geom.getCoordinates();
@@ -820,4 +821,74 @@ test("the note after a save says when a map was too detailed to check in one pie
     "Borders checked: no cracks or slivers between 2 m and 1.5 km across 12 regions. 1 pair of very large neighbouring regions was not compared.",
   );
   assert.ok(describeCleanupResult({ ...base, skippedPairs: 4 }).endsWith(" 4 pairs of very large neighbouring regions were not compared."));
+});
+
+// A region's boundary index. It was an R-tree with an object for every
+// segment: 1.1 GB for the default world's regions, once that map's unions
+// went through and its 25,000 holes each asked for their neighbours'.
+// The index is typed arrays over the geometry's own coordinates, and must
+// answer exactly what the R-tree answered: every segment whose own box meets
+// the square about the point, which is what walking them all finds.
+test("a region's boundary index hands back the segments a walk over all of them finds", () => {
+  const indexOf = (geom) => indexBoundary(geom.getFlatCoordinates(), geom.getType() === "Polygon" ? geom.getEnds() : geom.getEndss().flat(), geom.getStride());
+  const segmentsOf = (geom) => {
+    const polys = geom.getType() === "Polygon" ? [geom.getCoordinates()] : geom.getCoordinates();
+    return polys.reduce((sum, poly) => sum + poly.reduce((inPoly, ring) => inPoly + Math.max(0, ring.length - 1), 0), 0);
+  };
+  const sorted = (pairs) => pairs.map((pair) => JSON.stringify(pair)).sort();
+  let asked = 0;
+  let handedBack = 0;
+  const compare = (geom, points, reaches) => {
+    const index = indexOf(geom);
+    const walk = boundaryNear(geom);
+    assert.equal(index.size, segmentsOf(geom), "every segment of every ring is in it");
+    for (const point of points) {
+      for (const reach of reaches) {
+        const fast = index.near(point[0], point[1], reach);
+        assert.deepEqual(sorted(fast), sorted(walk(point, reach)));
+        asked += 1;
+        handedBack += fast.length;
+      }
+    }
+  };
+
+  // A square with a pond, and islands listed in no order across a wide sea.
+  const pond = blockWithPond(2000)[0];
+  compare(pond, [[0, 0], [15000, 0], [5000, 5000], [6000, 6000], [40000, 40000], [29999, 30001]], [1, 120, 6000]);
+  const islands = [];
+  for (let i = 0; i < 300; i += 1) {
+    const x = ((i * 7919) % 300) * 5000;
+    const y = ((i * 104729) % 97) * 9000;
+    islands.push([[[x, y], [x + 900, y], [x + 1200, y + 700], [x + 400, y + 1300], [x - 200, y + 600], [x, y]]]);
+  }
+  const archipelago = new MultiPolygon(islands);
+  compare(archipelago, islands.filter((island, i) => i % 7 === 0).map((island) => island[0][2]), [1, 120, 2500]);
+  compare(archipelago, [[-1e7, -1e7], [750000, 400000]], [1, 1e7]);
+
+  // The built-in map's five heaviest regions, asked the way the sweep asks:
+  // at points of their own boundary and beside it, at a metre (the rim) and
+  // at 120 m (the touch score).
+  const { features } = builtInMap();
+  const heaviest = features.map((feature) => feature.getGeometry()).sort((a, b) => vertexCountOf(b) - vertexCountOf(a)).slice(0, 5);
+  for (const geom of heaviest) {
+    const flat = geom.getFlatCoordinates();
+    const points = [];
+    for (let i = 0; i < flat.length; i += 2 * 37) points.push([flat[i], flat[i + 1]], [flat[i] + 60, flat[i + 1] - 45]);
+    compare(geom, points, [1, 120]);
+  }
+  assert.ok(asked > 500 && handedBack > 1000, `${asked} questions, ${handedBack} segments handed back`);
+
+  // Nothing to index: nothing near anything.
+  for (const empty of [indexBoundary([], []), indexBoundary([5, 5], [2]), indexBoundary([], [], 2)]) {
+    assert.equal(empty.size, 0);
+    assert.deepEqual(empty.near(5, 5, 100), []);
+  }
+  // A ring that is one segment there and back is two segments, and both are found.
+  const sliver = indexBoundary([0, 0, 10, 0, 0, 0], [6]);
+  assert.equal(sliver.size, 2);
+  assert.equal(sliver.near(5, 0, 1).length, 2);
+
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
+  assert.ok(olMap.includes("return indexBoundary(") && !olMap.includes("RBush"), "the Workshop builds this index, and no R-tree");
+  assert.ok(olMap.includes("holdsRim(ring, ([x, y], reach) => index.near(x, y, reach))") && olMap.includes("boundaryIndex.near(p[0], p[1], epsilon)"), "and asks it for the rim and for the touch score");
 });
