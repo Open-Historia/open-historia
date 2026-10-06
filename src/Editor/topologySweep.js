@@ -6,10 +6,12 @@
 // Every scenario save (Save, Save & Exit, Apply & Play) first runs a
 // conservative border repair over EVERY region — enclosed cracks narrower than
 // 1.5 km filled, thin overlaps trimmed — before the map is written
-// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere).
-// Nothing else in the Workshop repairs borders. This module is the pure part:
-// how regions are grouped for the staged union, and what the loading screen
-// says.
+// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere). The
+// standalone editor has no scenario to save into: a map leaves it as a file,
+// so there Export JSON and Export for game run it first instead (MapEditor.jsx
+// exportFromMenu). Nothing else in the Workshop repairs borders. This module
+// is the pure part: how regions are grouped for the staged union, and what
+// the loading screen and the note after the save say.
 //
 // The pass is not all-pairs. Overlap discovery asks the map's spatial index for
 // extent neighbours only (the stock 4,848-region world: 14,011 pairs, ~3 s),
@@ -363,13 +365,20 @@ export const holdsRim = (ring, segmentsNear, tolerance = 1) => {
 // to maxWidth. With one it is that region's own water or void, and is filled
 // only up to maxWidthInsideOneRegion. `rimRegionsOf(hole)` counts the regions
 // on a hole's rim (two is as far as it needs to count) and is asked only about
-// a hole wide enough for the answer to matter.
+// a hole wide enough for the answer to matter. `onLeftAlone(hole)` hears of
+// each hole passed over, so the note after the save can say how many there
+// were: a lagoon left open otherwise looks like a crack the cleanup missed.
 export const cracksAmong = (holes, rimRegionsOf, {
   maxWidth = BORDER_CLEANUP.maxWidth,
   maxWidthInsideOneRegion = BORDER_CLEANUP.maxWidthInsideOneRegion,
+  onLeftAlone,
 } = {}) => {
   const alone = Math.min(maxWidth, maxWidthInsideOneRegion);
-  return holes.filter((hole) => hole.width <= alone || rimRegionsOf(hole) > 1);
+  return holes.filter((hole) => {
+    if (hole.width <= alone || rimRegionsOf(hole) > 1) return true;
+    onLeftAlone?.(hole);
+    return false;
+  });
 };
 
 // Whether what two regions share is a sliver, to be trimmed off the smaller
@@ -377,6 +386,32 @@ export const cracksAmong = (holes, rimRegionsOf, {
 // (geometry.js overlapGeoms), because a trim takes all of it.
 export const isSliver = (shared, smallerArea, maxShare = BORDER_CLEANUP.maxSliverShare) =>
   count(shared) <= maxShare * count(smallerArea);
+
+// What the two guards passed over during one sweep, for the note after the
+// save: the holes cracksAmong left open and the pairs isSliver left
+// overlapping. A follow-up pass comes across the same ones again around its
+// repairs, so a hole is kept by where it is (its extent, to the metre) and a
+// pair by its two regions' ids, in either order, and each counts once. A pair
+// passed over on one pass can be a sliver on the next, once a repair has
+// changed one of the two (a crack filled into the smaller region makes it
+// larger): trimmed then, it was not left alone.
+export const leftAloneTally = () => {
+  const holes = new Set();
+  const pairs = new Set();
+  const pairKey = (idA, idB) => [idA, idB].sort().join("\n");
+  return {
+    hole: (hole) => {
+      holes.add(hole.geom.getExtent().map((value) => Math.round(value)).join(","));
+    },
+    pair: (idA, idB) => {
+      pairs.add(pairKey(idA, idB));
+    },
+    trimmed: (idA, idB) => {
+      pairs.delete(pairKey(idA, idB));
+    },
+    counts: () => ({ holesLeftAlone: holes.size, pairsLeftAlone: pairs.size }),
+  };
+};
 
 // Where a follow-up pass looks. A repair changes the map only inside its own
 // footprint — the sliver a trim takes away, the crack a fill adds — so anything
@@ -409,7 +444,7 @@ const describeCleanupLimits = (result) => {
 };
 
 // The one-line result shown after the save (and inside the loading screen
-// while the scenario is being written).
+// while the map is being written).
 // Why a sweep ended before it was done, when it did.
 const describeStop = (result) => {
   const seconds = Math.max(1, Math.round(count(result.elapsedMs) / 1000));
@@ -443,10 +478,43 @@ export const describeCleanupResult = (result, error = "") => {
   return `Borders cleaned${passes}: ${repairs}.${limits}`;
 };
 
+// What the two guards passed over, said under the result, a line each: without
+// it a lagoon left open reads as a crack the cleanup missed, and a small
+// region still lying over its neighbour as a sliver it missed. The sentences
+// are in a *_TEXTS table because the string extractor reads those
+// (scripts/i18n/), so the language packs carry each one whole, and the
+// singular is a sentence of its own: a language cannot translate an "s". Each
+// is shown in an element of its own, where the translator finds it by its
+// pattern (BorderCleanupOverlay.jsx).
+export const CLEANUP_LEFT_ALONE_TEXTS = Object.freeze({
+  holeOne: "1 gap inside a single region was left open: it is treated as enclosed water, not a crack.",
+  holeMany: "{{count}} gaps, each inside a single region, were left open: they are treated as enclosed water, not cracks.",
+  pairOne: "1 pair of overlapping regions was left as it is: trimming would take too much of the smaller region.",
+  pairMany: "{{count}} pairs of overlapping regions were left as they are: trimming would take too much of the smaller region.",
+});
+
+const leftAloneLine = (n, one, many) => (count(n) === 1 ? one : many.replace("{{count}}", formatCount(n)));
+
+// The lines for a sweep's result: `holesLeftAlone` counts the holes wider than
+// maxWidthInsideOneRegion with one region on their rim (cracksAmong), and
+// `pairsLeftAlone` the pairs that share more than maxSliverShare of the
+// smaller region (isSliver). No line for a count of zero.
+export const describeCleanupLeftAlone = (result) => {
+  const lines = [];
+  if (count(result?.holesLeftAlone) > 0) {
+    lines.push(leftAloneLine(result.holesLeftAlone, CLEANUP_LEFT_ALONE_TEXTS.holeOne, CLEANUP_LEFT_ALONE_TEXTS.holeMany));
+  }
+  if (count(result?.pairsLeftAlone) > 0) {
+    lines.push(leftAloneLine(result.pairsLeftAlone, CLEANUP_LEFT_ALONE_TEXTS.pairOne, CLEANUP_LEFT_ALONE_TEXTS.pairMany));
+  }
+  return lines;
+};
+
 // What the loading screen shows for a progress state from
 // repairTopologyEverywhere: a fraction for the bar (phases weighted by their
 // measured cost; the bar restarts on a follow-up pass) and two lines of
-// plain words.
+// plain words. While the map is being written the second line is the result,
+// and `leftAlone` the lines under it for what the guards passed over.
 export const describeCleanupProgress = (state) => {
   if (!state) return { fraction: 0, headline: "Preparing", detail: "" };
   const regions = count(state.regionCount);
@@ -488,8 +556,11 @@ export const describeCleanupProgress = (state) => {
     case "save":
       return {
         fraction: 0.97,
-        headline: "saving the map into the scenario",
+        // The standalone editor has no scenario: there the map is being
+        // written to a file (MapEditor.jsx exportFromMenu).
+        headline: state.exporting ? "exporting the map" : "saving the map into the scenario",
         detail: describeCleanupResult(state.result, state.error),
+        leftAlone: describeCleanupLeftAlone(state.result),
       };
     default:
       return { fraction: 1, headline: "done", detail: "" };

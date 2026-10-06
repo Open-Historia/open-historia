@@ -14,18 +14,23 @@ import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
 import VectorSource from "ol/source/Vector.js";
 
+import { extractFromSource } from "../../scripts/i18n/extractStrings.mjs";
+import { createPhraseBook } from "../runtime/phraseBook.js";
 import { enclosedGapGeoms, enclosedGapsOfUnion, overlapGeoms, planarGeometryArea, unionAllGeoms } from "./geometry.js";
 import {
   BORDER_CLEANUP,
+  CLEANUP_LEFT_ALONE_TEXTS,
   bucketRegions,
   chunkIndexFor,
   cracksAmong,
+  describeCleanupLeftAlone,
   describeCleanupProgress,
   describeCleanupResult,
   findEnclosedGaps,
   holdsRim,
   hotspotsOf,
   isSliver,
+  leftAloneTally,
   mergeWithinBudget,
   planTopologyChunks,
   splitByVertexBudget,
@@ -197,6 +202,15 @@ test("a hole one region surrounds keeps the old 500 m limit; the same width betw
   assert.equal(puddle.length, 1);
   assert.equal(cracksAmong(puddle, () => assert.fail("a hole this narrow needs no rim count")).length, 1);
 
+  // The pond is the one hole of the three the guard passes over, and it says
+  // so: the note after the save counts what it hears of.
+  const leftAlone = [];
+  const onLeftAlone = (hole) => leftAlone.push(hole);
+  cracksAmong(pondHoles, rimRegionsAmong(pond), { onLeftAlone });
+  cracksAmong(slotHoles, rimRegionsAmong(slot), { onLeftAlone });
+  cracksAmong(puddle, rimRegionsAmong(blockWithPond(600)), { onLeftAlone });
+  assert.deepEqual(leftAlone, [pondHoles[0]]);
+
   // A corner is not a rim. A wedge between two regions, closed along its base
   // by a third, comes to a point on the border of a fourth: three hold an
   // edge of it, the fourth only that point.
@@ -209,9 +223,11 @@ test("a hole one region surrounds keeps the old 500 m limit; the same width betw
   const ring = wedges[0].geom.getCoordinates()[0];
   assert.deepEqual([wedgeWest, wedgeEast, base, atThePoint].map((geom) => holdsRim(ring, boundaryNear(geom))), [true, true, true, false]);
 
-  // The Workshop asks exactly this of every hole a search finds.
+  // The Workshop asks exactly this of every hole a search finds, and the
+  // save-time sweep keeps count of the ones passed over.
   const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
-  assert.ok(olMap.includes("for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width })) {"));
+  assert.ok(olMap.includes("for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width, onLeftAlone })) {"));
+  assert.ok(olMap.includes("maxTargetVertices: BORDER_CLEANUP.maxUnionVertices, onLeftAlone: leftAlone.hole });"));
 });
 
 test("a pair that shares more than a tenth of the smaller region is left alone; one that shares less is a sliver, and trimmed", () => {
@@ -247,9 +263,45 @@ test("a pair that shares more than a tenth of the smaller region is left alone; 
   assert.equal(isSliver(narrow[0].area, planarGeometryArea(both)), true, "the strip alone is a twentieth of the region");
   assert.equal(isSliver(narrow[0].shared, planarGeometryArea(both)), false, "all they share is over half of it");
 
-  // The Workshop asks exactly this of every pair before it trims one.
+  // The Workshop asks exactly this of every pair before it trims one, and the
+  // save-time sweep keeps count of the pairs passed over.
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(olMap, /if \(!isSliver\(pieces\[0\]\.shared, Math\.min\(aArea, bArea\)\)\) \{\n\s+onLeftAlone\?\.\(a, b\);\n\s+continue;\n\s+\}/);
+  assert.ok(olMap.includes("onLeftAlone: (a, b) => leftAlone.pair(a.getId(), b.getId()),"));
+});
+
+// The sweep makes up to three passes, and a follow-up pass reads the regions
+// around the last pass's repairs again: on the European cut of the stock
+// world its second save met two of the 34 pairs twice. The note counts what
+// was left alone, not how often it was looked at.
+test("what the guards left alone is counted once, however many passes meet it", () => {
+  const sweep = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  const tally = leftAloneTally();
+  assert.deepEqual(tally.counts(), { holesLeftAlone: 0, pairsLeftAlone: 0 });
+  const [pond] = enclosedGapGeoms(blockWithPond(2000), sweep);
+  const [lagoon] = enclosedGapGeoms(blockWithPond(2400), sweep);
+  tally.hole(pond);
+  tally.hole(lagoon);
+  // The pond again on a follow-up pass, read from another union of its
+  // region: the same place, to the metre.
+  const [again] = enclosedGapGeoms(blockWithPond(2000), sweep);
+  again.geom.translate(0.2, -0.3);
+  tally.hole(again);
+  tally.pair("reg_a", "reg_b");
+  tally.pair("reg_b", "reg_a"); // the follow-up pass walks the changed region first
+  tally.pair("reg_a", "reg_c");
+  assert.deepEqual(tally.counts(), { holesLeftAlone: 2, pairsLeftAlone: 2 });
+  // A pair that a later pass does trim was not left alone.
+  tally.trimmed("reg_c", "reg_a");
+  tally.trimmed("reg_x", "reg_y");
+  assert.deepEqual(tally.counts(), { holesLeftAlone: 2, pairsLeftAlone: 1 });
+
+  // The sweep keeps one tally over all its passes and hands the counts back.
   const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
-  assert.ok(olMap.includes("if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) continue;"));
+  const run = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
+  assert.ok(run.indexOf("const leftAlone = leftAloneTally();") < run.indexOf("while (passes < BORDER_CLEANUP.maxPasses"), "made before the first pass");
+  assert.ok(run.includes("...leftAlone.counts(),"), "in the result");
+  assert.ok(run.includes("leftAlone.trimmed(item.winnerId, item.loserId);"), "told of every trim");
 });
 
 test("the loading screen reports each phase in plain words with a bar that only moves forward", () => {
@@ -266,6 +318,7 @@ test("the loading screen reports each phase in plain words with a bar that only 
   assert.match(apply.detail, /40 of 353 repairs this pass · 12 cracks filled, 28 slivers trimmed so far/);
   const save = describeCleanupProgress({ phase: "save", result: { changed: true, gaps: 12, overlaps: 41, affectedRegions: 48, regionCount: 4848, passes: 2 } });
   assert.equal(save.headline, "saving the map into the scenario");
+  assert.equal(describeCleanupProgress({ phase: "save", exporting: true, result: null }).headline, "exporting the map", "the standalone editor has no scenario to save into");
   assert.equal(save.detail, "Borders cleaned in 2 passes: 12 cracks filled and 41 slivers trimmed across 48 regions.");
   assert.ok(gaps.fraction < merging.fraction && merging.fraction <= overlaps.fraction && overlaps.fraction < apply.fraction && apply.fraction < save.fraction);
   assert.ok(describeCleanupProgress({ phase: "gaps", regionCount: 10, chunkIndex: 0, chunkCount: 0 }).fraction >= 0);
@@ -283,6 +336,80 @@ test("the note after a save says what changed, that nothing did, or that the cle
   assert.equal(describeCleanupResult({ changed: true, gaps: 106, overlaps: 59, affectedRegions: 152, passes: 2 }), "Borders cleaned in 2 passes: 106 cracks filled and 59 slivers trimmed across 152 regions.");
   assert.match(describeCleanupResult(null, "boom"), /^Border cleanup was skipped \(boom\); the map was saved as it is\.$/);
   assert.equal(describeCleanupResult(null), "");
+});
+
+// What the two guards passed over. Nothing said it, so a lagoon the cleanup
+// left open on purpose looked like a crack it had missed, and a small region
+// still lying over its neighbour like a sliver it had missed.
+test("the note says what the two guards left alone, a line each, and nothing when they left nothing", () => {
+  const base = { changed: true, gaps: 4071, overlaps: 5220, affectedRegions: 880, passes: 2 };
+  // The European cut of the stock world: 32 holes and 34 pairs.
+  assert.deepEqual(describeCleanupLeftAlone({ ...base, holesLeftAlone: 32, pairsLeftAlone: 34 }), [
+    "32 gaps, each inside a single region, were left open: they are treated as enclosed water, not cracks.",
+    "34 pairs of overlapping regions were left as they are: trimming would take too much of the smaller region.",
+  ]);
+  assert.deepEqual(describeCleanupLeftAlone({ ...base, holesLeftAlone: 1, pairsLeftAlone: 1 }), [
+    "1 gap inside a single region was left open: it is treated as enclosed water, not a crack.",
+    "1 pair of overlapping regions was left as it is: trimming would take too much of the smaller region.",
+  ]);
+  assert.deepEqual(describeCleanupLeftAlone({ ...base, holesLeftAlone: 0, pairsLeftAlone: 2 }), [
+    "2 pairs of overlapping regions were left as they are: trimming would take too much of the smaller region.",
+  ]);
+  assert.deepEqual(describeCleanupLeftAlone({ ...base, holesLeftAlone: 1234 }), [
+    "1,234 gaps, each inside a single region, were left open: they are treated as enclosed water, not cracks.",
+  ]);
+  // The built-in map: the guards pass over nothing on it, and the note is the
+  // one line it always was.
+  assert.deepEqual(describeCleanupLeftAlone({ changed: true, gaps: 106, overlaps: 59, affectedRegions: 152, passes: 2, holesLeftAlone: 0, pairsLeftAlone: 0 }), []);
+  assert.deepEqual(describeCleanupLeftAlone({ changed: false, regionCount: 9 }), [], "a result from before the counts says nothing");
+  assert.deepEqual(describeCleanupLeftAlone(null), [], "nor does a cleanup that was skipped");
+  // A save that repaired nothing still says what it left: the cut's third save.
+  assert.equal(describeCleanupResult({ changed: false, regionCount: 940, holesLeftAlone: 32, pairsLeftAlone: 34 }), "Borders checked: no cracks or slivers between 2 m and 1.5 km across 940 regions.");
+  assert.equal(describeCleanupLeftAlone({ changed: false, regionCount: 940, holesLeftAlone: 32, pairsLeftAlone: 34 }).length, 2);
+
+  // The loading screen shows the same lines under the result while the map is
+  // written, which is all a Save & Exit or an Apply & Play ever shows of it.
+  const save = describeCleanupProgress({ phase: "save", result: { ...base, holesLeftAlone: 32, pairsLeftAlone: 0 } });
+  assert.equal(save.detail, "Borders cleaned in 2 passes: 4,071 cracks filled and 5,220 slivers trimmed across 880 regions.");
+  assert.deepEqual(save.leftAlone, ["32 gaps, each inside a single region, were left open: they are treated as enclosed water, not cracks."]);
+  assert.deepEqual(describeCleanupProgress({ phase: "save", result: base }).leftAlone, []);
+  assert.deepEqual(describeCleanupProgress({ phase: "save", result: null, error: "boom" }).leftAlone, []);
+
+  // The Workshop's note is the result and then these lines.
+  const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
+  assert.ok(mapEditor.includes("[describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean)"));
+  assert.ok(mapEditor.includes("<BorderCleanupNote lines={cleanupNote}"));
+});
+
+// The lines reach the player through the language packs: the extractor reads
+// the table, each sentence whole, and the translator finds a line on screen by
+// its sentence, whatever the count in it.
+test("every sentence about what was left alone reaches the language packs whole", () => {
+  const file = "src/Editor/topologySweep.js";
+  const { exact, patterns } = extractFromSource(fs.readFileSync(new URL("./topologySweep.js", import.meta.url), "utf8"), file, { jsx: false, catchAll: false });
+  const found = new Set([...exact.keys(), ...patterns.keys()]);
+  for (const [key, text] of Object.entries(CLEANUP_LEFT_ALONE_TEXTS)) {
+    assert.ok(found.has(text), `${key} is read by the extractor`);
+    assert.match(text, /\.$/, `${key} is a sentence`);
+  }
+  assert.ok(found.has("exporting the map") && found.has("saving the map into the scenario"), "and both things the screen says while the map is written");
+
+  const book = createPhraseBook();
+  book.setAll({
+    [CLEANUP_LEFT_ALONE_TEXTS.holeOne]: "1 Lücke innerhalb einer einzelnen Region blieb offen: Sie gilt als eingeschlossenes Wasser, nicht als Riss.",
+    [CLEANUP_LEFT_ALONE_TEXTS.holeMany]: "{{count}} Lücken, jede innerhalb einer einzelnen Region, blieben offen: Sie gelten als eingeschlossenes Wasser, nicht als Risse.",
+    [CLEANUP_LEFT_ALONE_TEXTS.pairMany]: "{{count}} Paare überlappender Regionen blieben, wie sie sind: Ein Beschnitt nähme der kleineren Region zu viel.",
+  });
+  const [holes, pairs] = describeCleanupLeftAlone({ holesLeftAlone: 1234, pairsLeftAlone: 34 });
+  assert.equal(book.translate(holes), "1,234 Lücken, jede innerhalb einer einzelnen Region, blieben offen: Sie gelten als eingeschlossenes Wasser, nicht als Risse.");
+  assert.equal(book.translate(pairs), "34 Paare überlappender Regionen blieben, wie sie sind: Ein Beschnitt nähme der kleineren Region zu viel.");
+  assert.equal(book.translate(describeCleanupLeftAlone({ holesLeftAlone: 1 })[0]), "1 Lücke innerhalb einer einzelnen Region blieb offen: Sie gilt als eingeschlossenes Wasser, nicht als Riss.");
+
+  // Each line is an element of its own on both surfaces, or the translator
+  // would be handed the lines run together and know none of them.
+  const overlay = fs.readFileSync(new URL("./BorderCleanupOverlay.jsx", import.meta.url), "utf8");
+  assert.ok(overlay.includes("<div key={line}>{line}</div>"), "the note after the save");
+  assert.match(overlay, /\{leftAlone\.map\(\(line\) => \(\s+<div key=\{line\}[^>]*>\s+\{line\}\s+<\/div>/, "the loading screen");
 });
 
 test("yielding resolves on its own (a macrotask here, a frame plus a macrotask in a browser)", async () => {
@@ -538,12 +665,49 @@ test("only the save repairs borders: no Topology panel, and a merge that fails p
   assert.ok(!bottomBar.includes("\"topology\"") && !bottomBar.includes("label=\"Topology\""), "the bottom bar has no chip for it");
   assert.ok(!/topology panel/i.test(olMap + mapEditor + read("./BorderCleanupOverlay.jsx")), "nothing on screen sends the player to it");
   assert.equal(olMap.split("Borders are repaired when the map is saved into its scenario").length - 1, 2, "a merge and a border removal that fail both point to the save");
+  assert.equal(olMap.split("Borders are repaired when the map is exported, so export the map and then try again.").length - 1, 2, "and in the standalone editor, which has no scenario, to the export");
+  assert.ok(mapEditor.includes("scenarioMode={scenarioMode}"), "the map is told which of the two it is");
   assert.ok(!/\brepairTopology\b/.test(olMap), "the selection-scoped repair is gone with its only caller");
   const api = olMap.slice(olMap.indexOf("onReady?.({"), olMap.indexOf("replaceRegionsFromImport:"));
   assert.ok(api.includes("repairTopologyEverywhere,"), "the Workshop is handed the save-time sweep");
   assert.ok(!api.includes("analyzeTopology") && !api.includes("clearTopologyDiagnostics"), "and nothing of the panel's");
   // The Shared border tool keeps its own check after each edit, at its own width.
   assert.ok(olMap.includes("analyzeTopologyRef.current?.(pair.map((f) => f.getId()), { maxWidth: 100 })"));
+});
+
+// The standalone editor (/?editor=1) has no scenario, and so none of the three
+// Save buttons: with the panel gone nothing repaired borders in it at all. A
+// map leaves it as a file, so there Export JSON and Export for game run the
+// cleanup before they write. Save now does not: it writes the editor's own
+// stored copy, and is the autosave run early.
+test("an export from the standalone editor cleans the borders first; a scenario's exports and Save now do not", () => {
+  const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(mapEditor.includes("onExport={() => exportFromMenu(exportDocument)}"), "Export JSON");
+  assert.ok(mapEditor.includes("onExportGame={() => exportFromMenu(exportGameSeed)}"), "Export for game");
+  const fromMenu = mapEditor.slice(mapEditor.indexOf("const exportFromMenu = async (write) => {"), mapEditor.indexOf("// The ✕, and on a phone Back"));
+  assert.match(fromMenu, /if \(scenarioMode\) \{\n\s+await write\(\);\n\s+return;\n\s+\}/, "in a scenario's Workshop the file is written at once, as it was");
+  const cleaned = fromMenu.indexOf("await cleanBorders({ exporting: true })");
+  const written = fromMenu.indexOf("await write();", cleaned);
+  assert.ok(cleaned > 0 && written > cleaned, "the cleanup comes before the file is written");
+  assert.ok(fromMenu.indexOf("setCleanupNote(note);") > written, "and the note after it");
+  assert.ok(fromMenu.includes("if (!api || borderCleanup) return;"), "one at a time");
+  assert.ok(fromMenu.includes("setBorderCleanup(null);"), "the screen comes down whether or not the file was written");
+  // The file is built after the cleanup, from the map as it then is.
+  assert.ok(mapEditor.includes("const exportDocument = () => downloadJson({ ...buildPayload(), id: docIdRef.current, version: 1 });"));
+  assert.ok(mapEditor.includes("downloadJson(buildGameSeed(d.doc, api?.serializeRegions() || { type: \"FeatureCollection\", features: [] }, d.colors));"));
+
+  // One cleanup for both: the same sweep, width, screen, Save now and note.
+  const clean = mapEditor.slice(mapEditor.indexOf("const cleanBorders = async"), mapEditor.indexOf("const persistScenario = async"));
+  assert.ok(clean.includes("api.repairTopologyEverywhere?.({") && clean.includes("maxWidth: BORDER_CLEANUP.maxWidth,") && clean.includes("stopRequested: () => cleanupStopRef.current"));
+  assert.ok(clean.includes("return [describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean);"));
+  const scenario = mapEditor.slice(mapEditor.indexOf("const persistScenario = async"), mapEditor.indexOf("const docIdRef = useRef(null);"));
+  assert.ok(scenario.includes("const note = await cleanBorders();") && scenario.includes("setCleanupNote(note);"));
+  assert.equal(mapEditor.split("api.repairTopologyEverywhere").length - 1, 1, "nothing else in the editor runs the sweep");
+
+  // Save now is the store's own write, the one the autosave makes every two
+  // seconds: no cleanup in front of it.
+  assert.ok(mapEditor.includes("onSave={saveNow}"));
+  assert.ok(mapEditor.includes("const saveNow = () => runSaveRef.current();"));
 });
 
 // Time. A map with one 41,000-vertex sea zone held the old sweep for tens of

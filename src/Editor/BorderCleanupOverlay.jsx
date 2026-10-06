@@ -3,12 +3,13 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-// Shown by MapEditor.jsx from the moment a scenario save starts until the map
-// is written. The whole-map topology pass blocks the main thread for a few
-// seconds on a large world, chunk by chunk; this screen is what says the page
-// is working rather than frozen, and what it is working on. After ten seconds
-// it also offers "Save now": the sweep then stops at its next step, applies
-// what it has found, and the save goes on. (The sweep stops on its own after
+// Shown by MapEditor.jsx from the moment a scenario save starts, or an export
+// from the standalone editor, until the map is written. The whole-map
+// topology pass blocks the main thread for a few seconds on a large world,
+// chunk by chunk; this screen is what says the page is working rather than
+// frozen, and what it is working on. After ten seconds it also offers "Save
+// now": the sweep then stops at its next step, applies what it has found, and
+// the save goes on. (The sweep stops on its own after
 // BORDER_CLEANUP.maxMillis; the button is for the player who will not wait
 // that long.)
 
@@ -26,7 +27,7 @@ const CleanupCard = ({ state, onStop }) => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const { fraction, headline, detail } = describeCleanupProgress(state);
+  const { fraction, headline, detail, leftAlone = [] } = describeCleanupProgress(state);
   const startedAt = Number(state.startedAt) || now;
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   const searching = state.phase !== "save" && state.phase !== "done";
@@ -95,6 +96,12 @@ const CleanupCard = ({ state, onStop }) => {
         <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", fontVariantNumeric: "tabular-nums" }}>
           {detail ? `${detail} · ` : ""}{seconds} s
         </div>
+        {/* What the guards left alone, once the result is in: a line each. */}
+        {leftAlone.map((line) => (
+          <div key={line} style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", fontVariantNumeric: "tabular-nums" }}>
+            {line}
+          </div>
+        ))}
         <div style={{ fontSize: 12, lineHeight: 1.5, color: "rgba(255,255,255,0.55)" }}>
           The Workshop is not frozen. Before the map is saved it checks every region for cracks and slivers between {BORDER_CLEANUP.minWidth} m and {maxWidthKm} km wide and repairs them as one undo step, then looks again around each repair until nothing is left. A whole world takes about ten seconds; a very detailed map stops after {Math.round(BORDER_CLEANUP.maxMillis / 1000)} s, keeps what it repaired, and says so.
         </div>
@@ -135,10 +142,13 @@ const BorderCleanupOverlay = ({ state, onStop }) => {
   return <CleanupCard key={Number(state.startedAt) || 0} state={state} onStop={onStop} />;
 };
 
-// The one-line result left beside the save buttons for a few seconds after a
-// plain Save (Save & Exit and Apply & Play leave the Workshop).
-export const BorderCleanupNote = ({ text, top = 56 }) => {
-  if (!text) return null;
+// The result left beside the save buttons for a few seconds after a plain Save
+// (Save & Exit and Apply & Play leave the Workshop), and after an export from
+// the standalone editor: what was repaired, then a line for each kind of
+// thing the guards left alone. Each line is an element of its own, so the
+// translator looks each sentence up by itself.
+export const BorderCleanupNote = ({ lines, top = 56 }) => {
+  if (!lines?.length) return null;
   return (
     <div
       role="status"
@@ -156,9 +166,14 @@ export const BorderCleanupNote = ({ text, top = 56 }) => {
         color: "white",
         fontSize: 12.5,
         lineHeight: 1.45,
+        display: "flex",
+        flexDirection: "column",
+        gap: 5,
       }}
     >
-      {text}
+      {lines.map((line) => (
+        <div key={line}>{line}</div>
+      ))}
     </div>
   );
 };

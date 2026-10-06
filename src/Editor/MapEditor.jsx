@@ -20,7 +20,7 @@ import PolitiesPanel from "./PolitiesPanel.jsx";
 import GroupsPanel from "./GroupsPanel.jsx";
 import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
-import { BORDER_CLEANUP, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, describeCleanupLeftAlone, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
 import ProvinceImportPanel from "./ProvinceImportPanel.jsx";
 import LayersPanel from "./LayersPanel.jsx";
 import ReferencePanel from "./ReferencePanel.jsx";
@@ -107,15 +107,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [scenarioAction, setScenarioAction] = useState(""); // "save" | "save-exit" | "play" while writing scenario
   const [scenarioDirty, setScenarioDirty] = useState(false);
   // The "Cleaning up the borders" screen: progress from repairTopologyEverywhere
-  // while a scenario save runs, null otherwise; and the one-line result left
-  // beside the buttons for a few seconds after a plain Save.
+  // while a save runs, null otherwise; and the result left beside the buttons
+  // for a few seconds after a plain Save, or an export from the standalone
+  // editor, as its lines: what was repaired, then what the guards left alone.
   const [borderCleanup, setBorderCleanup] = useState(null);
-  const [cleanupNote, setCleanupNote] = useState("");
+  const [cleanupNote, setCleanupNote] = useState([]);
   // Set by the screen's "Save now" button; the sweep reads it between steps.
   const cleanupStopRef = useRef(false);
   useEffect(() => {
-    if (!cleanupNote) return undefined;
-    const timer = setTimeout(() => setCleanupNote(""), 9000);
+    if (!cleanupNote.length) return undefined;
+    // Nine seconds for the result, and five more to read each line under it.
+    const timer = setTimeout(() => setCleanupNote([]), 9000 + 5000 * (cleanupNote.length - 1));
     return () => clearTimeout(timer);
   }, [cleanupNote]);
   // Whether the scenario's own map has arrived and been loaded. The Workshop
@@ -377,28 +379,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
-  // Persist the Workshop map into the scenario without forcing a new game.
-  // Playing is now an explicit third action instead of the only way to save.
-  const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
-    if (!api || !onApplyToScenario || scenarioAction) return false;
-    // Before the scenario's map has loaded the document is empty, and a save
-    // then wrote an empty map over the scenario. That was the "save twice" bug:
-    // the first click, made while the map was still downloading, wiped it, and
-    // the second, once the map had appeared, wrote it back. The buttons are
-    // disabled until hydration; this guards every other way in.
-    if (scenarioMode && !hydrated) {
-      console.warn("[editor] scenario save requested before its map loaded — ignored.");
-      return false;
-    }
-    const action = play ? "play" : closeAfter ? "save-exit" : "save";
-    setScenarioAction(action);
-    // Every save first runs the border repair over the WHOLE map at
-    // BORDER_CLEANUP.maxWidth (1.5 km) — enclosed cracks filled, thin overlaps
-    // trimmed, one undo step — behind the "Cleaning up the borders" screen,
-    // which is painted before the work starts and updated between its chunks.
-    // Nothing else in the Workshop repairs borders, so this is also where a
-    // merge that fails sends the author (OlMap.jsx). A failure there never
-    // blocks the save: the map is then written as it is.
+  // Every save first runs the border repair over the WHOLE map at
+  // BORDER_CLEANUP.maxWidth (1.5 km) — enclosed cracks filled, thin overlaps
+  // trimmed, one undo step — behind the "Cleaning up the borders" screen,
+  // which is painted before the work starts and updated between its chunks.
+  // Nothing else in the Workshop repairs borders, so this is also where a
+  // merge that fails sends the author (OlMap.jsx). A failure here never
+  // blocks the save: the map is then written as it is.
+  //
+  // Leaves the screen up, saying the map is being written; whoever writes it
+  // takes the screen down (setBorderCleanup(null)). Resolves to the note for
+  // after the save, as its lines: what was repaired, then what the two guards
+  // passed over (topologySweep.js describeCleanupLeftAlone). `exporting`: the
+  // map goes to a file, not into a scenario, and the screen says so.
+  const cleanBorders = async ({ exporting = false } = {}) => {
     let cleanup = null;
     let cleanupError = "";
     cleanupStopRef.current = false;
@@ -414,8 +408,27 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       console.warn("[editor] border cleanup before saving failed; saving the map as it is:", e);
       cleanupError = e?.message || String(e);
     }
-    setBorderCleanup((current) => ({ ...(current || {}), phase: "save", result: cleanup, error: cleanupError }));
+    setBorderCleanup((current) => ({ ...(current || {}), phase: "save", result: cleanup, error: cleanupError, exporting }));
     await yieldToBrowser();
+    return [describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean);
+  };
+
+  // Persist the Workshop map into the scenario without forcing a new game.
+  // Playing is now an explicit third action instead of the only way to save.
+  const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
+    if (!api || !onApplyToScenario || scenarioAction) return false;
+    // Before the scenario's map has loaded the document is empty, and a save
+    // then wrote an empty map over the scenario. That was the "save twice" bug:
+    // the first click, made while the map was still downloading, wiped it, and
+    // the second, once the map had appeared, wrote it back. The buttons are
+    // disabled until hydration; this guards every other way in.
+    if (scenarioMode && !hydrated) {
+      console.warn("[editor] scenario save requested before its map loaded — ignored.");
+      return false;
+    }
+    const action = play ? "play" : closeAfter ? "save-exit" : "save";
+    setScenarioAction(action);
+    const note = await cleanBorders();
     try {
       const seed = buildGameSeed(
         d.doc,
@@ -433,7 +446,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
       }
       setScenarioDirty(false);
-      setCleanupNote(describeCleanupResult(cleanup, cleanupError));
+      setCleanupNote(note);
       if (!play && closeAfter) onClose?.();
       return true;
     } catch (e) {
@@ -526,6 +539,48 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   dRef.current = d;
   const saveNowRef = useRef(saveNow);
   saveNowRef.current = saveNow;
+
+  // The two files the Documents menu writes: the document, map and all, and
+  // the game's seed. The id is read from the ref because a first autosave can
+  // create the document while the cleanup below is still running.
+  const exportDocument = () => downloadJson({ ...buildPayload(), id: docIdRef.current, version: 1 });
+  const exportGameSeed = () =>
+    downloadJson(buildGameSeed(d.doc, api?.serializeRegions() || { type: "FeatureCollection", features: [] }, d.colors));
+
+  // Export JSON and Export for game, from the Documents menu. In a scenario's
+  // Workshop they write the file at once, as they always did: there the map
+  // is saved by the buttons above, which clean its borders. The standalone
+  // editor (/?editor=1) has no scenario and none of those buttons, so since
+  // the panel that repaired a selection was removed nothing repaired borders
+  // in it at all. A file is the only way a map leaves it, so there an export
+  // is its save: the cleanup runs first, behind the same screen, and leaves
+  // the same note.
+  //
+  // Save now is not one of them. It writes the stored map, which is the
+  // editor's own working copy, and it is the autosave run early: the same
+  // write is made every two seconds while the map has unsaved edits, when
+  // the tab is hidden, and before Close, New and Open, none of which can wait
+  // behind a loading screen. Cleaning on the one of them the author pressed
+  // would leave the stored map repaired or not by which came first. (And on
+  // the standalone editor's own default, the stock world, the sweep cannot
+  // run at all: polygon-clipping refuses its first union, seconds in, and
+  // Save now would spend them every time to say so.)
+  const exportFromMenu = async (write) => {
+    if (scenarioMode) {
+      await write();
+      return;
+    }
+    if (!api || borderCleanup) return;
+    try {
+      const note = await cleanBorders({ exporting: true });
+      await write();
+      setCleanupNote(note);
+    } catch (e) {
+      console.warn("[editor] the map could not be exported after its border cleanup:", e);
+    } finally {
+      setBorderCleanup(null);
+    }
+  };
 
   // The ✕, and on a phone Back (runtime/backToClose.js), which used to reach
   // past the Workshop to whatever was open under it. Answers false when the
@@ -891,6 +946,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         selectionIds={d.selection}
         activeTool={d.activeTool}
         seedKind={scenarioMode ? "deferred" : d.metadata.kind}
+        scenarioMode={scenarioMode}
         defaultTypeId={d.types[0]?.id || "land"}
         paintOwner={paintOwner}
         paintOnlyOwner={paintOnlyOwner}
@@ -967,12 +1023,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onAuthorChange={d.setAuthor}
         onNew={newDoc}
         onSave={saveNow}
-        onExport={() => downloadJson({ ...buildPayload(), id: docId, version: 1 })}
-        onExportGame={() =>
-          downloadJson(
-            buildGameSeed(d.doc, api?.serializeRegions() || { type: "FeatureCollection", features: [] }, d.colors),
-          )
-        }
+        onExport={() => exportFromMenu(exportDocument)}
+        onExportGame={() => exportFromMenu(exportGameSeed)}
         onOpen={openDoc}
       />
 
@@ -1482,7 +1534,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onUpload={uploadBasemap}
       />
 
-      <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />
+      <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />
       <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
       {fmgAvailable && (
