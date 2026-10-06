@@ -15,6 +15,7 @@ import {
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
+import { requestActivity } from "./requestActivity.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
     contextWindowKey,
@@ -977,7 +978,9 @@ async function callGemini(systemPrompt, history, {
     maxTokens = 8192,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -1136,6 +1139,9 @@ async function callGemini(systemPrompt, history, {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1192,7 +1198,7 @@ async function callGemini(systemPrompt, history, {
         // or proxy that ignored alt=sse still answers plain JSON, and that must
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream)
+            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         if (tool) {
@@ -1278,7 +1284,9 @@ async function callOpenAIStyleChatCompletions({
     tool,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
     onUsage,
     allowJsonSchemaFallback = false,
@@ -1373,6 +1381,9 @@ async function callOpenAIStyleChatCompletions({
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
@@ -1607,7 +1618,7 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream)
+            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
         const text = extractOpenAIMessageText(data);
@@ -1857,7 +1868,9 @@ async function callAnthropic(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -1965,6 +1978,9 @@ async function callAnthropic(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
             headers,
@@ -2051,7 +2067,7 @@ async function callAnthropic(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
         if (tool) {
@@ -2110,7 +2126,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -2243,6 +2261,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
         onRequest?.(response.status);
 
@@ -2321,7 +2342,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
         if (tool) {
@@ -2648,6 +2669,11 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // The timer wraps the caller's own onActivity (runJsonTask passes the idle
     // watchdog's note()), so it observes the first chunk without displacing it.
     const timer = createFirstByteTimer(providerOpts.onActivity);
+    // What each request of this call is doing while it is open, for the line
+    // under a skip's spinner (requestActivity.js). Only the calls a player may
+    // be watching a spinner for: a conversation shows its own reply as it
+    // arrives, and nobody waits on a background call or a translation.
+    const showsActivity = languageMode !== "chat" && requestKind !== BACKGROUND_REQUEST;
     // The request budget (requestBudget.js): every response any provider path
     // gets is one request against the player's daily allowance, so it is counted
     // HERE, under the lookup rounds, the retries and the Fallback list, rather
@@ -2724,24 +2750,35 @@ export async function callAI(systemPrompt, history, opts = {}) {
             attempt: (entry, { canFallBack, onChunk }) => {
                 if (record) record.provider = entry.provider;
                 logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, callShape, { verbose: true });
-                return runWithLookups(lookups, history, (roundHistory, roundOpts) => dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
-                    ...providerOpts,
-                    ...roundOpts,
-                    onChunk,
-                    entrySettings: entry,
-                    canFallBack,
-                    rateLimitPolicy: getRateLimitPolicy(),
-                    onActivity: timer.note,
-                    onRequest: noteRequest,
-                    onUsage: (data) => {
-                        const reported = normalizeUsage(data);
-                        if (!reported) return;
-                        roundUsage = reported;
-                        usage = sumUsage(usage, reported);
-                    },
-                    // The model the provider actually resolved (overrides, discovery).
-                    onModel: (model) => { if (record) record.model = String(model ?? ""); },
-                }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
+                return runWithLookups(lookups, history, (roundHistory, roundOpts) => {
+                    // Open from here until this round's answer is in or has
+                    // failed: one request, or several when the provider path
+                    // asks again (it says so with onSend).
+                    const live = showsActivity ? requestActivity.open({ label: `${label} → ${entry.label}` }) : null;
+                    return dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
+                        ...providerOpts,
+                        ...roundOpts,
+                        onChunk,
+                        entrySettings: entry,
+                        canFallBack,
+                        rateLimitPolicy: getRateLimitPolicy(),
+                        onActivity: timer.note,
+                        onSend: live?.sent,
+                        onReceived: live?.received,
+                        onRequest: noteRequest,
+                        onUsage: (data) => {
+                            const reported = normalizeUsage(data);
+                            if (!reported) return;
+                            roundUsage = reported;
+                            usage = sumUsage(usage, reported);
+                        },
+                        // The model the provider actually resolved (overrides, discovery).
+                        onModel: (model) => { if (record) record.model = String(model ?? ""); },
+                    }).catch((error) => {
+                        rememberContextWindow(entry, error);
+                        throw asUnreachable(error, providerOpts.signal);
+                    }).finally(() => live?.close());
+                }, {
                     label,
                     provider: entry.provider,
                     carry: lookupCarry,

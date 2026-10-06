@@ -418,3 +418,96 @@ test("gemini: a signed function call keeps its thoughtSignature on the rebuilt p
     { functionCall: { name: "find_region", args: { name: "Kharkiv" } } },
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// What each chunk carried — what the line under a skip's spinner is told
+// (requestActivity.js): reasoning or answer, and how much.
+
+const collect = () => {
+  const heard = [];
+  return { heard, onReceived: (report) => heard.push([report.reasoningChars, report.answerChars]) };
+};
+
+test("openai: each chunk says how much reasoning and how much answer it carried", async () => {
+  const { heard, onReceived } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { role: "assistant" } }] },
+    { choices: [{ delta: { reasoning_content: "thinking" } }] },
+    { choices: [{ delta: { reasoning: "more" } }] },
+    { choices: [{ delta: { content: "Here: " } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[]}' } }] } }] },
+    { choices: [{ finish_reason: "tool_calls", delta: {} }] },
+  ]), null, null, onReceived);
+  // One report per network chunk, the [DONE] line included: nothing, then
+  // reasoning, then the answer as text and as a tool call's arguments.
+  assert.deepEqual(heard, [[0, 0], [8, 0], [4, 0], [0, 6], [0, 13], [0, 0], [0, 0]]);
+});
+
+test("openai: reasoning written between <think> tags in the content is reasoning", async () => {
+  const { heard, onReceived } = collect();
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "<thi" } }] },
+    { choices: [{ delta: { content: "nk>The player wants" } }] },
+    { choices: [{ delta: { content: " a war.</th" } }] },
+    { choices: [{ delta: { content: "ink>" } }] },
+    { choices: [{ delta: { content: '{"events":[]}' } }] },
+    { choices: [{ finish_reason: "stop", delta: {} }] },
+  ]), null, null, onReceived);
+  // The opening tag is split across two frames: its first half cannot be known
+  // for reasoning yet, and everything after it is, until the tag closes.
+  assert.deepEqual(heard.slice(0, 5), [[0, 4], [19, 0], [11, 0], [0, 4], [0, 13]]);
+  // The content itself is untouched: main.jsx strips the block from the answer.
+  assert.equal(data.choices[0].message.content, '<think>The player wants a war.</think>{"events":[]}');
+});
+
+test("anthropic: thinking is counted as reasoning without joining the answer", async () => {
+  const { heard, onReceived } = collect();
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Let me plan this." } },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"events":[]}' } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
+  ], { done: false }), null, null, onReceived);
+  assert.deepEqual(heard, [[0, 0], [17, 0], [0, 0], [0, 5], [0, 0], [0, 13], [0, 0]]);
+  assert.deepEqual(data.content.map((block) => block.type), ["text", "tool_use"]);
+});
+
+test("gemini: text, a whole function call and a thought summary are each counted", async () => {
+  const { heard, onReceived } = collect();
+  await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "Weighing it up.", thought: true }] } }] },
+    { candidates: [{ content: { parts: [{ text: "ok" }] } }] },
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_jump_result", args: { events: [] } } }] }, finishReason: "STOP" }] },
+  ], { done: false }), null, null, onReceived);
+  assert.deepEqual(heard, [[15, 0], [0, 2], [0, 13]]);
+});
+
+test("a chunk that carried nothing readable is still reported, as zeros", async () => {
+  const encoder = new TextEncoder();
+  const { heard, onReceived } = collect();
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        controller.enqueue(encoder.encode("data: {\"choices\":[{\"delta\":"));
+        controller.enqueue(encoder.encode("{\"content\":\"split\"}}]}\n\n"));
+        controller.close();
+      },
+    }),
+  };
+  await readOpenAIStreamedResponse(response, null, null, onReceived);
+  assert.deepEqual(heard, [[0, 0], [0, 0], [0, 5]]);
+});
+
+test("a throwing receiver never breaks the stream", async () => {
+  const data = await readOpenAIStreamedResponse(
+    sseResponse([{ choices: [{ delta: { content: "survived" } }] }]),
+    null,
+    null,
+    () => { throw new Error("the row exploded"); },
+  );
+  assert.equal(data.choices[0].message.content, "survived");
+});

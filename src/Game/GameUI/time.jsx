@@ -20,6 +20,7 @@ import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStr
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { describeRequestActivity, formatElapsedClock, requestActivity } from "../AI/requestActivity.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -1024,47 +1025,109 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
     );
 };
 
+// What the open request is doing, in the words the row shows under the phase
+// (AI/requestActivity.js names the three states).
+const REQUEST_ACTIVITY_TEXTS = {
+    waiting: "Waiting for the model to answer…",
+    thinking: "The model is thinking…",
+    writing: "The model is writing its answer…",
+};
+// Added once the request has been open a minute: by then a player who does not
+// know a thinking model can take ten is reaching for Cancel.
+const REQUEST_STILL_OPEN_TEXT = "Still working: a slow model can take several minutes. The request is still open.";
+
+// What the row adds to the phase's name: how long the skip has run, and what
+// its open request is doing. Both are read off the clock, so they are state the
+// row's own timer refreshes, never values worked out while rendering.
+const readSkipProgress = (startedAt) => ({
+    elapsed: startedAt ? formatElapsedClock(Date.now() - startedAt) : "",
+    request: requestActivity.current(),
+});
+
 // What the skip is doing, and the way out. The same row in both panels, so
 // switching between them does not look like two different states of the game.
-const SkipProgressRow = ({ label, onCancel }) => (
-    <div
-    style={{
-        alignItems: "center",
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "12px",
-        color: "rgba(255,255,255,0.75)",
-        display: "flex",
-        fontSize: "0.76rem",
-        gap: "0.55rem",
-        justifyContent: "center",
-        padding: "0.68rem 0.8rem",
-    }}
-    >
-    <SpinnerRing size={15} />
-    <span>{label || "Simulating…"}</span>
-    {onCancel && (
-        <button
-        type="button"
-        className="oh-tap-row"
-        onClick={onCancel}
+//
+// A skip is mostly one long request, and a spinner beside an unchanging line
+// reads as a hung one: players cancelled skips that were minutes from landing.
+// So the row also counts the time since the skip began (`startedAt`, held by
+// the widget: the row is mounted afresh whenever the player changes panel) and
+// says, on a second line, what the open request is doing. The second line is
+// absent while the skip is doing its own work between requests.
+//
+// The clock ticks in here, once a second and whenever the request changes
+// state, so the panel around the row is not rendered again for it.
+const SkipProgressRow = ({ label, onCancel, startedAt = 0 }) => {
+    const [progress, setProgress] = useState(() => readSkipProgress(startedAt));
+    useEffect(() => {
+        const refresh = () => setProgress(readSkipProgress(startedAt));
+        const timer = setInterval(refresh, 1000);
+        const stopListening = requestActivity.subscribe(refresh);
+        return () => {
+            clearInterval(timer);
+            stopListening();
+        };
+    }, [startedAt]);
+    const activity = progress.request ? REQUEST_ACTIVITY_TEXTS[progress.request.state] : "";
+
+    return (
+        <div
         style={{
-            background: "rgba(220,38,38,0.18)",
-            border: "1px solid rgba(248,113,113,0.5)",
-            borderRadius: "8px",
-            color: "#fecaca",
-            cursor: "pointer",
-            fontSize: "0.74rem",
-            fontWeight: 600,
-            marginLeft: "0.2rem",
-            padding: "0.28rem 0.7rem",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: "12px",
+            color: "rgba(255,255,255,0.75)",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "0.76rem",
+            gap: "0.4rem",
+            padding: "0.68rem 0.8rem",
         }}
         >
-        Cancel
-        </button>
-    )}
-    </div>
-);
+        {/* The label may wrap and the clock and Cancel may not: on a phone the
+            row is under 280 px wide, and Cancel must stay on it. */}
+        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center" }}>
+        <span style={{ display: "flex", flexShrink: 0 }}><SpinnerRing size={15} /></span>
+        <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{label || "Simulating…"}</span>
+        {/* Its own element: a number that changes every second is never text to translate. */}
+        {progress.elapsed && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+            {progress.elapsed}
+            </span>
+        )}
+        {onCancel && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={onCancel}
+            style={{
+                background: "rgba(220,38,38,0.18)",
+                border: "1px solid rgba(248,113,113,0.5)",
+                borderRadius: "8px",
+                color: "#fecaca",
+                cursor: "pointer",
+                flexShrink: 0,
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                marginLeft: "0.2rem",
+                padding: "0.28rem 0.7rem",
+                whiteSpace: "nowrap",
+            }}
+            >
+            Cancel
+            </button>
+        )}
+        </div>
+        {/* Each sentence in an element of its own, so each is looked up whole
+            in the player's language. */}
+        {activity && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", lineHeight: 1.45, textAlign: "center" }}>
+            <span>{activity}</span>
+            {progress.request.stillWorking && <> <span>{REQUEST_STILL_OPEN_TEXT}</span></>}
+            </div>
+        )}
+        </div>
+    );
+};
 
 const TimelineSkipPanel = ({
     canUndo,
@@ -1088,6 +1151,7 @@ const TimelineSkipPanel = ({
     onRetrySegment,
     onUndo,
     progressLabel,
+    progressStartedAt = 0,
     projectsHeld,
     projectsRetries,
     sceneInProgress = false,
@@ -1341,6 +1405,7 @@ const TimelineSkipPanel = ({
             <SkipProgressRow
             label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : "")}
             onCancel={onCancel}
+            startedAt={progressStartedAt}
             />
         )}
 
@@ -1597,7 +1662,7 @@ const TimelineHistoryPanel = ({
     // moved. The cards and the reveal are a finished turn's, but everything that
     // acts on a written turn waits for it to land.
     live = false,
-    // { label, onCancel } while the skip runs.
+    // { label, onCancel, startedAt } while the skip runs.
     progress = null,
     record,
     topOffset,
@@ -1930,7 +1995,7 @@ const TimelineHistoryPanel = ({
         {/* Under the cards, so the list reads as a finished turn's would. */}
         {progress && (
             <div style={{ marginTop: totalEvents > 0 ? "0.75rem" : 0 }}>
-            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} />
+            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} startedAt={progress.startedAt} />
             </div>
         )}
         </PanelChrome>
@@ -1977,6 +2042,10 @@ const DateWidget = ({
     // A phase of the skip as it starts: "Writing 1 month of events… (part 2 of 3)".
     const showSkipPhase = ({ label, detail } = {}) =>
         setJumpProgress(label ? `${label}…${detail ? ` (${detail})` : ""}` : "");
+    // When the skip or retry now running began, for the clock in its progress
+    // row; 0 while none is. Held here because the row is not: it is shown in two
+    // panels and mounted afresh whenever the player moves between them.
+    const [progressStartedAt, setProgressStartedAt] = useState(0);
     // The skip's events as the model writes them (AI/streamedEvents.js): the
     // request already streamed, nothing was reading it. A preview, before the
     // validators sort, clamp and screen; the list goes when the turn does.
@@ -2054,6 +2123,9 @@ const DateWidget = ({
     }, [modeEvidence, turnRunning]);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
+    // What the open request had got to when Cancel was pressed, for the log line
+    // the cancel writes: by the time the cancel has unwound, the request is closed.
+    const cancelledRequestRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
@@ -2254,12 +2326,14 @@ const DateWidget = ({
         // that took eleven seconds are different bugs, and the wall-clock
         // timestamps are the only way to tell them apart after the fact.
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         logDebugEvent("turn", `Timeline ${mode === "auto" ? "auto-jump" : "jump"} started: ${days} day(s) from ${gameData.gameDate || "unknown"}.`, {
             round: gameData.round ?? 0,
         });
 
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             // No onEvents with the setting off: nothing streams anywhere.
             const onEvents = live ? showStreamedEvents : undefined;
@@ -2340,7 +2414,10 @@ const DateWidget = ({
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
-                logDebugEvent("turn", "Turn cancelled by the player.");
+                // With how long it had run and what its open request had
+                // received: a report of skips "failing" that were in fact
+                // cancelled a minute or two into a slow answer reads at a glance.
+                logDebugEvent("turn", `Turn cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}.`);
             } else if (jumpError?.segmentHeld) {
                 // Not a failed turn: a long skip is generated in segments and one
                 // of them did not come back. The finished segments are still held,
@@ -2368,6 +2445,7 @@ const DateWidget = ({
             setIsLoading(false);
             setSkipInFlight(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             setStreamedEvents([]);
             setLiveStageBase(null);
             // Between turns, never during one. If the ladder has learned
@@ -2377,7 +2455,12 @@ const DateWidget = ({
     };
 
     const cancelJump = () => {
-        jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+        const controller = jumpAbortRef.current;
+        // A second press while the first unwinds has nothing left to read.
+        if (!controller || controller.signal.aborted) return;
+        // Read before the abort: it closes the request this is taken from.
+        cancelledRequestRef.current = requestActivity.current();
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
     };
 
     // A skip that finished while another campaign was open was kept for this one
@@ -2427,8 +2510,10 @@ const DateWidget = ({
         setIsLoading(true);
         setProjectsRetries((count) => count + 1);
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             const result = await retryPendingProjectsJump({ signal: controller.signal });
             warnIfNoRestorePoint(result);
@@ -2448,7 +2533,7 @@ const DateWidget = ({
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
                 // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", "Board retry cancelled; the turn is still held.");
+                logDebugEvent("turn", `Board retry cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}. The turn is still held.`);
             } else if (retryError?.projectsHeld) {
                 setProjectsHeld(retryError.message);
             } else {
@@ -2461,6 +2546,7 @@ const DateWidget = ({
             jumpAbortRef.current = null;
             setIsRetryingProjects(false);
             setIsLoading(false);
+            setProgressStartedAt(0);
             // Between turns, as after a skip.
             setModeSuggestion(getStructuredModeSuggestion());
         }
@@ -2489,8 +2575,10 @@ const DateWidget = ({
             setPanel("history");
         }
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             const result = await retryPendingJumpSegment({
                 signal: controller.signal,
@@ -2513,7 +2601,7 @@ const DateWidget = ({
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
                 // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", "Segment retry cancelled; the turn is still held.");
+                logDebugEvent("turn", `Segment retry cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}. The turn is still held.`);
             } else if (retryError?.segmentHeld) {
                 setSegmentHeld(retryError.message);
             } else if (retryError?.projectsHeld) {
@@ -2536,6 +2624,7 @@ const DateWidget = ({
             setIsLoading(false);
             setSkipInFlight(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             setStreamedEvents([]);
             setLiveStageBase(null);
             setModeSuggestion(getStructuredModeSuggestion());
@@ -3152,6 +3241,7 @@ const DateWidget = ({
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
+        progressStartedAt={progressStartedAt}
         projectsHeld={projectsHeld}
         projectsRetries={projectsRetries}
         sceneInProgress={sceneInProgress}
@@ -3179,7 +3269,7 @@ const DateWidget = ({
         // that skip replaces it.
         offeredInteractiveId={!skipInFlight && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
-        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
+        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump, startedAt: progressStartedAt } : null}
         record={displayRecord}
         topOffset={topOffset}
         visibleEventCount={visibleEventCount}
