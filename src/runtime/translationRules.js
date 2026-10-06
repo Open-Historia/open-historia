@@ -15,7 +15,10 @@
 //     (planTranslationBatch, chooseTranslationBatch);
 //   - what of the model's answer may be kept (readTranslationReply): an answer
 //     is paired with its strings by position, so one of the wrong length is
-//     never kept at all.
+//     never kept at all;
+//   - what a failed request means for the next one (readTranslationFailure,
+//     aiWaitIsOver): with nothing in the Fallback list able to answer, the
+//     translator waits for the AI settings to change instead of asking again.
 
 // How many strings ride in one request. This used to be 60 strings × 3 requests
 // at a time, which made a first pass over a new language dozens of requests
@@ -180,4 +183,33 @@ export const readTranslationReply = (raw, batch) => {
     else unusable.push(source);
   });
   return { pairs, unusable };
+};
+
+// What a failed request says about the next one.
+//
+// "unavailable": nothing in the Fallback list can answer. The list is empty,
+// no entry has a key, or every one is Unusable or Spent (AI/fallbackRunner.js
+// marks that error `fallbackUnavailable`, with `nextResetAt` when the first
+// Spent model's return is known). No request went out, and asking again cannot
+// work until the player changes the AI settings or that allowance is back, so
+// it is waited for rather than tried again on a timer. Counted as an ordinary
+// failure it was three calls failing at once, a minute's pause, three more,
+// and translation stopped for the session: the key a new player pasted two
+// minutes in translated nothing until the game was reloaded. (An older build
+// never stopped: a player's log has it failing "after 0.0s" every minute.)
+//
+// "transient": anything else. A run of those pauses for a minute, as before.
+export const readTranslationFailure = (error) => {
+  const unavailable = error?.fallbackUnavailable;
+  if (!unavailable || typeof unavailable !== "object") return { kind: "transient", until: null };
+  const until = Number(unavailable.nextResetAt);
+  return { kind: "unavailable", until: Number.isFinite(until) && until > 0 ? until : null };
+};
+
+// Whether a wait that began with an "unavailable" failure is over: something in
+// the Fallback list can answer again (`canAnswer`, asked when the list says it
+// changed), or the time the first Spent model comes back has passed.
+export const aiWaitIsOver = (waiting, { canAnswer = false, now = Date.now() } = {}) => {
+  if (!waiting || canAnswer) return true;
+  return Number.isFinite(waiting.until) && now >= waiting.until;
 };

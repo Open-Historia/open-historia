@@ -6,17 +6,21 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
+import { createMemoryStateStore, runWithFallback } from "../Game/AI/fallbackRunner.js";
 import {
   CONTENT_MAX_ARRAY,
   CONTENT_MAX_DEPTH,
   TranslationReplyError,
+  aiWaitIsOver,
   authoredEventText,
   chooseTranslationBatch,
   collectContentText,
   isAuthoredEvent,
   isNumericDate,
   isTranslatable,
+  readTranslationFailure,
   readTranslationReply,
   routeUnknownText,
 } from "./translationRules.js";
@@ -140,4 +144,79 @@ test("an empty or non-text entry is not kept as a translation, and the source is
   const { pairs, unusable } = readTranslationReply('["Spiel speichern", "", {"text": "x"}, "Paris"]', ["Save game", "Load game", "Quit", "Paris"]);
   assert.deepEqual(pairs, [["Save game", "Spiel speichern"], ["Paris", "Paris"]], "a name returned unchanged is an answer");
   assert.deepEqual(unusable, ["Load game", "Quit"]);
+});
+
+// A player's log, with the game in Russian and no key in it yet: "content
+// translation: call FAILED after 0.0s — nothing in the Fallback list can
+// answer. (×3)", then "[i18n] translation paused for 60s after repeated
+// failures (No model in your Fallback list can answer. … no API key …)", again
+// every minute. The errors below are the Fallback list's own (fallbackRunner.js),
+// made the way a call makes them.
+const fallbackFailure = async ({ entries, attempt, now = () => 1_000_000 }) => {
+  try {
+    await runWithFallback({ entries, store: createMemoryStateStore(), now, attempt });
+  } catch (error) {
+    return error;
+  }
+  throw new Error("the call answered");
+};
+const providerError = (kind, reason) => Object.assign(new Error(`${kind} failure`), { providerFailure: { kind, reason } });
+const GEMINI = [
+  { id: "g1", provider: "gemini", label: "gemini-3.5-flash-lite (Gemini)" },
+  { id: "g2", provider: "gemini", label: "gemini-3.1-flash-lite (Gemini)" },
+];
+
+test("a call that found nothing in the Fallback list able to answer is waited out, not tried again", async () => {
+  const noKey = await fallbackFailure({ entries: GEMINI, attempt: async () => { throw providerError("unusable", "no API key"); } });
+  assert.equal(noKey.message, "No model in your Fallback list can answer. gemini-3.5-flash-lite (Gemini): no API key. Fix it in Settings → AI.");
+  assert.deepEqual(readTranslationFailure(noKey), { kind: "unavailable", until: null });
+
+  const emptyList = await fallbackFailure({ entries: [], attempt: async () => "never asked" });
+  assert.deepEqual(readTranslationFailure(emptyList), { kind: "unavailable", until: null });
+
+  // Every model has used its allowance: the list knows when the first is back.
+  const spent = await fallbackFailure({ entries: GEMINI, attempt: async () => { throw providerError("spent", "quota"); } });
+  const waiting = readTranslationFailure(spent);
+  assert.equal(waiting.kind, "unavailable");
+  assert.ok(waiting.until > 1_000_000, "the time the first Spent model comes back");
+});
+
+test("any other failure is one of a run that pauses for a minute, as before", async () => {
+  const busy = await fallbackFailure({ entries: [GEMINI[0]], attempt: async () => { throw providerError("busy", "503"); } });
+  assert.deepEqual(readTranslationFailure(busy), { kind: "transient", until: null });
+  assert.deepEqual(readTranslationFailure(new Error("network error")), { kind: "transient", until: null });
+  assert.deepEqual(readTranslationFailure(new TranslationReplyError("translation response was not a JSON array")), { kind: "transient", until: null });
+  assert.deepEqual(readTranslationFailure(null), { kind: "transient", until: null });
+  assert.deepEqual(readTranslationFailure({ fallbackUnavailable: true }), { kind: "transient", until: null }, "only the list's own mark counts");
+});
+
+test("a wait for the AI ends when the list can answer again, or when a Spent model is back", () => {
+  const noKey = { until: null };
+  assert.equal(aiWaitIsOver(noKey, { canAnswer: false, now: 9e15 }), false, "no key: time alone never ends it");
+  assert.equal(aiWaitIsOver(noKey, { canAnswer: true }), true, "the player added a model that can answer");
+
+  const spent = { until: 5_000 };
+  assert.equal(aiWaitIsOver(spent, { now: 4_999 }), false);
+  assert.equal(aiWaitIsOver(spent, { now: 5_000 }), true, "its allowance is back");
+  assert.equal(aiWaitIsOver(spent, { canAnswer: true, now: 1 }), true, "or a backup was added first");
+  assert.equal(aiWaitIsOver(null), true, "not waiting at all");
+});
+
+// translator.js needs a page to run, so its side is read in its source.
+test("the translator waits for the AI settings instead of counting such a failure", () => {
+  const source = fs.readFileSync(new URL("./translator.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const queue = source.slice(source.indexOf("const processQueue = async () => {"), source.indexOf("// ---- content ----"));
+  assert.match(queue, /const failure = result\.error \? readTranslationFailure\(result\.error\) : null;\n\s*if \(failure\?\.kind === "unavailable"\) \{\n(?:\s*\/\/[^\n]*\n)*\s*waitForAi\(result\.error, failure\);\n\s*\} else if \(result\.error\) \{/);
+  assert.equal(queue.match(/noteFailure\(/g).length, 1, "counted only on the other branch");
+  assert.match(queue, /if \(waitingForAi\) \{\n\s*if \(!aiWaitIsOver\(waitingForAi\)\) return;/, "nothing is sent while waiting");
+  assert.match(queue, /while \(pending\.size > 0 && !stopped && !halted && !waitingForAi && /);
+
+  const wait = source.slice(source.indexOf("const waitForAi = "), source.indexOf("const processQueue = async () => {"));
+  assert.doesNotMatch(wait, /cooldownCount|halted = true|cooldownUntil/, "a wait is not a pause and never stops the session");
+  assert.match(wait, /if \(reason !== lastAiWaitReason\) \{/, "the log hears a reason once");
+  assert.match(wait, /aiWaitIsOver\(waitingForAi, \{ canAnswer: await fallbackListCanAnswer\(\) \}\)/);
+  assert.match(source, /window\.addEventListener\("ai:fallback-changed", onFallbackChanged\);/, "the Fallback list says when it changed");
+  // The event's name is providerConfig.js's.
+  const provider = fs.readFileSync(new URL("../Game/AI/providerConfig.js", import.meta.url), "utf8");
+  assert.match(provider, /new CustomEvent\("ai:fallback-changed"\)/);
 });
