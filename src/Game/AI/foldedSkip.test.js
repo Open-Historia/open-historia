@@ -299,11 +299,11 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   for (const gone of ["runStandaloneActionOutcomeReview", "refreshSpyIntercepts", "runJsonTask(\"unitDirector\"", "runJsonTask(\"territoryDirector\"", "runJsonTask(\"structureDirector\""]) {
     assert.equal(gameplaySource.includes(gone), false, `${gone} is gone`);
   }
-  // What a skip may spend on is one list (requestBudget.js), and the budget is
-  // never unlimited for a real skip.
+  // What a skip may spend on is one list (requestBudget.js), and no budget is
+  // without a cap: nothing in the game can ask for one.
   const requests = functionBody("createJumpRequests");
   assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces \}\), only: SKIP_SPENDERS \}\);/);
-  assert.equal(/unlimited/.test(requests), false);
+  assert.equal(/\bunlimited\b/.test(gameplaySource), false);
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
   // The two that asked outside the list are told no before they build anything.
   assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
@@ -312,7 +312,7 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
 
 test("function calling inside a skip spends the skip's budget: a round is a request", () => {
   const task = functionBody("runJsonTask");
-  assert.match(task, /const lookupRounds = budget && !budget\.unlimited && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? carriedRoundCount\(lookupCarry\) \+ budget\.free\s*\n\s*: null;/);
+  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? carriedRoundCount\(lookupCarry\) \+ budget\.free\s*\n\s*: null;/);
   assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
   assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
   // Decided after the attempt's own request is taken, so `free` is what is left.

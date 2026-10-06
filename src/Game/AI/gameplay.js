@@ -3059,7 +3059,7 @@ const runJsonTask = async (taskKey, {
       // for an ordinary skip, which makes three requests the most a skip is).
       // Rounds an earlier attempt already had answered are carried, not asked
       // again, so they count toward the limit without costing anything now.
-      const lookupRounds = budget && !budget.unlimited && Array.isArray(lookups?.tools) && lookups.tools.length
+      const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
         ? carriedRoundCount(lookupCarry) + budget.free
         : null;
       const lastChance = outputAttempt === 2 || salvageFirst;

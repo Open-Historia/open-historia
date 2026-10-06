@@ -299,8 +299,9 @@ export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math
 // `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
 // skip); null serves anyone. `state` is what `state` below gave out: a skip
 // kept for its campaign (parkedTurn.js) goes on spending from the budget it
-// had, after a restart too.
-export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, only = null, state = null } = {}) => {
+// had, after a restart too. There is no budget without a cap: the one that
+// had none was for the A/B lab's runs, and went with them.
+export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = null } = {}) => {
     const spends = (Array.isArray(state?.spends) ? state.spends : [])
         .filter((entry) => entry && typeof entry === "object")
         .map((entry) => ({ spender: String(entry.spender || "other"), granted: entry.granted === true, ...(entry.denied === true ? { denied: true } : {}) }));
@@ -312,17 +313,15 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
     const spent = () => spends.filter((entry) => entry.granted).length;
     const reserved = () => [...reservations.values()].reduce((sum, value) => sum + value, 0);
     // Is this something the budget spends on at all, whatever is left of it?
-    const allows = (spender) => unlimited || !served || served.has(spenderBase(spender));
+    const allows = (spender) => !served || served.has(spenderBase(spender));
     return {
         cap: limit,
-        unlimited,
         only: served ? [...served] : null,
         allows,
         // Reserve a bounded slot for correctness work that happens late in the
         // turn. Optional work asked earlier cannot consume that slot, but the
         // total request cap never increases.
         reserve: (spender, count = 1) => {
-            if (unlimited) return 0;
             const key = String(spender || "other");
             const wanted = Math.max(0, Math.round(Number(count) || 0));
             if (!wanted) return reservations.get(key) || 0;
@@ -341,11 +340,9 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
                 return false;
             }
             const ownReservation = reservations.get(key) || 0;
-            const granted = unlimited || (
-                ownReservation > 0
-                    ? spent() < limit
-                    : spent() < Math.max(0, limit - reserved())
-            );
+            const granted = ownReservation > 0
+                ? spent() < limit
+                : spent() < Math.max(0, limit - reserved());
             if (granted && ownReservation > 0) {
                 if (ownReservation === 1) reservations.delete(key);
                 else reservations.set(key, ownReservation - 1);
@@ -354,11 +351,11 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
             return granted;
         },
         get spent() { return spent(); },
-        get remaining() { return unlimited ? Infinity : Math.max(0, limit - spent()); },
-        get reserved() { return unlimited ? 0 : reserved(); },
+        get remaining() { return Math.max(0, limit - spent()); },
+        get reserved() { return reserved(); },
         // What anyone without a reservation could still take: the rounds of
         // function calling a task may ask (gameplay.js runJsonTask).
-        get free() { return unlimited ? Infinity : Math.max(0, limit - spent() - reserved()); },
+        get free() { return Math.max(0, limit - spent() - reserved()); },
         // Put off to stay inside the cap; and never asked, because a skip does
         // not spend on it.
         get skipped() { return spends.filter((entry) => !entry.granted && !entry.denied).map((entry) => entry.spender); },

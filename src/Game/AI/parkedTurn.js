@@ -17,7 +17,7 @@
 //
 // Import-light, so node tests can drive it.
 
-import { createJumpBudget } from "./requestBudget.js";
+import { SKIP_SPENDERS, createJumpBudget } from "./requestBudget.js";
 import { createTurnReplay } from "./heldTurnReplay.js";
 
 export const PARKED_TURN_VERSION = 1;
@@ -33,16 +33,19 @@ const savedRequests = (requests) => (requests?.budget
     refused: Number(requests.refused) || 0,
     // `only`: what a skip spends on at all (requestBudget.js SKIP_SPENDERS), so
     // the turn written later asks for nothing the skip would not have.
-    budget: { cap: requests.budget.cap, unlimited: requests.budget.unlimited === true, only: requests.budget.only ?? null, ...requests.budget.state },
+    budget: { cap: requests.budget.cap, only: requests.budget.only ?? null, ...requests.budget.state },
   }
   : null);
 
+// A turn kept by a build from before a skip was one request in every mode has
+// no `only`, and may say `unlimited` (Save AI requests was off): it is written
+// under the skip's own list and cap all the same.
 export const restoreJumpRequests = (saved) => {
   if (!isObject(saved) || !isObject(saved.budget)) return null;
-  const { cap, unlimited, only, spends, reservations } = saved.budget;
+  const { cap, only, spends, reservations } = saved.budget;
   return {
     saving: saved.saving === true,
-    budget: createJumpBudget({ cap, unlimited: unlimited === true, only: Array.isArray(only) ? only : null, state: { spends, reservations } }),
+    budget: createJumpBudget({ cap, only: Array.isArray(only) ? only : SKIP_SPENDERS, state: { spends, reservations } }),
     used: Math.max(0, Number(saved.used) || 0),
     refused: Math.max(0, Number(saved.refused) || 0),
   };

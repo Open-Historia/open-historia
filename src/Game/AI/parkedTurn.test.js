@@ -84,6 +84,21 @@ test("a kept skip comes back from its campaign's store ready to be written, aski
   assert.equal(requests.budget.take("institutionBallots"), true);
 });
 
+test("a skip kept by an older build is written under the skip's own list and cap", async () => {
+  // Kept with Save AI requests off, when that meant a budget with no cap and
+  // every check a request of its own.
+  const record = stored(parkedTurnRecord({ campaignId: "game-a", applyArgs: await keptSkip() }));
+  record.requests.saving = false;
+  record.requests.budget = { cap: 3, unlimited: true, spends: [{ spender: "jump", granted: true }], reservations: {} };
+  const { requests } = restoreParkedTurn(record, { campaignId: "game-a" }).applyArgs.projects;
+  assert.equal(requests.budget.allows("unitDirector"), false, "a check is no longer a request of its own");
+  assert.equal(requests.budget.take("unitDirector"), false);
+  assert.equal(requests.budget.take("history"), true);
+  assert.equal(requests.budget.take("stats"), true);
+  assert.equal(requests.budget.take("history"), false, "three is the most a skip spends");
+  assert.equal(requests.budget.spent, 3);
+});
+
 test("a kept skip is only ever offered to its own campaign", async () => {
   const record = stored(parkedTurnRecord({ campaignId: "game-a", applyArgs: await keptSkip() }));
   assert.equal(restoreParkedTurn(record, { campaignId: "game-b" }), null);
