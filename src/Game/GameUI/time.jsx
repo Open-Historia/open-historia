@@ -1493,9 +1493,16 @@ const TimelineSkipPanel = ({
 }) => {
     const [customValue, setCustomValue] = useState("");
     const [customUnit, setCustomUnit] = useState("days");
+    // A turn is being made: a skip, or the retry of a held one. The retry
+    // raises only its own flag, and everything here used to ask isLoading
+    // alone, so the skips, Auto-jump, Go and Undo all stayed live through a
+    // retry that can take minutes: a skip started then ran a second turn from
+    // the same pre-jump world, both spent requests, and the later write
+    // replaced the earlier.
+    const busy = isLoading || isRetryingHeld;
     // Time stands still while an interactive event is being played: the skips
     // wait for it to end or be set aside, as the engine does.
-    const blocked = isLoading || sceneInProgress;
+    const blocked = busy || sceneInProgress;
     const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
     const runCustomJump = () => {
         const amount = Number(customValue);
@@ -1570,15 +1577,15 @@ const TimelineSkipPanel = ({
             <button
             type="button"
             className="oh-tap-row"
-            disabled={isLoading}
-            onClick={() => { if (!isLoading) onUndo(); }}
+            disabled={busy}
+            onClick={() => { if (!busy) onUndo(); }}
             style={{
                 background: "rgba(180,83,9,0.18)",
                 border: "1px solid rgba(245,158,11,0.5)",
                 borderRadius: "10px",
                 color: "#fcd9a8",
-                cursor: isLoading ? "default" : "pointer",
-                opacity: isLoading ? 0.7 : 1,
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.7 : 1,
                 padding: "0.38rem 0",
                 textAlign: "center",
                 width: "12.5rem",
@@ -2455,7 +2462,11 @@ const DateWidget = ({
     }
 
     function togglePanel(panelName) {
-        if (isLoading && panelName !== "skip") {
+        // While a skip runs, only its own panels: the Timeline, and the Events
+        // panel a watched skip streams into, so the player can go back to it
+        // after looking for Cancel. (The guard is from before live skips: «
+        // did nothing for the whole of one.)
+        if (isLoading && panelName !== "skip" && !(panelName === "history" && skipInFlight)) {
             return;
         }
 
@@ -2472,7 +2483,11 @@ const DateWidget = ({
     // retryDirective: a whole skip run again from a turn held on the player's
     // events, telling the model what failed the first time.
     const runJump = async (days, mode = "jump", { retryDirective = "" } = {}) => {
-        if (!gameData || days == null || isLoading) {
+        // A held turn's retry holds the controller too: a skip started under it
+        // would run a second turn from the same pre-jump world, and the later
+        // write would replace the earlier. The panel greys the buttons out
+        // (`busy`); this is the backstop behind them.
+        if (!gameData || days == null || isLoading || jumpAbortRef.current) {
             return;
         }
 
@@ -2677,7 +2692,8 @@ const DateWidget = ({
     // only) takes the turn as the failed checks left it, asking no check again.
     // keep (a turn held on the player's events): the turn lands as it is.
     const retryHeld = async ({ withoutFailedChecks = false, keep = false } = {}) => {
-        if (isRetryingHeld || !held) return;
+        // Never beside a skip, an undo or another retry: it writes a turn too.
+        if (isRetryingHeld || isLoading || jumpAbortRef.current || !held) return;
         const { kind } = held;
         // A segment retry writes the rest of the round, so it streams like a jump.
         const live = kind === HELD_TURN.segment && getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
@@ -2807,7 +2823,9 @@ const DateWidget = ({
     // hide the very thing the player just acted on. The Timeline panel's own
     // undo button still switches, since that is where it is already looking.
     const runUndo = async ({ stayOnHistory = false } = {}) => {
-        if (isLoading || undoCount <= 0) {
+        // Never under a skip or a retry still running: it would write its turn
+        // on top of the one this rolls back to.
+        if (isLoading || jumpAbortRef.current || undoCount <= 0) {
             return false;
         }
 
@@ -2856,7 +2874,7 @@ const DateWidget = ({
     // the panel then shows the shorter turn, fully revealed.
     const runIntervene = async () => {
         const keep = Math.max(1, visibleEventCount);
-        if (isLoading || !canInterveneTurn) return false;
+        if (isLoading || jumpAbortRef.current || !canInterveneTurn) return false;
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
@@ -3385,9 +3403,10 @@ const DateWidget = ({
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.
         // Nothing is written mid-skip, so there is no turn to roll back and no round to stop.
-        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight}
+        // Nor while a held turn's retry runs: it is about to write one.
+        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight}
+        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
