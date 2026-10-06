@@ -23,6 +23,7 @@ import {
   mergeReceipts,
   noteMalformedImpacts,
   noteReceipt,
+  quoteReceiptIds,
   renderLastTurnReceipt,
   tallyAppliedEvents,
   withReceiptDraft,
@@ -279,6 +280,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -786,6 +788,15 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     }
   });
 
+  // Prose where war records go (a heading, "No changes.") is not a record and
+  // never reaches the ledger (nativeWarLedger.js parseWarUpdateRecord). Said
+  // here, once for the answer and before anything rewrites the field. It is
+  // not a rejection and not a note for the next turn: such a line names no war.
+  const warProse = warUpdateProseLines(candidate?.warUpdates);
+  if (warProse.length) {
+    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
+  }
+
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
   // explicit opposing combatants; anything ambiguous comes back as an error.
@@ -870,11 +881,13 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       residual: repair.residual,
     });
     if (repair.droppedIds.length || repair.strippedEvents) {
+      // The ids are quoted short (quoteReceiptIds): a malformed record's "id" is
+      // whatever the model wrote there, and this note is read by it next turn.
       noteReceipt(
         receipt,
         "dropped",
         `War ledger: ${repair.droppedIds.length} war record(s) were dropped`
-          + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
+          + `${repair.droppedIds.length ? ` (${quoteReceiptIds(repair.droppedIds)})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
           + `because the records could not be tied to their events — ${firstComplaintLine(first)}`,
       );
     }

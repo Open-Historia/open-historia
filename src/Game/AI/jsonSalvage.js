@@ -156,6 +156,21 @@ const balancedJsonCandidates = (text) => {
   return [...candidates, ...repairs];
 };
 
+// The OpenAI wire's own tool call, written out as text:
+// `{ "id": "call_001", "type": "function", "function": { "name": …,
+// "arguments": … } }`. The call is its `function` member, returned here; null
+// when `value` is not such a call. Everything around that member has to be the
+// wire's own fields, so a payload that merely has a field named `function` is
+// not taken for one.
+const WIRE_CALL_KEYS = new Set(["id", "type", "index", "function"]);
+const wireCallFunction = (value) => {
+  const inner = value.function;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return null;
+  if (Object.keys(value).some((key) => !WIRE_CALL_KEYS.has(key))) return null;
+  if (value.type !== undefined && normalizeString(value.type).toLowerCase() !== "function") return null;
+  return inner;
+};
+
 // Some openai-compatible endpoints/models (seen with nvidia/nemotron models)
 // are asked to call the tool (tool_choice: "required") but don't actually
 // populate tool_calls — they answer with a normal text message that just
@@ -168,12 +183,19 @@ const balancedJsonCandidates = (text) => {
 // wrapping breaks strict JSON parsing, fails to parse at all) and the whole
 // turn is discarded to the canned fallback. Unwrap it back to the actual
 // arguments object so the real content underneath still gets applied.
+//
+// Small local models go one level further and write the wire's whole call
+// around it (wireCallFunction above), usually as the one member of an array,
+// once a lookup conversation has shown them what a call looks like. A player's
+// koboldcpp model answered the Projects board that way, and "$ must be object;
+// received array" held a turn whose events were already written.
 export const unwrapMimickedToolCall = (value, toolName) => {
   let current = value;
   for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
     current = current[0];
   }
   if (!current || typeof current !== "object" || Array.isArray(current)) return value;
+  current = wireCallFunction(current) ?? current;
   const name = normalizeString(current.name);
   if (toolName && name && name !== toolName) return value;
   // getGameplayTool returns null for tasks with no registered tool, so a name

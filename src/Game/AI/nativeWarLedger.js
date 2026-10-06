@@ -120,9 +120,30 @@ const parseEventNumbers = (value) =>
     .map((entry) => entry - 1)
     .slice(0, 16);
 
+// A record is fields joined by the separator, so a line with none is not one.
+// It is prose a model wrote where records go: a heading, or a sentence saying
+// nothing changed, where the prompt asks for an empty string. A player's local
+// model answered "### Обновления войн:" and "Нет изменений. В этом периоде ни
+// одна война не началась…". Read as a record such a line has an id and no
+// operation. A strict pass refuses the whole answer over it, which is a second
+// request for the same month; the last attempt's salvage dropped both by "id",
+// which put the model's own sentence into its next prompt. A line that has the
+// separator and a bad operation is still a record, and still refused.
+const isWarUpdateRecordLine = (text) => text.includes(WAR_UPDATE_SEPARATOR);
+
+// The lines of a warUpdates answer that are not records, as written: for the
+// caller's one log line saying they were ignored (the decoder runs many times
+// over one answer, and says nothing).
+export const warUpdateProseLines = (value) => {
+  const lines = Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string")
+    : String(value ?? "").split(/\r?\n/);
+  return lines.map(normalizeString).filter((line) => line && !isWarUpdateRecordLine(line));
+};
+
 const parseWarUpdateRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  if (!text || !isWarUpdateRecordLine(text)) return null;
 
   // id~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
   const fields = [];

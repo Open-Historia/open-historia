@@ -189,6 +189,33 @@ test("the filler filter spares an event that answers an order or names a Project
   assert.equal(createSpareTest([])({ title: "Project Turing update", impacts: {} }), false);
 });
 
+// Names were folded to their a-z and 0-9, so one in another script folded to
+// nothing: a Project named in the player's language never spared the event
+// that named it, and one owned by a polity named in Cyrillic had a blank owner,
+// which on the Board means the player.
+test("Projects and their owners are told apart in any script", () => {
+  const board = {
+    ...campaign,
+    projects: [
+      { id: "p-fortress", name: "Проект «Береговая крепость»", ownerCode: "", status: "active", targetDate: "2016-08-20", milestones: [] },
+      { id: "p-carrier", name: "Авианосец «Шторм»", ownerCode: "Российская Федерация", status: "active", targetDate: "2016-08-10", milestones: [] },
+      { id: "p-rail", name: "高速铁路计划", ownerCode: "中华人民共和国", status: "active", targetDate: "2016-08-12", milestones: [] },
+    ],
+  };
+  const material = collectPlayerMaterial({ ...board, ...window, playerNames: [PLAYER], isPlayerEvent: isBritish });
+  assert.deepEqual(material.filter((item) => item.kind === "target").map((item) => item.id), ["p-fortress"], "another polity's Projects are not the player's");
+
+  const spare = createSpareTest(material);
+  assert.equal(spare({ title: "Проект «Береговая крепость»: артиллерийская батарея введена в строй", impacts: {} }), true);
+  assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: {} }), false);
+
+  // Whose event it is, by a name in that script.
+  const isRussian = createPlayerEventTest({ playerNames: ["Российская Федерация"], territoryNames: ["Севастополь"] });
+  assert.equal(isRussian({ title: "Польша направила ноту", description: "Нота адресована: Российская Федерация." }), true);
+  assert.equal(isRussian({ title: "Парад в городе Севастополь", description: "" }), true);
+  assert.equal(isRussian({ title: "Бразилия девальвирует реал", description: "" }), false);
+});
+
 test("Focused and Spotlight trim the world's lanes and evidence, lowest-ranked first; the player's stay", () => {
   const ranked = [
     { id: "w1", mine: false }, { id: "p1", mine: true }, { id: "w2", mine: false }, { id: "w3", mine: false },

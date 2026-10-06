@@ -45,11 +45,13 @@ import { loadPromptTranslations } from "./promptTranslations.js";
 import {
   BATCH_MAX_STRINGS,
   BATCH_MIN_STRINGS,
+  aiWaitIsOver,
   authoredEventText,
   chooseTranslationBatch,
   collectContentText,
   isNumericDate,
   isTranslatable,
+  readTranslationFailure,
   readTranslationReply,
   routeUnknownText,
 } from "./translationRules.js";
@@ -66,9 +68,14 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 // A run of failures pauses translation for a minute; the second run in a
 // session stops it until the game is reloaded, and the pill says so. Before,
 // the next DOM change restarted the cycle with the same strings, for as long
-// as the game was open.
+// as the game was open. A call that found nothing in the Fallback list able to
+// answer is not one of these failures: see waitForAi.
 const MAX_COOLDOWNS = 2;
 const COOLDOWN_MS = 60000;
+// How long the AI settings must be left alone before a wait for them ends
+// (waitForAi): a key typed a character at a time is a change per character,
+// and each one would otherwise be tried as the key.
+const AI_SETTINGS_SETTLE_MS = 4000;
 const NOTICE_MS = 12000;
 const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-description", "alt"];
 
@@ -114,6 +121,13 @@ let failureCount = 0;
 let cooldownCount = 0;
 // Set by repeated failures (MAX_COOLDOWNS): nothing more is sent this session.
 let halted = false;
+// Nothing in the Fallback list can answer (waitForAi): { until }, the time the
+// first Spent model comes back when that is known. Nothing is sent meanwhile.
+let waitingForAi = null;
+let aiSettingsTimer = null;
+// The reason last logged for a wait, so the same one is said once.
+let lastAiWaitReason = "";
+let aiWaitNoticeShown = false;
 // Content is waiting on Background AI: the pill is not shown for it.
 let heldBack = false;
 let noticeTimer = null;
@@ -224,7 +238,8 @@ const showProgress = () => {
 };
 
 const updateProgress = () => {
-  if (!progressEl || halted) return;
+  // Halted, or waiting for the AI: the pill holds its notice until it times out.
+  if (!progressEl || halted || waitingForAi) return;
   if (pending.size === 0 || heldBack) {
     progressEl.remove();
     progressEl = null;
@@ -531,14 +546,77 @@ const noteFailure = (error) => {
   }
 };
 
+// Nothing in the Fallback list can answer (translationRules.js
+// readTranslationFailure): no key yet, or every model Unusable or Spent. That
+// is not counted towards a pause, because asking again cannot work. Nothing
+// more is sent until the Fallback list says it changed and something in it can
+// answer (onFallbackChanged), or a Spent model's allowance is back. The log
+// hears each reason once, and the pill says it once.
+const waitForAi = (error, failure) => {
+  waitingForAi = { until: failure.until };
+  failureCount = 0;
+  const reason = error?.message || "unknown";
+  if (reason !== lastAiWaitReason) {
+    lastAiWaitReason = reason;
+    console.warn(
+      `[i18n] translation is waiting for an AI model that can answer (${reason}). ` +
+      `Untranslated text stays in English; it goes on by itself once a model in Settings → AI can answer.`,
+    );
+  }
+  if (!aiWaitNoticeShown) {
+    aiWaitNoticeShown = true;
+    showNotice(PROGRESS_TEXT.paused);
+  } else if (progressEl) {
+    progressEl.remove();
+    progressEl = null;
+  }
+};
+
+// Whether anything in the Fallback list can answer now. Asked only while
+// waiting. The modules are the AI's, loaded late as callAI is.
+const fallbackListCanAnswer = async () => {
+  try {
+    const [{ fallbackStateStore, getResolvedFallbackList }, { fallbackAvailability }] = await Promise.all([
+      import("../Game/AI/providerConfig.js"),
+      import("../Game/AI/fallbackRunner.js"),
+    ]);
+    const entries = getResolvedFallbackList();
+    return entries.length > 0 && fallbackAvailability({ entries, store: fallbackStateStore }).canAnswer;
+  } catch {
+    return false;
+  }
+};
+
+// The Fallback list changed: an edit in Settings, or a mark a call left on an
+// entry (providerConfig.js announces both, this module's own failed call
+// included, which is why the list is asked rather than taken at its word).
+// While waiting, and once the settings have been left alone for a moment,
+// translation goes on if something can answer.
+const onFallbackChanged = () => {
+  if (!waitingForAi || stopped) return;
+  clearTimeout(aiSettingsTimer);
+  aiSettingsTimer = setTimeout(async () => {
+    if (!waitingForAi || stopped) return;
+    if (!aiWaitIsOver(waitingForAi, { canAnswer: await fallbackListCanAnswer() })) return;
+    waitingForAi = null;
+    void processQueue();
+  }, AI_SETTINGS_SETTLE_MS);
+};
+
 const processQueue = async () => {
   if (inFlight || stopped || halted || pending.size === 0 || Date.now() < cooldownUntil) {
     return;
   }
+  // Waiting for the AI. A change to the Fallback list ends that
+  // (onFallbackChanged); here only the clock can, when a Spent model is back.
+  if (waitingForAi) {
+    if (!aiWaitIsOver(waitingForAi)) return;
+    waitingForAi = null;
+  }
 
   inFlight = true;
   try {
-    while (pending.size > 0 && !stopped && !halted && Date.now() >= cooldownUntil) {
+    while (pending.size > 0 && !stopped && !halted && !waitingForAi && Date.now() >= cooldownUntil) {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
       const next = chooseTranslationBatch(pending, {
@@ -553,7 +631,11 @@ const processQueue = async () => {
       const result = await translateBatch(batch, next.kind)
         .then((raw) => ({ reply: readTranslationReply(raw, batch) }))
         .catch((error) => ({ error }));
-      if (result.error) {
+      const failure = result.error ? readTranslationFailure(result.error) : null;
+      if (failure?.kind === "unavailable") {
+        // Not this batch's doing, and not a failure to count: see waitForAi.
+        waitForAi(result.error, failure);
+      } else if (result.error) {
         if (result.error.misaligned) {
           // Paired by position, so none of it is kept. Asked again in halves;
           // a single string the model cannot answer as one is given up on.
@@ -569,6 +651,8 @@ const processQueue = async () => {
       } else {
         if (batchStrings < BATCH_MAX_STRINGS) batchStrings = BATCH_MAX_STRINGS;
         failureCount = 0;
+        // An answer ends the wait's story: the same reason later is news again.
+        lastAiWaitReason = "";
         for (const [source, value] of result.reply.pairs) {
           book.set(source, value);
           learned.set(source, value);
@@ -875,6 +959,8 @@ const startInLanguage = (code) => {
     window.addEventListener("oh:active-game-changed", () => {
       void collectAndTranslate();
     });
+    // What ends a wait for an AI model that can answer (waitForAi).
+    window.addEventListener("ai:fallback-changed", onFallbackChanged);
     await collectAndTranslate();
   })();
 };
@@ -885,6 +971,8 @@ export const stopTranslator = () => {
   observer?.disconnect();
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
+  clearTimeout(aiSettingsTimer);
+  if (typeof window !== "undefined") window.removeEventListener?.("ai:fallback-changed", onFallbackChanged);
   progressEl?.remove();
   progressEl = null;
 };
