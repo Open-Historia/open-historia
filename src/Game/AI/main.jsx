@@ -232,8 +232,9 @@ async function readJsonAnswer(response, providerLabel) {
 // is kept (judgeUnmarkedEnd, providerErrors.js), and this is the one line that
 // says so: a report can then tell a gateway that never marks the end of its
 // streams from a reply that lost its connection partway.
-const noteUnmarkedEnd = (providerLabel, text) => {
-    logDebugEvent("ai", `${providerLabel}: the reply's stream ended without an end marker (no finish reason, no [DONE]); the ${String(text ?? "").length} characters that arrived are kept as the reply.`);
+const noteUnmarkedEnd = (providerLabel, text, reasoning = "") => {
+    const arrived = `${String(text ?? "").length} characters of reply${reasoning ? ` and ${reasoning.length} of reasoning` : ""}`;
+    logDebugEvent("ai", `${providerLabel}: the reply's stream ended without an end marker (no finish reason, no [DONE]); what arrived is kept (${arrived}).`);
 };
 
 // The same for a stream. One that closed with nothing to say the provider had
@@ -793,12 +794,18 @@ async function streamTextSSE(response, extractDelta, onChunk, providerLabel) {
     // error inside the stream says why it stopped, and each caller handles that.
     // Otherwise this is prose, with nothing to hold it against, and some gateways
     // never send a marker at all: what arrived is the reply, as it always was,
-    // and the log says how it ended. With no reply in it, the connection closed
-    // before anything came (judgeUnmarkedEnd, providerErrors.js). A stream that
-    // BROKE never gets here: the read above threw.
+    // and the log says how it ended. When nothing arrived at all, the connection
+    // closed before anything came (judgeUnmarkedEnd, providerErrors.js).
+    //
+    // Thinking with no answer after it counts as something arrived: it goes
+    // back to the caller like any other reply with no answer in it, and the
+    // caller does what it always did with one (the OpenAI-style caller gives
+    // the model more room and asks once more).
+    //
+    // A stream that BROKE never gets here: the read above threw.
     if (!ended && !streamError) {
-        if (judgeUnmarkedEnd({ text }) === UNMARKED_END.fail) throw connectionClosedError();
-        noteUnmarkedEnd(providerLabel, text);
+        if (judgeUnmarkedEnd({ text: text || reasoning }) === UNMARKED_END.fail) throw connectionClosedError();
+        noteUnmarkedEnd(providerLabel, text, reasoning.trim());
     }
 
     return {

@@ -447,7 +447,10 @@ export const connectionClosedError = (cause = null) => {
 //   every reply through one ends this way, and each has always been shown as it
 //   arrived. Failing them would break what works, so a reply with text in it is
 //   kept and the log says how its stream ended. A reply with nothing in it is
-//   the connection closing before anything came.
+//   the connection closing before anything came. (`text` is whatever arrived:
+//   the chat reader hands in the model's thinking when there is no answer
+//   after it, so that such a reply still reaches the caller that gives the
+//   model more room and asks once more.)
 //
 // A stream that BREAKS (its reader throws) is not judged here: that is a broken
 // connection whatever was asked for (asUnreachable, above).

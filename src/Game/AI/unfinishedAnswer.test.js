@@ -71,11 +71,15 @@ test("the chat reader keeps a reply whose stream ended without an end marker, sa
     assert.match(reader, /if \(payload === "\[DONE\]"\) ended = true;/);
     assert.match(reader, /if \(streamFrameEnds\(json\)\) ended = true;/);
     const unmarked = body(reader, "if (!ended && !streamError) {", "\n    }");
-    assert.match(unmarked, /if \(judgeUnmarkedEnd\(\{ text \}\) === UNMARKED_END\.fail\) throw connectionClosedError\(\);/,
-        "judged on the reply with its thinking stripped: nothing but thinking is nothing arrived");
-    assert.match(unmarked, /noteUnmarkedEnd\(providerLabel, text\);/);
+    // Empty means nothing arrived at all. Thinking with no answer after it is
+    // handed back as it always was: its caller gives the model more room and
+    // asks once more, which a gateway that never marks its streams relies on.
+    assert.match(unmarked, /if \(judgeUnmarkedEnd\(\{ text: text \|\| reasoning \}\) === UNMARKED_END\.fail\) throw connectionClosedError\(\);/);
+    assert.match(unmarked, /noteUnmarkedEnd\(providerLabel, text, reasoning\.trim\(\)\);/);
     assert.match(reader, /const text = stripThinking\(full\);/);
     assert.ok(reader.indexOf("const text = stripThinking(full);") < reader.indexOf("if (!ended && !streamError) {"));
+    const caller = body(main, "async function callOpenAIStyleChatCompletions(", "async function callOpenAI(");
+    assert.match(caller, /if \(streamedReasoning && !liftedCapForReasoning\) \{\s*liftedCapForReasoning = true;/, "the one retry that was always there, and no other");
     // One line a reply, in the log and not on screen.
     const note = body(main, "const noteUnmarkedEnd = ", "\n};");
     assert.match(note, /logDebugEvent\("ai", `\$\{providerLabel\}: the reply's stream ended without an end marker/);
