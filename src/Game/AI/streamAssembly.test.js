@@ -97,6 +97,32 @@ test("openai: reads a real SSE body end to end", async () => {
   );
 });
 
+// A whole body names the answer and the model that wrote it. The envelope a
+// stream is rebuilt into does as well, from the first chunk that carries them:
+// it is how a KoboldCpp server is known for one (koboldCpp.js).
+test("openai: the rebuilt envelope keeps the answer's id and model, as a whole body has them", async () => {
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { id: "chatcmpl-A1", object: "chat.completion.chunk", model: "koboldcpp/Qwen3-8B-Q4_K_M", choices: [{ index: 0, finish_reason: null, delta: { role: "assistant", content: "ok" } }] },
+    { id: "chatcmpl-A1", object: "chat.completion.chunk", model: "koboldcpp/Qwen3-8B-Q4_K_M", choices: [{ index: 0, finish_reason: "stop", delta: {} }] },
+  ]));
+  assert.equal(data.id, "chatcmpl-A1");
+  assert.equal(data.model, "koboldcpp/Qwen3-8B-Q4_K_M");
+  assert.equal(data.choices[0].message.content, "ok");
+
+  // A stream that names neither gains neither key.
+  const bare = finishOpenAIStream(runOpenAI([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]));
+  assert.equal("id" in bare, false);
+  assert.equal("model" in bare, false);
+  // The first chunk to name them is the one kept, a later usage frame or not.
+  const late = finishOpenAIStream(runOpenAI([
+    { id: 7, choices: [{ delta: { content: "a" } }] },
+    { id: "koboldcpp", model: "koboldcpp/x", choices: [{ delta: { content: "b" } }] },
+    { id: "other", model: "other", choices: [], usage: { prompt_tokens: 1 } },
+  ]));
+  assert.equal(late.id, "koboldcpp");
+  assert.equal(late.model, "koboldcpp/x");
+});
+
 // ---------------------------------------------------------------------------
 // Anthropic Messages
 

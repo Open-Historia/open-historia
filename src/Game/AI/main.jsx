@@ -18,6 +18,7 @@ import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } fro
 import { requestActivity } from "./requestActivity.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
+    LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
     estimateTokens,
@@ -26,6 +27,7 @@ import {
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
+import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
@@ -155,6 +157,36 @@ const settingsStorage = {
 };
 export const contextWindows = createContextWindowMemory(settingsStorage);
 export const temperatureRefusals = createTemperatureMemory(settingsStorage);
+// Which endpoints are KoboldCpp servers (koboldCpp.js), kept the same way: the
+// one server that is sent an output limit when nobody named one.
+export const koboldCppServers = createKoboldCppMemory(settingsStorage);
+
+// One answer's word on what is serving an endpoint (koboldCpp.js
+// saysKoboldCpp): a whole body, the envelope a stream was rebuilt into, a chunk
+// of a chat's stream, or the model a request is about to name. Logged when it
+// changes what is remembered, which for most installs is once.
+const noteKoboldCpp = (endpoint, payload) => {
+    const change = koboldCppServers.note(endpoint, payload);
+    if (change === "learned") {
+        logDebugEvent("ai", `KoboldCpp recognised at ${endpointOriginOf(endpoint)} and remembered: a call that starts from here on sends it max_tokens ${LOCAL_OUTPUT_LIMIT_TOKENS} when neither the task nor the entry names a limit.`, {
+            model: String(payload?.model ?? ""),
+        });
+    } else if (change === "forgotten") {
+        logDebugEvent("ai", `${endpointOriginOf(endpoint)} no longer answers as KoboldCpp: a call that starts from here on sends it no output limit of the game's.`, {
+            model: String(payload?.model ?? ""),
+        });
+    }
+};
+// The same for a chat's stream, which is read chunk by chunk (streamTextSSE):
+// the first chunk that says anything is the one heard.
+const koboldCppChunkNoter = (endpoint) => {
+    let heard = false;
+    return (chunk) => {
+        if (heard || saysKoboldCpp(chunk) === null) return;
+        heard = true;
+        noteKoboldCpp(endpoint, chunk);
+    };
+};
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
 
@@ -1353,7 +1385,13 @@ async function callOpenAIStyleChatCompletions({
     lookupTools,
     taskKey = "",
     requireOutputTool = false,
+    // callAI's word that this entry is a KoboldCpp server (entryOutputLimit):
+    // decided once per attempt, where the request's log line is written.
+    koboldCpp = false,
 }) {
+    // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
+    // into the entry or found there a moment ago (resolveConfiguredModel).
+    if (isKoboldCppModelName(model)) noteKoboldCpp(endpoint, { model });
     // Lookup functions (lookupTools.js) beside the output function. On the
     // round that must end in an answer they are left out altogether: with one
     // tool declared, tool_choice "required" IS the forcing, on every gateway
@@ -1422,8 +1460,8 @@ async function callOpenAIStyleChatCompletions({
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
             : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
-        const outputLimit = outputLimitFor({ maxTokens, customParams: requestCustomParams, localEndpoint: streamLocalEndpoint });
-        const localOutputLimit = outputLimit.source === "local" ? outputLimit.tokens : 0;
+        const outputLimit = outputLimitFor({ maxTokens, customParams: requestCustomParams, koboldCpp });
+        const koboldCppLimit = outputLimit.source === "koboldcpp" ? outputLimit.tokens : 0;
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
         // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
@@ -1477,12 +1515,13 @@ async function callOpenAIStyleChatCompletions({
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
                     : {}),
-                // The exception: a local server. With no limit in the request
-                // it applies its own, and koboldcpp's cuts a turn's JSON off
-                // about a thousand tokens in (contextWindow.js
-                // LOCAL_OUTPUT_LIMIT_TOKENS says why this number and no more).
-                // Only where neither the caller nor the entry named one.
-                ...(localOutputLimit ? { [tokenLimitField]: localOutputLimit } : {}),
+                // The exception: KoboldCpp. With no limit in the request it
+                // applies its own default and cuts a turn's JSON off there
+                // (contextWindow.js LOCAL_OUTPUT_LIMIT_TOKENS says why this
+                // number and no more, koboldCpp.js how the server is known).
+                // Only where neither the caller nor the entry named one, and
+                // to no other server: the rest read no limit as none.
+                ...(koboldCppLimit ? { [tokenLimitField]: koboldCppLimit } : {}),
                 ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
@@ -1631,7 +1670,11 @@ async function callOpenAIStyleChatCompletions({
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length ? createOpenAIStreamState() : null;
-            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, callState ? (frame) => applyOpenAIFrame(callState, frame) : null);
+            const hearKoboldCpp = koboldCppChunkNoter(endpoint);
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, (frame) => {
+                hearKoboldCpp(frame);
+                if (callState) applyOpenAIFrame(callState, frame);
+            });
             const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             const chatCalls = callState ? lookupCallsFromOpenAI(finishOpenAIStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamed, lookupCalls: chatCalls };
@@ -1685,6 +1728,8 @@ async function callOpenAIStyleChatCompletions({
             ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
+        // The answer names its server: a KoboldCpp is remembered for one.
+        noteKoboldCpp(endpoint, data);
         const text = extractOpenAIMessageText(data);
 
         // Some gateways put "the request does not fit the context window" in a
@@ -2525,17 +2570,25 @@ const conversationShape = (systemPrompt, history) => ({
 
 const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 
-// The output limit a request to this entry carries, for the request's log line
-// (contextWindow.js outputLimitFor; callOpenAIStyleChatCompletions works out
-// the same for the request itself). Only the OpenAI-style paths take a limit
-// from the entry's custom parameters as it stands, and only a self-hosted one
-// can be a local server.
-const entryOutputLimit = (entry, maxTokens) => {
+// Whether an entry's server is KoboldCpp (koboldCpp.js): its endpoint has
+// answered as one, or the model it is set to is one of KoboldCpp's. Only an
+// OpenAI-compatible endpoint can be.
+const entryIsKoboldCpp = (entry) => entry?.provider === "openai-compatible"
+    && koboldCppServers.isKoboldCpp({ endpoint: normalizeEndpoint(entry.endpoint), model: entry.model });
+
+// The output limit a request to this entry carries and whose it is
+// (contextWindow.js outputLimitFor). callAI settles both once per attempt,
+// writes the limit in the request's log line and hands `koboldCpp` to the
+// provider path, so the line and the request cannot disagree: a server
+// recognised while the call is in the air changes the next call, not this one.
+// Only the OpenAI-style paths take a limit from the entry's custom parameters
+// as it stands.
+const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
     const openAiStyle = entry?.provider === "openai" || entry?.provider === "openai-compatible";
     return outputLimitFor({
         maxTokens,
         customParams: openAiStyle ? parseCustomParams(entry.customParams) : null,
-        localEndpoint: entry?.provider === "openai-compatible" && isLocalEndpoint(normalizeEndpoint(entry.endpoint)),
+        koboldCpp,
     });
 };
 
@@ -2798,6 +2851,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // (providerErrors.js stoppedAtOutputLimit), read off the same envelope the
     // usage is: the last one read is the one whose answer is returned.
     let answerCutAtLimit = false;
+    // The output limit the attempt in hand was given (entryOutputLimit): the
+    // last attempt is the one that answered.
+    let attemptLimit = { tokens: 0, source: "" };
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2848,12 +2904,15 @@ export async function callAI(systemPrompt, history, opts = {}) {
             attempt: (entry, { canFallBack, onChunk }) => {
                 if (record) record.provider = entry.provider;
                 // The output limit is the entry's as much as the call's: its
-                // custom parameters can name one, and a local server is given
-                // one where nobody did (entryOutputLimit).
-                const limit = entryOutputLimit(entry, providerOpts.maxTokens);
+                // custom parameters can name one, and KoboldCpp is given one
+                // where nobody did (entryOutputLimit). Settled here, once for
+                // the attempt, so this line says what its requests carry.
+                const koboldCpp = entryIsKoboldCpp(entry);
+                const limit = entryOutputLimit(entry, providerOpts.maxTokens, koboldCpp);
+                attemptLimit = limit;
                 logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, {
                     ...callShape,
-                    maxTokens: limit.source === "local" ? `${limit.tokens} (the game's limit for a local server)`
+                    maxTokens: limit.source === "koboldcpp" ? `${limit.tokens} (the game's limit for KoboldCpp)`
                         : limit.source === "custom" ? `${limit.tokens} (the entry's custom parameters)`
                         : callShape.maxTokens,
                 }, { verbose: true });
@@ -2869,6 +2928,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         entrySettings: entry,
                         canFallBack,
                         rateLimitPolicy: getRateLimitPolicy(),
+                        koboldCpp,
                         onActivity: timer.note,
                         onSend: live?.sent,
                         onReceived: live?.received,
@@ -2922,7 +2982,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
             if (debugSink && typeof debugSink === "object") debugSink.stoppedAtOutputLimit = true;
             logDebugEvent("ai-call", `${label}: ${answeredBy.label} stopped at its output limit; the answer may be cut short.`, {
                 replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
-                maxTokens: entryOutputLimit(answeredBy, providerOpts.maxTokens).tokens || "(none sent: the provider's own)",
+                // What the attempt was given, not what the entry would be
+                // given now: this very answer can be the one KoboldCpp was
+                // recognised by.
+                maxTokens: attemptLimit.tokens || "(the call named none)",
                 ...(usage?.outputTokens ? { outputTokens: usage.outputTokens } : {}),
             });
         }

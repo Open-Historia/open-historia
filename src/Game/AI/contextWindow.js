@@ -41,35 +41,42 @@ export const SEEN_LIMIT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const estimateTokens = (chars) => Math.ceil(Math.max(0, Number(chars) || 0) / CHARS_PER_TOKEN);
 
 // ---------------------------------------------------------------------------
-// The output limit a local server is asked for
+// The output limit KoboldCpp is asked for
 // ---------------------------------------------------------------------------
 //
-// A task names no output cap of its own, so its request carried none and the
-// model's own maximum applied. A hosted provider's maximum is large. A local
-// server's default is whatever its author chose, and koboldcpp's is about a
-// thousand tokens: in one player's log, of 224 answers from it, seventeen stop
-// between 3,900 and 4,400 characters and the only one longer is the advisor's
-// 24,069, the one call that does name a cap. The two the log keeps in full
-// stop inside a JSON object at the same half-written word: the first failed to
-// parse, was asked for again, and was cut at the same place.
+// A task names no output cap of its own, so its request carries none and the
+// model's own maximum applies. A hosted provider's is large, and llama.cpp, LM
+// Studio and Ollama read no limit as none at all. KoboldCpp reads it as its
+// own default, a few hundred tokens to 2,048 depending on the build
+// (koboldCpp.js has the figures): in one player's log, of 224 answers from it,
+// seventeen stop between 3,900 and 4,400 characters and the only one longer is
+// the advisor's 24,069, the one call that does name a cap. The two the log
+// keeps in full stop inside a JSON object at the same half-written word: the
+// first failed to parse, was asked for again, and was cut at the same place.
 //
-// So a request to a local server that would carry no limit carries this one:
-// the room the preflight above already keeps for the answer. Not more:
-// koboldcpp takes the limit out of the context window, so a large one leaves
-// less room for the prompt. An entry that needs more, or less, says so in its
-// custom parameters ({ "max_tokens": … }), which always wins.
+// So a request to KoboldCpp that would carry no limit carries this one, and a
+// request to any other server carries none, as it always did: a limit there
+// would cut answers that complete today (a long turn in Russian, a thinking
+// model whose reasoning is counted against it). Which server is KoboldCpp is
+// koboldCpp.js's to say.
+//
+// The number is the room the preflight above already keeps for the answer,
+// and not more: KoboldCpp takes the limit out of the context window, so a
+// large one leaves less room for the prompt. An entry that needs more, or
+// less, says so in its custom parameters ({ "max_tokens": … }), which always
+// wins.
 export const LOCAL_OUTPUT_LIMIT_TOKENS = DEFAULT_ANSWER_RESERVE_TOKENS;
 
 // The limit one request carries and whose it is: the entry's own (`custom`,
 // from its custom parameters, which are merged into the request last), the
-// caller's (`task`, the advisor's cap), the one above for a local server
-// (`local`), or none (`tokens` 0: the provider's maximum).
-export const outputLimitFor = ({ maxTokens, customParams, localEndpoint = false } = {}) => {
+// caller's (`task`, the advisor's cap), the one above when the request goes to
+// KoboldCpp (`koboldcpp`), or none (`tokens` 0: the provider's maximum).
+export const outputLimitFor = ({ maxTokens, customParams, koboldCpp = false } = {}) => {
     const custom = Number(customParams?.max_tokens ?? customParams?.max_completion_tokens);
     if (custom > 0) return { tokens: custom, source: "custom" };
     const asked = Number(maxTokens);
     if (asked > 0) return { tokens: asked, source: "task" };
-    if (localEndpoint) return { tokens: LOCAL_OUTPUT_LIMIT_TOKENS, source: "local" };
+    if (koboldCpp) return { tokens: LOCAL_OUTPUT_LIMIT_TOKENS, source: "koboldcpp" };
     return { tokens: 0, source: "" };
 };
 

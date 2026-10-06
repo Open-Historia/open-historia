@@ -150,6 +150,11 @@ const writtenLength = (value) => {
 // OpenAI-style chat completions
 
 export const createOpenAIStreamState = () => ({
+    // The answer's id and the model that wrote it, as the first chunk to name
+    // them does. A whole body carries both, so the envelope rebuilt here does
+    // too: they are how a KoboldCpp server is known for one (koboldCpp.js).
+    id: "",
+    model: "",
     content: "",
     reasoning: "",
     // One entry per tool call, in stream order. A jump makes one call; a task
@@ -195,6 +200,8 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // when asked (stream_options.include_usage); most local gateways send it
     // unprompted. Kept whenever it appears — see usageStats.js.
     if (chunk?.usage && typeof chunk.usage === "object") state.usage = chunk.usage;
+    if (!state.id && typeof chunk?.id === "string") state.id = chunk.id;
+    if (!state.model && typeof chunk?.model === "string") state.model = chunk.model;
     const choice = chunk?.choices?.[0];
     if (!choice) return state;
     const delta = choice.delta ?? choice.message ?? {};
@@ -240,6 +247,8 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
 
 export function finishOpenAIStream(state) {
     return {
+        ...(state.id ? { id: state.id } : {}),
+        ...(state.model ? { model: state.model } : {}),
         choices: [{
             finish_reason: state.finishReason,
             message: {
