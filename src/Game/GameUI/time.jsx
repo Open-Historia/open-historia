@@ -17,6 +17,7 @@ import {
 } from "../../runtime/assets.js";
 import { canInterveneInLastTurn, declineInteractiveOffer, heldSkipToRerun, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { HELD_TURN, discardHeldTurn, isNoResponseNote } from "../AI/simulationStatus.js";
+import { AI_REQUEST_CONTROL_EVENT } from "../AI/aiRequestControl.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
@@ -2648,9 +2649,26 @@ const DateWidget = ({
         }
     };
 
-    const cancelJump = () => {
+    // Only refs inside, so one function for the life of the widget: the Cancel
+    // buttons and the listener below share it.
+    const cancelJump = useCallback(() => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
-    };
+    }, []);
+
+    // "Cancel all AI requests" (Settings → AI requests) stops a skip, or a held
+    // turn's retry, the way its own Cancel does. On its own the stop reaches only
+    // the request in flight (AI/aiRequestControl.js): the skip's signal stayed
+    // live, so a single-request skip took the failure for a model that would not
+    // answer and wrote its canned turn, and a longer one went on to make its
+    // next request after the player had asked for all of them to stop. Every
+    // press counts, with a request in flight or between two of them.
+    useEffect(() => {
+        const stopWithTheRest = (event) => {
+            if (event?.detail && "cancelled" in event.detail) cancelJump();
+        };
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+    }, [cancelJump]);
 
     // Finish the held turn by re-running only what failed: the one segment
     // and the ones after it, the board call, or the failed checks. What was
