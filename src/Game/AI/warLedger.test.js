@@ -215,3 +215,138 @@ test("an unbindable combat event is reported for unbinding, never for deletion",
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates), [], "no war record was conjured either");
   assert.match(repair.residual, /no event.warId/, "the residual complaint is about the ledger, and is only logged");
 });
+
+// A player's Modern Day game (2016). That scenario starts with no war on
+// record, so the wars in Syria and Iraq are opened by the model from whichever
+// of their battles it writes first, as the prompt tells it to. The turn's log:
+// "dropped 2 war record(s) (war-iraq-isis-2014, war-syrian-civil-2011), unbound
+// 4 event(s) … cannot create a canonical war from "Iraqi Forces Secure Central
+// Ramadi and Clear Anbar Pockets" … The ledger still says: Combat event "Syrian
+// and Russian Forces Advance North of Aleppo" has no event.warId." The two
+// titles and the two ids are the log's; the log holds no more of the turn, so
+// the descriptions are plain reporting of the same two operations.
+const ongoing = (id, date, title, description, warId, combatants, kind = "military") => ({ id, date, title, description, kind, warId, combatants });
+const RAMADI = () => ongoing("e1", "2016-01-04", "Iraqi Forces Secure Central Ramadi and Clear Anbar Pockets",
+  "Iraqi security forces, backed by coalition air power, secured the government complex in central Ramadi and cleared the remaining Islamic State pockets across Anbar province.",
+  "war-iraq-isis-2014", ["Iraq", "Islamic State"]);
+const ALEPPO = () => ongoing("e2", "2016-02-03", "Syrian and Russian Forces Advance North of Aleppo",
+  "Syrian government troops backed by Russian aircraft took Nubl and Zahraa north of Aleppo, cutting the opposition's supply corridor to Turkey.",
+  "war-syrian-civil-2011", ["Syria", "Russia", "Syrian Opposition"]);
+const IRAQ_START = "war-iraq-isis-2014~start~Iraq~Islamic State~1~title: War against the Islamic State; the campaign to retake Anbar";
+const SYRIA_START = "war-syrian-civil-2011~start~Syria,Russia~Syrian Opposition~2~title: Syrian Civil War; the government's Aleppo offensive";
+const quietly = (run) => {
+  const [warn, info] = [console.warn, console.info];
+  console.warn = () => {};
+  console.info = () => {};
+  try {
+    return run();
+  } finally {
+    console.warn = warn;
+    console.info = info;
+  }
+};
+
+test("a war already under way is opened on a report of its fighting", () => {
+  const events = [RAMADI(), ALEPPO()];
+  // Neither is a battle by the ledger's own word lists, which is why each was
+  // refused: an event had to hold one of those words to open a war.
+  assert.equal(eventNarratesHardCombat(events[0]), false);
+  assert.equal(eventNarratesHardCombat(events[1]), false);
+  const candidate = { events, warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "", "both starts are accepted as written, with no second request");
+
+  const merge = applyWarUpdates({ world, updates: decodeWarUpdates(candidate.warUpdates), events, stopDate: "2016-02-29", round: 1 });
+  assert.deepEqual(merge.appliedIds, ["war-iraq-isis-2014", "war-syrian-civil-2011"]);
+  assert.deepEqual(merge.wars.map((war) => `${war.id}: ${war.status}`).sort(), ["war-iraq-isis-2014: active", "war-syrian-civil-2011: active"]);
+  assert.deepEqual(merge.wars.find((war) => war.id === "war-syrian-civil-2011").sideA, ["Syria", "Russia"]);
+});
+
+test("what the ledger calls hard combat can open the war it is told it needs", () => {
+  // A military event that "raids" must belong to an active war, and until now
+  // could not open one: whatever the model answered for it was refused.
+  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "war-eritrea-ethiopia-1998", ["Ethiopia", "Eritrea"]);
+  assert.equal(eventNarratesHardCombat(raid), true);
+  const candidate = { events: [raid], warUpdates: "war-eritrea-ethiopia-1998~start~Ethiopia~Eritrea~1~title: Eritrean–Ethiopian War; the dispute over Badme" };
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+});
+
+test("a deployment, an exercise or a charm offensive still opens no war, whatever record is put on it", () => {
+  const refused = (title, description, kind = "military") => {
+    const candidate = {
+      events: [ongoing("e1", "2016-03-01", title, description, "war-poland-belarus-2016", ["Poland", "Belarus"], kind)],
+      warUpdates: "war-poland-belarus-2016~start~Poland~Belarus~1~title: A war nobody is fighting",
+    };
+    return validateWarLedgerPayload(candidate, { world });
+  };
+  assert.match(refused("Polish 18th Division Deploys to the Suwalki Gap", "Warsaw moves a mechanised division to the border and raises readiness."), /cannot create a canonical war/);
+  assert.match(refused("Anakonda Exercise Simulates an Attack on the Suwalki Gap", "A training attack by two brigades; attack helicopters and main battle tanks take part in the drill."), /cannot create a canonical war/);
+  assert.match(refused("Warsaw Launches a Diplomatic Offensive Over the Border", "Envoys tour European capitals.", "diplomacy"), /cannot create a canonical war/);
+  assert.match(refused("Combat Battlegroup Arrives at Orzysz", "A NATO combat battlegroup takes up its barracks."), /cannot create a canonical war/);
+  assert.match(refused("Army Declares Its Brigades Ready for Offensive Operations", "The general staff reports full offensive capability on the front line."), /cannot create a canonical war/);
+  assert.match(refused("Allied Forces Push East to Reassure the Baltic States", "Two battalions take up positions near the border."), /cannot create a canonical war/);
+});
+
+test("the engine still makes up no war of its own from the wider wording", () => {
+  // Two names and a raid, and no record from the model: reconcileCombatWarState
+  // asks the narrow question it always asked before it invents a war.
+  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "", ["Ethiopia", "Eritrea"]);
+  const candidate = { events: [raid], warUpdates: "" };
+  const outcome = quietly(() => reconcileCombatWarState(candidate, { world }));
+  assert.equal(outcome.started, 0);
+  assert.equal(outcome.unresolved.length, 1);
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates), []);
+});
+
+test("the last attempt's repair drops a war at a time: a refused start costs its own war only", () => {
+  // The Iraqi start sits on an event that narrates no fighting at all, and the
+  // Syrian one is sound. Every record of the turn used to go.
+  const budget = ongoing("e1", "2016-01-04", "Iraqi Parliament Approves an Emergency War Budget", "Baghdad votes the army another year of funding.", "war-iraq-isis-2014", [], "politics");
+  const candidate = { events: [budget, ALEPPO()], warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
+  assert.match(validateWarLedgerPayload(candidate, { world }), /war-iraq-isis-2014 \(start\) cannot create a canonical war/);
+  const repair = quietly(() => repairWarLedgerPayload(candidate, { world }));
+  assert.deepEqual(repair.droppedIds, ["war-iraq-isis-2014"]);
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => update.id), ["war-syrian-civil-2011"]);
+  assert.equal(repair.strippedEvents, 1);
+  assert.equal(candidate.events[0].warId, "", "the budget vote is narrative");
+  assert.equal(candidate.events[1].warId, "war-syrian-civil-2011", "the advance is still the Syrian war's");
+  assert.equal(repair.residual, "");
+});
+
+test("the repair keeps a sound war beside an event the ledger cannot place", () => {
+  const strike = ongoing("e1", "2016-02-25", "Saudi Aircraft Bombard Houthi Positions Around Sanaa", "Coalition aircraft bombarded Houthi positions around Sanaa in the heaviest air strikes of the month.", "war-yemen-2015", ["Saudi Arabia", "Houthis"]);
+  const start = "war-yemen-2015~start~Saudi Arabia~Houthis~1~title: Yemeni Civil War; the coalition's air campaign";
+  // A riot that reads like a battle and belongs to no war.
+  const riot = { id: "e2", date: "2016-02-27", title: "Tragic Clashes and Fire in Odessa", description: "Street clashes between rival demonstrators end with a building alight; dozens are killed.", kind: "world", warId: "", combatants: [] };
+  const withRiot = { events: [strike, riot], warUpdates: start };
+  assert.match(validateWarLedgerPayload(withRiot, { world }), /no event\.warId/);
+  const first = quietly(() => repairWarLedgerPayload(withRiot, { world }));
+  assert.deepEqual(first.droppedIds, []);
+  assert.equal(withRiot.events[0].warId, "war-yemen-2015");
+  assert.match(first.residual, /Tragic Clashes and Fire in Odessa/, "the riot is still what the ledger remarks on, and it is only logged");
+
+  // A battle of the war that names one side only: the war's record applies,
+  // so the war is kept, and the remark is about the battle.
+  const oneSided = ongoing("e2", "2016-03-02", "Coalition Aircraft Bombard Taiz", "A second week of bombardment of the city.", "war-yemen-2015", ["Saudi Arabia"]);
+  const withOneSided = { events: [strike, oneSided], warUpdates: start };
+  assert.match(validateWarLedgerPayload(withOneSided, { world }), /at least the two opposing belligerent/);
+  const second = quietly(() => repairWarLedgerPayload(withOneSided, { world }));
+  assert.deepEqual(second.droppedIds, []);
+  assert.deepEqual(decodeWarUpdates(withOneSided.warUpdates).map((update) => update.id), ["war-yemen-2015"]);
+  assert.equal(withOneSided.events[1].warId, "war-yemen-2015");
+  assert.match(second.residual, /Coalition Aircraft Bombard Taiz/);
+});
+
+test("the repair drops a join that cannot be made and keeps the war it was joining", () => {
+  const strike = ongoing("e1", "2016-02-25", "Saudi Aircraft Bombard Houthi Positions Around Sanaa", "Coalition aircraft bombarded Houthi positions around Sanaa.", "war-yemen-2015", ["Saudi Arabia", "Houthis"]);
+  const entry = ongoing("e2", "2016-03-01", "Egypt Joins the War in Yemen", "Cairo enters the war beside Riyadh.", "war-yemen-2015", []);
+  const candidate = {
+    events: [strike, entry],
+    // The join names a polity that is already on the other side.
+    warUpdates: "war-yemen-2015~start~Saudi Arabia~Houthis~1~title: Yemeni Civil War\nwar-yemen-2015~join-b~Saudi Arabia~~2~",
+  };
+  assert.match(validateWarLedgerPayload(candidate, { world }), /already on the opposing side/);
+  const repair = quietly(() => repairWarLedgerPayload(candidate, { world }));
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => `${update.id}:${update.op}`), ["war-yemen-2015:start"]);
+  assert.deepEqual(repair.droppedIds, ["war-yemen-2015"]);
+  assert.equal(repair.strippedEvents, 0);
+});
