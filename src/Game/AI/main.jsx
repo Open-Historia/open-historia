@@ -80,15 +80,13 @@ import {
     stoppedAtOutputLimit,
     streamFrameEnds,
 } from "./streamAssembly.js";
+import { runWithLookups } from "./lookupRounds.js";
 import {
     anthropicMessagesFromHistory,
-    appendLookupRound,
-    describeLookupCall,
     geminiContentsFromHistory,
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
     lookupCallsFromOpenAI,
-    lookupRoundCount,
     openAiMessagesFromHistory,
 } from "./toolTurns.js";
 import {
@@ -2294,83 +2292,9 @@ const conversationShape = (systemPrompt, history) => ({
 
 const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 
-// Lookup rounds (lookupTools.js, toolTurns.js). A structured task may hand
-// callAI `lookups: { tools, execute, maxRounds?, onRound? }`: the lookup
-// functions are declared beside the task's output function, and when the model
-// calls them instead of answering, each call is answered here (from the live
-// campaign, by the task's executor) and the exchange goes back as the next
-// turns of the same conversation. That repeats until the model calls the
-// output function, or the round budget is spent and the final request is made
-// with only the output function callable. One provider request per round; the
-// system prompt is byte-identical across rounds, so a cached prefix pays off.
-// Three, not more: every round re-sends the whole prompt, and a model that
-// asks one question per round spent seven rounds and three hundred thousand
-// prompt tokens on one jump. The directive tells it to ask everything at once.
-const DEFAULT_LOOKUP_ROUNDS = 3;
-
-// Every round the model spends asking is reported to `onRound` — callAI
-// writes it to the telemetry record and the diagnostics log — so "what did
-// the model look up before it answered" is answerable from the console.
-async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null }) {
-    const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
-    if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
-    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
-    let conversation = Array.isArray(history) ? history : [];
-    let roundStartedAt = Date.now();
-    for (let round = 0; ; round += 1) {
-        const requireOutputTool = round >= maxRounds;
-        if (round > 0) lookups.onRound?.(round);
-        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
-        const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
-        // The answer, or a request that could not be turned into one (a final
-        // round still asking questions falls through to the runner's retry).
-        if (!calls.length || result?.toolInput || requireOutputTool) {
-            if (round > 0) {
-                logDebugEvent("ai-call", `${label}: ${provider} answered after ${round} lookup round${round === 1 ? "" : "s"}${result?.toolInput ? "" : " without calling the output function"}.`,
-                    { lookupRounds: lookupRoundCount(conversation), answered: Boolean(result?.toolInput), forcedOutput: requireOutputTool });
-            }
-            return result;
-        }
-        const elapsedMs = Date.now() - roundStartedAt;
-        const results = [];
-        const answered = [];
-        for (const call of calls) {
-            const startedAt = Date.now();
-            let response;
-            try {
-                response = await lookups.execute(call.name, call.args);
-            } catch (error) {
-                response = { error: String(error?.message || error) };
-            }
-            if (response == null || typeof response !== "object" || Array.isArray(response)) response = { result: response ?? null };
-            results.push({ id: call.id, name: call.name, response });
-            answered.push({
-                name: call.name,
-                args: call.args,
-                label: describeLookupCall(call),
-                response: JSON.stringify(response),
-                ms: Date.now() - startedAt,
-                error: typeof response.error === "string" && response.error.length > 0,
-            });
-        }
-        // Always logged: the calls and what they cost, one line. The full
-        // arguments and answers ride along only in detailed mode.
-        logDebugEvent("ai-call", `${label}: lookup round ${round + 1} on ${provider}: ${answered.map((entry) => entry.label).join("; ")}.`, {
-            answers: answered.map((entry) => `${entry.name} ${entry.error ? "ERROR " : ""}${entry.response.length} chars`).join("; "),
-            modelMs: elapsedMs,
-        });
-        logDebugEvent("ai-call", `${label}: lookup round ${round + 1} in full.`, answered.map((entry) => ({
-            call: entry.label, args: entry.args, response: entry.response,
-        })), { verbose: true });
-        try {
-            onRound?.({ round: round + 1, calls: answered, elapsedMs });
-        } catch (error) {
-            console.warn("[ai] a lookup-round observer threw; continuing.", error);
-        }
-        conversation = appendLookupRound(conversation, calls, results);
-        roundStartedAt = Date.now();
-    }
-}
+// The lookup rounds of a call (the model asking the campaign questions before
+// it answers, and what a repeated question gets) are run by runWithLookups in
+// lookupRounds.js, where the loop can be tested.
 
 // asUnreachable (a call that failed because the connection to the provider
 // did) is in providerErrors.js, "A server that could not be reached".
@@ -2603,6 +2527,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                 }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
                     label,
                     provider: entry.provider,
+                    outputTool: providerOpts.tool?.name,
                     onRound: ({ round, calls, elapsedMs }) => {
                         lookupRounds = round;
                         lookupCalls += calls.length;

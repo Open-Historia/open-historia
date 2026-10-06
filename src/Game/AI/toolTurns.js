@@ -155,6 +155,27 @@ export const appendLookupRound = (history, calls, results) => {
 // How much of a history is lookup traffic, for logs.
 export const lookupRoundCount = (history) => array(history).filter((entry) => callsOf(entry).length > 0).length;
 
+// What makes two lookups the same question: the function and its arguments,
+// whatever order the model wrote the keys in. Arguments that only LOOK alike
+// (limit=200 spelled out against the default left unsaid) are different calls:
+// the model changed something, which is not going round in a circle.
+const canonical = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+};
+export const lookupCallKey = (call) => `${clean(call?.name)}(${canonical(call?.args && typeof call.args === "object" ? call.args : {})})`;
+
+// What a lookup asked a second time is answered with, in place of the same
+// result again (lookupRounds.js): where the result is, and what to do now. Said
+// to the model, so it names the output function it must call.
+export const repeatedLookupAnswer = (outputTool) => ({
+  repeated: true,
+  note: `You already made this exact call in this conversation, and its result is above: it has not changed and is not sent again. No further lookups can be made. Call ${clean(outputTool) || "the output function"} now with your answer.`,
+});
+
 // One line for a call, the way a log reads it: name(key="value", n=3). Long
 // strings are cut so a list of calls stays a list and not a transcript.
 const argValue = (value, max) => {

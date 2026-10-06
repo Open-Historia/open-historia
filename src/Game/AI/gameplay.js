@@ -3267,7 +3267,7 @@ const runJsonTask = async (taskKey, {
   // Lookup functions for this task (buildTaskLookups): { tools, execute,
   // maxRounds? }. Declared beside the output function on every provider; the
   // model's calls are answered inside callAI and the answers go back as the
-  // next turns of the same conversation (main.jsx runWithLookups).
+  // next turns of the same conversation (lookupRounds.js runWithLookups).
   lookups = null,
   // Some request classes need the task validator but must not expose the task's
   // normal output function declaration to the provider. `undefined` keeps the
