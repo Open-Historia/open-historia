@@ -177,7 +177,7 @@ test("an answer written to either contract passes the skip's validation", () => 
 
 test("a skip is folded exactly when requests are being saved, decided once", () => {
   const body = functionBody("runJumpSegments");
-  assert.match(body, /if \(state\.folded === undefined\) state\.folded = Boolean\(state\.requests\?\.saving\) && !evaluation && !foldedSkipRefused;/);
+  assert.match(body, /if \(state\.folded === undefined\) state\.folded = Boolean\(state\.requests\?\.saving\) && !foldedSkipRefused;/);
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
   assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: Boolean\(state\.foldedPrep\?\.board\), agentReports: agentJobs\.length > 0 \}\)/);
   assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
