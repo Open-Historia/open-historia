@@ -67,8 +67,22 @@ export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
     return text.replace(prefix, "").trim();
 };
 
-// An option's label, usable as its ref when the model gave none.
-const refFromLabel = (label) => fold(label).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+// An option's label, usable as its ref when the model gave none. Its letters,
+// marks and digits in any script: made of a-z0-9 alone, the ref of a label in
+// Cyrillic, Arabic or Chinese was empty, an option with no ref is not an
+// option, and a poll whose choices were written as "Принять" and "Отклонить"
+// lost them both and so itself. A label in ASCII has the ref it always had.
+const refFromLabel = (label) => fold(label).normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 40);
+
+// The id a poll's added option is given, from the ref its batch called it by.
+// The ref of an option named in another script used to leave nothing but
+// dashes, so two such options added to one poll had one id between them; that
+// ref is kept in its own letters instead. Any ref with an ASCII letter or digit
+// in it makes the id it always made.
+const optionIdPart = (optionRef) => {
+    const ascii = asText(optionRef).replace(/[^a-z0-9-]+/gi, "-");
+    return /[a-z0-9]/i.test(ascii) ? ascii : asText(optionRef).normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-");
+};
 
 // ---------------------------------------------------------------------------
 // Reading one action
@@ -277,7 +291,7 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds
         }
 
         if (action.type === "add_poll_option") {
-            const optionId = `${pollId}-${asText(action.optionRef).replace(/[^a-z0-9-]+/gi, "-")}`;
+            const optionId = `${pollId}-${optionIdPart(action.optionRef)}`;
             optionIdByRef.set(`${action.pollRef}/${action.optionRef}`, optionId);
             events.push({ id: nextId("pollopt"), kind: "poll_option_added", time, by: actor, pollId, optionId, label: action.label });
             applied.push({ ...action, actorName: actor, pollId, optionId });

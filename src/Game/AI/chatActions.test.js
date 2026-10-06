@@ -181,6 +181,63 @@ test("a poll written loosely still lands: bare options, votes by label", () => {
     assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), ["Accept:1", "Refuse:1"]);
 });
 
+// The same loose poll in a game played in Russian, or in Chinese. The ref made
+// from a label kept a-z0-9 only, so "Принять" and "Отклонить" both had the
+// empty ref: neither was an option, a poll needs two, and the poll was refused
+// with every vote cast in it.
+test("a poll written loosely lands in any script: bare options, votes by label", () => {
+    for (const [question, accept, refuse] of [
+        ["Принять немедленное перемирие?", "Принять", "Отклонить"],
+        ["接受立即停火吗？", "接受", "拒绝"],
+    ]) {
+        const { events, applied, rejected, unansweredPolls } = applyChatActionBatch([
+            { type: "create_poll", actorName: "France", pollRef: "ceasefire_vote", question, options: [accept, refuse] },
+            { type: "poll_vote", actorName: "France", pollRef: "ceasefire_vote", optionRef: accept },
+            { type: "poll_vote", actorName: "Prussia", pollRef: "ceasefire_vote", optionRef: refuse.toUpperCase() },
+        ], roster(), { time: "1871-01-26" });
+
+        assert.deepEqual(rejected, [], question);
+        assert.equal(applied.length, 3);
+        assert.deepEqual(unansweredPolls, []);
+        const [poll] = projectChatThread([
+            { id: "c", kind: "chat_created", title: "Armistice" },
+            { id: "j1", kind: "member_joined", member: "France" },
+            { id: "j2", kind: "member_joined", member: "Prussia" },
+            ...events,
+        ]).polls;
+        assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), [`${accept}:1`, `${refuse}:1`]);
+    }
+});
+
+test("two options added under refs in another script are two options", () => {
+    // The added option's id was made from its ref's a-z0-9, which for "отложить"
+    // and "передать" left the same row of dashes: the second was the first again.
+    const { events, rejected } = applyChatActionBatch([
+        { type: "create_poll", actorName: "France", pollRef: "p", question: "Что делать с перемирием?", options: [{ optionRef: "yes", label: "Принять" }, { optionRef: "no", label: "Отклонить" }] },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "p", optionRef: "отложить", label: "Отложить на месяц" },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "p", optionRef: "передать", label: "Передать посредникам" },
+        { type: "poll_vote", actorName: "France", pollRef: "p", optionRef: "передать" },
+        { type: "poll_vote", actorName: "Prussia", pollRef: "p", optionRef: "отложить" },
+    ], roster(), { time: "1871-01-26" });
+    assert.deepEqual(rejected, []);
+    const [poll] = projectChatThread([
+        { id: "c", kind: "chat_created", title: "Armistice" },
+        { id: "j1", kind: "member_joined", member: "France" },
+        { id: "j2", kind: "member_joined", member: "Prussia" },
+        ...events,
+    ]).polls;
+    assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), ["Принять:0", "Отклонить:0", "Отложить на месяц:1", "Передать посредникам:1"]);
+    assert.equal(new Set(poll.options.map((option) => option.id)).size, 4);
+
+    // A ref in ASCII makes the id it always made.
+    const ascii = applyChatActionBatch([
+        { type: "create_poll", actorName: "France", pollRef: "p", question: "Adjourn?", options: [{ optionRef: "y", label: "Yes" }, { optionRef: "n", label: "No" }] },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "p", optionRef: "Later, perhaps", label: "Later" },
+    ], roster(), { time: "1871-01-26" });
+    const created = ascii.events.find((event) => event.kind === "poll_created");
+    assert.equal(ascii.events.find((event) => event.kind === "poll_option_added").optionId, `${created.pollId}-Later-perhaps`);
+});
+
 test("a second turn on the same game day mints ids of its own, so its replies are not dropped", () => {
     const base = [
         { id: "c", kind: "chat_created", title: "Talks" },

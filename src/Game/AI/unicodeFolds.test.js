@@ -18,7 +18,7 @@
 //   - ASCII in, the same key out as before, byte for byte;
 //   - two different titles in another script, two different keys.
 // What the folds are FOR is tested where each is used (the Round-Zero compiler,
-// the timeline cleanup, the player's share, the Board, the map search…).
+// the timeline cleanup, the player's share, the Board, polls, the map search…).
 
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -69,6 +69,7 @@ const FOLDS = [
         MARKER_ATTENTION_STOP_WORDS: new Set(),
         markerAttentionKey: evaluate(statementOf("src/Game/AI/promptContext.js", "markerAttentionKey"), "markerAttentionKey", { normalizeString: trimmed }),
     }, true],
+    ["src/Game/AI/chatActions.js", "refFromLabel", { fold: (value) => trimmed(value).toLowerCase() }, false],
     ["src/runtime/projects.js", "foldWords", {}, true],
     ["src/runtime/demandCheck.js", "shorn", { norm: (value) => trimmed(value).toLocaleLowerCase() }, false],
     ["src/runtime/institutions.js", "textToken", { clean: cleaned }, false],
