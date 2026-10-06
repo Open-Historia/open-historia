@@ -186,7 +186,7 @@ test("the map survives a render or a map effect while the WebGL context is lost"
   // Effects that run in that window wait for the style like a missing source.
   assert.match(nations, /if \(\s*!mapInstance\.style\s*\|\| !mapInstance\.getSource\?\.\("custom-regions-source"\)/);
   assert.match(nations, /if \(!mapInstance\.style \|\| !mapInstance\.getSource\?\.\("regions-source"\)\) \{/);
-  assert.equal((nations.match(/const applySlice = \(\) => \{\s*if \(cancelled \|\| !mapInstance\.style\) return;/g) ?? []).length, 2);
+  assert.equal((nations.match(/const applySlice = \(\) => \{\s*if \(cancelled \|\| !mapInstance\.style\) return;/g) ?? []).length, 3, "the owners' fills, the stock tiles' fills and the region types' state");
   assert.equal((nations.match(/mapInstance\?\.style \? mapInstance\.getSource\?\.\("polity-boundaries-source"\) : null/g) ?? []).length, 2);
   assert.doesNotMatch(nations, /mapInstance\?\.getSource\?\.\("polity-boundaries-source"\)/);
   // Labels published in that window wake the polity text renderer: it waits

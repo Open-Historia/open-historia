@@ -18,10 +18,10 @@ registerHooks({
 });
 
 const {
+  generateGeopoliticalAgreementsJob,
+  generateGeopoliticalInstitutionCatalogJob,
   generateGeopoliticalInstitutionMembersJob,
-  generateGeopoliticalMembershipJob,
   generateGeopoliticalPowerEvidenceJob,
-  generateGeopoliticalWorldBaseline,
 } = await import("./geopoliticalWorldGenerator.js");
 
 const NO_REFERENCE = "EXTERNAL/REFERENCE AUTHORITY: NONE";
@@ -60,101 +60,39 @@ test("the institution-members prompt lists the staged member polities, not array
   assert.doesNotMatch(staged, /\b0 \| 1\b/);
 });
 
-test("the baseline passes the scenario's history authority to every prompt, including completeness and membership rescue", async () => {
-  // 64 polities trigger the completeness pass; leaving one polity out of the
-  // first membership answer forces the rescue prompt.
-  const polities = Array.from({ length: 64 }, (_, index) => `Polity ${String(index + 1).padStart(2, "0")}`);
-  const omitted = polities[5];
+test("every Political World geopolitics request carries the scenario's history authority, the catalog's completeness pass included", async () => {
+  const historyAuthority = { referenceAllowed: false };
   const prompts = [];
-  let membershipCalls = 0;
   const callModel = async (systemPrompt, messages, options) => {
-    const userMessage = messages[0].parts[0].text;
-    prompts.push({ tool: options.tool.name, label: options.logLabel, systemPrompt, userMessage });
+    prompts.push({ label: options.logLabel, systemPrompt });
     switch (options.tool.name) {
       case "submit_geopolitical_institution_catalog":
-        return { toolInput: { institutionsJson: options.logLabel.includes("completeness") ? "[]" : JSON.stringify([{ id: "star-league", name: "Star League", kind: "political_union", foundedDate: "1990-01-01" }]) } };
+        return { toolInput: { institutionsJson: "[]" } };
+      case "submit_geopolitical_institution_members":
+        return { toolInput: { membersJson: "[]" } };
       case "submit_geopolitical_power_calibration":
-        return { toolInput: { powerJson: JSON.stringify(polities.map((polityKey) => ({ polityKey, strategicWeight: 40 }))) } };
-      case "submit_geopolitical_memberships": {
-        membershipCalls += 1;
-        const requested = polities.filter((polity) => userMessage.includes(`- ${polity}`));
-        const answer = membershipCalls === 1 ? requested.filter((polity) => polity !== omitted) : requested;
-        return { toolInput: { politiesJson: JSON.stringify(answer.map((polityKey) => ({ polityKey, regimeCharacter: "democratic", memberships: [] }))) } };
-      }
+        return { toolInput: { powerJson: "[]" } };
       case "submit_geopolitical_agreements":
         return { toolInput: { agreementsJson: "[]" } };
       default:
         throw new Error(`unexpected tool ${options.tool.name}`);
     }
   };
+  const polities = ["Avalon", "Borduria"];
+  const world = { institutions: { byId: { "star-league": { id: "star-league", name: "Star League", kind: "political_union", foundedDate: "1990-01-01" } } } };
+  const shared = { scenarioDate: "2214-06-01", historyAuthority, polities, world, scenarioContext: "A fictional star cluster.", callModel };
+  await generateGeopoliticalInstitutionCatalogJob(shared);
+  await generateGeopoliticalInstitutionCatalogJob({ ...shared, completenessPass: true });
+  await generateGeopoliticalInstitutionMembersJob({ ...shared, institutionId: "star-league" });
+  await generateGeopoliticalPowerEvidenceJob({ ...shared, targets: polities });
+  await generateGeopoliticalAgreementsJob(shared);
 
-  const result = await generateGeopoliticalWorldBaseline({
-    scenarioDate: "2214-06-01",
-    historyAuthority: { referenceAllowed: false },
-    polities,
-    world: {},
-    scenarioContext: "A fictional star cluster.",
-    callModel,
-  });
-
-  assert.deepEqual(result.blockingErrors, []);
+  assert.equal(prompts.length, 5);
   assert.ok(prompts.some((entry) => entry.label.includes("completeness")), "the completeness pass ran");
-  assert.ok(prompts.some((entry) => entry.systemPrompt.includes("COVERAGE RECOVERY")), "the membership rescue ran");
   for (const entry of prompts) {
     assert.ok(entry.systemPrompt.includes(NO_REFERENCE), `${entry.label} carries the scenario's history authority`);
     assert.ok(!entry.systemPrompt.includes(FALLBACK_REFERENCE), `${entry.label} does not fall back to external chronology`);
   }
-});
-
-
-test("the baseline stops asking once a phase has already blocked Apply", async () => {
-  const polities = ["Avalon", "Borduria"];
-  const tools = [];
-  const result = await generateGeopoliticalWorldBaseline({
-    scenarioDate: "2014-03-22",
-    polities,
-    world: {},
-    callModel: async (systemPrompt, messages, options) => {
-      tools.push(options.tool.name);
-      if (options.tool.name === "submit_geopolitical_institution_catalog") return { toolInput: { institutionsJson: "[]" } };
-      if (options.tool.name === "submit_geopolitical_power_calibration") return { toolInput: { powerJson: "[]" } };
-      throw new Error(`unexpected tool ${options.tool.name}`);
-    },
-  });
-
-  assert.equal(result.blockingErrors.length, 1);
-  assert.match(result.blockingErrors[0], /Power calibration incomplete/);
-  // One catalog call and the two power attempts; no membership or agreement
-  // request is spent on a baseline that can no longer be applied.
-  assert.deepEqual(tools, [
-    "submit_geopolitical_institution_catalog",
-    "submit_geopolitical_power_calibration",
-    "submit_geopolitical_power_calibration",
-  ]);
-  assert.equal(result.modelCalls, 3);
-  assert.deepEqual(result.unresolvedMembershipPolities, polities);
-  assert.ok(result.warnings.includes("Skipped the membership and standing-agreement requests because the baseline was already blocked."));
-});
-
-test("a failed institution catalog skips power calibration as well", async () => {
-  const polities = ["Avalon", "Borduria"];
-  const tools = [];
-  const result = await generateGeopoliticalWorldBaseline({
-    scenarioDate: "2014-03-22",
-    polities,
-    world: {},
-    callModel: async (systemPrompt, messages, options) => {
-      tools.push(options.tool.name);
-      throw new Error("provider unavailable");
-    },
-  });
-
-  assert.equal(result.blockingErrors.length, 1);
-  assert.match(result.blockingErrors[0], /Institution catalog failed/);
-  // Only the two catalog attempts; power, memberships and agreements are skipped.
-  assert.deepEqual(tools, ["submit_geopolitical_institution_catalog", "submit_geopolitical_institution_catalog"]);
-  assert.equal(result.modelCalls, 2);
-  assert.ok(result.warnings.includes("Skipped the power, membership and standing-agreement requests because the baseline was already blocked."));
 });
 
 test("power and membership prompts show the scenario author's country tags, with live tags winning", async () => {
@@ -176,19 +114,4 @@ test("power and membership prompts show the scenario author's country tags, with
   assert.match(prompts[0], /- Avalon \| authored descriptors: socialist, authoritarian/);
   assert.match(prompts[0], /- Borduria \| authored descriptors: military-junta/);
   assert.doesNotMatch(prompts[0], /Borduria \| authored descriptors: democratic/);
-});
-
-test("a regime character implied by the author's tags outranks the model's classification", async () => {
-  const world = {
-    institutions: { byId: { "north-pact": { id: "north-pact", name: "North Pact", kind: "military_alliance", foundedDate: "1990-01-01" } } },
-  };
-  const result = await generateGeopoliticalMembershipJob({
-    scenarioDate: "2014-03-22",
-    targets: ["Avalon"],
-    polities: ["Avalon"],
-    world,
-    baseCountryTags: { Avalon: ["military-junta"] },
-    callModel: async () => ({ toolInput: { politiesJson: JSON.stringify([{ polityKey: "Avalon", regimeCharacter: "democratic", memberships: [] }]) } }),
-  });
-  assert.deepEqual(result.records.map((record) => [record.polityKey, record.regimeCharacter]), [["Avalon", "military"]]);
 });

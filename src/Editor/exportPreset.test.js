@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeCustomCityFeatureCollection } from "../runtime/cityFeatures.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 
 const doc = (features) => ({
   name: "test",
@@ -72,4 +73,23 @@ test("a stored city without the new properties opens as before", () => {
   assert.equal(feature.tier, 3);
   assert.deepEqual(feature.populationByYear, { 1950: 1000000 });
   assert.equal(gameCityToFeature({ type: "Feature", properties: { city: "Nowhere" }, geometry: null }, "x"), null);
+});
+
+test("the map's region types go to the game with the scenario, and a round trip keeps them", () => {
+  const types = [
+    { id: "land", name: "Land" },
+    { id: "sea", name: "Sea", overrideColor: [20, 60, 140], passable: false, note: "the author's own field" },
+  ];
+  const regions = {
+    type: "FeatureCollection",
+    features: [{ type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: { id: "reg_1", owner: "", typeId: "sea" } }],
+  };
+  const seed = buildGameSeed({ ...doc([]), types }, regions);
+  assert.deepEqual(seed.world.regionTypes.map((type) => type.id), ["land", "sea"]);
+  assert.deepEqual(seed.world.regionTypes[1].overrideColor, [20, 60, 140]);
+  assert.equal(seed.world.regionTypes[1].passable, false);
+  assert.equal(seed.world.regionTypes[1].note, "the author's own field");
+  assert.equal(seed.regions.features[0].properties.typeId, "sea", "each region still names its type");
+  // What the Workshop reads back when it opens the scenario (MapEditor.jsx).
+  assert.deepEqual(normalizeRegionTypes(seed.world.regionTypes), seed.world.regionTypes);
 });

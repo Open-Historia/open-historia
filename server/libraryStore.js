@@ -18,12 +18,18 @@ import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
 import {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
   importedGameScenarioId,
+  missingBasemapOfBundle,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  normalizeMissingBasemap,
+  pickHubProvenance,
 } from "./hubProvenance.js";
+import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
 const SCENARIO_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
@@ -416,16 +422,20 @@ const OPTIONAL_JSON_ASSET_FILES = {
 // so it is never copied into new games, embedded in scenario exports, or dragged
 // into the polled details bundle — a snapshot list holds full prior state and can
 // be large. Read/written only through the /api/runtime/json/snapshots endpoint.
+// Kept one file each under RESTORE_POINT_DIR (see storeRestorePoints); the
+// single snapshots.json is where an older install kept them all, read and moved
+// on first use.
 const RUNTIME_ONLY_JSON_ASSET_FILES = {
   snapshots: "storage/snapshots.json",
-  // Derived, read-only projection of snapshots.json: id/round/dates, no state.
-  // The undo counter polled the real thing per turn, parsing 8+ MB for a length.
+  // The restore points' order and id/round/dates, no state. The undo counter
+  // polled the real archive per turn, parsing 8+ MB for a length.
   snapshotsIndex: "storage/snapshots-index.json",
   // What the player's spies have intercepted, keyed by target polity. Its own
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
 };
+const RESTORE_POINT_DIR = "storage/snapshots";
 
 const TURN_COMMIT_ASSET_KEYS = ["actions", "chat", "events", "game", "colors", "world"];
 const TURN_COMMIT_JOURNAL_FILE = "storage/turn-commit-journal.json";
@@ -523,6 +533,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "puppets",
   "groups",
   "groupAreas",
+  // The map's region types (runtime/regionTypes.js), which the game draws.
+  "regionTypes",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",
@@ -812,12 +824,20 @@ const saveGameManifest = (manifest) => {
 
 // Provenance for scenarios imported straight from the community hub (which post,
 // which exact bundle file, when, and whether it has been edited since), the post
-// the player made of their own scenario, and the suggestions they reviewed:
-// server/hubProvenance.js, shared with the web store.
+// the player made of their own scenario, what they unlinked it from for good,
+// and the suggestions they reviewed: server/hubProvenance.js, shared with the
+// web store.
 
 const normalizePlayCount = (raw) => {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+};
+
+// Only there while a basemap is missing (hubProvenance.js), so every other
+// scenario's record reads as it always has.
+const missingBasemapField = (raw) => {
+  const missingBasemap = normalizeMissingBasemap(raw);
+  return missingBasemap ? { missingBasemap } : {};
 };
 
 const readScenarioMeta = (scenarioId) => {
@@ -842,7 +862,9 @@ const readScenarioMeta = (scenarioId) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
+    hubUnlinked: normalizeHubUnlinked(raw?.hubUnlinked),
     id: scenarioId,
+    ...missingBasemapField(raw?.missingBasemap),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -873,17 +895,23 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
     // modification — a rename, an editor apply, a cover change — which keeps the
     // link but marks it edited: an edited copy must stop offering hub updates
     // that would overwrite the player's work, and must still know its original
-    // so the player can suggest their changes back (hubProvenance.js).
-    hubOrigin: hubOriginAfterWrite(current.hubOrigin, updates ?? {}, { touch }),
-    hubPublished: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubPublished")
-      ? normalizeHubPublished(updates.hubPublished)
-      : current.hubPublished,
+    // so the player can suggest their changes back. A write that carries
+    // hubPublished replaces the record of the player's own posts, or clears it
+    // (Unlink). Either Unlink is for good: what it unlinked goes into
+    // hubUnlinked, and no later write puts it back (hubProvenance.js
+    // hubLinksAfterWrite, the one rule for this store and the web store).
+    ...hubLinksAfterWrite(current, updates ?? {}, { touch }),
     hubReviews: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubReviews")
       ? normalizeHubReviews(updates.hubReviews)
       : current.hubReviews,
     id: scenarioId,
     updatedAt: touch ? new Date().toISOString() : current.updatedAt,
   };
+  // null clears it (the basemap arrived); anything else is normalised.
+  delete next.missingBasemap;
+  Object.assign(next, missingBasemapField(
+    Object.prototype.hasOwnProperty.call(updates ?? {}, "missingBasemap") ? updates.missingBasemap : current.missingBasemap,
+  ));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   return next;
@@ -2319,13 +2347,11 @@ const createGame = ({
   return getGameDetails(resolvedGameId);
 };
 
-// The hub bookkeeping a scenario write may carry (server/hubProvenance.js):
-// hubOrigin (null unlinks the scenario from the post it was downloaded from),
-// hubPublished (the player's own post) and hubReviews (suggestions reviewed).
-const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
-const pickHubProvenance = (body) =>
-  Object.fromEntries(HUB_PROVENANCE_KEYS.filter((key) => Object.hasOwn(body ?? {}, key)).map((key) => [key, body[key]]));
-
+// The hub bookkeeping a scenario write may carry is picked by
+// server/hubProvenance.js (pickHubProvenance), for this store and the web
+// store alike: hubOrigin only as null, which unlinks the scenario from the post
+// it was downloaded from (a write that tries to link one is refused),
+// hubPublished (the player's own posts) and hubReviews (suggestions reviewed).
 const updateScenario = (scenarioId, body = {}) => {
   const {
     accentColor,
@@ -2611,11 +2637,22 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   // alongside delete-sharing handles, and rmSync's own retries ride out the
   // stragglers. The copy lands in .trash first, so the soft-delete contract
   // (recoverable by hand) holds on this path too.
+  let copied = false;
   try {
     fs.cpSync(sourceDir, dest, { recursive: true });
+    copied = true;
     fs.rmSync(sourceDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
     markTrashEntry(dest, kind, id);
   } catch (error) {
+    // A copy that did not finish is not a trash entry (the original is still
+    // whole), and left there it would list, and restore, as half a save.
+    if (!copied) {
+      try {
+        fs.rmSync(dest, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      } catch {
+        // Leave it; the original is intact either way.
+      }
+    }
     throw new Error(
       `Windows is blocking the delete of "${id}" — another program holds its files open ` +
         `(an indexing/sync tool, or a request in flight). Close it or restart the server, ` +
@@ -2629,12 +2666,17 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
 // time it was moved.
 const TRASH_MARKER_FILE = ".deleted.json";
 const TRASH_KINDS = new Set(["scenario", "game"]);
+// How long a deleted game or scenario can be restored before the server
+// deletes it for good at startup (purgeOldTrash). The delete confirmation and
+// the Recently deleted shelf say so.
+const TRASH_KEEP_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-const markTrashEntry = (dest, kind, id) => {
+const markTrashEntry = (dest, kind, id, at = new Date()) => {
   try {
     fs.writeFileSync(
       path.join(dest, TRASH_MARKER_FILE),
-      JSON.stringify({ deletedAt: new Date().toISOString(), id: String(id), kind }),
+      JSON.stringify({ deletedAt: at.toISOString(), id: String(id), kind }),
       "utf-8",
     );
   } catch {
@@ -2670,13 +2712,23 @@ const describeTrashEntry = (entry) => {
   };
 };
 
+// One entry that cannot be read is left out, not a failed list.
+const describeTrashEntrySafely = (entry) => {
+  try {
+    return describeTrashEntry(entry);
+  } catch (error) {
+    console.warn(`[trash] ${entry}: ${error.message}`);
+    return null;
+  }
+};
+
 // Everything in .trash, most recently deleted first.
 const listTrash = () => {
   if (!fs.existsSync(TRASH_DIR)) return [];
   return fs
     .readdirSync(TRASH_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => describeTrashEntry(entry.name))
+    .map((entry) => describeTrashEntrySafely(entry.name))
     .filter(Boolean)
     .sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
 };
@@ -2723,15 +2775,48 @@ const restoreFromTrash = (entry) => {
   return { id, kind, library: getLibraryCatalog() };
 };
 
-// Deletes everything in .trash for good.
-const emptyTrash = () => {
-  const entries = listTrash();
+// Deletes everything in .trash for good, or only the games or the scenarios
+// (each shelf empties its own kind).
+const emptyTrash = ({ kind = "" } = {}) => {
+  const entries = listTrash().filter((described) => !kind || described.kind === kind);
   let bytes = 0;
   for (const described of entries) {
     fs.rmSync(path.join(TRASH_DIR, described.entry), { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
     bytes += described.bytes;
   }
   return { bytes, removed: entries.length };
+};
+
+// Run at startup: deletes for good what was deleted more than TRASH_KEEP_DAYS
+// ago. An entry from before deletes were dated has no marker, and its
+// directory's mtime is when its files last changed, not when it was deleted,
+// so it is dated now instead: its days start today rather than it vanishing
+// on the first start of this version.
+const purgeOldTrash = ({ now = Date.now() } = {}) => {
+  if (!fs.existsSync(TRASH_DIR)) return { bytes: 0, removed: 0 };
+  const cutoff = now - TRASH_KEEP_DAYS * DAY_MS;
+  let bytes = 0;
+  let removed = 0;
+  for (const entry of fs.readdirSync(TRASH_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(TRASH_DIR, entry.name);
+    try {
+      const deletedAt = Date.parse(String(readJsonFile(path.join(dir, TRASH_MARKER_FILE), null)?.deletedAt ?? ""));
+      if (!Number.isFinite(deletedAt)) {
+        const described = describeTrashEntry(entry.name);
+        if (described) markTrashEntry(dir, described.kind, described.id, new Date(now));
+        continue;
+      }
+      if (deletedAt >= cutoff) continue;
+      const size = directoryBytes(dir);
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      bytes += size;
+      removed += 1;
+    } catch (error) {
+      console.warn(`[trash] could not purge ${entry.name}: ${error.message}`);
+    }
+  }
+  return { bytes, removed };
 };
 
 const deleteScenario = (scenarioId) => {
@@ -2802,6 +2887,11 @@ const deleteGame = (gameId) => {
   return getLibraryCatalog();
 };
 
+// A basemap the player sets or clears themselves (the Workshop, the editor)
+// replaces one the import could not download: that download is no longer
+// wanted, and landing later it would overwrite their choice.
+const BASEMAP_CHOSEN = { missingBasemap: null };
+
 const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "") => {
   ensureScenarioStore();
 
@@ -2821,7 +2911,7 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
     scenarioId,
     assetKey === COVER_IMAGE_ASSET_KEY
     ? { coverImageContentType: normalizeImageContentType(contentType) }
-    : {},
+    : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -2840,7 +2930,7 @@ const removeScenarioAsset = (scenarioId, assetKey) => {
   removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
   writeScenarioMeta(
     scenarioId,
-    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : {},
+    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -3093,10 +3183,9 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   // are blind-written back over live state on restore, with no marker of their own
   // to catch. Rather than migrate that surface, drop them: a stale restore point
   // would re-inject every code-keyed structure at once, silently.
-  if (paths.snapshots && fs.existsSync(paths.snapshots)) {
+  if (paths.discardSnapshots) {
     try {
-      fs.rmSync(paths.snapshots);
-      warn("discarded roll-back snapshots — they predate the owner rename");
+      if (paths.discardSnapshots()) warn("discarded roll-back snapshots — they predate the owner rename");
     } catch { /* best effort */ }
   }
 
@@ -3177,7 +3266,7 @@ const ensureGameOwnerSchema = (gameId) => {
       tags: getGameJsonPath(gameId, "tags"),
       events: path.join(getGameDirectory(gameId), "storage", "events.json"),
       chat: path.join(getGameDirectory(gameId), "storage", "chat.json"),
-      snapshots: getGameJsonPath(gameId, "snapshots"),
+      discardSnapshots: () => discardRestorePoints(gameId),
       // From the SCENARIO — the same two inputs the scenario resolved against, so
       // one token cannot mean two things inside one game.
       meta: getScenarioMetaPath(parentId),
@@ -3237,45 +3326,99 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
   return { contentType: "application/json; charset=utf-8", sourcePath };
 };
 
-// What the rollback list shows, minus `state` (~700 KB per entry, up to 12).
-const snapshotIndexEntry = (snap) => ({
-  id: snap?.id ?? "",
-  round: snap?.round ?? null,
-  fromDate: snap?.fromDate ?? "",
-  toDate: snap?.toDate ?? "",
-  capturedAt: snap?.capturedAt ?? "",
-});
-
-const writeSnapshotIndex = (gameId, snapshots, stamp = "") => {
-  const list = Array.isArray(snapshots) ? snapshots : [];
-  const target = getGameJsonPath(gameId, "snapshotsIndex");
-  ensureDirectory(path.dirname(target));
-  writeJsonFile(target, { stamp, entries: list.map(snapshotIndexEntry) });
+// Restore points, one file each (server/restorePoints.js): storage/snapshots/
+// holds them and storage/snapshots-index.json their order, newest first, with
+// id/round/dates and the file each is in. A turn writes the one it adds and
+// deletes the one that falls off the end, where it used to rewrite the whole
+// archive (up to twelve worlds, 8-21 MB); a reader after one restore point
+// (the staged reveal) reads one file.
+//
+// An older install kept them all in storage/snapshots.json. The first read or
+// write moves them into files and deletes it; one that will not parse is
+// renamed out of the way rather than deleted.
+const RESTORE_POINT_INDEX_VERSION = 2;
+const restorePointDirectory = (gameId) => path.join(getGameDirectory(gameId), RESTORE_POINT_DIR);
+// Plain ids only, and none Windows keeps for devices (CON, NUL, COM1…). In
+// lower case: Windows and macOS take "Snap-A" and "snap-a" for one file, so two
+// such ids must reach the planner as the same name to be told apart.
+const restorePointFileFor = (id, attempt) => {
+  const base = /^[A-Za-z0-9_-]{1,80}$/.test(id) && !/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(id) ? id.toLowerCase() : "restore-point";
+  return attempt ? `${base}-${attempt}.json` : `${base}.json`;
 };
 
-// The write path refreshes the index for free; this covers a cold index, a zip
-// import, or a file edited outside the app.
-const ensureSnapshotIndexFresh = (gameId) => {
-  const source = getGameJsonPath(gameId, "snapshots");
-  const indexPath = getGameJsonPath(gameId, "snapshotsIndex");
-  if (!fs.existsSync(source)) {
-    // The owner-rename migration deletes snapshots outright. A surviving index
-    // would advertise turns that cannot be restored, so it goes with them.
-    if (fs.existsSync(indexPath)) {
-      try { fs.rmSync(indexPath); } catch { /* best effort */ }
-    }
-    return;
+const readRestorePointIndex = (gameId) => {
+  const index = readJsonFile(getGameJsonPath(gameId, "snapshotsIndex"), null);
+  // An index of the old kind (a stamp, no files) only described snapshots.json.
+  return index?.version === RESTORE_POINT_INDEX_VERSION && Array.isArray(index.entries) ? index.entries : [];
+};
+
+// Replaces the game's restore points with `list`, writing only those not
+// already stored (`reuse: false` writes them all, for a list from outside).
+const storeRestorePoints = (gameId, list, { reuse = true } = {}) => {
+  const directory = restorePointDirectory(gameId);
+  const { entries, writes } = planRestorePointSlots(readRestorePointIndex(gameId), list, { slotFor: restorePointFileFor, reuse });
+  // The files first, then the index that names them, then whatever it no longer
+  // names (the restore point that fell off the end, or a file a crash left).
+  for (const { slot, snapshot } of writes) writeJsonFileAtomic(path.join(directory, slot), snapshot);
+  writeJsonFileAtomic(getGameJsonPath(gameId, "snapshotsIndex"), { version: RESTORE_POINT_INDEX_VERSION, entries });
+  const named = new Set(entries.map((entry) => entry.slot));
+  let present = [];
+  try { present = fs.readdirSync(directory); } catch { /* no restore points at all */ }
+  for (const name of present) {
+    if (!named.has(name)) fs.rmSync(path.join(directory, name), { force: true, recursive: true });
   }
-  let stamp = "";
+  fs.rmSync(getGameJsonPath(gameId, "snapshots"), { force: true });
+  return entries;
+};
+
+const moveLegacyRestorePoints = (gameId) => {
+  const legacyPath = getGameJsonPath(gameId, "snapshots");
+  if (!fs.existsSync(legacyPath)) return;
+  let list = null;
   try {
-    const stat = fs.statSync(source);
-    stamp = `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  } catch {
+    list = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+  } catch (error) {
+    console.warn(`[restore points] ${gameId}: snapshots.json could not be read: ${error.message}`);
+  }
+  if (!Array.isArray(list)) {
+    // Read as none before too; kept for whoever wants to look at it.
+    try { fs.renameSync(legacyPath, `${legacyPath}.unreadable`); } catch { /* best effort */ }
     return;
   }
-  const cached = readJsonFile(indexPath, null);
-  if (cached?.stamp === stamp && Array.isArray(cached.entries)) return;
-  writeSnapshotIndex(gameId, readJsonFile(source, []), stamp);
+  storeRestorePoints(gameId, list, { reuse: false });
+};
+
+// The index entries, each with its file.
+const readRestorePointEntries = (gameId) => {
+  moveLegacyRestorePoints(gameId);
+  return readRestorePointIndex(gameId);
+};
+
+// Every restore point, newest first. One whose file is gone is left out.
+const readRestorePoints = (gameId) => {
+  const directory = restorePointDirectory(gameId);
+  return readRestorePointEntries(gameId)
+    .map((entry) => readJsonFile(path.join(directory, entry.slot), null))
+    .filter((snap) => snap && typeof snap === "object");
+};
+
+// The file holding one restore point, found by its id, or null.
+const restorePointPath = (gameId, snapshotId) => {
+  const entry = readRestorePointEntries(gameId).find((candidate) => candidate.id && candidate.id === snapshotId);
+  const target = entry ? path.join(restorePointDirectory(gameId), entry.slot) : null;
+  return target && fs.existsSync(target) ? target : null;
+};
+
+// Deletes every restore point a game has, in either layout. True if it had any.
+const discardRestorePoints = (gameId) => {
+  const targets = [
+    getGameJsonPath(gameId, "snapshots"),
+    getGameJsonPath(gameId, "snapshotsIndex"),
+    restorePointDirectory(gameId),
+  ];
+  const had = fs.existsSync(targets[0]) || readRestorePointIndex(gameId).length > 0;
+  for (const target of targets) fs.rmSync(target, { force: true, recursive: true });
+  return had;
 };
 
 const turnCommitJournalPath = (gameId) => path.join(getGameDirectory(gameId), TURN_COMMIT_JOURNAL_FILE);
@@ -3394,7 +3537,21 @@ const readRuntimeJsonAsset = (assetKey) => {
   const activeGame = getActiveGameSummary();
   if (activeGame?.id) ensureGameOwnerSchema(activeGame.id);
 
-  if (assetKey === "snapshotsIndex" && activeGame?.id) ensureSnapshotIndexFresh(activeGame.id);
+  // One file each, assembled here (storeRestorePoints).
+  if (assetKey === "snapshots" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: readRestorePoints(activeGame.id),
+      sourcePath: restorePointDirectory(activeGame.id),
+    };
+  }
+  if (assetKey === "snapshotsIndex" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: publicRestorePointIndex(readRestorePointEntries(activeGame.id)),
+      sourcePath: getGameJsonPath(activeGame.id, "snapshotsIndex"),
+    };
+  }
 
   const scenario = getActiveRuntimeScenarioSummary();
 
@@ -3618,17 +3775,10 @@ const writeRuntimeJsonAsset = (assetKey, value, { readBack = true } = {}) => {
     canonical = canonicalizeColorKeys(value, activeWorld());
   }
 
-  const targetPath = getGameJsonPath(activeGameId, assetKey);
-  writeJsonFile(targetPath, canonical);
-  // From the array already in hand, so a turn never reparses to stay in step.
-  if (assetKey === "snapshots") {
-    try {
-      const stat = fs.statSync(targetPath);
-      writeSnapshotIndex(activeGameId, canonical, `${stat.size}:${Math.round(stat.mtimeMs)}`);
-    } catch {
-      // A missing index just means the next read rebuilds it.
-    }
-  }
+  // Restore points go one file each: the turn's new one is written, the rest
+  // are already there.
+  if (assetKey === "snapshots") storeRestorePoints(activeGameId, canonical);
+  else writeJsonFile(getGameJsonPath(activeGameId, assetKey), canonical);
   writeGameMeta(activeGameId, {});
   return readBack ? readRuntimeJsonAsset(assetKey) : null;
 };
@@ -3773,7 +3923,11 @@ const exportScenarioBundle = (scenarioId) => {
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson"),
       // The custom map background travels with the scenario (always embedded, like
       // the geometry) so a shared/imported custom map isn't blank.
-      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData"),
+      // A basemap still missing travels as the reference it arrived as, so the
+      // next import tries the download too.
+      backgroundData: !fs.existsSync(getScenarioUploadPath(scenarioId, "backgroundData")) && summary.missingBasemap
+        ? { ...summary.missingBasemap.reference }
+        : buildScenarioBundleAsset(scenarioId, "backgroundData"),
     },
     data: {
       actions: cloneJson(details.data.actions),
@@ -3860,7 +4014,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     applyScenarioBundleAsset(scenarioId, assetKey, assetValue);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // A community basemap the game could not download is kept as its reference,
+  // so opening the scenario later can try again (src/runtime/missingBasemap.js).
+  const missingBasemap = missingBasemapOfBundle(bundle);
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), ...(missingBasemap ? { missingBasemap } : {}) });
 
   if (setSelected) {
     setSelectedScenario(scenarioId);
@@ -3915,7 +4072,10 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
 // id, so their link survives) and createdAt; the name, description, world, and
 // assets all come from the new bundle, and every uploadable asset the bundle
 // doesn't carry is cleared. The new hubOrigin is stamped last, so the card's
-// Update button reverts to New Game once the catalog refreshes.
+// Update button reverts to New Game once the catalog refreshes. It renews the
+// link the scenario has and never makes one: a scenario that is not a copy of
+// the bundle's post (its player unlinked it, or it never was one) is refused
+// before anything is written (hubProvenance.js hubOriginForUpdate).
 const updateScenarioFromBundle = (scenarioId, bundle) => {
   ensureScenarioStore();
 
@@ -3932,7 +4092,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
-  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
+  const hubOrigin = hubOriginForUpdate(readScenarioMeta(scenarioId).hubOrigin, bundle.hubOrigin);
 
   const metaPatch = {};
   for (const key of ["accentColor", "name", "subtitle", "description", "eyebrow", "heroTitle", "heroSubtitle"]) {
@@ -3975,8 +4135,43 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
     applyScenarioBundleAsset(scenarioId, assetKey, assets[assetKey]);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // The new version's basemap reference while it is still missing, so the
+  // download is tried again and the copy keeps offering Update; cleared when
+  // this version brought its basemap.
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), missingBasemap: missingBasemapOfBundle(bundle) });
 
+  return getScenarioDetails(scenarioId);
+};
+
+// A basemap payload as background.json holds it: { dataUrl } for an image,
+// { geojson } for a vector map. Mirrored by the web store.
+const basemapPayloadOf = (payload) => {
+  if (typeof payload?.dataUrl === "string" && /^data:image\//i.test(payload.dataUrl)) return { dataUrl: payload.dataUrl };
+  if (payload?.geojson && typeof payload.geojson === "object" && !Array.isArray(payload.geojson)) return { geojson: payload.geojson };
+  throw new Error("That basemap has no image or map in it.");
+};
+
+// The community basemap an import or Update could not download
+// (meta.missingBasemap), downloaded since: the game tries again when the
+// scenario is opened (src/runtime/missingBasemap.js). The world takes the
+// background description of the version that referenced it. Not an edit: a
+// downloaded copy stays unedited and keeps following its post.
+const restoreScenarioBasemap = (scenarioId, payload) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  const { missingBasemap } = readScenarioMeta(scenarioId);
+  if (!missingBasemap) throw new Error("This scenario is not waiting for a basemap.");
+  const data = basemapPayloadOf(payload);
+
+  const targetPath = getScenarioUploadPath(scenarioId, "backgroundData");
+  ensureDirectory(path.dirname(targetPath));
+  fs.writeFileSync(targetPath, JSON.stringify(data), "utf-8");
+  const worldPath = getScenarioJsonPath(scenarioId, "world");
+  const background = missingBasemap.background ?? readJsonFile(worldPath, {})?.background ?? {};
+  mergeJsonAsset(worldPath, { background: { ...background, kind: data.geojson ? "vector" : "image" } }, JSON_ASSET_DEFAULTS.world);
+  writeScenarioMeta(scenarioId, { missingBasemap: null }, { touch: false });
   return getScenarioDetails(scenarioId);
 };
 
@@ -4225,17 +4420,64 @@ const importGameBundle = (bundle) => {
 
 // Restore points move as text on the CLIENT side, so the browser never parses
 // them. The server is not the memory-constrained end, so here they are ordinary
-// JSON: the route parses the body, this writes it.
+// JSON: the route parses the body, this writes it (one file each, as a turn
+// does; every one is written, since they come from another game).
 const readGameSnapshots = (gameId) => {
   ensureGameStore();
   getGameSummary(gameId);
-  return readJsonFile(getGameJsonPath(gameId, "snapshots"), []);
+  return readRestorePoints(gameId);
 };
 
 const writeGameSnapshots = (gameId, snapshots) => {
   ensureGameStore();
   getGameSummary(gameId);
-  writeJsonFile(getGameJsonPath(gameId, "snapshots"), Array.isArray(snapshots) ? snapshots : []);
+  storeRestorePoints(gameId, Array.isArray(snapshots) ? snapshots : [], { reuse: false });
+  return { ok: true };
+};
+
+// One of the active game's restore points, by id: the file to send, or null.
+// The staged reveal wants one world, not the archive of twelve.
+const resolveRuntimeRestorePoint = (snapshotId) => {
+  ensureGameStore();
+  const activeGame = getActiveGameSummary();
+  if (!activeGame?.id) return null;
+  // The rename migration discards restore points that predate it.
+  ensureGameOwnerSchema(activeGame.id);
+  return restorePointPath(activeGame.id, String(snapshotId ?? ""));
+};
+
+// A time skip that finished while another game was open, kept for this one
+// until the player applies or discards it (src/Game/AI/parkedTurn.js). By game
+// id, because it is written while ANOTHER game is the active one. One per game;
+// not in the bundle, a copy or an export: it belongs to this game's round, and
+// is dropped by the game that reads it once that round has passed.
+const PARKED_TURN_FILE = "storage/parked-turn.json";
+const getGameParkedTurnPath = (gameId) => path.join(getGameDirectory(gameId), PARKED_TURN_FILE);
+
+const readGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  const value = readJsonFile(getGameParkedTurnPath(gameId), null);
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+};
+
+const writeGameParkedTurn = (gameId, parkedTurn) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  if (!parkedTurn || typeof parkedTurn !== "object" || Array.isArray(parkedTurn)) {
+    throw new Error("A kept turn must be an object.");
+  }
+  if (String(parkedTurn.campaignId ?? "") !== gameId) {
+    throw new Error(`This kept turn belongs to another game: ${parkedTurn.campaignId}`);
+  }
+  writeJsonFileAtomic(getGameParkedTurnPath(gameId), parkedTurn);
+  return { ok: true };
+};
+
+const removeGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  fs.rmSync(getGameParkedTurnPath(gameId), { force: true });
   return { ok: true };
 };
 
@@ -4257,12 +4499,18 @@ export {
   importGameBundle,
   importScenarioBundle,
   listTrash,
+  purgeOldTrash,
   restoreFromTrash,
+  restoreScenarioBasemap,
+  TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
+  readGameParkedTurn,
   readRuntimeJsonAsset,
+  resolveRuntimeRestorePoint,
   resolveRuntimeGeojsonAsset,
   removeGameAsset,
+  removeGameParkedTurn,
   removeScenarioAsset,
   resolveGameUploadAsset,
   resolveScenarioCoarseRegionsAsset,
@@ -4275,6 +4523,7 @@ export {
   uploadGameAsset,
   uploadScenarioAsset,
   writeGameSnapshots,
+  writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
   recoverPendingTurnCommit,

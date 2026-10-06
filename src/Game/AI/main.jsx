@@ -30,7 +30,8 @@ import { isRelayRefusal, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
-import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   buildDiplomaticTurnInstruction,
@@ -67,6 +68,7 @@ import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.
 import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
+import { buildAnswerFormatBlock } from "./schemaOutline.js";
 import {
     applyAnthropicFrame,
     applyGeminiFrame,
@@ -367,22 +369,61 @@ function getGeminiStreamUrl(model, apiKey) {
     return getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
 }
 
-// Why a Gemini skip's events arrive together while every other provider's arrive
-// one by one (streamedEvents.js).
+// How a Gemini skip's events arrive one by one, as every other provider's do
+// (streamedEvents.js).
 //
 // Streaming a tool call's arguments needs partialArgs, and
 // toolConfig.functionCallingConfig.streamFunctionCallArguments is Vertex-only:
 // this API's v1beta discovery doc (revision 20260918) gives FunctionCallingConfig
 // only `mode` and `allowedFunctionNames`. Sending it buys a 400 and costs the
-// player a request, so it is not sent.
+// player a request, so it is not sent, and a skip asked for as a function call
+// arrives whole.
 //
-// The alternative, JSON mode, does stream but Gemini refuses it alongside tools
-// ("Function calling with a response mime type: 'application/json' is
-// unsupported"), so a skip would lose its lookup functions. Declined: the
-// simulator keeps the ability to ask the engine questions.
+// Text does stream, so a watched skip is asked for as JSON text: the answer's
+// mime type set to application/json, and the function's contract written out in
+// the prompt in place of its declaration (schemaOutline.js buildAnswerFormatBlock).
+// Gemini refuses a response mime type alongside tools ("Function calling with a
+// response mime type: 'application/json' is unsupported"), so it is used exactly
+// when nothing else needs the function channel: a watched skip (onToolStream)
+// with no lookup functions, which is every skip while requests are being saved,
+// the default. A skip that has lookup functions keeps the function call and its
+// questions, and arrives whole as before.
+//
+// Not generationConfig.responseSchema, which was built first and measured
+// against the live API on 2026-10-05 (gemini-3.5-flash-lite): the schema is
+// compiled into a grammar with a ceiling on its size, and the skip's contract
+// sits at it. As it stood it was refused, 400 "Request contains an invalid
+// argument"; with its four unions merged into single objects it passed; with the
+// Projects board's ops added it was refused again; and the same weight spent
+// anywhere else (the stats block, the institution ops) tipped it the same way.
+// That ceiling has moved before (geminiSchema.js), so a contract that passes
+// today is no promise. Written into the prompt, the contract's size costs tokens
+// and nothing else: measured the same day, the whole folded contract is about
+// 5,800 tokens there, fewer than its declaration, the answer arrived in 72
+// frames with no gap over 0.2 s, in the order the outline gives its fields, and
+// it passed the task's validation as written. What holds an answer to the
+// contract is that validation, as it does for every model that has no function
+// calling at all.
+//
+// A model that refuses the mime type itself is asked again at once as the
+// function call it always was, and that way for the rest of the session rather
+// than paying a refused request per skip.
 //
 // streamAssembly.js still assembles partialArgs if they ever arrive, so the day
 // the field reaches this API, asking for it is the only change.
+const geminiJsonAnswerRefusals = new Set();
+
+// The whole answer of a JSON-mode request, or null when it is not one object
+// (cut off, fenced, prose around it): the task's own salvage reads those from
+// the raw text.
+function parseGeminiJsonAnswer(text) {
+    try {
+        const value = JSON.parse(text);
+        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    } catch {
+        return null;
+    }
+}
 
 // AI calls go straight from the browser to the provider so the player's API key
 // only ever reaches the provider — never a server or a community node. Direct is
@@ -1119,6 +1160,16 @@ async function callGemini(systemPrompt, history, {
     }
 
     let retriedAfterOverload = false;
+    // The answer as JSON text rather than a function call, so a watched skip's
+    // events arrive one at a time (see geminiJsonAnswerRefusals above for when,
+    // and for what happens when it is refused).
+    let jsonAnswer = Boolean(tool && typeof onToolStream === "function" && !lookupDeclarations.length)
+        && !geminiJsonAnswerRefusals.has(model);
+    let jsonAnswerRefused = false;
+    // Events first: they are what the panel shows as they are written.
+    const answerFormat = jsonAnswer
+        ? buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" })
+        : "";
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         // Tool calls stream, for the same reason they do on the other three
@@ -1135,16 +1186,23 @@ async function callGemini(systemPrompt, history, {
         const generationConfig = {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+            ...(jsonAnswer ? { responseMimeType: "application/json" } : {}),
         };
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                system_instruction: { parts: [{ text: systemPrompt }] },
+                // The contract after the prompt, as a part of its own: nothing
+                // before it changes, so the prompt's cacheable prefix is the
+                // one a function-call request has.
+                system_instruction: { parts: [
+                    { text: systemPrompt },
+                    ...(jsonAnswer ? [{ text: answerFormat }] : []),
+                ] },
                 contents: geminiContentsFromHistory(history),
                 ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
                 ...customParams,
-                ...(tool ? {
+                ...(tool && !jsonAnswer ? {
                     tools: [{ functionDeclarations: [
                         {
                             name: tool.name,
@@ -1182,11 +1240,32 @@ async function callGemini(systemPrompt, history, {
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
+            const failure = classifyProviderFailure({ status: response.status, payload });
+            // The JSON-text form of the answer, refused as a request: asked again
+            // at once as the function call it always was. Not one of the
+            // attempts, which are for a busy model; a key, a missing model or a
+            // request too large fails the same either way and is not asked twice.
+            if (jsonAnswer && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
+                jsonAnswer = false;
+                jsonAnswerRefused = true;
+                console.warn("[ai] Gemini refused the skip's JSON-text form; asking again as a function call (its events will arrive together).");
+                logDebugEvent("ai", "Gemini refused a JSON-mode request; asked again as a function call.", {
+                    model,
+                    status: response.status,
+                    detail: extractErrorMessage(payload, "").slice(0, 300),
+                }, { verbose: true });
+                attempt -= 1;
+                continue;
+            }
             throw refusedRequestError("Gemini",
                 extractErrorMessage(payload, `Gemini API request failed (${response.status})`),
-                classifyProviderFailure({ status: response.status, payload }),
+                failure,
             );
         }
+        // Accepted as a function call straight after being refused as JSON text:
+        // it was the form that was refused, so this model is asked the function
+        // way for the rest of the session.
+        if (jsonAnswerRefused) geminiJsonAnswerRefusals.add(model);
 
         // Branch on what actually came back, not on what was asked for: an edge
         // or proxy that ignored alt=sse still answers plain JSON, and that must
@@ -1196,6 +1275,14 @@ async function callGemini(systemPrompt, history, {
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         if (tool) {
+            // Asked for as JSON text: the text IS the function's arguments. One
+            // that will not parse whole (cut off mid-answer) goes on below as raw
+            // text, where the task's salvage and the busy-retry both read it.
+            const jsonText = jsonAnswer ? joinGeminiParts(data?.candidates?.[0]?.content?.parts) : "";
+            const jsonInput = jsonText ? parseGeminiJsonAnswer(jsonText) : null;
+            // answeredAsText: no function was declared, so a correction asks for
+            // the JSON again and not for a call (gameplay.js runJsonTask).
+            if (jsonInput) return { rawText: jsonText, toolInput: jsonInput, answeredAsText: true };
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
             // Not the answer but a question: the model called lookup functions.
@@ -3094,10 +3181,6 @@ export const PLANNED_ACTIONS_IN_ACTION_PLANNING = "(listed once, with their ids,
 // context). A player's-eye view reaching the simulator would have it resolving
 // the world from a picture it knows to be incomplete.
 const buildAdvisorPuppetsDirective = (world, playerCountry) => {
-    // With the system off the whole section goes, rather than saying nobody
-    // directs anybody: the directives list is filtered, and an advisor told the
-    // concept exists will reach for it when a player asks about their "puppets".
-    if (!puppetStatesEnabled()) return "";
     const rows = livePuppetsFor(world, playerCountry);
     const lines = rows.slice(0, 40).map((row) => {
         const who = describeRole(row, {
@@ -3122,7 +3205,8 @@ ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 // (gameplay.js lookupFunctionsEnabled), since each round is a request.
 // Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
 // Save AI requests promises: the names it needs instead of looking them up.
-const advisorGroupCount = (world) => Object.keys(normalizeGroups(world?.groups)).length;
+// Neither while groups are switched off for the game (server/gameFeatures.js).
+const advisorGroupCount = (world) => (isActiveFeatureEnabled("groups") ? Object.keys(normalizeGroups(world?.groups)).length : 0);
 const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 // The map indexed for the lookups, the player's government asking, not the
 // narrator (audience.js).
@@ -3390,10 +3474,11 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
     // When the player leads a group rather than a country (runtime/groups.js), the
-    // leader answering it knows what it is dealing with.
+    // leader answering it knows what it is dealing with. Not while groups are
+    // switched off for the game (server/gameFeatures.js), as for the time skip.
     const playerGroupText = await (async () => {
         const playerName = playerCountry || gameData?.country || "";
-        if (!worldData?.groups || !playerName) return "";
+        if (!worldData?.groups || !playerName || !isActiveFeatureEnabled("groups")) return "";
         const catalog = await loadRegionCatalog().catch(() => []);
         const names = new Map(catalog.map((region) => [region.id, region.name]));
         return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });

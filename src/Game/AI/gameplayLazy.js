@@ -34,11 +34,12 @@ export const simulateAutoJump = async (...args) => (await gameplay()).simulateAu
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
 export const applyParkedTurn = async (...args) => (await gameplay()).applyParkedTurn(...args);
+export const loadParkedTurn = async (...args) => (await gameplay()).loadParkedTurn(...args);
+export const discardKeptTurn = async (...args) => (await gameplay()).discardKeptTurn(...args);
 export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
-export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
 export const rollBackToSnapshot = async (...args) => (await gameplay()).rollBackToSnapshot(...args);
 // Intervene: stop the last turn after the events revealed so far (intervene.js).
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);
@@ -79,3 +80,5 @@ export const generateCountryStatSheet = async (...args) => (await gameplay()).ge
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
+// Listen in: one request for what people in a place are posting (runtime/listenIn.js).
+export const generateListenInFeed = async (...args) => (await gameplay()).generateListenInFeed(...args);

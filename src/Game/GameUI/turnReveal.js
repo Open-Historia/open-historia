@@ -122,6 +122,67 @@ export const revealNeedsStaging = (record, visibleCount) =>
     (record?.events?.length ?? 0) > 0 && visibleCount < record.events.length;
 
 // ---------------------------------------------------------------------------
+// Rereading the kept turns
+// ---------------------------------------------------------------------------
+
+// Which kept turn the panel shows, as an index into world.simulationHistory
+// (newest first). The choice is keyed on the newest turn's record id, so a new
+// turn landing puts the panel back on it; and it is clamped, since an undo or a
+// Game Master record can shorten the list under it.
+export const shownTurnIndex = (choice, latestRecordId, historyLength) => {
+  if (!choice || choice.latestId !== latestRecordId) return 0;
+  const index = Math.trunc(Number(choice.index) || 0);
+  return Math.max(0, Math.min(index, Math.max(0, (Number(historyLength) || 0) - 1)));
+};
+
+// Which kept turn holds an event; -1 when none does (its turn has aged out of
+// the kept twelve, or the event was never on the timeline).
+export const findTurnIndexOfEvent = (history, eventId) => {
+  const id = String(eventId ?? "").trim();
+  if (!id) return -1;
+  return (Array.isArray(history) ? history : []).findIndex(
+    (entry) => Array.isArray(entry?.eventIds) && entry.eventIds.includes(id),
+  );
+};
+
+// The event a war links to on the timeline: its first event the Events panel
+// can still show. A long war's opening turn ages out of the kept turns, and
+// then its earliest event still kept is where its story can be picked up.
+// "" when none is left.
+export const warTimelineEventId = (war, history) => {
+  for (const raw of Array.isArray(war?.sourceEventIds) ? war.sourceEventIds : []) {
+    const id = String(raw ?? "").trim();
+    if (findTurnIndexOfEvent(history, id) >= 0) return id;
+  }
+  return "";
+};
+
+// Whether that event is where the war began. The ledger keeps only a war's
+// newest 24 event ids (nativeWarLedger.js), so on a long war the first id kept
+// is a later event: it is the opening only on the turn the war was started in
+// (the turn's round is the war's createdRound). Old records without either
+// round are taken at their word.
+export const warTimelineEventOpensWar = (war, history, eventId) => {
+  const id = String(eventId ?? "").trim();
+  const first = Array.isArray(war?.sourceEventIds) ? String(war.sourceEventIds[0] ?? "").trim() : "";
+  if (!id || id !== first) return false;
+  const index = findTurnIndexOfEvent(history, id);
+  if (index < 0) return false;
+  const createdRound = Math.trunc(Number(war?.createdRound) || 0);
+  const turnRound = Math.trunc(Number(history[index]?.round) || 0);
+  return createdRound <= 0 || turnRound <= 0 || createdRound === turnRound;
+};
+
+// Another panel asking the Events panel to open on one event: the turn that
+// holds it, revealed through it, scrolled to and marked (time.jsx).
+export const SHOW_EVENT_ON_TIMELINE = "oh:show-event-on-timeline";
+
+export const showEventOnTimeline = (eventId) => {
+  if (typeof window === "undefined" || !eventId) return;
+  window.dispatchEvent(new CustomEvent(SHOW_EVENT_ON_TIMELINE, { detail: { eventId } }));
+};
+
+// ---------------------------------------------------------------------------
 // Carrying the reveal from the streamed cards to the written turn
 // ---------------------------------------------------------------------------
 

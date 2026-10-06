@@ -192,7 +192,7 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 | `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
 | `custom-regions-local-outline` | `buildProvinceOutlinePaint` | Scenario province grid (`customActive && worldKnown`): hidden through z6.5; opacity `6.5→0, 7.5→0.25, 10→0.38, 12→0.45`; width `6.5→0.25, 8→0.4, 12→0.5` CSS px, capped above z12. Country/frontier strokes stay visible, and fill-based province selection is unchanged. |
 
-No dissolved polity surface owns the political fill: live ownership colours the canonical regions through feature state, and `_fillColor` is carried only by the disputed-region features (with their `_stripes`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
+No dissolved polity surface owns the political fill: live ownership colours the canonical regions through feature state, and `_fillColor` is carried only by the disputed-region features (with their `_stripes`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement. A scenario region type adds its own state beside it (§6a).
 
 ### 4.4 Ownership hand-over
 
@@ -241,6 +241,10 @@ Claimants come from `world.regionClaimants[id]` first (how the modern-world scen
 
 - `custom-regions-disputed-vnext` — the worker's `disputedData` (every claimant-carrying region with its live owner and claimants), striped at `0.90` whenever `customActive && worldKnown`.
 - `regions-disputed` — the tile twin for GADM disputed regions (uses `disputedTileStops`, opacity `TILE_FILL_FADE`), excluding `editedStockIds`.
+
+### 6a. Region types
+
+A scenario's region types (`world.regionTypes`, `src/runtime/regionTypes.js`; map-editor.md §8) can give a kind of region its own look. For every region whose type draws differently from the default Land, `Nations.jsx` writes feature-state beside the owner's `fillColor` on each source that draws it (the scenario source, the repair source for a repaired region, the stock tiles): `typeFill` (the override colour, first in `CUSTOM_FILL_COLOR` and `DETAIL_FILL_COLOR`), `typeOpacity` (a factor inside each stop of `buildPoliticalFillOpacity`, capped at 1), `typeStroke` and `typeStrokeScale` (the province hairline's colour and a factor on its width, `provinceOutlineStyle.js`). The expressions are in `regionTypePaint.js`; each falls back to the game's own value, so a region with no such state paints as before. A zoom band hides the fill and border outside it (factor 0), counted in Workshop zoom (MapLibre zoom + 1); the state is rewritten only when the zoom crosses a band (`regionTypeZoomKey`), when a region changes hands, or when a source is rebuilt. The worker's region records carry `typeId` for this.
 
 ### 6b. Group areas
 
@@ -414,6 +418,8 @@ A click on the place whose card is open closes it; a click anywhere else shows t
 The region card's control block (`regionControlStatus`) shows for a region that is occupied or claimed: Sovereign, Controlled by, Status and Claimants, with the claims the map file draws merged in (`withMapClaims`). Unowned land that someone claims shows Status and Claimants only, the status reading "Unclaimed, claimed by …" for one claimant and "Unclaimed, contested" for more.
 
 The ⓘ beside the region's name (**Region info**) opens a section with the region's cities (with populations, capital and biggest first) and its neighbouring regions grouped by who holds them now. `Selection/regionInfo.js` answers the questions the AI's `region_info` lookup answers, from what the map already holds: the compact catalog the map primes (`getPrimedScenarioRegionCatalog`: declared adjacencies, else touching boxes; centroids) and the city rows it publishes for search (`getWorldPlaceIndex().cities`, with `world.cityRenames` applied). A city belongs to the region whose centre is nearest among those whose box holds it. No read and no request. A world whose map primes no catalog (stock tiles only) says it knows nothing more.
+
+Under everything else on the card is a **Listen in** button, shown while the game's Listen in feature is on. It opens the phone on this region, with the country that holds it now as a second tab, and leaves the card where it is; the country panel's footer has the same button for the country as a whole ([game-ui.md §10-ter](game-ui.md)).
 
 The feature card (a city or a structure) names the **Region** it stands in. `featureAt` in `Nations.jsx` resolves the region under the glyph and hands it over as `hostRegionName` and `hostRegion` (the same selection a click on that region gives `onRegionSelected`); the row is a link that closes the feature card and opens the region's, which a tap beside a small dot on a phone rarely managed. Coordinates show only where there is no region (a structure at sea, or a place opened from search).
 

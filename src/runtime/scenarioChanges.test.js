@@ -147,6 +147,11 @@ test("what a save's own border cleanup does to a region is no change", () => {
   // A crack filled along the whole south border.
   const filled = { type: "Polygon", coordinates: [[[0, -0.001], [1, -0.001], [1, 1], [0, 1], [0, -0.001]]] };
   assert.equal(sameShape(shape(base), shape(filled)), true);
+  // And one 1.3 km wide: the cleanup reaches 1.5 km (0.0135°), where it used
+  // to stop at 500 m. On the built-in map it fills a triangle that moves
+  // Freiburg's outline 0.0099° and a crack that adds 0.28% to Gillette.
+  const filledWide = { type: "Polygon", coordinates: [[[0, -0.012], [1, -0.012], [1, 1], [0, 1], [0, -0.012]]] };
+  assert.equal(sameShape(shape(base), shape(filledWide)), true);
 });
 
 test("a border the player redrew is a change, even a thin corridor out of a large region", () => {
@@ -156,6 +161,9 @@ test("a border the player redrew is a change, even a thin corridor out of a larg
   const corridor = { type: "Polygon", coordinates: [[[0, 0], [3, 0], [3, 1.5], [3.5, 1.5], [3.5, 1.51], [3, 1.51], [3, 3], [0, 3], [0, 0]]] };
   assert.equal(sameShape(measureGeometry(base), measureGeometry(corridor)), false);
   assert.equal(sameShape(measureGeometry(base), measureGeometry(square(0, 0, 3.1))), false);
+  // A whole border moved two kilometres: further than a cleanup reaches.
+  const pushed = { type: "Polygon", coordinates: [[[0, -0.02], [1, -0.02], [1, 1], [0, 1], [0, -0.02]]] };
+  assert.equal(sameShape(measureGeometry(square(0, 0)), measureGeometry(pushed)), false);
 });
 
 test("regions drawn and removed travel whole, with their owner, claims and group", () => {

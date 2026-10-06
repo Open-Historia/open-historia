@@ -19,7 +19,7 @@ import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../r
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
-import { livePuppetsFor, puppetStatesEnabled } from "../../runtime/puppets.js";
+import { livePuppetsFor } from "../../runtime/puppets.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
@@ -304,6 +304,28 @@ export const GROUP_LOOKUP_TOOLS = Object.freeze([
 ]);
 export const GROUP_LOOKUP_TOOL_NAMES = Object.freeze(GROUP_LOOKUP_TOOLS.map((tool) => tool.name));
 
+// Groups switched off for a game (server/gameFeatures.js): the same functions,
+// told nothing about groups, and list_regions without its group parameter. The
+// context is built without them too (buildLookupContext `groups`), so no answer
+// names one.
+const WITHOUT_GROUP_MENTIONS = [
+  [" (a government in exile, the polity of a group of the same name)", " (a government in exile)"],
+  [" Or pass group instead of owner for every region a group controls, with each region's owner: the ids a groupOps entry names.", ""],
+  ["Which power, or which group.", "Which power."],
+  [", the group controlling it if any,", ","],
+  [" and the group controlling it if any,", ","],
+];
+const withoutGroupMentions = (value) => WITHOUT_GROUP_MENTIONS.reduce((out, [from, to]) => out.split(from).join(to), value);
+export const LOOKUP_TOOLS_WITHOUT_GROUPS = Object.freeze(LOOKUP_TOOLS.map((tool) => {
+  const { group: _group, ...properties } = tool.schema.properties ?? {};
+  return {
+    ...tool,
+    description: withoutGroupMentions(tool.description),
+    schema: { ...tool.schema, description: withoutGroupMentions(tool.schema.description), properties },
+  };
+}));
+export const lookupToolsFor = ({ groups = true } = {}) => (groups ? LOOKUP_TOOLS : LOOKUP_TOOLS_WITHOUT_GROUPS);
+
 // The instruction that goes with the tools.
 export const LOOKUP_DIRECTIVE = [
   "[Lookup tools]",
@@ -398,8 +420,12 @@ const distanceSquared = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
  *             narrator; a surface that speaks AS a polity (a leader, an envoy,
  *             the advisor) MUST pass a viewer, or it can read the player's
  *             letters to everyone else through a function call.
+ *   groups    false when groups are switched off for the game
+ *             (server/gameFeatures.js): the world is read without its groups
+ *             and their areas, so no answer names one.
  */
-export const buildLookupContext = ({ regions = [], world = {}, cities = [], events = [], chats = [], units = [], player = "", audience = SIMULATION_AUDIENCE } = {}) => {
+export const buildLookupContext = ({ regions = [], world = {}, cities = [], events = [], chats = [], units = [], player = "", audience = SIMULATION_AUDIENCE, groups = true } = {}) => {
+  if (!groups) world = { ...world, groups: {}, groupAreas: {} };
   const overrides = world?.regionOwnershipOverrides ?? {};
   const sovereignty = world?.regionSovereigntyOverrides ?? {};
   const claimants = world?.regionClaimants ?? {};
@@ -525,6 +551,7 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     rows, byId, ownerRows, landless, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
+    ...(groups ? {} : { groupsOff: true }),
   };
 };
 
@@ -848,9 +875,7 @@ const chatThreadBrief = (chat) => {
 // standing truth, loyalty and who has found out included; a viewer what its
 // governments believe still stands (runtime/puppets.js), a loyalty band only as
 // the overlord and never another's covert arrangement it has not uncovered.
-// Nothing at all while the game has puppet states switched off.
 const subordinationsFor = (context, involves) => {
-  if (!puppetStatesEnabled()) return [];
   const world = context.world ?? {};
   if (isSimulationAudience(context.audience)) {
     return array(world.puppets)
@@ -1012,6 +1037,8 @@ export const executeLookup = (context, name, args = {}) => {
       };
       // A group's area, which crosses countries: each region with its owner, the
       // ids a groupOps release names.
+      // Groups switched off: list_regions takes no group, and says nothing of one.
+      if (!clean(a.owner) && context.groupsOff) return { error: "owner (a power's exact name) is required." };
       if (clean(a.group) && !clean(a.owner)) {
         const { groups, rowsOf } = groupsOnMap(context);
         const group = findGroupKey(groups, a.group);
@@ -1124,9 +1151,7 @@ export const executeLookup = (context, name, args = {}) => {
         claimsAgainstIt: claimsAgainst.slice(0, 20),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
-        ...(puppetStatesEnabled()
-          ? { subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)) }
-          : {}),
+        subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)),
       };
     }
     case "recent_events": {
@@ -1251,10 +1276,8 @@ export const executeLookup = (context, name, args = {}) => {
         agreements: agreements.slice(0, 12).map(agreementBrief),
         wars: wars.map(warBrief),
         atWar: wars.some((war) => clean(war?.status).toLowerCase() !== "ended"),
-        ...(puppetStatesEnabled()
-          ? { subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
-            || (sameName(row?.overlord, second) && sameName(row?.puppet, first))) }
-          : {}),
+        subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
+          || (sameName(row?.overlord, second) && sameName(row?.puppet, first))),
       };
     }
     case "storylines": {

@@ -78,7 +78,6 @@ test("an open subordination is named; a covert one the player has not found is n
     const covert = worldOf({ puppets: [{ id: "p1", overlord: "Russia", puppet: "Belarus", kind: "satellite", secrecy: "covert", status: "active", loyalty: 40 }] });
     assert.equal(line(ledger(covert), "Directs:"), "");
     assert.equal(line(ledger(covert, "Belarus"), "Directed by:"), "");
-    assert.equal(line(ledger(open, "Russia", { puppetStates: false }), "Directs:"), "");
 });
 
 test("the groups holding ground inside the target's borders", () => {

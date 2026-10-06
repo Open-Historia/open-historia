@@ -115,7 +115,6 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, signed `content-manifest.json` / `node-directory.json`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, `map-assets.android.json`); no server of its own — see [mobile.md](mobile.md) |
-| `node-content/` + `server/node.js` | A minimal **development stub** of a content node (hash-addressed, read-only content only). The node hosts run is the separate [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) repository; the stub lacks the `/oh/v1/status`, `/ping`, `/leave` and `/hub` endpoints the web client uses, so `selectBestNode` never picks it — see [Content nodes](assets-and-data.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
 | `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
@@ -161,7 +160,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `mobile/scripts/stage-map-assets.mjs` | Fetch + sha256-verify the six map files the APK ships (`mobile/map-assets.android.json`) |
 | `extract-regions.mjs` / `extract-cities.mjs` / `build-default-map.mjs` | Build the PMTiles/geojson map data |
 | `build-content-manifest.mjs` / `sign-release.mjs` / `gen-signing-key.mjs` | Content-node manifest signing (Ed25519) |
-| `generate-country-*.mjs`, `generate-lang-packs.mjs`, `fetch-fmg.mjs`, `populate-node.mjs`, `node-updater.mjs` | Data/tooling generation |
+| `generate-country-*.mjs`, `generate-lang-packs.mjs`, `fetch-fmg.mjs` | Data/tooling generation |
 
 | `server/*.js` | Purpose |
 |---|---|
@@ -171,7 +170,6 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `dataDir.js` | Resolves the single writable `DATA_DIR` (`OH_DATA_DIR` or `server/data`) |
 | `security.js` | Cross-origin write policy, hub URL allowlist, byte-range parsing |
 | `ownerMigration.js`, `trust.js`, `country-names.json` | Owner code→name migration, trust helpers, data |
-| `node.js` | Standalone content-node server (separate process) |
 
 ---
 
@@ -233,7 +231,7 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest. `server/node.js` here is only a development stub that serves content by hash | [Content nodes](assets-and-data.md) |
+| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest. The node software lives only in that repository; this one holds just the client side (`src/runtime/web/nodeConnect.js`, `contentTrust.js`) | [Content nodes](assets-and-data.md) |
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 

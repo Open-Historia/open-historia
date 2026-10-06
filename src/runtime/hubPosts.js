@@ -22,6 +22,7 @@ import {
   normalizeHubKey,
   normalizeHubPublished,
   normalizeHubSuggestionRef,
+  normalizeHubUnlinked,
 } from "../../server/hubProvenance.js";
 import { fetchHubFile, fetchHubIndex, importCountOf } from "./hubFiles.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
@@ -31,16 +32,6 @@ export const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const hubPostUrl = (postId) => `${HUB_URL}/issues/${Number(postId)}`;
-
-// The post a player means by what they pasted into Link my post: its address
-// (a comment's #anchor, a trailing slash or a ?query after the number are
-// fine) or its bare number. null for anything else.
-export const postIdFromInput = (value) => {
-  const text = String(value ?? "").trim();
-  const match = /\/issues\/(\d+)(?=[/?#]|$)/.exec(text) || /^#?(\d+)$/.exec(text);
-  const postId = match ? Number(match[1]) : 0;
-  return Number.isSafeInteger(postId) && postId > 0 ? postId : null;
-};
 
 // First GitHub-hosted .json (release asset, attachment or raw) link in an issue
 // body = the bundle. Release links come first in official posts so imports go
@@ -158,14 +149,15 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
 // Whether a copy downloaded from a post can take the post's newer file: it came
 // from that post, the player has not edited it (an edited copy is never
 // overwritten — its player suggests their changes instead), and the post's
-// file is not the one it was imported from. The Scenarios tab's Update button
-// and the Community tab's "Update available" both ask this.
+// file is not the one it was imported from, or its community basemap could not
+// be downloaded (missingBasemap), which Update tries again. The Scenarios tab's
+// Update button and the Community tab's "Update available" both ask this.
 export const hubUpdateAvailable = (scenario, post) => Boolean(
   scenario?.hubOrigin &&
   !scenario.hubOrigin.editedAt &&
   post?.bundleUrl &&
   Number(post.id) === Number(scenario.hubOrigin.postId) &&
-  post.bundleUrl !== scenario.hubOrigin.bundleUrl,
+  (post.bundleUrl !== scenario.hubOrigin.bundleUrl || scenario.missingBasemap),
 );
 
 // The library's scenarios that came from each hub post, by post id.
@@ -331,12 +323,21 @@ export const trimSuggestions = (list, reviews = {}) => {
 // suggestions on those posts. Comments are read only for a post whose comment
 // count moved since the last look, so an unchanged post costs nothing but its
 // share of the one post list. Returns { published, changed }.
-export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments, reviews = {} } = {}) => {
+//
+// This is the only thing that attaches a post to a scenario by itself, so it
+// is where an unlinked post must not come back: `unlinked` is the scenario's
+// hubUnlinked, and a post in it is never found again, whatever key it carries
+// now (the stores refuse it as well, server/hubProvenance.js). The record is
+// never emptied here either: only the player's Unlink does that.
+export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments, reviews = {}, unlinked = null } = {}) => {
   const current = normalizeHubPublished(published);
   if (!current) return { published: null, changed: false };
   const list = Array.isArray(posts) ? posts : [];
   const byId = new Map(list.map((post) => [Number(post.id), post]));
-  const matched = current.key ? list.filter((post) => post.scenarioKey === current.key).map((post) => Number(post.id)) : [];
+  const gone = new Set(normalizeHubUnlinked(unlinked)?.postIds ?? []);
+  const matched = current.key
+    ? list.filter((post) => post.scenarioKey === current.key).map((post) => Number(post.id)).filter((postId) => !gone.has(postId))
+    : [];
   const postIds = [...new Set([...matched.sort((a, b) => b - a), ...current.postIds])].slice(0, 10);
   const newest = byId.get(postIds.find((id) => byId.has(id)));
   const commentCounts = { ...(current.commentCounts ?? {}) };
@@ -362,6 +363,8 @@ export const refreshPublishedRecord = async (published, posts, { fetchComments =
     commentCounts,
     ...(fetchedAny || matched.length ? { checkedAt: new Date().toISOString() } : {}),
   });
+  // A write of null is an Unlink, and that is for good: no check may ask for one.
+  if (!next) return { published: current, changed: false };
   const strip = (record) => JSON.stringify({ ...record, checkedAt: undefined });
   return { published: next, changed: strip(next) !== strip(current) };
 };

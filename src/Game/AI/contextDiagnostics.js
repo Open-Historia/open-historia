@@ -146,6 +146,7 @@ const TASK_PROFILE_MAP = Object.freeze({
   demandCheck: CONTEXT_PROFILE_KEYS.DIPLOMACY,
   spyIntercept: CONTEXT_PROFILE_KEYS.DIPLOMACY,
   intelligenceAssessment: CONTEXT_PROFILE_KEYS.ADVISOR,
+  listenIn: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   projects: CONTEXT_PROFILE_KEYS.MECHANICAL,
   worldMotionRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   worldBreadthRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
@@ -364,12 +365,14 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "structureDirectorProjects",
     "structureDirectorGameDate",
     "structureDirectorBudget",
+    "regionTypeRules",
   ]),
   unitDirector: Object.freeze([
     "unitDirectorUnits",
     "unitDirectorCandidates",
     "unitDirectorGameDate",
     "unitDirectorRound",
+    "regionTypeRules",
   ]),
 });
 

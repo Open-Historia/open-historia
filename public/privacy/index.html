@@ -68,9 +68,11 @@
     <ul>
       <li>your games, scenarios, maps, flags, basemaps and settings, and any language packs the game builds for you;</li>
       <li><strong>your AI keys and endpoints.</strong> They are stored as they are, without encryption, so anyone who can use your device or browser profile could read them. On Android, if device backup is turned on, Android may include the app's data in your backup;</li>
-      <li>a record of the last 200 AI calls (the prompts and the answers), which the AI debug console shows;</li>
+      <li>a record of the last 200 AI calls (the prompts and the answers), which the AI debug console shows. In the Android app it is kept only if you turn on Record AI telemetry in Settings;</li>
+      <li>the feeds Listen in has shown you (the posts your AI model wrote about a place), kept so that opening one again costs no AI request;</li>
       <li>the diagnostics log: warnings, errors and milestones, and the text of advisor and diplomacy conversations only if you turn on detailed logging. It is <strong>never sent automatically</strong>. It leaves your device only when you copy or save it yourself, for example to attach to a bug report, and keys and tokens are removed from it first. Bug reports are GitHub issues, so anything you attach to one is public;</li>
-      <li>on the desktop, deleted games and scenarios (in a trash folder, until you empty it) and downloaded community scenarios (a cache of up to 1 GB that you can clear in Settings).</li>
+      <li>games and scenarios you deleted, which the library keeps under Recently deleted so you can restore them: for 30 days in the desktop app, and for 7 days on the website and Android, where only the last five things you deleted are kept. Emptying Recently deleted removes them at once;</li>
+      <li>on the desktop, downloaded community scenarios (a cache of up to 1 GB that you can clear in Settings).</li>
     </ul>
     <p>You can delete any of it in the game, by clearing the site's data in your browser, or by uninstalling the app (on the desktop, also delete the app's data folder). If you turn on network play in the desktop app, other devices on your network can open your saves; it is off unless you turn it on. If you run the game's server yourself, you are the one holding everything it stores.</p>
 
@@ -151,7 +153,7 @@
           <tr><th>What</th><th>Where</th><th>How long</th></tr>
         </thead>
         <tbody>
-          <tr><td>Your games, saves, keys and settings</td><td>Only on your device</td><td>Until you delete them</td></tr>
+          <tr><td>Your games, saves, keys and settings</td><td>Only on your device</td><td>Until you delete them; a deleted game or scenario can be restored for up to 30 days</td></tr>
           <tr><td>Analytics</td><td>Google Analytics</td><td>At most 14 months for the detailed data</td></tr>
           <tr><td>How many times each hub file was downloaded</td><td>GitHub (public)</td><td>While the hub shows them</td></tr>
           <tr><td>Hashed IP addresses from the old import counter</td><td>Our import counter on Cloudflare</td><td>Up to 365 days from when each was written; no new ones are written</td></tr>

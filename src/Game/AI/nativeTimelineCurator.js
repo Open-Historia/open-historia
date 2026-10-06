@@ -227,7 +227,7 @@ const recurrenceCueIsNegated = (text, cueIndex) => {
   );
 };
 
-const hasMaterialRecurrenceCue = (event) => {
+export const hasMaterialRecurrenceCue = (event) => {
   const text = normalizeText(eventText(event));
   if (!text) return false;
 
@@ -1652,58 +1652,11 @@ droppedCount:
   return { events: keptEvents, hidden, dropped };
 };
 
-const runNativeCuratorSelfTests = () => {
-  const make = (description) => ({
-    title: "Test",
-    description,
-    impacts: {
-      createdChats: [],
-      polityChanges: [],
-      politicalActorOps: [],
-      regionTransfers: [],
-      regionClaims: [],
-      unitOps: [],
-      markerOps: [],
-    },
-  });
-
-  const cases = [
-    {
-      name: "real disruption counts as material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Repeated shortages and transport disruption spread across the district."),
-      ) === true,
-    },
-    {
-      name: "without disruption is not material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Spring sowing concludes without major domestic disruption."),
-      ) === false,
-    },
-    {
-      name: "no shortages is not material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Officials report no shortages or unrest during the distribution period."),
-      ) === false,
-    },
-  ];
-
-  const passed = cases.every((entry) => entry.pass);
-  console.table(cases);
-  console.info(
-    `[OH Native Timeline Curator self-test] ${passed ? "PASS" : "FAIL"} — ` +
-    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
-  );
-
-  return { passed, cases };
-};
-
 if (typeof window !== "undefined") {
   window.__OH_NATIVE_TIMELINE_CURATOR__ = {
     version: VERSION,
     mode: "live",
     config: CONFIG,
     last: () => lastAudit,
-    selfTest: () => runNativeCuratorSelfTests(),
   };
 }

@@ -262,6 +262,40 @@ test("ceasefire, resume and end move the status; a second start on a live war is
   assert.match(buildCanonicalWarContext(ended.world), /No active or ceasefire canonical wars/);
 });
 
+// An ended war dropped out of the context the moment it ended, so the next
+// skip's model had no word that the fighting had stopped.
+test("wars ended in the last two rounds are listed as ENDED, at most five", () => {
+  const war = (id, updatedRound, extra = {}) => ({
+    id, status: "ended", sideA: [`${id}-a`], sideB: [`${id}-b`],
+    startedDate: "1900-01-01", endedDate: "1901-06-01", updatedRound, ...extra,
+  });
+  const recent = { wars: [
+    { id: "live", status: "active", sideA: ["A"], sideB: ["B"], startedDate: "1900-01-01" },
+    war("just-now", 7, { endedDate: "1901-07-01" }),
+    war("last-round", 6),
+    war("long-ago", 5),
+  ] };
+
+  const text = buildCanonicalWarContext(recent, { round: 7 });
+  assert.match(text, /- live \| ACTIVE/);
+  assert.match(text, /- just-now \| ENDED 1901-07-01 \| SIDE A: just-now-a \| SIDE B: just-now-b/);
+  assert.match(text, /- last-round \| ENDED 1901-06-01/);
+  assert.doesNotMatch(text, /long-ago/, "three rounds back is no longer recent");
+  assert.ok(text.indexOf("just-now") < text.indexOf("last-round"), "newest first");
+  assert.match(text, /This ledger is authoritative belligerency/);
+
+  // Without the round nothing ended is listed.
+  assert.doesNotMatch(buildCanonicalWarContext(recent), /ENDED/);
+
+  // With no war running, the ended ones still follow the "no war" lines.
+  const quiet = buildCanonicalWarContext({ wars: recent.wars.slice(1) }, { round: 7 });
+  assert.match(quiet, /^No active or ceasefire canonical wars are recorded\./);
+  assert.match(quiet, /- just-now \| ENDED/);
+
+  const many = { wars: Array.from({ length: 8 }, (_, index) => war(`w${index}`, 7)) };
+  assert.equal(buildCanonicalWarContext(many, { round: 7 }).match(/\| ENDED /g).length, 5);
+});
+
 // A live run (2026-09-17) lost two real events to this: "Tragic Clashes and Fire
 // in Odessa" and "Explosion Rocks Regional Administration Building in Luhansk"
 // read as hard combat to the detector, named no two belligerents, and were

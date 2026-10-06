@@ -5,6 +5,7 @@
 // author as a comment on the post with a small .zip attached. What has to hold:
 //   - the author's game recognises its own posts by the key Publish wrote, and
 //     a suggestion by its file or its marker line, never any other comment;
+//   - a post the player unlinked the scenario from is never found again;
 //   - comments are read only for a post whose comment count moved;
 //   - the .zip carries only the changes, and reads back exactly (a cover image
 //     and a basemap travel as files of their own);
@@ -14,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parsePost, parseSuggestionComment, postIdFromInput, refreshPublishedRecord } from "./hubPosts.js";
+import { parsePost, parseSuggestionComment, refreshPublishedRecord } from "./hubPosts.js";
 import {
   KNOWN_KINDS,
   SUGGESTION_SCHEMA,
@@ -95,6 +96,36 @@ test("the author's own posts are found by key, and comments read only when the c
   const blocked = { ...first.published, blocked: ["spam-bot"], commentCounts: {} };
   const guarded = await refreshPublishedRecord(blocked, [{ ...posts[0], comments: 32 }], { fetchComments: async () => [...flood, { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` }] });
   assert.deepEqual(guarded.published.suggestions.map((ref) => ref.author), ["bob"]);
+});
+
+test("a post the scenario was unlinked from is never found again, whatever key it carries now", async () => {
+  // The player unlinked post 12 and published the scenario again: post 40,
+  // with a new key. Post 12 was then edited on the hub to carry that key too.
+  const key = newPublishKey();
+  const posts = [
+    { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 3 },
+    { id: 40, title: "Old World, again", author: "ann", scenarioKey: key, comments: 0 },
+  ];
+  const calls = [];
+  const fetchComments = async (postId) => {
+    calls.push(postId);
+    return [];
+  };
+  const record = { key, publishedAt: "2026-10-01T00:00:00Z" };
+  const unlinked = { postIds: [12], keys: ["oh-0123456789abcdef"] };
+
+  const found = await refreshPublishedRecord(record, posts, { fetchComments, unlinked });
+  assert.deepEqual(found.published.postIds, [40], "only the new post is the scenario's");
+  assert.equal(found.published.title, "Old World, again");
+  assert.deepEqual(calls, [], "and the old one's comments are not read");
+  const again = await refreshPublishedRecord(found.published, posts, { fetchComments, unlinked });
+  assert.equal(again.changed, false, "a later check has nothing to add, so nothing to write");
+
+  // Without what the scenario remembers, the same search would take both.
+  assert.deepEqual((await refreshPublishedRecord(record, posts, { fetchComments })).published.postIds, [40, 12]);
+  // A post the record already holds is not the search's to take away: only the player's Unlink removes one.
+  const held = await refreshPublishedRecord({ ...record, postIds: [12] }, posts, { fetchComments: async () => [], unlinked });
+  assert.deepEqual(held.published.postIds, [40, 12]);
 });
 
 test("a post with more than fifty suggestions keeps the new ones, leaving out reviewed ones first", async () => {
@@ -215,19 +246,4 @@ test("every kind of change has a line in the comment", () => {
   }
   const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
   assert.match(comment, /^- Institution logos changed$/m);
-});
-
-test("Link my post reads the post's number from its address, however it was copied", () => {
-  const post = "https://github.com/Open-Historia/Open-historia-scenarios/issues/412";
-  assert.equal(postIdFromInput(post), 412);
-  assert.equal(postIdFromInput(`${post}#issuecomment-2345678901`), 412, "a comment's anchor is not the post's number");
-  assert.equal(postIdFromInput(`${post}/`), 412);
-  assert.equal(postIdFromInput(`${post}?utm_source=x`), 412);
-  assert.equal(postIdFromInput(`  ${post}  `), 412);
-  assert.equal(postIdFromInput("412"), 412);
-  assert.equal(postIdFromInput("#412"), 412);
-  assert.equal(postIdFromInput(""), null);
-  assert.equal(postIdFromInput("my post"), null);
-  assert.equal(postIdFromInput("0"), null);
-  assert.equal(postIdFromInput(`${post}abc`), null);
 });

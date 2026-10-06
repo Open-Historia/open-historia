@@ -45,6 +45,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `unitDirector` | `UNIT_DIRECTOR_SCHEMA` | `submit_unit_director` | unit operations for the turn's military events (sanitized by `nativeUnitDirector.js`) |
 | `idleDiplomacy` | `IDLE_DIPLOMACY_SCHEMA` | `submit_idle_diplomacy` | idle inbox drip |
 | `pregameHistory` | `PREGAME_HISTORY_SCHEMA` | `submit_pregame_history` | pre-game backstory |
+| `listenIn` | `LISTEN_IN_SCHEMA` | `submit_listen_in_feed` | `generateListenInFeed`: the Listen in phone's feed |
 
 `getGameplayTool` returns `null` for an unknown key; `validateGameplayPayload` returns `{ valid: false, error: "Unknown gameplay task key: …" }`.
 
@@ -182,7 +183,9 @@ Required: `op` and `name`. `eventIndex` says which of the events this op follows
 
 ### 4.5-ter `PROJECTS_SCHEMA` — the board's own task
 
-`projectOps` no longer appears on a jump at all. `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
+While requests are being saved the skip keeps the board itself: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `priority`, `startedAt`, the links, `focus`, the nested `project` and `onComplete`), and `agentReports` at the top level when an agent's report is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts both contracts. See [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences).
+
+With saving off, and for a skip a provider refused in its folded form, `projectOps` does not appear on the jump the model is sent: `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
 
 ```
 { "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
@@ -283,6 +286,7 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 | `GAME_MASTER_SCHEMA` | `summary`*, `impacts`* | GM intervention + world effects |
 | `IDLE_DIPLOMACY_SCHEMA` | `chat`* (`null \| createdChatSchema`) | At most one idle note, or `null` for silence |
 | `PREGAME_HISTORY_SCHEMA` | `events`* (array `minItems:1`,`maxItems:12` of `pregameEventSchema`), `summary`* | Pre-game backstory |
+| `LISTEN_IN_SCHEMA` | `posts`* (array of `{ author*, text*, handle, about, filler, minutesAgo, likes, reposts, replies }`; deliberately no `minItems`, since one usable post is still a feed), `trends` (≤ 5 strings) | What ordinary people in a place are posting (the Listen in phone) |
 
 `actionSchema`: `id`, `title`*, `text`*, `kind`, `invitees`, `chatStarter`. `pregameEventSchema`: `date`*, `title`*, `description`*, `importance`, `kind` — **deliberately no `impacts`** (a backstory event is a record, not a change to apply).
 

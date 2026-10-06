@@ -18,7 +18,6 @@ import TypeManager from "./TypeManager.jsx";
 import RegionsPanel from "./RegionsPanel.jsx";
 import PolitiesPanel from "./PolitiesPanel.jsx";
 import GroupsPanel from "./GroupsPanel.jsx";
-import TopologyPanel from "./TopologyPanel.jsx";
 import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
 import { BORDER_CLEANUP, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
@@ -57,6 +56,7 @@ import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
@@ -96,7 +96,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // loaded once it arrives, so never auto-seed the default world underneath it.
   const scenarioMode = Boolean(onApplyToScenario);
   const [api, setApi] = useState(null);
-  const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'polities' | 'topology' | 'province-import' | 'layers' | 'features' | 'reference' | null
+  const [openPanel, setOpenPanel] = useState(null); // 'types' | 'regions' | 'polities' | 'province-import' | 'layers' | 'features' | 'reference' | null
   const [paintOwner, setPaintOwner] = useState(""); // stable polity key assigned by the paint tool
   const [paintOnlyOwner, setPaintOnlyOwner] = useState("*"); // "*" | "__unowned__" | stable polity key
   const [docId, setDocId] = useState(null); // server document id (null until first save)
@@ -392,11 +392,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
     const action = play ? "play" : closeAfter ? "save-exit" : "save";
     setScenarioAction(action);
-    // Every save first runs the Topology panel's conservative repair over the
-    // WHOLE map at 500 m — enclosed cracks filled, thin overlaps trimmed, one
-    // undo step — behind the "Cleaning up the borders" screen, which is painted
-    // before the work starts and updated between its chunks. A failure there
-    // never blocks the save: the map is then written as it is.
+    // Every save first runs the border repair over the WHOLE map at
+    // BORDER_CLEANUP.maxWidth (1.5 km) — enclosed cracks filled, thin overlaps
+    // trimmed, one undo step — behind the "Cleaning up the borders" screen,
+    // which is painted before the work starts and updated between its chunks.
+    // Nothing else in the Workshop repairs borders, so this is also where a
+    // merge that fails sends the author (OlMap.jsx). A failure there never
+    // blocks the save: the map is then written as it is.
     let cleanup = null;
     let cleanupError = "";
     cleanupStopRef.current = false;
@@ -749,6 +751,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     base.groups = normalizeGroups(initialMap.groups);
     // The scenario's puppet states, as its world has them (scenarioPuppets.js).
     base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
+    // Its region types, so a round trip keeps them (the default Land and
+    // Coastal for a scenario saved before they were).
+    const regionTypes = normalizeRegionTypes(initialMap.regionTypes);
+    if (regionTypes.length) base.types = regionTypes;
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
@@ -1242,14 +1248,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           api={api}
           groups={d.groups}
           setGroups={d.setGroups}
-          selection={d.selection}
-          regionEpoch={regionEpoch}
-          onClose={() => setOpenPanel(null)}
-        />
-      )}
-      {openPanel === "topology" && (
-        <TopologyPanel
-          api={api}
           selection={d.selection}
           regionEpoch={regionEpoch}
           onClose={() => setOpenPanel(null)}

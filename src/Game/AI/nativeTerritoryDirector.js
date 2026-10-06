@@ -61,7 +61,7 @@ const opKey = (op) => {
   return `${kind}|${region}|${JSON.stringify(op)}`;
 };
 
-const hasTerritorialContent = (event) => {
+export const hasTerritorialContent = (event) => {
   const impacts = event?.impacts || {};
   return (
     normalizeArray(impacts.regionTransfers).length > 0 ||
@@ -142,7 +142,7 @@ const convertLegacyWartimeTransfers = (events) => {
   return { events: nextEvents, diagnostics };
 };
 
-const sanitizeDirectorOrders = ({ events, orders }) => {
+export const sanitizeDirectorOrders = ({ events, orders }) => {
   const diagnostics = [];
   const acceptedByEvent = new Map();
 
@@ -248,98 +248,10 @@ const sanitizeDirectorOrders = ({ events, orders }) => {
   return { acceptedByEvent, diagnostics };
 };
 
-const runNativeTerritoryDirectorSelfTests = () => {
-  const easterEvent = {
-    title: "The Easter Rising Erupts in Dublin",
-    description:
-      "Armed nationalist and republican volunteers stage a coordinated insurrection in Dublin, seizing the General Post Office and proclaiming the establishment of an independent Irish Republic. British garrison troops and artillery are swiftly deployed to seal off the city center and engage insurgent strongholds, triggering heavy urban skirmishing across the capital over the subsequent week.",
-    impacts: {
-      regionTransfers: [],
-      regionControlOps: [],
-      unitOps: [],
-    },
-  };
-
-  const easterOrders = [{
-    eventIndex: 0,
-    regionControlOps: [{
-      actorCode: "Ireland",
-      op: "contest",
-      regionName: "Dublin",
-      fromCode: "British Empire",
-      regionId: "Dublin",
-      note: "Easter Rising in Dublin",
-    }],
-  }];
-
-  const easterResult = sanitizeDirectorOrders({
-    events: [easterEvent],
-    orders: easterOrders,
-  });
-  const easterAccepted = easterResult.acceptedByEvent.get(0) || [];
-
-  const sameActorResult = sanitizeDirectorOrders({
-    events: [easterEvent],
-    orders: [{
-      eventIndex: 0,
-      regionControlOps: [{
-        actorCode: "British Empire",
-        op: "contest",
-        fromCode: "British Empire",
-        regionId: "Dublin",
-      }],
-    }],
-  });
-
-  const quietEvent = {
-    title: "Railway Officials Convene",
-    description: "Officials review freight timetables and administrative procedures.",
-    impacts: {
-      regionTransfers: [],
-      regionControlOps: [],
-      unitOps: [],
-    },
-  };
-
-  const cases = [
-    {
-      name: "Easter Rising language supports Dublin contest",
-      pass:
-        hasTerritorialContent(easterEvent) &&
-        easterAccepted.length === 1 &&
-        easterAccepted[0]?.op === "contest",
-      detail: easterResult.diagnostics.map((row) => `${row.action}:${row.reason}`).join(" | "),
-    },
-    {
-      name: "same actor cannot contest itself",
-      pass:
-        (sameActorResult.acceptedByEvent.get(0) || []).length === 0 &&
-        sameActorResult.diagnostics.some((row) =>
-          String(row.reason || "").includes("different nonblank")
-        ),
-      detail: sameActorResult.diagnostics.map((row) => `${row.action}:${row.reason}`).join(" | "),
-    },
-    {
-      name: "administrative meeting is not territorial",
-      pass: hasTerritorialContent(quietEvent) === false,
-      detail: "no territorial cue",
-    },
-  ];
-
-  const passed = cases.every((entry) => entry.pass);
-  console.table(cases);
-  console.info(
-    `[OH Native Territory Director self-test] ${passed ? "PASS" : "FAIL"} — ` +
-    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
-  );
-  return { passed, cases };
-};
-
 const publishDiagnostics = ({ candidates = [], analysis = null, eventOrders = [], diagnostics = [], skippedReason = "" } = {}) => {
   if (typeof window === "undefined") return;
   window.__OH_NATIVE_TERRITORY_DIRECTOR__ = {
     version: VERSION,
-    selfTest: () => runNativeTerritoryDirectorSelfTests(),
     last: () => ({
       candidateCount: candidates.length,
       candidateTitles: candidates.map(({ event, index }) => ({

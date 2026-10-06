@@ -30,6 +30,7 @@ import {
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { zipBundle } from "../../runtime/bundleZip.js";
 import { sha256Hex } from "../../runtime/basemapLibrary.js";
+import { noteMissingBasemapTried } from "../../runtime/missingBasemap.js";
 import { listFlags } from "../../runtime/flagLibrary.js";
 import {
   HUB_NEW_POST_URL,
@@ -177,7 +178,7 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
 // What the library already holds of a post (hubCopyStatus), as a small pill.
 const LIBRARY_BADGES = {
   current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
-  update: { label: "Update available", title: "Your copy is older than this post. Update it from the Scenarios tab." },
+  update: { label: "Update available", title: "Your copy is older than this post, or its basemap could not be downloaded. Update it from the Scenarios tab." },
   edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
 };
 
@@ -604,6 +605,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // Nothing is reported anywhere: the download of the post's file from the
       // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
+      // A basemap that just failed to download is not tried again this session
+      // (runtime/missingBasemap.js); Import & Play opens the picker next.
+      noteMissingBasemapTried(details?.scenario);
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
@@ -615,7 +619,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
         );
         const missingBasemap = unresolvedBundleBackground(bundle);
         if (missingBasemap) {
-          setError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+          setError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
         }
       }
       // "Import & Play" goes on to the country picker, which opens over the
@@ -701,7 +705,10 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // The scenario's publish key, written into the post: finding it there is
       // how this install later learns which post is its player's own, and so
       // which posts' comments to read for suggested changes. The same key for
-      // every post made of this scenario; the scenario keeps it.
+      // every post made of this scenario; the scenario keeps it, until its
+      // player unlinks the post. That is for good (server/hubProvenance.js):
+      // the record and its key go, so this mints another, and the post made
+      // now is followed while the unlinked one is never found again.
       const publishKey = scenario.hubPublished?.key || newPublishKey();
       const technicalLines = [
         ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),

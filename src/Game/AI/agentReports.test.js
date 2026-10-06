@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport } from "./agentReports.js";
+import { AGENT_REPORT_EVERY_ROUNDS, SKIP_AGENT_REPORT_LIMIT, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
 
 const agent = (target, deployedAt = "2014-01-01") => ({ target, deployedAt, status: "active" });
 const targets = (list) => list.map((spy) => spy.target);
@@ -59,4 +59,41 @@ test("BC dates compare as game dates", () => {
 
 test("no agents, nothing due", () => {
     assert.deepEqual(agentsDueToReport(), { justPlaced: [], overdue: [] });
+});
+
+// --- the reports that ride on a time skip's own answer ---
+//
+// While requests are being saved the reports cost no request, only the length
+// of the skip's answer: everyone reports, up to a limit, the longest silent first.
+
+test("every agent reports with the skip while there are few of them", () => {
+    const agents = [agent("Poland"), agent("Belarus"), agent("Ukraine")];
+    const filed = { Poland: { round: 6 }, Belarus: { round: 6 }, Ukraine: { round: 6 } };
+    assert.equal(SKIP_AGENT_REPORT_LIMIT, 4);
+    assert.deepEqual(targets(agentsReportingWithSkip({ agents, filed, round: 7, originDate: "2014-06-01" })), ["Poland", "Belarus", "Ukraine"],
+        "a report last round does not make an agent wait: nothing is being saved by waiting");
+});
+
+test("past the limit, the longest silent go first and the rest wait for the next skip", () => {
+    const agents = ["A", "B", "C", "D", "E", "F"].map((target) => agent(target));
+    const filed = { A: { round: 6 }, B: { round: 2 }, C: { round: 5 }, D: { round: 6 }, E: { round: 4 } };
+    // F has nothing on file at all, then B (round 2), E (4), C (5); A and D reported last round.
+    assert.deepEqual(targets(agentsReportingWithSkip({ agents, filed, round: 7, originDate: "2014-06-01" })), ["F", "B", "E", "C"]);
+    // Next skip the four have reports from round 7, and the two left out are the oldest.
+    const next = { ...filed, F: { round: 7 }, B: { round: 7 }, E: { round: 7 }, C: { round: 7 } };
+    assert.deepEqual(targets(agentsReportingWithSkip({ agents, filed: next, round: 8, originDate: "2014-07-01" })).slice(0, 2), ["A", "D"]);
+});
+
+test("an agent placed since the last skip reports first, and a report from an undone round counts as none", () => {
+    const agents = [agent("Old"), agent("Undone"), agent("New", "2014-06-10")];
+    const filed = { Old: { round: 3 }, Undone: { round: 12 } };
+    assert.deepEqual(targets(agentsReportingWithSkip({ agents, filed, round: 7, originDate: "2014-06-01", limit: 2 })), ["New", "Undone"]);
+});
+
+test("the limit is the caller's to change, and nothing reports when there is nobody", () => {
+    const agents = [agent("A"), agent("B")];
+    assert.deepEqual(targets(agentsReportingWithSkip({ agents, filed: {}, round: 2, limit: 1 })), ["A"], "equally silent: the order they were placed in");
+    assert.deepEqual(agentsReportingWithSkip({ agents, filed: {}, round: 2, limit: 0 }), []);
+    assert.deepEqual(agentsReportingWithSkip(), []);
+    assert.deepEqual(agentsReportingWithSkip({ agents: "nobody" }), []);
 });

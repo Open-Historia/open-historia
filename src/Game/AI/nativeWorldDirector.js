@@ -895,7 +895,7 @@ const activeCanonicalWarForStoryline = (storyline, worldLike) => {
   return null;
 };
 
-const coalesceWorldStorylines = (worldLike) => {
+export const coalesceWorldStorylines = (worldLike) => {
   const world = worldLike && typeof worldLike === "object" ? worldLike : {};
   const normalized = normalizeArray(world?.storylines)
     .map(normalizeStorylineForDirector)
@@ -993,7 +993,7 @@ const coalesceWorldStorylines = (worldLike) => {
   };
 };
 
-const recentEventEligibleForInitiative = (event, originDate) => {
+export const recentEventEligibleForInitiative = (event, originDate) => {
   if (!event || typeof event !== "object") return false;
 
   const originParsed = parseIsoDate(originDate);
@@ -1026,7 +1026,7 @@ const recentEventEligibleForInitiative = (event, originDate) => {
   return false;
 };
 
-const storylineStagnationAgeDays = (storyline, referenceDate) => {
+export const storylineStagnationAgeDays = (storyline, referenceDate) => {
   if (!storyline || parseIsoDate(referenceDate) == null) return 0;
 
   const anchor =
@@ -1046,7 +1046,7 @@ const storylineStagnationAgeDays = (storyline, referenceDate) => {
 // the process, not time since the last visible card. This prevents an active war
 // that honestly remains quiet from being selected on every one-day jump forever.
 // The 45-day objective anti-stasis backstop still uses visible-stagnation age.
-const storylineReviewAgeDays = (storyline, referenceDate) => {
+export const storylineReviewAgeDays = (storyline, referenceDate) => {
   if (!storyline || parseIsoDate(referenceDate) == null) return 0;
   const anchor =
     parseIsoDate(storyline.lastUpdatedDate) != null
@@ -1113,7 +1113,7 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
   return score;
 };
 
-const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
+export const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
   if (!storyline || storyline.status === "resolved") return false;
 
   // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after
@@ -1230,7 +1230,7 @@ const selectStorylineAttention = (world, originDate, targetDate) => {
   };
 };
 
-const recommendedReviewDays = (pressure, momentum, status, { activeWar = false } = {}) => {
+export const recommendedReviewDays = (pressure, momentum, status, { activeWar = false } = {}) => {
   if (status === "resolved") return 0;
 
   // Pressure is unresolved seriousness; momentum is the rate of meaningful change.
@@ -2827,494 +2827,16 @@ const selectBoundedCandidates = (rankedCandidates, limit) => {
   return selected;
 };
 
-const runWorldDirectorSelfTests = () => {
-  const fixtureWorld = {
-    wars: [
-      {
-        id: "polish-war-of-independence",
-        status: "active",
-        sideA: ["Poland"],
-        sideB: ["Russian Empire"],
-      },
-      {
-        id: "austro-serbian-war",
-        status: "active",
-        sideA: ["Austria-Hungary"],
-        sideB: ["Kingdom of Serbia"],
-      },
-    ],
-    storylines: [
-      {
-        id: "storyline-polish-war-of-independence",
-        kind: "war",
-        title: "War of Polish Independence",
-        participants: ["Poland", "Russian Empire"],
-        status: "active",
-        pressure: 85,
-        momentum: 30,
-        startedDate: "1915-04-18",
-        accountedThroughDate: "1916-03-13",
-        lastUpdatedDate: "1916-03-13",
-        state: "Older canonical-id copy.",
-        sourceEventIds: ["polish-a"],
-      },
-      {
-        id: "storyline-polish-independence",
-        kind: "war",
-        title: "War of Polish Independence",
-        participants: ["Poland", "Russian Empire"],
-        status: "active",
-        pressure: 72,
-        momentum: 18,
-        startedDate: "1915-04-18",
-        accountedThroughDate: "1916-04-12",
-        lastUpdatedDate: "1916-04-12",
-        state: "Newer duplicate-id copy.",
-        sourceEventIds: ["polish-b"],
-      },
-      {
-        id: "storyline-july-crisis",
-        kind: "war",
-        title: "Austro-Serbian War",
-        participants: ["Austria-Hungary", "Kingdom of Serbia"],
-        status: "active",
-        pressure: 68,
-        momentum: 20,
-        startedDate: "1914-06-28",
-        accountedThroughDate: "1916-05-12",
-        lastUpdatedDate: "1916-05-12",
-        state: "Freshest Austro-Serbian state.",
-        sourceEventIds: ["serbia-a"],
-      },
-      {
-        id: "storyline-austro-serbian-war",
-        kind: "war",
-        title: "Austro-Serbian War",
-        participants: ["Austria-Hungary", "Kingdom of Serbia"],
-        status: "active",
-        pressure: 80,
-        momentum: 25,
-        startedDate: "1914-07-28",
-        accountedThroughDate: "1916-03-13",
-        lastUpdatedDate: "1916-03-13",
-        state: "Older canonical-id Austro-Serbian copy.",
-        sourceEventIds: ["serbia-b"],
-      },
-    ],
-  };
-
-  const merged = coalesceWorldStorylines(fixtureWorld);
-  const polish = merged.storylines.find((entry) =>
-    entry.id === "storyline-polish-war-of-independence"
-  );
-  const serbia = merged.storylines.find((entry) =>
-    entry.id === "storyline-austro-serbian-war"
-  );
-
-  const cases = [
-    {
-      name: "semantic duplicate wars collapse",
-      pass: merged.storylines.length === 2 && merged.mergedDuplicateCount === 2,
-      detail: `${merged.storylines.length} storyline(s), ${merged.mergedDuplicateCount} duplicate(s) merged`,
-    },
-    {
-      name: "canonical war storyline id survives newer alias",
-      pass:
-        polish?.id === "storyline-polish-war-of-independence" &&
-        polish?.state === "Newer duplicate-id copy." &&
-        normalizeArray(polish?.sourceEventIds).includes("polish-a") &&
-        normalizeArray(polish?.sourceEventIds).includes("polish-b"),
-      detail: polish?.id || "",
-    },
-    {
-      name: "canonical Austro-Serbian id keeps freshest state",
-      pass:
-        serbia?.id === "storyline-austro-serbian-war" &&
-        serbia?.state === "Freshest Austro-Serbian state.",
-      detail: serbia?.id || "",
-    },
-    {
-      name: "360-day event is not current initiative evidence",
-      pass: !recentEventEligibleForInitiative(
-        { date: "1915-04-18" },
-        "1916-04-12",
-      ),
-      detail: "1915-04-18 → 1916-04-12",
-    },
-    {
-      name: "30-day storyline event remains current initiative evidence",
-      pass: recentEventEligibleForInitiative(
-        {
-          date: "1916-03-13",
-          importance: "minor",
-          storylineIds: ["storyline-test"],
-          impacts: {},
-        },
-        "1916-04-12",
-      ),
-      detail: "1916-03-13 storyline-linked",
-    },
-    {
-      name: "minor no-impact narrative card is not a causal seed",
-      pass: !recentEventEligibleForInitiative(
-        {
-          date: "1916-01-29",
-          importance: "minor",
-          notable: false,
-          playerRelated: false,
-          kind: "world",
-          storylineIds: [],
-          impacts: {},
-        },
-        "1916-04-12",
-      ),
-      detail: "minor + no impacts + no storyline",
-    },
-    {
-      name: "minor structured event remains a causal seed",
-      pass: recentEventEligibleForInitiative(
-        {
-          date: "1916-03-20",
-          importance: "minor",
-          notable: false,
-          storylineIds: [],
-          impacts: { markerOps: [{ op: "build" }] },
-        },
-        "1916-04-12",
-      ),
-      detail: "minor + persistent impact",
-    },
-  ];
-
-  const stagnantHighPressure = {
-    id: "storyline-motion-test",
-    kind: "war",
-    title: "Motion Test War",
-    participants: ["Poland", "Russian Empire"],
-    status: "active",
-    pressure: 78,
-    momentum: 20,
-    startedDate: "1916-01-01",
-    accountedThroughDate: "1916-06-11",
-    lastUpdatedDate: "1916-06-11",
-    lastVisibleEventDate: "1916-04-20",
-    nextReviewDate: "1916-09-01",
-    state: "A high-pressure stalemate remains unchanged.",
-  };
-
-  cases.push({
-    name: "21-day high-pressure stagnation overrides later review date",
-    pass: storylineNeedsAttentionWithin(
-      stagnantHighPressure,
-      "1916-06-11",
-      "1916-07-11",
-    ),
-    detail: `stagnation ${storylineStagnationAgeDays(stagnantHighPressure, "1916-07-11")}d`,
-  });
-
-  const stagnantError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "45-day high-pressure anti-stasis rejects copy-forward",
-    pass: /anti-stasis backstop/i.test(stagnantError),
-    detail: stagnantError || "unexpectedly accepted",
-  });
-
-  const repairIssues = findWorldStorylineAntiStasisIssues(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      stopDate: "1916-07-11",
-    },
-  );
-
-  const nonFatalStagnantError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-    },
-  );
-
-  cases.push({
-    name: "45-day anti-stasis is detectable without invalidating whole pass",
-    pass: repairIssues.length === 1 && repairIssues[0]?.id === stagnantHighPressure.id && nonFatalStagnantError === "",
-    detail: `${repairIssues.length} repair issue(s); validation ${nonFatalStagnantError || "accepted"}`,
-  });
-
-  const missingSelectedCandidate = {
-    events: [],
-    storylineUpdates: [],
-  };
-  const missingSelectedStrictError = validateWorldStorylinePayload(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-    },
-  );
-  const missingSelectedRepairableError = validateWorldStorylinePayload(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-      enforceSelectedCoverage: false,
-    },
-  );
-  const missingSelectedIssues = findWorldStorylineAntiStasisIssues(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "missing native-attention update becomes local repair instead of whole-pass failure",
-    pass:
-      /must include native-attention storyline/i.test(missingSelectedStrictError) &&
-      missingSelectedRepairableError === "" &&
-      missingSelectedIssues.length === 1 &&
-      missingSelectedIssues[0]?.kind === "missing-update" &&
-      missingSelectedIssues[0]?.id === stagnantHighPressure.id,
-    detail:
-      `strict=${missingSelectedStrictError || "accepted"}; ` +
-      `repairable=${missingSelectedRepairableError || "accepted"}; ` +
-      `issues=${missingSelectedIssues.map((issue) => `${issue.kind}:${issue.id}`).join(", ") || "none"}`,
-  });
-
-  const evolvedError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 74,
-        momentum: 28,
-        eventIndexes: [],
-        state: "The front remains intact, but both commands reorganize and operational tempo begins to recover.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "45-day backstop accepts objective hidden evolution",
-    pass: evolvedError === "",
-    detail: evolvedError || "pressure/momentum changed",
-  });
-
-  const lowPressureActiveWar = {
-    id: "storyline-polish-war-of-independence",
-    kind: "war",
-    title: "War of Polish Independence",
-    participants: ["Poland", "Russian Empire"],
-    status: "active",
-    pressure: 65,
-    momentum: 25,
-    startedDate: "1915-04-18",
-    accountedThroughDate: "1916-12-08",
-    lastUpdatedDate: "1916-12-08",
-    lastVisibleEventDate: "1916-11-20",
-    nextReviewDate: "1917-04-07",
-    state: "Winter positions hold while the active war remains unresolved.",
-  };
-
-  cases.push({
-    name: "21-day active-war review overrides pressure cliff",
-    pass: storylineNeedsAttentionWithin(
-      lowPressureActiveWar,
-      "1917-01-07",
-      "1917-02-06",
-      fixtureWorld,
-    ),
-    detail: `review age ${storylineReviewAgeDays(lowPressureActiveWar, "1917-02-06")}d at pressure ${lowPressureActiveWar.pressure}`,
-  });
-
-  const lowPressureWarAntiStasis = findWorldStorylineAntiStasisIssues(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...lowPressureActiveWar,
-        pressure: 65,
-        momentum: 25,
-        eventIndexes: [],
-        state: lowPressureActiveWar.state,
-      }],
-    },
-    {
-      existingStorylines: [lowPressureActiveWar],
-      selectedStorylines: [lowPressureActiveWar],
-      stopDate: "1917-02-06",
-      world: fixtureWorld,
-    },
-  );
-
-  cases.push({
-    name: "45-day active-war anti-stasis ignores pressure cliff",
-    pass:
-      lowPressureWarAntiStasis.length === 1 &&
-      lowPressureWarAntiStasis[0]?.activeWar === true,
-    detail: `${lowPressureWarAntiStasis.length} issue(s) at pressure ${lowPressureActiveWar.pressure}`,
-  });
-
-  const lowPressureNonWar = {
-    ...lowPressureActiveWar,
-    id: "storyline-domestic-control",
-    kind: "politics",
-    title: "Domestic Control Test",
-    participants: ["Poland"],
-    nextReviewDate: "1917-04-07",
-  };
-
-  cases.push({
-    name: "non-war pressure 65 enters high-pressure review cadence",
-    pass: storylineNeedsAttentionWithin(
-      lowPressureNonWar,
-      "1917-01-07",
-      "1917-02-06",
-      fixtureWorld,
-    ),
-    detail: "pressure 65 is now above the 55 high-pressure guard",
-  });
-
-  cases.push({
-    name: "active-war persisted review cadence caps at 21 days",
-    pass: recommendedReviewDays(65, 25, "active", { activeWar: true }) === 21,
-    detail: `${recommendedReviewDays(65, 25, "active", { activeWar: true })}d`,
-  });
-
-  const deferredQuietCandidate = {
-    events: [{
-      title: "Independent material event",
-      description: "A separate development occurs elsewhere.",
-      impacts: {},
-    }],
-    storylineUpdates: [
-      {
-        id: "storyline-selected-test",
-        status: "active",
-        pressure: 72,
-        momentum: 24,
-        startedDate: "1916-01-01",
-        kind: "war",
-        title: "Selected Test War",
-        participants: ["Poland", "Russian Empire"],
-        eventIndexes: [0],
-        state: "A material development changes the selected process.",
-      },
-      {
-        id: "storyline-deferred-quiet-test",
-        status: "active",
-        pressure: 35,
-        momentum: 15,
-        startedDate: "1915-01-01",
-        kind: "diplomacy",
-        title: "Deferred Quiet Test",
-        participants: ["German Empire", "British Empire"],
-        eventIndexes: [],
-        state: "The quiet detente remains unchanged.",
-      },
-    ],
-  };
-  const quietSalvage = stripQuietDeferredStorylineUpdates(
-    deferredQuietCandidate,
-    [{
-      id: "storyline-deferred-quiet-test",
-      status: "active",
-      pressure: 35,
-      momentum: 15,
-      title: "Deferred Quiet Test",
-    }],
-  );
-  const remainingQuietSalvageUpdates = decodeWorldStorylineUpdates(
-    deferredQuietCandidate.storylineUpdates,
-  );
-
-  cases.push({
-    name: "final-attempt salvage strips only quiet deferred bookkeeping",
-    pass:
-      quietSalvage.strippedIds.length === 1 &&
-      quietSalvage.strippedIds[0] === "storyline-deferred-quiet-test" &&
-      remainingQuietSalvageUpdates.length === 1 &&
-      remainingQuietSalvageUpdates[0]?.id === "storyline-selected-test",
-    detail: `${quietSalvage.strippedIds.join(", ") || "none"} stripped`,
-  });
-
-  const passed = cases.every((entry) => entry.pass);
-  console.table(cases);
-  console.info(
-    `[OH Native World Director self-test] ${passed ? "PASS" : "FAIL"} — ` +
-    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
-  );
-  return { passed, cases };
-};
-
 const installDebugApi = () => {
   if (typeof globalThis === "undefined") return;
 
+  // No self-test here: the director's regression cases run under node --test
+  // (nativeWorldDirector.storylines.test.js), not in every player's bundle.
   globalThis.__OH_NATIVE_WORLD_DIRECTOR__ = {
     version: WORLD_DIRECTOR_VERSION,
     last: () => lastAnalysis
       ? JSON.parse(JSON.stringify(lastAnalysis))
       : null,
-    selfTest: () => runWorldDirectorSelfTests(),
   };
 };
 
@@ -3326,10 +2848,6 @@ export const buildWorldInitiativeContext = (
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
     playerFocus = "",
-    // The scenario's "Puppet states" feature, handed down rather than read:
-    // this module runs in a worker and in node tests, so it stays clear of the
-    // browser runtime (see the same argument in nativeDiplomaticDirector.js).
-    puppetStates = true,
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3384,7 +2902,6 @@ export const buildWorldInitiativeContext = (
     playerPolity: normalizeString(bundle?.game?.country),
     selectedStorylines: storylineAttention.selected,
     maxActors: 8,
-    puppetStates,
   });
 
   const canonicalStorylineId = (value) => {

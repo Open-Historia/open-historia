@@ -11,8 +11,30 @@
 // it is the single region left standing: an ambiguous name resolves to nothing
 // rather than to the wrong province.
 
-export const foldRegionKey = (value) =>
-  String(value ?? "")
+// What a string folds to is remembered. One name is looked up against every
+// city and every region on the map, several times over (exact, affix,
+// substring, fuzzy), and a placement phrase such as "Fort Drum, New York" asks
+// for several names: folding each of the map's ten thousand names afresh every
+// time cost five seconds of a time skip on the built-in map, after its last
+// event had already arrived. The answer depends on the string alone, so the
+// memo changes nothing but the time. It is emptied when it grows past any real
+// map, so text a model made up cannot pile up in it.
+const MEMO_LIMIT = 60_000;
+const memoized = (compute) => {
+  const memo = new Map();
+  return (value) => {
+    const text = String(value ?? "");
+    const known = memo.get(text);
+    if (known !== undefined) return known;
+    const answer = compute(text);
+    if (memo.size >= MEMO_LIMIT) memo.clear();
+    memo.set(text, answer);
+    return answer;
+  };
+};
+
+export const foldRegionKey = memoized((text) =>
+  text
     .trim()
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -20,22 +42,22 @@ export const foldRegionKey = (value) =>
     .replace(/['’`´.]/g, "")
     .replace(/[-_/]+/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim());
 
 // Administrative words a model appends that a map rarely carries. The
 // autonomous-* forms come first so the longer suffix wins.
 const REGION_SUFFIX = /\s+(?:autonomous (?:republic|region|oblast|okrug)|federal district|special administrative region|oblast|krai|okrug|voivodeship|governorate|prefecture|province|region|district|county|state|territory|department|canton|municipality|division|emirate|zone|area|city)$/;
 const REGION_PREFIX = /^(?:(?:the|republic of|province of|state of|district of|region of|county of|city of|oblast of|governorate of|prefecture of)\s+)+/;
 
-export const stripRegionAffixes = (key) => {
-  let next = String(key ?? "");
+export const stripRegionAffixes = memoized((key) => {
+  let next = key;
   let previous;
   do {
     previous = next;
     next = next.replace(REGION_PREFIX, "").replace(REGION_SUFFIX, "").trim();
   } while (next !== previous && next.length > 0);
   return next;
-};
+});
 
 // Bounded Levenshtein: stops counting once the distance exceeds `max`, so a
 // pool of a few thousand names costs almost nothing.
