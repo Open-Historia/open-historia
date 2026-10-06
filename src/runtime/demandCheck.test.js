@@ -246,6 +246,26 @@ test("an Overlord acknowledging what was just agreed is not a fresh demand", () 
   assert.equal(fresh[0]?.kind, "demand_made");
 });
 
+// The summaries were compared by their a-z and 0-9, and one written in the
+// player's language has none: it was never a restatement of anything.
+test("an obligation restated in another script is not a fresh demand either", () => {
+  const context = { role: "overlord", overlord: "Russia", puppet: "Belarus" };
+  const outcome = (agreed, summary) => interpretDemandCheck({
+    payload: { outcome: "demand", summary },
+    context,
+    demands: [{ id: "d1", by: "Russia", target: "Belarus", summary: agreed, status: "accepted" }],
+    time: "2016-01-05",
+    idFor: (prefix) => `${prefix}-x`,
+  });
+
+  assert.deepEqual(outcome("Выполнить Женевские протоколы", "Выполнить женевские протоколы."), []);
+  assert.deepEqual(outcome("Выполнить Женевские протоколы", "Выполнить Женевские протоколы полностью!"), [], "one wholly inside the other");
+  assert.equal(outcome("Выполнить Женевские протоколы", "Передать журналы патрулей")[0]?.kind, "demand_made", "another obligation is still a demand");
+
+  assert.deepEqual(outcome("履行日内瓦议定书", "履行日内瓦议定书。"), []);
+  assert.equal(outcome("履行日内瓦议定书", "交出巡逻日志")[0]?.kind, "demand_made");
+});
+
 test("the prompt tells the model what is already agreed, so it does not ask for it again", () => {
   const prompt = demandCheckPrompt({
     context: { role: "overlord", overlord: "Russia", puppet: "Belarus" },

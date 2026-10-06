@@ -414,3 +414,57 @@ test("the salvage pass leaves a clean answer exactly as it was", () => {
   assert.deepEqual(salvageDiplomaticLedgerPayload(candidate, { world }), []);
   assert.equal(JSON.stringify(candidate), before, "objects stay objects, untouched");
 });
+
+// A game played in another language: the map's polities keep their names and
+// carry the player's as aliases, and every title, summary and event is written
+// in that language. The words these checks compare were cut to a-z and 0-9, so
+// such text had none.
+const russianWorld = {
+  ...world,
+  polityOverrides: {
+    France: { code: "France", name: "France", aliases: ["Франция"] },
+    Russia: { code: "Russia", name: "Russia", aliases: ["Россия"] },
+    Germany: { code: "Germany", name: "Germany", aliases: ["Германия"] },
+  },
+};
+const russianEvents = () => [
+  { id: "e1", date: "1894-01-03", title: "Германия спустила на воду новый броненосец", description: "В Киле спущен на воду броненосец.", kind: "military" },
+  { id: "e2", date: "1894-01-04", title: "Франция и Россия заключили военную конвенцию", description: "Париж и Петербург подписали конвенцию о взаимной военной помощи.", kind: "diplomacy" },
+];
+
+test("a relation record with no event number is tied to its event in another script", () => {
+  // It named no event, the engine found none for it, and it was dropped
+  // without a word: the relation never moved.
+  const candidate = { events: russianEvents(), relationUpdates: "France~Russia~70~friendly~Военная конвенция подписана", agreementUpdates: "" };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world: russianWorld, allowNativeBinding: true }), "");
+  assert.deepEqual(
+    decodeRelationUpdates(candidate.relationUpdates).map((update) => [update.a, update.b, update.eventIds]),
+    [["France", "Russia", ["e2"]]],
+  );
+});
+
+test("two wordings of one agreement's title agree in another script, and two agreements do not", () => {
+  const signed = (title) => ({
+    ...russianWorld,
+    agreements: [{ id: "franco-russian-alliance", title, type: "alliance", status: "active", parties: ["France", "Russia"], startedDate: "1894-01-04", terms: "Взаимная военная помощь против Германии" }],
+  });
+  const restated = (title, ledger) => {
+    const candidate = {
+      events: russianEvents(),
+      relationUpdates: "",
+      agreementUpdates: `franco-russian-alliance~start~alliance~France,Russia~2~${title}~Взаимная помощь распространена на Австро-Венгрию`,
+    };
+    const error = validateDiplomaticLedgerPayload(candidate, { world: ledger, allowNativeBinding: true });
+    return error || decodeAgreementUpdates(candidate.agreementUpdates).map((update) => update.op).join(",");
+  };
+
+  // Refused as a second agreement under a taken id, which is a second request.
+  assert.equal(restated("Франко-русский военный союз 1894 года", signed("Франко-русский союз")), "update");
+  assert.match(restated("Договор о торговле зерном", signed("Франко-русский союз")), /already exists; use update/);
+  // Chinese is not written in words, so a title agrees with one it contains.
+  assert.equal(restated("法俄同盟条约", signed("法俄同盟")), "update");
+  assert.match(restated("粮食贸易协定", signed("法俄同盟")), /already exists; use update/);
+  // Titles in a-z and 0-9 are compared as they always were.
+  assert.equal(restated("The Franco-Russian Military Alliance", signed("Franco-Russian Alliance")), "update");
+  assert.match(restated("Grain Trade Treaty", signed("Franco-Russian Alliance")), /already exists; use update/);
+});

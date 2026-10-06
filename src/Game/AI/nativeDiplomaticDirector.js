@@ -456,11 +456,15 @@ const SEARCH_STOPWORDS = new Set([
   "states", "country", "countries", "event", "relation", "relations", "update",
 ]);
 
+// The letters, marks and digits of any script. Kept to a-z and 0-9, a summary
+// and an event written in Russian or Arabic had no words in common however
+// alike they were, and a record with no event number of its own was never tied
+// to the event that caused it. English text reads as it always did.
 const diplomaticSearchText = (value) => String(value ?? "")
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -833,7 +837,9 @@ const agreementTitleLooksCompatible = (left, right) => {
   const a = lower(left);
   const b = lower(right);
   if (!a || !b || a === b || a.includes(b) || b.includes(a)) return true;
-  const tokens = (value) => [...new Set(value.split(/[^a-z0-9]+/).filter((token) => token.length >= 4))];
+  // Words in any script: split on a-z and 0-9 alone, a title in Cyrillic or
+  // Greek had no words at all, and two wordings of one treaty never agreed.
+  const tokens = (value) => [...new Set(lower(value.normalize("NFKC")).split(/[^\p{L}\p{M}\p{N}]+/u).filter((token) => token.length >= 4))];
   const aTokens = tokens(a);
   const bTokens = new Set(tokens(b));
   if (!aTokens.length || !bTokens.size) return false;

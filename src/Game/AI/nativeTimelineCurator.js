@@ -463,18 +463,35 @@ const retrievePriorMatches = (candidate, priorEvents) => {
 
 // ---- duplicate guard --------------------------------------------------------
 
+// What two events must share to be the same words: the letters, marks and
+// digits of every script, case and accents folded. normalizeText keeps a-z and
+// 0-9 only, which is right for the English cues above and wrong here: two
+// different events written in Russian, Arabic or Chinese on one date both came
+// out empty, or as the same stray digits, and the second was removed as a
+// word-for-word repeat of the first. English text gives the key it always did.
+const exactTextKey = (text) =>
+  normalizeString(text)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const deterministicNearDuplicate = (
   candidate,
   priorMatches,
 ) => {
-  const candidateText = normalizeText(eventText(candidate));
+  const candidateText = exactTextKey(eventText(candidate));
   const candidateDate = normalizeString(candidate?.date);
 
   for (const match of priorMatches) {
     if (
       candidateDate &&
+      // A text with no letter or digit in it has no key, and repeats nothing.
+      candidateText &&
       candidateDate === normalizeString(match.event?.date) &&
-      normalizeText(eventText(match.event)) === candidateText
+      exactTextKey(eventText(match.event)) === candidateText
     ) {
       return {
         duplicate: true,

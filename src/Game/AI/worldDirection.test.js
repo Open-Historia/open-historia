@@ -68,6 +68,17 @@ test("the player's name is matched as whole words, never inside another", () => 
     assert.equal(eventConcernsPlayer(event("Ob river floods"), ["Ob"]), false);
 });
 
+// A name was looked for with everything but a-z and 0-9 taken out of it and of
+// the event, so one written in another script was never found.
+test("the player's name is found in any script, still as whole words", () => {
+    assert.equal(eventConcernsPlayer(event("Польша направила ноту России", "Нота адресована Российской Федерации."), ["Российская Федерация", "России"]), true);
+    assert.equal(eventConcernsPlayer(event("Белоруссия проводит учения"), ["Россия", "Руссия"]), false, "not inside another word");
+    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал"), ["Россия"]), false);
+    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会"), ["俄罗斯"]), false, "Chinese is not written in words: only the simulator's mark counts there");
+    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会", "", { playerRelated: true }), ["俄罗斯"]), true);
+    assert.equal(eventConcernsPlayer(event("Η Πολωνία διαμαρτύρεται στη Ρωσία"), ["Ρωσία"]), true);
+});
+
 test("the floor is met when enough of the period belongs to the rest of the world", () => {
     const events = [
         event("Russian forces enter Kharkiv", "", { playerRelated: true }),
@@ -220,6 +231,20 @@ test("a beat is written when an event near its date shares its particular words"
     assert.equal(beatIsWritten(beat, [{ date: "2014-05-26", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), true);
     assert.equal(beatIsWritten(beat, [{ date: "2014-05-25", title: "Fighting near Donetsk", description: "Separatists seize the airport." }]), false, "same day, different event");
     assert.equal(beatIsWritten(beat, [{ date: "2014-07-25", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), false, "two months out is not this beat");
+});
+
+// A beat's words were split on a-z and 0-9 alone. One its author wrote in
+// Russian had none, so it was never found in the answer and the engine wrote it
+// again beside the model's own telling of it.
+test("a beat written in another script is found in an answer in that script", () => {
+    const beats = parseScriptedEvents("2014-05-02 Столкновения в Одессе: десятки погибших в Доме профсоюзов.\n2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
+    const [odesa, election] = beats;
+    const answer = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах на Украине уже в первом туре." }];
+    assert.equal(beatIsWritten(election, answer), true);
+    assert.equal(beatIsWritten(odesa, answer), false, "the other beat is not this event");
+    const { written, inserted } = ensureScriptedEvents(answer, beats);
+    assert.deepEqual(written.map((beat) => beat.date), ["2014-05-25"]);
+    assert.deepEqual(inserted.map((beat) => beat.date), ["2014-05-02"], "only the beat the answer left out is written by the engine");
 });
 
 test("a beat the answer left out is written by the engine, in the author's words, without impacts", () => {
