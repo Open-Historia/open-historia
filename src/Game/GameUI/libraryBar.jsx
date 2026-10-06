@@ -736,7 +736,7 @@ const PromptSectionEditor = ({
   );
 };
 
-const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable, updating = false }) => {
+const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable, updateNote = "", updating = false }) => {
   const isBuiltIn = scenario.id === "default";
   const assetBadges = Object.entries(scenarioBadgeLabels)
     .filter(([key]) => scenario.assetStatus?.[key])
@@ -926,6 +926,33 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
               <ButtonIcon kind="clone" /> Clone Scenario
             </button>
           </div>
+          {/* What came of the last Update when it did not simply work: it
+              failed, or it went through without its new basemap. The ring
+              going back to a plain button says neither, and the only other
+              place the reason is shown is the editor drawer, which is shut
+              when Update is pressed from a card. Only while the card still
+              offers Update (a copy whose basemap is missing does): once the
+              update has gone through, or the basemap has arrived, the note is
+              old news. */}
+          {updateNote && updateAvailable && !updating && (
+            <div
+              role="status"
+              title={updateNote}
+              style={{
+                color: "#fecaca",
+                display: "-webkit-box",
+                fontSize: "0.72rem",
+                lineHeight: 1.4,
+                marginTop: "0.55rem",
+                overflow: "hidden",
+                textShadow: SCENARIO_CARD_TEXT_SHADOW,
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 4,
+              }}
+            >
+              {updateNote}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -2343,17 +2370,27 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The scenarios being updated now: each one's cards (it can sit on all three
   // shelves) show it and cannot be pressed again until it lands or fails.
   const updatingScenarioIds = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.running, scenarioUpdates.running);
+  // And what each one's last Update left to say, when it did not simply work.
+  const scenarioUpdateNotes = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.notes, scenarioUpdates.notes);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
   // fresh hubOrigin stamp flips the card back to New Game on refresh. A failed
-  // update leaves the card on Update, with the reason in the editor's error.
+  // update leaves the card on Update, with the reason under its buttons and in
+  // the editor's error; so does one that went through without its new basemap.
   const handleScenarioUpdate = async (scenario) => {
     const post = scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null;
     // A press that got in before the button redrew starts nothing either.
     if (!post?.bundleUrl || !scenarioUpdates.begin(scenario.id)) return;
     setEditorError(null);
     setIsBusy(true);
+    // Said on the card as well as in the editor drawer, which is shut when
+    // Update is pressed from a card.
+    let outcome = "";
+    const tell = (message) => {
+      outcome = message;
+      setEditorError(message);
+    };
 
     try {
       const { downloadHubBundle } = await import("./communityHub.jsx");
@@ -2368,13 +2405,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
+        tell(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
-      setEditorError(`Update failed: ${nextError.message}`);
+      tell(`Update failed: ${nextError.message}`);
     } finally {
       setIsBusy(false);
-      scenarioUpdates.end(scenario.id);
+      scenarioUpdates.end(scenario.id, outcome);
     }
   };
 
@@ -4314,6 +4351,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
@@ -4330,6 +4368,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
@@ -4347,6 +4386,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}

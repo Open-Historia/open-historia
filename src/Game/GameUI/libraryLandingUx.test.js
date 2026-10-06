@@ -63,7 +63,9 @@ test("a scenario's Update shows that it is working, and takes no second press", 
   // update gives the button back.
   assert.match(source, /^const scenarioUpdates = createWorkInProgress\(\);$/m);
   assert.match(source, /if \(!post\?\.bundleUrl \|\| !scenarioUpdates\.begin\(scenario\.id\)\) return;/);
-  assert.match(source, /\} finally \{\s+setIsBusy\(false\);\s+scenarioUpdates\.end\(scenario\.id\);\s+\}/);
+  // In `finally`, so a failure gives the button back too; with what the update
+  // left to say, which the card shows (workInProgress.test.js).
+  assert.match(source, /\} finally \{\s+setIsBusy\(false\);\s+scenarioUpdates\.end\(scenario\.id, outcome\);\s+\}/);
 
   // The ring's turn is the loading logo's; reduced motion stops every
   // animation with one rule, so the ring stays still and the label says it.
