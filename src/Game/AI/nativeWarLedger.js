@@ -166,10 +166,23 @@ const samePregameSourceSet = (superset, required) => {
   return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
 };
 
-// Resolve Day-One war identity conservatively. Sides/date identify possible
-// candidates; title/provenance provide identity evidence. A title mismatch is
-// ambiguity, not permission to fork or silently merge a second live war.
-export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null } = {}) => {
+// Resolve Day-One war identity conservatively. Sides and date say which war it
+// is; the title is how it is worded.
+//
+// ONE live war between the same two sides, with no conflicting known date, is
+// that war whatever the fact calls it: the same belligerents are not fighting
+// each other twice at once, and a model that restates canon writes the war's
+// name in the game's language. Such a fact used to be "ambiguous: the same live
+// sides/date already exist under a different canonical title", which refused
+// the whole Round-Zero answer; it is now the match, marked `restated`, and the
+// caller keeps the canonical title (see resolvePregameAgreementBaselineMatch,
+// where a player's game met this).
+//
+// MORE than one such war is still an error, marked `ambiguous` so the caller
+// can leave that fact out on its last attempt. So is a single one that another
+// fact of the same answer already resolved to (`claimedIds`), or that has no
+// title of its own to keep. Neither is permission to fork a second live war.
+export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null, claimedIds = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero war resolver requires a candidate." };
   const sides = pregameWarSidePairKey(candidate.sideA, candidate.sideB);
   const title = pregameWarTitleKey(candidate.title);
@@ -185,10 +198,13 @@ export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null 
   };
   const possible = live.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameWarTitleKey(entry.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero war identity matches multiple canonical wars." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero war identity matches multiple canonical wars." };
   if (exact.length === 1) return { match: exact[0], error: "" };
+  if (possible.length === 1 && pregameWarTitleKey(possible[0].title) && !claimedIds?.has(normalizeString(possible[0].id))) {
+    return { match: possible[0], restated: true, error: "" };
+  }
   if (possible.length) {
-    return { match: null, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
+    return { match: null, ambiguous: true, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
   }
 
   const conflictingKnownDate = live.some((entry) =>

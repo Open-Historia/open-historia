@@ -26,6 +26,7 @@ const compile = (facts, options = {}) => compilePregameBootstrapCandidate({
   eventIdsByRef: options.eventIdsByRef || {},
   startDate: options.startDate || "2021-07-18",
   puppetStates: options.puppetStates ?? true,
+  leaveOutAmbiguous: options.leaveOutAmbiguous ?? false,
 });
 
 const warFact = (patch = {}) => ({
@@ -108,12 +109,21 @@ test("a unique live war keeps its identity when an unknown start date later beco
   assert.equal(replay.projectedWorld.wars.length, 1);
 });
 
-test("a renamed live war is ambiguity rather than silent identity reuse", () => {
+// This was "a renamed live war is ambiguity rather than silent identity reuse":
+// the one live war between these sides, said under another name, refused the
+// whole answer. It is read as that war now, and said to be (receipt.restated);
+// the cases that are still ambiguity are further down.
+test("the one live war between two sides, under another title, is that war and keeps its title", () => {
   const first = compile([warFact()]);
   assert.equal(first.ok, true, first.error);
+  const warId = first.receipt.facts[0].canonicalId;
   const renamed = compile([warFact({ ref: "w2", title: "Renamed Alpha-Beta Conflict" })], { world: first.projectedWorld });
-  assert.equal(renamed.ok, false);
-  assert.match(renamed.error, /identity is ambiguous/);
+  assert.equal(renamed.ok, true, renamed.error);
+  assert.deepEqual([renamed.receipt.facts[0].outcome, renamed.receipt.facts[0].canonicalId], ["merged", warId]);
+  assert.deepEqual(renamed.projectedWorld.wars.map((war) => war.title), ["Alpha-Beta War"]);
+  assert.deepEqual(renamed.receipt.restated, [{
+    ref: "w2", kind: "war", canonicalId: warId, title: "Renamed Alpha-Beta Conflict", canonicalTitle: "Alpha-Beta War",
+  }]);
 });
 
 test("repeated war episodes with different known start dates do not collapse", () => {
@@ -135,20 +145,31 @@ test("a conflicting date for an already-live same war fails closed instead of fo
   assert.match(conflict.error, /same sides\/title but a different known start date/);
 });
 
-test("an agreement with incomplete identity fails closed rather than guessing across a renamed title", () => {
+// This was "an agreement with incomplete identity fails closed rather than
+// guessing across a renamed title". The one alliance between these two is the
+// alliance a second fact means, whatever it is called: the record keeps its own
+// title and terms, and takes from the fact the start date it did not have, as
+// it would from a fact under its own title.
+test("the one agreement of a type among the same parties, under another title, is that agreement", () => {
   const first = compile([{
     ref: "a1", kind: "agreement", type: "alliance", title: "Alpha-Gamma Pact",
     parties: ["Alpha", "Gamma"], startedDate: "", terms: "Standing alliance.",
   }]);
   assert.equal(first.ok, true, first.error);
+  const id = first.receipt.facts[0].canonicalId;
 
   const replay = compile([{
     ref: "a2", kind: "agreement", type: "alliance", title: "Renamed Mutual Defense Treaty",
     parties: ["Gamma", "Alpha"], startedDate: "2020-01-01", terms: "Possibly the same alliance.",
   }], { world: first.projectedWorld });
-  assert.equal(replay.ok, false);
-  assert.match(replay.error, /identity is ambiguous/);
-  assert.equal(replay.projectedWorld, null);
+  assert.equal(replay.ok, true, replay.error);
+  assert.deepEqual([replay.receipt.facts[0].outcome, replay.receipt.facts[0].canonicalId], ["merged", id]);
+  assert.equal(replay.projectedWorld.agreements.length, 1);
+  const pact = replay.projectedWorld.agreements[0];
+  assert.deepEqual([pact.title, pact.terms, pact.startedDate], ["Alpha-Gamma Pact", "Standing alliance.", "2020-01-01"]);
+  assert.deepEqual(replay.receipt.restated, [{
+    ref: "a2", kind: "agreement", canonicalId: id, title: "Renamed Mutual Defense Treaty", canonicalTitle: "Alpha-Gamma Pact",
+  }]);
 });
 
 test("guarantee direction is canonical identity, not an unordered party set", () => {
@@ -680,10 +701,11 @@ test("semantic receipt is family-specific even when scenario canon reuses an id 
 //
 // Every identity rule above compares titles by a folded key, and the fold kept
 // a-z0-9 only. A game played in Russian or Chinese writes its titles in neither,
-// so each title's key was "" and every title was every other: two wars between
-// the same sides were one war, two treaties among the same parties one treaty,
-// and a crisis among a war's belligerents was always "ambiguous with" the war.
-// The rules are the same rules in every script now.
+// so each title's key was "" and every title was every other: with two wars
+// between the same sides on record, a fact that named one of them named both,
+// a second treaty was the first without anyone being told, and a crisis among a
+// war's belligerents was always "ambiguous with" the war. The rules are the
+// same rules in every script now.
 const SCRIPTS = {
   Cyrillic: {
     wars: ["Крымская война", "Донбасская война"],
@@ -698,22 +720,38 @@ const SCRIPTS = {
 };
 
 for (const [script, { wars, pacts, crises }] of Object.entries(SCRIPTS)) {
-  test(`${script}: a live war keeps its identity under its own title, and another title is another war's`, () => {
+  test(`${script}: a live war is known by its own title, and told from another on record by it`, () => {
     const first = compile([warFact({ title: wars[0] })]);
     assert.equal(first.ok, true, first.error);
     const warId = first.receipt.facts[0].canonicalId;
 
-    // The same war again, its title cased and punctuated otherwise.
+    // The same war again, its title cased and punctuated otherwise: the same
+    // title, so nothing is said to have been restated.
     const again = compile([warFact({ ref: "w2", title: `  ${wars[0].toUpperCase()}!` })], { world: first.projectedWorld });
     assert.equal(again.ok, true, again.error);
-    assert.equal(again.receipt.facts[0].outcome, "merged");
-    assert.equal(again.receipt.facts[0].canonicalId, warId);
+    assert.deepEqual([again.receipt.facts[0].outcome, again.receipt.facts[0].canonicalId], ["merged", warId]);
+    assert.deepEqual(again.receipt.restated, []);
 
-    // Same sides, same date, another name: it used to be merged into the first
-    // without a word, because both names were the empty key.
+    // The only live war between these sides under another name is that war,
+    // and is said to be: it used to be taken for it without a word, because
+    // both names were the empty key.
     const renamed = compile([warFact({ ref: "w3", title: wars[1] })], { world: first.projectedWorld });
-    assert.equal(renamed.ok, false);
-    assert.match(renamed.error, /identity is ambiguous/);
+    assert.equal(renamed.ok, true, renamed.error);
+    assert.equal(renamed.receipt.facts[0].canonicalId, warId);
+    assert.deepEqual(renamed.receipt.restated.map((entry) => [entry.title, entry.canonicalTitle]), [[wars[1], wars[0]]]);
+    assert.deepEqual(renamed.projectedWorld.wars.map((war) => war.title), [wars[0]]);
+
+    // Two live wars between the same sides on record: a fact that names one is
+    // that one. With the empty key it named both, and was refused.
+    const world = makeWorld();
+    world.wars = wars.map((title, index) => ({
+      id: `scenario-war-${index + 1}`, title, status: "active", sideA: ["Alpha"], sideB: ["Beta"],
+      startedDate: "2020-11-18", sourceEventIds: [], storylineIds: [],
+    }));
+    const second = compile([warFact({ ref: "w4", title: wars[1] })], { world });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(second.receipt.facts[0].canonicalId, "scenario-war-2");
+    assert.deepEqual(second.receipt.restated, []);
   });
 
   test(`${script}: two wars of one day between the same sides are given two ids`, () => {
@@ -722,16 +760,36 @@ for (const [script, { wars, pacts, crises }] of Object.entries(SCRIPTS)) {
     assert.notEqual(worldOf(wars[0]), worldOf(wars[1]), "the title is part of what a new war's id is made from");
   });
 
-  test(`${script}: a second treaty among the same parties is not the first under another name`, () => {
+  test(`${script}: a treaty is known by its own title, and told from another on record by it`, () => {
     const pact = (ref, title, terms) => ({ ref, kind: "agreement", type: "alliance", title, parties: ["Alpha", "Gamma"], startedDate: "2020-01-01", terms });
     const first = compile([pact("a1", pacts[0], "Standing alliance.")]);
     assert.equal(first.ok, true, first.error);
-    const other = compile([pact("a2", pacts[1], "Standing alliance.")], { world: first.projectedWorld });
-    assert.equal(other.ok, false, "it was merged into the first: same parties, same type, same date, and the same empty title key");
-    assert.match(other.error, /identity is ambiguous/);
+    const id = first.receipt.facts[0].canonicalId;
     const same = compile([pact("a3", pacts[0], "Standing alliance.")], { world: first.projectedWorld });
     assert.equal(same.ok, true, same.error);
     assert.equal(same.receipt.facts[0].outcome, "merged");
+    assert.deepEqual(same.receipt.restated, []);
+
+    // The only alliance between these two under another name is that alliance,
+    // and is said to be. With the empty key it was taken for it unsaid, and a
+    // word of difference in its terms then refused the whole answer.
+    const other = compile([pact("a2", pacts[1], "The same alliance in other words.")], { world: first.projectedWorld });
+    assert.equal(other.ok, true, other.error);
+    assert.equal(other.receipt.facts[0].canonicalId, id);
+    assert.deepEqual(other.receipt.restated.map((entry) => [entry.title, entry.canonicalTitle]), [[pacts[1], pacts[0]]]);
+    assert.deepEqual(other.projectedWorld.agreements.map((entry) => [entry.title, entry.terms]), [[pacts[0], "Standing alliance."]]);
+
+    // Two alliances between the same two on record: a fact that names one is
+    // that one. With the empty key it named both, and was refused.
+    const world = makeWorld();
+    world.agreements = pacts.map((title, index) => ({
+      id: `scenario-pact-${index + 1}`, title, type: "alliance", status: "active", parties: ["Alpha", "Gamma"],
+      startedDate: "2020-01-01", terms: "Standing alliance.", sourceEventIds: [],
+    }));
+    const second = compile([pact("a4", pacts[1], "Standing alliance.")], { world });
+    assert.equal(second.ok, true, second.error);
+    assert.equal(second.receipt.facts[0].canonicalId, "scenario-pact-2");
+    assert.deepEqual(second.receipt.restated, []);
   });
 
   test(`${script}: a crisis among a war's belligerents is not the war unless it has the war's title`, () => {
@@ -768,3 +826,246 @@ for (const [script, { wars, pacts, crises }] of Object.entries(SCRIPTS)) {
     assert.equal(same.receipt.facts[0].canonicalId, "scenario-crisis");
   });
 }
+
+// --- a fact that says again what the world already holds ---
+//
+// A player's log (beta 0.0.66, 2026-10-05, the game played in Russian). The
+// first fact of the Round-Zero answer was the 1997 friendship treaty between
+// Russia and Ukraine, under its Russian title, and the world already held a
+// friendship agreement between the two:
+//
+//   $.facts[0] Round-Zero agreement identity is ambiguous: the same roles/type/
+//   date already exist under a different canonical title.
+//
+// The whole answer was refused for it, the corrective attempt said the same
+// thing again and was refused again, the bootstrap failed, and it was asked for
+// again at every open of the game: two requests, of 14,000 and 15,000 tokens,
+// and never a pre-game history. The two facts below are the first two of that
+// answer as the model wrote them. What the world's own record was titled is not
+// in the log; it is given an English title here, the usual case.
+const TREATY_IN_RUSSIAN = "Договор о дружбе, сотрудничестве и партнерстве между Российской Федерацией и Украиной";
+const UNION_STATE_IN_RUSSIAN = "Договор о создании Союзного государства";
+const friendshipFact = (patch = {}) => ({
+  ref: "f1", kind: "agreement", type: "friendship_consultation", title: TREATY_IN_RUSSIAN,
+  parties: ["Russian Federation", "Ukraine"],
+  terms: "Подтверждает стратегическое партнерство, нерушимость границ, уважение территориальной целостности и взаимное обязательство не использовать территорию для нанесения ущерба безопасности друг друга.",
+  ...patch,
+});
+const unionStateFact = (patch = {}) => ({
+  ref: "f2", kind: "agreement", type: "trade_economic", title: UNION_STATE_IN_RUSSIAN,
+  parties: ["Russian Federation", "Republic of Belarus"],
+  terms: "Устанавливает наднациональный союз, объединяющий экономические, политические и военные структуры между Россией и Беларусью.",
+  ...patch,
+});
+const treatyOnRecord = (patch = {}) => ({
+  id: "ru-ua-friendship-1997", title: "Treaty on Friendship, Cooperation and Partnership", type: "friendship_consultation",
+  status: "active", parties: ["Russian Federation", "Ukraine"], startedDate: "1997-05-31",
+  terms: "Strategic partnership; each recognises the other's borders.", sourceEventIds: [],
+  ...patch,
+});
+const worldOf2014 = (agreements = [treatyOnRecord()]) => ({
+  ...makeWorld(["Russian Federation", "Ukraine", "Republic of Belarus", "Poland"]),
+  agreements,
+});
+const compile2014 = (facts, options = {}) => compile(facts, { startDate: "2014-03-22", ...options });
+const RETITLED_AGREEMENT = "Round-Zero agreement identity is ambiguous: the same roles/type/date already exist under a different canonical title.";
+
+test("the log's treaty, restated in Russian, is read as the treaty on record, and the answer is not refused", () => {
+  // Compiled as on a first attempt: nothing is sent back, so no second request.
+  const result = compile2014([friendshipFact(), unionStateFact()], { world: worldOf2014() });
+  assert.equal(result.ok, true, result.error);
+  const [treaty, union] = result.receipt.facts;
+  assert.deepEqual([treaty.ref, treaty.outcome, treaty.canonicalId], ["f1", "merged", "ru-ua-friendship-1997"]);
+  assert.deepEqual(result.receipt.restated, [{
+    ref: "f1", kind: "agreement", canonicalId: "ru-ua-friendship-1997",
+    title: TREATY_IN_RUSSIAN, canonicalTitle: "Treaty on Friendship, Cooperation and Partnership",
+  }]);
+
+  // The record keeps its own words, and there is still one of it.
+  const friendship = result.projectedWorld.agreements.filter((entry) => entry.type === "friendship_consultation");
+  assert.equal(friendship.length, 1);
+  assert.deepEqual(
+    [friendship[0].id, friendship[0].title, friendship[0].terms, friendship[0].startedDate],
+    ["ru-ua-friendship-1997", "Treaty on Friendship, Cooperation and Partnership", "Strategic partnership; each recognises the other's borders.", "1997-05-31"],
+  );
+
+  // The agreement beside it, which the world did not hold, is still made, under its own title.
+  assert.deepEqual([union.ref, union.outcome], ["f2", "applied"]);
+  assert.match(union.canonicalId, /^agreement-r0v1-/);
+  const made = result.projectedWorld.agreements.find((entry) => entry.id === union.canonicalId);
+  assert.deepEqual([made.title, made.type, [...made.parties].sort()], [UNION_STATE_IN_RUSSIAN, "trade_economic", ["Republic of Belarus", "Russian Federation"]]);
+  assert.equal(result.projectedWorld.agreements.length, 2);
+  assert.deepEqual(result.receipt.omitted, []);
+  assert.deepEqual(result.receipt.counts, { candidateFacts: 2, applied: 1, merged: 1, derived: 0, restated: 1, omitted: 0 });
+});
+
+test("a restated agreement gives the record what it lacks, and a different known date is another agreement", () => {
+  // On record with no date and no terms: the fact's are taken, as they are
+  // from a fact under the canonical title, and so is its provenance.
+  const bare = compile2014(
+    [friendshipFact({ startedDate: "1997-05-31", sourceEventRefs: ["e1"] })],
+    { world: worldOf2014([treatyOnRecord({ startedDate: "", terms: "" })]), eventIdsByRef: { e1: "pregame-1" } },
+  );
+  assert.equal(bare.ok, true, bare.error);
+  const [record] = bare.projectedWorld.agreements;
+  assert.deepEqual(
+    [record.id, record.title, record.startedDate, record.terms, record.sourceEventIds],
+    ["ru-ua-friendship-1997", "Treaty on Friendship, Cooperation and Partnership", "1997-05-31", friendshipFact().terms, ["pregame-1"]],
+  );
+
+  // A known date that is not the record's is not the record: the fact is an
+  // agreement of its own, as it always was.
+  const later = compile2014([friendshipFact({ startedDate: "2010-04-21" })], { world: worldOf2014() });
+  assert.equal(later.ok, true, later.error);
+  assert.deepEqual(later.receipt.restated, []);
+  assert.equal(later.receipt.facts[0].outcome, "applied");
+  assert.deepEqual(
+    later.projectedWorld.agreements.map((entry) => [entry.title, entry.startedDate]).sort(),
+    [[TREATY_IN_RUSSIAN, "2010-04-21"], ["Treaty on Friendship, Cooperation and Partnership", "1997-05-31"]].sort(),
+  );
+});
+
+test("a fact that could be either of two agreements on record is refused, then left out on the last attempt", () => {
+  const twoOnRecord = () => worldOf2014([
+    treatyOnRecord(),
+    treatyOnRecord({ id: "ru-ua-consultations", title: "Agreement on Regular Consultations", startedDate: "", terms: "The foreign ministers meet yearly." }),
+  ]);
+  const facts = [
+    friendshipFact(),
+    unionStateFact(),
+    { ref: "r1", kind: "relation", a: "Russian Federation", b: "Poland", score: -35, summary: "Напряжённые отношения." },
+  ];
+
+  // While a corrective attempt remains: refused, in the words the log has.
+  const first = compile2014(facts, { world: twoOnRecord() });
+  assert.equal(first.ok, false);
+  assert.equal(first.error, `$.facts[0] ${RETITLED_AGREEMENT}`);
+  assert.equal(first.projectedWorld, null);
+
+  // On the last attempt: that fact is left out and named; the rest stands.
+  const last = compile2014(facts, { world: twoOnRecord(), leaveOutAmbiguous: true });
+  assert.equal(last.ok, true, last.error);
+  assert.deepEqual(last.receipt.omitted, [{ ref: "f1", kind: "agreement", title: TREATY_IN_RUSSIAN, reason: RETITLED_AGREEMENT }]);
+  assert.deepEqual(last.receipt.facts.map((entry) => [entry.ref, entry.outcome]), [["f2", "applied"], ["r1", "applied"]]);
+  assert.deepEqual(last.receipt.counts, { candidateFacts: 3, applied: 2, merged: 0, derived: 0, restated: 0, omitted: 1 });
+  assert.deepEqual(
+    last.projectedWorld.agreements.map((entry) => entry.title).sort(),
+    ["Agreement on Regular Consultations", UNION_STATE_IN_RUSSIAN, "Treaty on Friendship, Cooperation and Partnership"].sort(),
+  );
+  assert.equal(last.projectedWorld.relations.length, 1);
+
+  // A title that is on record twice is the same ambiguity.
+  const twins = worldOf2014([treatyOnRecord(), treatyOnRecord({ id: "ru-ua-friendship-copy" })]);
+  const named = friendshipFact({ title: "Treaty on Friendship, Cooperation and Partnership" });
+  assert.match(compile2014([named], { world: twins }).error, /matches multiple canonical instruments/);
+  const without = compile2014([named], { world: twins, leaveOutAmbiguous: true });
+  assert.equal(without.ok, true, without.error);
+  assert.deepEqual(without.receipt.omitted.map((entry) => entry.ref), ["f1"]);
+  assert.equal(without.projectedWorld.agreements.length, 2);
+});
+
+test("two facts of one answer that differ only in title are not each other's restatement", () => {
+  const pact = (ref, title) => ({
+    ref, kind: "agreement", type: "alliance", title, parties: ["Alpha", "Gamma"], startedDate: "2020-01-01", terms: "Standing alliance.",
+  });
+  const facts = [pact("a1", "Alpha-Gamma Pact"), pact("a2", "Treaty of Mutual Defence")];
+  const strict = compile(facts);
+  assert.equal(strict.ok, false);
+  assert.equal(strict.error, `$.facts[1] ${RETITLED_AGREEMENT}`);
+  const last = compile(facts, { leaveOutAmbiguous: true });
+  assert.equal(last.ok, true, last.error);
+  assert.deepEqual(last.projectedWorld.agreements.map((entry) => entry.title), ["Alpha-Gamma Pact"]);
+  assert.deepEqual(last.receipt.omitted.map((entry) => [entry.ref, entry.title]), [["a2", "Treaty of Mutual Defence"]]);
+
+  // Nor does a second fact restate a record the first has just named by its own title.
+  const onRecord = compile([pact("a1", "Alpha-Gamma Pact")]).projectedWorld;
+  const again = [pact("a3", "Alpha-Gamma Pact"), pact("a4", "Treaty of Mutual Defence")];
+  assert.equal(compile(again, { world: onRecord }).error, `$.facts[1] ${RETITLED_AGREEMENT}`);
+  const kept = compile(again, { world: onRecord, leaveOutAmbiguous: true });
+  assert.equal(kept.ok, true, kept.error);
+  assert.deepEqual(kept.receipt.facts.map((entry) => [entry.ref, entry.outcome]), [["a3", "merged"]]);
+  assert.deepEqual(kept.receipt.restated, []);
+  assert.deepEqual(kept.receipt.omitted.map((entry) => entry.ref), ["a4"]);
+});
+
+test("a restated war still has to agree on its status, and two wars on record are still an ambiguity", () => {
+  const first = compile([warFact()]);
+  assert.equal(first.ok, true, first.error);
+  // What is not wording is judged as it is for a fact under the canonical title.
+  const ceasefire = [warFact({ ref: "w2", title: "The Northern War", status: "ceasefire" })];
+  for (const leaveOutAmbiguous of [false, true]) {
+    const result = compile(ceasefire, { world: first.projectedWorld, leaveOutAmbiguous });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /conflicts on status \(active vs ceasefire\)/);
+  }
+
+  const world = makeWorld();
+  world.wars = ["Alpha-Beta War", "The Border War"].map((title, index) => ({
+    id: `scenario-war-${index + 1}`, title, status: "active", sideA: ["Alpha"], sideB: ["Beta"],
+    startedDate: "2020-11-18", sourceEventIds: [], storylineIds: [],
+  }));
+  const third = [warFact({ ref: "w3", title: "A Third Name For It" })];
+  const strict = compile(third, { world });
+  assert.equal(strict.ok, false);
+  assert.match(strict.error, /^\$\.facts\[0\] Round-Zero war identity is ambiguous: the same live sides\/date already exist under a different canonical title\.$/);
+  const last = compile(third, { world, leaveOutAmbiguous: true });
+  assert.equal(last.ok, true, last.error);
+  assert.deepEqual(last.receipt.omitted.map((entry) => [entry.ref, entry.kind, entry.title]), [["w3", "war", "A Third Name For It"]]);
+  assert.deepEqual(last.receipt.facts, []);
+  assert.deepEqual(last.receipt.derived, [], "no mirror is made for a war that is not in the baseline");
+  assert.deepEqual(last.projectedWorld.wars.map((war) => war.title).sort(), ["Alpha-Beta War", "The Border War"]);
+});
+
+test("a storyline under another title is never read as the one on record: refused, then left out", () => {
+  const onRecord = {
+    id: "scenario-crisis", kind: "crisis", title: "Banking Crisis", participants: ["Alpha"], status: "active",
+    pressure: 70, momentum: 20, startedDate: "2020-01-01", state: "Banking stress remains unresolved.",
+  };
+  const world = () => ({ ...makeWorld(), storylines: [{ ...onRecord }] });
+  // One crisis of this country on record, and a fact about another: kind,
+  // participants and date do not say they are the same process.
+  const facts = [
+    {
+      ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title: "Industrial Slowdown",
+      participants: ["Alpha"], startedDate: "2020-01-01", pressure: 40, momentum: 10, state: "Factories stand idle.",
+    },
+    { ref: "r1", kind: "relation", a: "Alpha", b: "Gamma", score: 20, summary: "Cordial." },
+  ];
+  const strict = compile(facts, { world: world() });
+  assert.equal(strict.ok, false);
+  assert.match(strict.error, /^\$\.facts\[0\] Round-Zero storyline identity is ambiguous/);
+
+  const last = compile(facts, { world: world(), leaveOutAmbiguous: true });
+  assert.equal(last.ok, true, last.error);
+  assert.deepEqual(last.receipt.restated, []);
+  assert.deepEqual(last.receipt.omitted.map((entry) => [entry.ref, entry.kind, entry.title]), [["s1", "storyline", "Industrial Slowdown"]]);
+  assert.deepEqual(last.receipt.facts.map((entry) => entry.ref), ["r1"]);
+  const crises = last.projectedWorld.storylines.filter((entry) => entry.kind === "crisis");
+  assert.deepEqual(crises.map((entry) => [entry.id, entry.title, entry.pressure, entry.state]), [
+    ["scenario-crisis", "Banking Crisis", 70, "Banking stress remains unresolved."],
+  ]);
+});
+
+test("only a fact that could be more than one record is left out: every other refusal still refuses the answer", () => {
+  // Canon that does not say which way a grant runs is not an ambiguity of titles.
+  const legacy = makeWorld();
+  legacy.agreements = [{
+    id: "legacy-access", title: "Base Access", type: "military_access", status: "active",
+    parties: ["Alpha", "Beta"], startedDate: "2020-01-01", terms: "Legacy record without direction.",
+  }];
+  const access = compile([{
+    ref: "m1", kind: "agreement", type: "military_access", title: "Base Access",
+    grantor: "Alpha", grantee: "Beta", startedDate: "2020-01-01", terms: "Alpha grants Beta access.",
+  }], { world: legacy, leaveOutAmbiguous: true });
+  assert.equal(access.ok, false);
+  assert.match(access.error, /does not record grant direction/);
+
+  // Nor are other terms under the canonical title: that fact names the record
+  // itself and contradicts it, and is refused on every attempt, as before.
+  const sameTitle = compile2014(
+    [friendshipFact({ title: "Treaty on Friendship, Cooperation and Partnership" })],
+    { world: worldOf2014(), leaveOutAmbiguous: true },
+  );
+  assert.equal(sameTitle.ok, false);
+  assert.match(sameTitle.error, /conflicts on substantive terms/);
+});

@@ -418,7 +418,28 @@ export const pregameRelationBaselineCompatibilityError = (expected, actual, worl
   return "";
 };
 
-export const resolvePregameAgreementBaselineMatch = ({ records = [], candidate = null, world = {} } = {}) => {
+// Which agreement on record a Round-Zero fact is. Its type, its roles and its
+// date say which instrument; the title is only how that instrument is worded.
+//
+// ONE active agreement of the same type, among the same roles, with no
+// conflicting known date, is that agreement whatever the fact calls it. A model
+// that restates canon writes the title in the game's language, not in the
+// record's: a treaty the world already held came back as "Договор о дружбе,
+// сотрудничестве и партнерстве между Российской Федерацией и Украиной", was
+// refused as "the same roles/type/date already exist under a different
+// canonical title", and took the whole Round-Zero answer with it, on both
+// attempts, at every open of the game (a player's log, 2026-10-05: two
+// requests each time and no pre-game history, for ever). Such a fact is now
+// the match, marked `restated`: the caller keeps the canonical record's own
+// words and creates nothing.
+//
+// MORE than one such agreement is a real ambiguity and is still an error. It is
+// marked `ambiguous`, which lets the caller leave that one fact out on its last
+// attempt instead of losing the answer. A single one that another fact of the
+// same answer has already resolved to (`claimedIds`) is ambiguous too: two
+// facts of one answer are not each other's restatement. So is one that has no
+// title of its own to keep.
+export const resolvePregameAgreementBaselineMatch = ({ records = [], candidate = null, world = {}, claimedIds = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero agreement resolver requires a candidate." };
   const type = normalizeAgreementType(candidate.type);
   const roleKey = pregameAgreementRoleKey(candidate, world);
@@ -429,7 +450,7 @@ export const resolvePregameAgreementBaselineMatch = ({ records = [], candidate =
   const dateCompatible = (entry) => !date || !clean(entry?.startedDate) || clean(entry?.startedDate) === date;
   const possible = sameRoles.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameTitleKey(entry?.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero agreement identity matches multiple canonical instruments." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero agreement identity matches multiple canonical instruments." };
   if (exact.length === 1) return { match: exact[0], error: "" };
 
   const candidateParties = pregamePartySetKey(candidate.parties, world);
@@ -439,7 +460,10 @@ export const resolvePregameAgreementBaselineMatch = ({ records = [], candidate =
     dateCompatible(entry)
   );
   if (legacyDirectional.length) return { match: null, error: "Round-Zero military-access identity is ambiguous because existing canon does not record grant direction." };
-  if (possible.length) return { match: null, error: "Round-Zero agreement identity is ambiguous: the same roles/type/date already exist under a different canonical title." };
+  if (possible.length === 1 && pregameTitleKey(possible[0]?.title) && !claimedIds?.has(clean(possible[0]?.id))) {
+    return { match: possible[0], restated: true, error: "" };
+  }
+  if (possible.length) return { match: null, ambiguous: true, error: "Round-Zero agreement identity is ambiguous: the same roles/type/date already exist under a different canonical title." };
   return { match: null, error: "" };
 };
 

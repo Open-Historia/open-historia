@@ -17559,6 +17559,41 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
   return "";
 };
 
+// A fact the compiler left out of the baseline (receipt.omitted) covers nobody.
+// The coverage check counts the answer's wars and processes as written, so it is
+// run again without those facts: a baseline is never accepted, or published, on
+// the strength of a war that is not in it. Nothing left out, nothing to check.
+const pregameCoverageErrorWithoutOmitted = (payload, compilation, options) => {
+  const omittedRefs = new Set(
+    normalizeArray(compilation?.receipt?.omitted).map((entry) => normalizeString(entry?.ref)).filter(Boolean),
+  );
+  if (!omittedRefs.size) return "";
+  return validatePregameBootstrapCoverage({
+    ...payload,
+    canonicalUpdates: normalizeArray(payload?.canonicalUpdates)
+      .filter((fact) => !omittedRefs.has(normalizeString(fact?.ref))),
+  }, options);
+};
+
+// What the compiler did with a fact that says again what the world already
+// holds, in the log the player sends: one line for each fact read as an
+// existing record under that record's title, one for each left out. Logged where
+// the baseline is published, so once, and only for the answer that landed.
+const logPregameRestatedAndOmittedFacts = (compilation) => {
+  for (const entry of normalizeArray(compilation?.receipt?.restated)) {
+    logDebugEvent("ai", `Round Zero read the ${entry.kind} "${entry.title}" as the ${entry.kind} already on record, "${entry.canonicalTitle}": the canonical title is kept and nothing new was made.`, {
+      ref: entry.ref,
+      canonicalId: entry.canonicalId,
+    });
+  }
+  for (const entry of normalizeArray(compilation?.receipt?.omitted)) {
+    logDebugEvent("warn", `[ai] Round Zero left the ${entry.kind} "${entry.title}" out of the baseline; the rest of it stands.`, {
+      ref: entry.ref,
+      reason: entry.reason,
+    });
+  }
+};
+
 // Round Zero validates semantic baseline facts against the current snapshot, but
 // persistent identity is NOT finalized here. Publication recompiles the exact
 // accepted candidate inside mutateCanonicalTurnState against the fresh world and
@@ -17599,9 +17634,20 @@ const validatePregameCanonicalBootstrap = (
     startDate,
     round: 1,
     puppetStates: isActiveFeatureEnabled("puppetStates"),
+    // While a corrective attempt remains, a fact that could be more than one
+    // canonical record is sent back to be said plainly. On the last attempt it
+    // is left out and the rest of the baseline stands: one such fact used to
+    // fail the bootstrap on both attempts, and at every open after that. A fact
+    // that restates the ONE record it could be is accepted on any attempt.
+    leaveOutAmbiguous: !strict,
   });
   if (!compilation.ok) return compilation.error || "Round-Zero semantic baseline compilation failed.";
-  return "";
+  return pregameCoverageErrorWithoutOmitted(candidate, compilation, {
+    world,
+    briefing,
+    canonicalPolities,
+    requirements: coverageRequirements,
+  });
 };
 
 // A fresh game whose scenario wrote a "World Before Round One" briefing gets
@@ -17729,10 +17775,22 @@ export const maybeGeneratePregameHistory = async () => {
         startDate,
         round: 1,
         puppetStates: isActiveFeatureEnabled("puppetStates"),
+        // The answer is accepted and no attempt remains: a fact that could be
+        // more than one canonical record is left out here as it was when the
+        // answer was accepted on its last attempt, and as it must be if the
+        // world gained such a record since. The baseline is not lost to it.
+        leaveOutAmbiguous: true,
       });
       if (!compilation.ok) {
         throw new Error(compilation.error || "Round-Zero semantic baseline compilation failed against fresh canonical state.");
       }
+      const omittedCoverageError = pregameCoverageErrorWithoutOmitted(payload, compilation, {
+        world: currentWorld,
+        briefing,
+        canonicalPolities,
+        requirements: freshCoverageRequirements,
+      });
+      if (omittedCoverageError) throw new Error(omittedCoverageError);
 
       const bootstrapEvents = attachCompiledPregameStorylines(generatedEvents, compilation.projectedWorld);
       const committedEventIds = new Set(bootstrapEvents.map((event) => normalizeString(event?.id)).filter(Boolean));
@@ -17783,6 +17841,7 @@ export const maybeGeneratePregameHistory = async () => {
         `${factCounts.storyline || 0} non-war storyline fact(s), ${derivedStorylineIds.length} derived war mirror(s), ` +
         `${freshCoverageRequirements.length} authoritative armed-actor coverage anchor(s).`,
       );
+      logPregameRestatedAndOmittedFacts(compilation);
 
       const summary = normalizeString(payload?.summary);
       bootstrapWorld.simulationHistory = [

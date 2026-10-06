@@ -1137,6 +1137,15 @@ const pregameStorylineSourceContains = (superset, required) => {
   return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
 };
 
+// Which storyline on record a Round-Zero fact is. Unlike a war or an agreement
+// (resolvePregameWarBaselineMatch, resolvePregameAgreementBaselineMatch), a
+// storyline under another title is NOT read as a restatement of the one on
+// record: kind, participants and date do not say which process it is. Two
+// crises of one country in one year are two crises, and a gas dispute among the
+// same two governments is not their border talks. So another title stays an
+// ambiguity, as does a title that fits more than one record. Both are marked
+// `ambiguous`, which lets the caller leave that one fact out on its last
+// attempt instead of losing the whole Round-Zero answer.
 export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero storyline resolver requires a candidate." };
   const kind = normalizeString(candidate.processKind || candidate.kind).toLowerCase();
@@ -1151,9 +1160,9 @@ export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate =
   const dateCompatible = (entry) => !date || !normalizeString(entry.startedDate) || normalizeString(entry.startedDate) === date;
   const possible = candidates.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameStorylineTitleKey(entry.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero storyline identity matches multiple canonical processes." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero storyline identity matches multiple canonical processes." };
   if (exact.length === 1) return { match: exact[0], error: "" };
-  if (possible.length) return { match: null, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
+  if (possible.length) return { match: null, ambiguous: true, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
   return { match: null, error: "" };
 };
 

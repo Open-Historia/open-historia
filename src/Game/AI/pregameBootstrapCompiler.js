@@ -305,6 +305,25 @@ const receiptOutcome = (fact, outcome, canonicalId, reason = "") => ({
   ...(reason ? { reason } : {}),
 });
 
+// A fact read as a record canon already holds, under that record's own title
+// (the matchers' `restated`). Both titles are kept here for whoever logs it.
+const restatedFact = (fact, record) => ({
+  ref: clean(fact?.ref),
+  kind: lower(fact?.kind),
+  canonicalId: clean(record?.id),
+  title: clean(fact?.title),
+  canonicalTitle: clean(record?.title),
+});
+
+// A fact left out of the baseline (leaveOutAmbiguous), with the refusal it
+// would otherwise have been for the whole answer.
+const omittedFact = (fact, reason) => ({
+  ref: clean(fact?.ref),
+  kind: lower(fact?.kind),
+  title: clean(fact?.title),
+  reason,
+});
+
 const reject = (candidate, receipt, fact, error) => {
   const rejectedRef = clean(fact?.ref);
   const priorFacts = rejectedRef
@@ -319,6 +338,8 @@ const reject = (candidate, receipt, fact, error) => {
     receipt: {
       facts: [...priorFacts, ...(fact ? [receiptOutcome(fact, "rejected", "", error)] : [])],
       derived: [...receipt.derived],
+      restated: [...array(receipt.restated)],
+      omitted: [...array(receipt.omitted)],
     },
     candidate,
   };
@@ -390,6 +411,28 @@ const semanticConservationError = (kind, expected, actual, world) => {
   return `unsupported receipt family ${kind}`;
 };
 
+// Two things the compiler does about a fact that says again what canon already
+// holds, both decided by the family's matcher:
+//
+// - A war or an agreement under another title, where canon holds exactly one
+//   it could be, is READ AS that record (`restated`). The canonical title
+//   stays, nothing new is made, and the answer is not refused for it, on any
+//   attempt. What else the fact says is taken as it is from a fact under the
+//   canonical title: a start date canon did not know and the fact's provenance
+//   are added, a status that disagrees is still refused. Its wording is not
+//   compared: a restated agreement keeps canon's terms as it keeps canon's
+//   title (the fact's terms are used only where canon has none), because a
+//   fact that says the title in another language says the terms in it too, and
+//   would only be refused for those instead.
+// - A fact that could be more than one record (`ambiguous`) is refused, as it
+//   always was. With `leaveOutAmbiguous`, which the caller sets when no
+//   corrective attempt remains, that one fact is left out and listed in
+//   receipt.omitted, and the rest of the baseline stands: the alternative was
+//   to lose the whole pre-game history to one line of it, and to ask for it
+//   again at every open of the game.
+//
+// receipt.restated and receipt.omitted name the facts so the caller can say so
+// in the log; every other fact is still accounted for in receipt.facts.
 export const compilePregameBootstrapCandidate = ({
   candidate,
   world = {},
@@ -397,9 +440,10 @@ export const compilePregameBootstrapCandidate = ({
   startDate = "",
   round = 1,
   puppetStates = true,
+  leaveOutAmbiguous = false,
 } = {}) => {
   const shapeError = validatePregameBootstrapCandidateShape(candidate);
-  const receipt = { facts: [], derived: [] };
+  const receipt = { facts: [], derived: [], restated: [], omitted: [] };
   if (shapeError) return reject(candidate, receipt, null, shapeError);
   if (clean(startDate) && !validDate(startDate)) return reject(candidate, receipt, null, `Round-Zero start date ${startDate} is invalid.`);
 
@@ -413,6 +457,14 @@ export const compilePregameBootstrapCandidate = ({
     ...existingArray(baseWorld, "storylines"),
   ].map((entry) => clean(entry.id)).filter(Boolean));
   const canonicalClaims = new Map();
+  // The records of one family that facts of THIS answer have already resolved
+  // to. A record one fact has claimed is not restated by a second: two facts of
+  // one answer that differ only in title are an ambiguity between themselves.
+  const claimedIdsOf = (kind) => new Set(
+    [...canonicalClaims.keys()]
+      .filter((key) => key.startsWith(`${kind}|`))
+      .map((key) => key.slice(kind.length + 1)),
+  );
   const expectedByRef = new Map();
   const expectedDerived = new Map();
   const warMetaByRef = new Map();
@@ -454,15 +506,21 @@ export const compilePregameBootstrapCandidate = ({
         startedDate: clean(raw.startedDate),
       };
       const currentWars = overlayRecords(existingArray(baseWorld, "wars"), compiled.wars);
-      const matched = resolvePregameWarBaselineMatch({ records: currentWars, candidate: semantic });
-      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+      const matched = resolvePregameWarBaselineMatch({ records: currentWars, candidate: semantic, claimedIds: claimedIdsOf("war") });
+      if (matched.error) {
+        if (matched.ambiguous && leaveOutAmbiguous) {
+          receipt.omitted.push(omittedFact(raw, matched.error));
+          continue;
+        }
+        return reject(candidate, receipt, raw, factError(index, matched.error));
+      }
 
       let warRecord;
       let outcome;
       if (matched.match) {
         const incoming = buildPregameWarBaselineRecord({
           id: matched.match.id,
-          title: raw.title,
+          title: matched.restated ? matched.match.title : raw.title,
           status: raw.status,
           sideA,
           sideB,
@@ -498,7 +556,10 @@ export const compilePregameBootstrapCandidate = ({
       const claimError = claimCanonicalId(canonicalClaims, "war", warRecord.id, raw.ref);
       if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
       compiled.wars.push(warRecord);
-      receipt.facts.push(receiptOutcome(raw, outcome, warRecord.id, outcome === "merged" ? "Compatible authoritative war baseline enriched and retained." : ""));
+      receipt.facts.push(receiptOutcome(raw, outcome, warRecord.id, matched.restated
+        ? "Restated authoritative war baseline read under its canonical title and retained."
+        : outcome === "merged" ? "Compatible authoritative war baseline enriched and retained." : ""));
+      if (matched.restated) receipt.restated.push(restatedFact(raw, warRecord));
       expectedByRef.set(clean(raw.ref), { kind: "war", record: warRecord });
       warMetaByRef.set(clean(raw.ref), {
         ref: clean(raw.ref),
@@ -599,16 +660,30 @@ export const compilePregameBootstrapCandidate = ({
       }
       const semantic = { ...raw, type, parties, guarantor, beneficiary, grantor, grantee, reciprocalAccess };
       const currentAgreements = overlayRecords(existingArray(baseWorld, "agreements"), compiled.agreements);
-      const matched = resolvePregameAgreementBaselineMatch({ records: currentAgreements, candidate: semantic, world: baseWorld });
-      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+      const matched = resolvePregameAgreementBaselineMatch({
+        records: currentAgreements,
+        candidate: semantic,
+        world: baseWorld,
+        claimedIds: claimedIdsOf("agreement"),
+      });
+      if (matched.error) {
+        if (matched.ambiguous && leaveOutAmbiguous) {
+          receipt.omitted.push(omittedFact(raw, matched.error));
+          continue;
+        }
+        return reject(candidate, receipt, raw, factError(index, matched.error));
+      }
 
       let agreementRecord;
       let outcome;
       if (matched.match) {
+        // A restated agreement keeps canon's words, its terms with its title;
+        // the fact's own terms are used only where canon has none.
+        const canonicalTerms = matched.restated ? clean(matched.match.terms) : "";
         const incoming = buildPregameAgreementBaselineRecord({
           id: matched.match.id,
           type,
-          title: raw.title,
+          title: matched.restated ? matched.match.title : raw.title,
           parties,
           guarantor,
           beneficiary,
@@ -616,7 +691,7 @@ export const compilePregameBootstrapCandidate = ({
           grantee,
           reciprocalAccess,
           startedDate: raw.startedDate,
-          terms: raw.terms,
+          terms: canonicalTerms || raw.terms,
           sourceEventIds: sources.ids,
           observedDate: startDate,
           round,
@@ -656,7 +731,10 @@ export const compilePregameBootstrapCandidate = ({
       const claimError = claimCanonicalId(canonicalClaims, "agreement", agreementRecord.id, raw.ref);
       if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
       compiled.agreements.push(agreementRecord);
-      receipt.facts.push(receiptOutcome(raw, outcome, agreementRecord.id, outcome === "merged" ? "Compatible authoritative agreement baseline enriched and retained." : ""));
+      receipt.facts.push(receiptOutcome(raw, outcome, agreementRecord.id, matched.restated
+        ? "Restated authoritative agreement baseline read under its canonical title and retained."
+        : outcome === "merged" ? "Compatible authoritative agreement baseline enriched and retained." : ""));
+      if (matched.restated) receipt.restated.push(restatedFact(raw, agreementRecord));
       expectedByRef.set(clean(raw.ref), { kind: "agreement", record: agreementRecord });
       continue;
     }
@@ -678,7 +756,13 @@ export const compilePregameBootstrapCandidate = ({
       };
       const currentStorylines = overlayRecords(existingArray(baseWorld, "storylines"), compiled.storylines);
       const matched = resolvePregameStorylineBaselineMatch({ records: currentStorylines, candidate: semantic });
-      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+      if (matched.error) {
+        if (matched.ambiguous && leaveOutAmbiguous) {
+          receipt.omitted.push(omittedFact(raw, matched.error));
+          continue;
+        }
+        return reject(candidate, receipt, raw, factError(index, matched.error));
+      }
 
       let storylineRecord;
       let outcome;
@@ -919,8 +1003,9 @@ export const compilePregameBootstrapCandidate = ({
     const semanticError = pregameStorylineBaselineCompatibilityError(expected, actual);
     if (semanticError) return reject(candidate, receipt, null, `Round-Zero receipt changed derived ${derived.kind} ${derived.canonicalId}: ${semanticError}.`);
   }
-  if (receipt.facts.length !== candidate.facts.length) {
-    return reject(candidate, receipt, null, `Round-Zero receipt accounted for ${receipt.facts.length}/${candidate.facts.length} candidate facts.`);
+  // Every fact is either in the baseline or named as left out; none goes missing.
+  if (receipt.facts.length + receipt.omitted.length !== candidate.facts.length) {
+    return reject(candidate, receipt, null, `Round-Zero receipt accounted for ${receipt.facts.length + receipt.omitted.length}/${candidate.facts.length} candidate facts.`);
   }
 
   return {
@@ -932,11 +1017,15 @@ export const compilePregameBootstrapCandidate = ({
     receipt: {
       facts: receipt.facts,
       derived: receipt.derived,
+      restated: receipt.restated,
+      omitted: receipt.omitted,
       counts: {
         candidateFacts: candidate.facts.length,
         applied: receipt.facts.filter((entry) => entry.outcome === "applied").length,
         merged: receipt.facts.filter((entry) => entry.outcome === "merged").length,
         derived: receipt.derived.length,
+        restated: receipt.restated.length,
+        omitted: receipt.omitted.length,
       },
     },
     candidate,
