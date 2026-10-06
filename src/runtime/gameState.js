@@ -737,10 +737,15 @@ export const normalizeChatEntry = (entry, index = 0) => {
   // projection would drop them.
   const events = withUnloggedMessages(normalizeChatEvents(entry.events), entry.messages, { threadId: entry.id });
   const projected = events.length ? projectChatThread(events) : null;
+  // In a shared game a thread belongs to the person who opened it, named here
+  // (multiplayer/host/projection.js threadOwner). Single player's threads name
+  // nobody: they are the player's.
+  const owner = normalizeOptionalString(entry.player);
 
   return {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
+    ...(owner ? { player: owner } : {}),
     ...(institutionId ? { institutionId } : {}),
     ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
     ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),
@@ -955,13 +960,28 @@ const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", id
 
 export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   const index = buildPolityIdentityIndex(world || {});
+  // In a shared game a thread can belong to another person (entry.player, kept
+  // by normalizeChatEntry): its implicit player is that person, so this player
+  // may be one of its listed members, and its members may match one of this
+  // player's own threads. It is theirs and stays as it stands: never reconciled
+  // against this player, never merged into a thread of this player's.
+  const playerName = normalizeOptionalString(playerCountry);
+  const playerKey = playerName ? normalizedChatIdentityToken(playerName, world, index) : "";
+  const anothers = (entry) => {
+    const owner = normalizeOptionalString(entry?.player);
+    return Boolean(owner) && normalizedChatIdentityToken(owner, world, index) !== playerKey;
+  };
   const reconciled = normalizeArray(chats)
-    .map((entry) => reconcileModernChatForPlayer(entry, world, playerCountry, index))
+    .map((entry) => (anothers(entry) ? normalizeChatEntry(entry) : reconcileModernChatForPlayer(entry, world, playerCountry, index)))
     .filter(Boolean);
 
   const output = [];
   const openByIdentity = new Map();
   for (const chat of reconciled) {
+    if (anothers(chat)) {
+      output.push(chat);
+      continue;
+    }
     if (normalizeOptionalString(chat.status).toLocaleLowerCase() === "closed") {
       output.push(chat);
       continue;
@@ -4190,6 +4210,18 @@ export const normalizeWorldState = (world) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
     }),
+    // A shared game's other boards (multiplayer/host/gameHost.js): every country
+    // a second person plays keeps a Projects board of its own here, by country
+    // name. world.projects stays the host's, which is single player's. Only a
+    // world that has the key keeps it, so a single-player save never gains one.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatBoards") ? {
+      seatBoards: Object.fromEntries(
+        Object.entries(nextWorld.seatBoards && typeof nextWorld.seatBoards === "object" && !Array.isArray(nextWorld.seatBoards) ? nextWorld.seatBoards : {})
+          .map(([country, board]) => [normalizeOptionalString(country), normalizeProjects(board)])
+          .filter(([country, board]) => country && board.length)
+          .slice(0, 64),
+      ),
+    } : {}),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])

@@ -21,7 +21,7 @@ import { SETTINGS_SCHEMA } from "../host/settings.js";
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
 // screen would misread. The session refuses a player on another version.
-export const SHARED_GAME_VERSION = "1";
+export const SHARED_GAME_VERSION = "2";
 
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
@@ -40,6 +40,10 @@ export const PLAYER_REQUESTS = Object.freeze({
   order: obj({ t: literal("order"), id: REQUEST_ID, text: str(ORDER_MAX_CHARS, { min: 1 }) }),
   unorder: obj({ t: literal("unorder"), id: REQUEST_ID, order: str(120, { min: 1 }) }),
   goal: obj({ t: literal("goal"), id: REQUEST_ID, text: str(600) }),
+  // The player's own Projects board, whole. The host puts it through the
+  // game's own normalizer, which holds it to a board's shape and size, and the
+  // session holds the message to its own size limit (session/host.js).
+  board: obj({ t: literal("board"), id: REQUEST_ID, projects: json(12) }),
   // Diplomacy: into a thread the player is in, or to open one with `to`.
   say: obj({
     t: literal("say"), id: REQUEST_ID, thread: str(120, { nullable: true }),

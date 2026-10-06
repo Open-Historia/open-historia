@@ -58,6 +58,7 @@ const machine = (settings = {}, extra = {}) => {
     onResolve: async ({ round: number }) => {
       resolved.push(number);
       if (extra.fail) throw new Error("the jump failed");
+      if (extra.during) await extra.during();
     },
   });
   return { clock, round, phases, resolved };
@@ -144,6 +145,25 @@ test("the reveal ends when every player has seen it, or at its limit; then the n
   await clock.flush();
   await clock.advance(60_000);
   assert.equal(round.status().round, 3, "a reveal nobody finishes still ends");
+});
+
+test("a player who has read the round before the reveal is announced is counted", async () => {
+  // The round's events reach the players as the last step of resolving it: one
+  // with a single event to read says so while the host is still finishing.
+  let said = false;
+  const world = machine({}, { during: async () => {
+    world.round.revealedBy("a");
+    world.round.revealedBy("b");
+    said = true;
+  } });
+  world.round.setPlayers(["a", "b"]);
+  world.round.start();
+  world.round.setReady("a", true);
+  world.round.setReady("b", true);
+  await world.clock.flush();
+  assert.equal(said, true);
+  assert.equal(world.round.status().phase, "planning", "nobody is left reading: the next round plans at once");
+  assert.equal(world.round.status().round, 2);
 });
 
 test("a leaver stops counting, so the rest are not held up", async () => {

@@ -116,6 +116,10 @@ export const createRoundMachine = ({
   const resolve = () => {
     phase = "resolving";
     timers.clearTimeout(timer);
+    // Who has read the round through is counted from here: a player is sent
+    // the round's events as the last step of resolving it, and one with little
+    // to read may say so before the phase is announced.
+    revealed.clear();
     emit();
     Promise.resolve()
       .then(() => onResolve({ round }))
@@ -123,9 +127,8 @@ export const createRoundMachine = ({
         () => {
           phase = "revealing";
           revealEnds = now() + settings.revealSeconds * 1000;
-          revealed.clear();
           emit();
-          arm();
+          evaluate();
         },
         () => {
           // A round that could not be resolved goes back to planning, with the
@@ -207,9 +210,9 @@ export const createRoundMachine = ({
     },
     // A player's client finished showing the round's events.
     revealedBy(seat) {
-      if (phase !== "revealing" || !present.has(seat)) return;
+      if (!["resolving", "revealing"].includes(phase) || !present.has(seat)) return;
       revealed.add(seat);
-      evaluate();
+      if (phase === "revealing") evaluate();
     },
     start() {
       if (phase !== "lobby") return;

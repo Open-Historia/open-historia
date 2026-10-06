@@ -23,6 +23,7 @@ import { roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { ORDER_MAX_CHARS } from "../game/messages.js";
 import { withPlayerGoal } from "../../runtime/playerGoal.js";
+import { normalizeProjects } from "../../runtime/gameState.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 const SEEN_REQUESTS = 64;
@@ -31,6 +32,22 @@ const VIEW_KEYS = ["world", "game", "events", "chat", "actions", "intercepts", "
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
+
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+// One player's Projects board put where the game keeps it: the host's seat has
+// the game's own (world.projects, single player's); every other person's is
+// kept beside it by country (world.seatBoards), where no time skip, no rollback
+// and no other player's view mistakes it for the host's. The game's normalizer
+// holds it to a board's shape and size, whatever was sent.
+export const withSeatBoard = (world, country, projects, { host = "" } = {}) => {
+  const board = normalizeProjects(projects);
+  if (same(country, host)) return { ...world, projects: board };
+  const boards = Object.fromEntries(Object.entries(isRecord(world?.seatBoards) ? world.seatBoards : {})
+    .filter(([key]) => !same(key, country)));
+  if (board.length) boards[clean(country)] = board;
+  return { ...world, seatBoards: boards };
+};
 
 let sequence = 0;
 const mintId = (prefix, now) => {
@@ -141,8 +158,17 @@ export const createGameHost = ({
     return pushing;
   };
 
-  // The game must know who people are before the engine runs a round.
-  const recordHumans = () => store.updateGame((game) => ({ ...game, humanCountries: seats.humanCountries() }));
+  // The game must know who people are: before the engine runs a round, and
+  // from the lobby on, so that nothing ever answers a message for a country a
+  // person has taken. Forgotten again when the game stops being shared (stop).
+  const recordHumans = () => (stopped
+    ? Promise.resolve()
+    : store.updateGame((game) => ({ ...game, humanCountries: seats.humanCountries() })));
+  const forgetHumans = () => store.updateGame((game) => {
+    if (!list(game?.humanCountries).length) return null;
+    const { humanCountries: _gone, ...rest } = game;
+    return rest;
+  });
 
   const round = createRoundMachine({
     settings: roundSettingsOf(settings),
@@ -161,9 +187,11 @@ export const createGameHost = ({
   });
 
   const seatsChanged = async () => {
+    // A connection closing after the game stopped changes nothing.
+    if (stopped) return;
     round.setPlayers(present());
     broadcastLobby();
-    if (seats.started) await recordHumans();
+    await recordHumans();
     await pushViews();
   };
 
@@ -238,6 +266,17 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
+    // The player's own Projects board, whole, as their screen has just changed
+    // it: their advisor's entries, or the board's own buttons. A board is a
+    // government's working papers, so it may be changed whenever a round is not
+    // being resolved (the time skip is then rewriting the host's own).
+    board: async (connection, { projects }, seat) => {
+      if (!Array.isArray(projects)) return "A board is a list of projects.";
+      if (round.status().phase === "resolving") return "The round is being resolved: change the board once it has landed.";
+      await store.updateWorld((world) => withSeatBoard(world, seat.country, projects, { host: hostCountry }));
+      round.touch(seat.country);
+      return "";
+    },
     say: async (connection, { thread, to, text }, seat) => {
       const body = clean(text);
       if (!body) return "A message needs words.";
@@ -247,6 +286,11 @@ export const createGameHost = ({
       if (recipients.some((country) => !countries.some((known) => same(known, country)))) return "Unknown country.";
       let chatId = clean(thread);
       let refusal = "";
+      // Everyone at the table: the thread's owner and its members.
+      let parties = [];
+      // A person's line is theirs by name (speaker); "user" is the role every
+      // line a person writes is stored with, whoever owns the thread. Each
+      // player's view then reads its own lines as its own (host/projection.js).
       const message = {
         id: mintId("message", now),
         role: "user",
@@ -261,17 +305,20 @@ export const createGameHost = ({
           const index = all.findIndex((chat) => clean(chat?.id) === chatId);
           const chat = all[index];
           // A thread's owner is chat.player, or the host's seat when blank.
-          const inIt = chat && (same(clean(chat.player) || hostCountry, seat.country)
-            || list(chat.countries).some((entry) => same(typeof entry === "object" ? entry?.name ?? entry?.code : entry, seat.country)));
+          const owner = chat ? clean(chat.player) || hostCountry : "";
+          const members = list(chat?.countries).map((entry) => clean(typeof entry === "object" && entry ? entry.name ?? entry.code : entry));
+          const inIt = chat && (same(owner, seat.country) || members.some((name) => same(name, seat.country)));
           if (!inIt) {
             refusal = "You are not in that conversation.";
             return null;
           }
+          parties = [owner, ...members];
           const next = [...all];
           next[index] = { ...chat, messages: [...list(chat.messages), message] };
           return next;
         }
         chatId = mintId("thread", now);
+        parties = [seat.country, ...recipients];
         return [...all, {
           id: chatId,
           player: seat.country,
@@ -282,9 +329,14 @@ export const createGameHost = ({
       if (refusal) return refusal;
       round.touch(seat.country);
       // The AI governments in the thread answer (the game's own diplomacy),
-      // after the player's view shows what they wrote.
-      pushViews().then(() => replyTo({ chatId, seat: seat.country })).then(() => pushViews())
-        .catch((error) => log("warn", "reply failed", { error: String(error?.message || error) }));
+      // after the player's view shows what they wrote. A country a person plays
+      // answers for itself: a thread between people asks the model nothing.
+      const people = seats.humanCountries();
+      const hasAiGovernment = parties.some((name) => name && !same(name, seat.country) && !people.some((human) => same(human, name)));
+      if (hasAiGovernment) {
+        pushViews().then(() => replyTo({ chatId, seat: seat.country })).then(() => pushViews())
+          .catch((error) => log("warn", "reply failed", { error: String(error?.message || error) }));
+      }
       return "";
     },
   };
@@ -371,10 +423,14 @@ export const createGameHost = ({
         void seatsChanged();
       }, 15_000);
     },
-    stop() {
+    // The game is single player again: nobody is played by a person but the
+    // host, and the AI plays every other country as before.
+    async stop() {
       stopped = true;
       timers.clearInterval(expiryTimer);
       round.stop();
+      await pushing.catch(() => {});
+      await forgetHumans().catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
     },
     pushViews,
     status: () => ({ lobby: lobbyFor(null), round: round.status(), players: [...connections.values()].map((entry) => ({ id: entry.id, name: entry.name, seat: seatOf(entry)?.country ?? "" })) }),

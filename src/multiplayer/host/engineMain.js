@@ -25,6 +25,9 @@ import {
   readGameStateBundle,
 } from "../../runtime/gameState.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
+import { setHostingSharedGame } from "../../runtime/humanPolities.js";
+import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
+import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
 import { runChatActionBatch, simulateTimelineJump } from "../../Game/AI/gameplay.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -38,6 +41,36 @@ import { normalizeSettings } from "./settings.js";
 const SCREEN = "host-screen";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
+
+// This window shares the app's storage with the host's own screen. Its log is
+// sent there (see boot) and never stored from here, or the two windows would
+// write over each other's stored copy.
+setDebugLogPersistence(false);
+
+// Nobody reads this window's console: what it warns of, and what goes wrong in
+// it, goes in the log, which the host's screen is sent.
+const captureConsole = () => {
+  let inside = false;
+  const record = (category, message, detail) => {
+    if (inside) return;
+    inside = true;
+    try {
+      logDebugEvent(category, message, detail, { problem: true });
+    } finally {
+      inside = false;
+    }
+  };
+  for (const method of ["warn", "error"]) {
+    const original = console[method].bind(console);
+    console[method] = (...args) => {
+      original(...args);
+      const [first, ...rest] = args;
+      record(method, typeof first === "string" ? first : String(first?.message ?? first), rest.length > 1 ? rest : rest[0]);
+    };
+  }
+  window.addEventListener("unhandledrejection", (event) => record("crash", "Unhandled promise rejection", event.reason));
+  window.addEventListener("error", (event) => record("crash", "Uncaught error", event.error ?? event.message));
+};
 
 // The game's own documents, through the game's own readers and its queued
 // writers (gameState.js mutate*), so a request never races a turn.
@@ -151,6 +184,19 @@ const boot = async () => {
     },
   });
 
+  // Every AI call of a shared game is made in this window. The host's own
+  // screen is told as each one finishes, and is sent what this window logs: its
+  // AI debug console and its diagnostics log then cover the game it hosts.
+  window.addEventListener(GENERATION_COMPLETE_EVENT, (event) => loopback.ai(event.detail ?? {}));
+  captureConsole();
+  let logged = getDebugLogEntries().at(-1)?.seq ?? 0;
+  subscribeToDebugLog(() => {
+    const fresh = getDebugLogEntries().filter((entry) => entry.seq > logged);
+    if (!fresh.length) return;
+    logged = fresh.at(-1).seq;
+    loopback.log(fresh);
+  });
+
   // Plain JSON only: the screen checks it, and refuses a status with anything
   // else in it (an undefined field included).
   const report = () => {
@@ -167,8 +213,19 @@ const boot = async () => {
     });
   };
 
-  const open = async ({ settings: input, name } = {}) => {
+  // The host's screen asks until it is answered, and the game's documents take
+  // a moment to read (longer on a busy machine): every ask made meanwhile is
+  // the same opening, never a second game beside the first.
+  let opening = null;
+  const open = (args = {}) => {
     if (gameHost) return report();
+    opening ??= openGame(args).finally(() => {
+      opening = null;
+    });
+    return opening;
+  };
+
+  const openGame = async ({ settings: input, name } = {}) => {
     const checked = normalizeSettings(input ?? {});
     if (!checked.ok) throw new Error(checked.error);
     const settings = checked.settings;
@@ -217,8 +274,12 @@ const boot = async () => {
         report();
       },
     });
+    // From here this window is the game's host: the engine reads who people
+    // play from the game (runtime/humanPolities.js), and nowhere else does.
+    setHostingSharedGame(true);
     gameHost.start();
     session.start();
+    failure = "";
     report();
   };
 
@@ -243,10 +304,15 @@ const boot = async () => {
         return report();
       }
       case "stop": {
-        session?.stop();
-        gameHost.stop();
+        // No request is taken from here on, and a connection closing late
+        // changes nothing; then the save is single player again, before this
+        // window goes.
+        const stopping = gameHost;
         gameHost = null;
+        session?.stop();
         session = null;
+        await stopping.stop();
+        setHostingSharedGame(false);
         report();
         loopback.close();
         await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});

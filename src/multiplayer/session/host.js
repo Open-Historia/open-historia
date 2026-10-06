@@ -29,6 +29,9 @@ const DEFAULT_LIMITS = Object.freeze({
   offersPerDevicePerMinute: 10,
   messagesPerSecond: 30,
   messageBurst: 60,
+  // The largest thing a player sends is its own Projects board (a few hundred
+  // KB at the board's limit); nothing a player sends is ever larger.
+  maxMessageChars: 512 * 1024,
   strikesToRemove: 5,
   pendingTimeoutMs: 30_000,
   helloTimeoutMs: 10_000,
@@ -276,7 +279,7 @@ export const createHostSession = ({
       session: offer.session,
       device: offer.device,
       name: offer.name,
-      decoder: createDecoder(),
+      decoder: createDecoder({ maxMessageLength: limits.maxMessageChars }),
       bind: (player) => { bound = player; },
       timer: timers.setTimeout(() => {
         if (pending.get(offer.session) === entry) {

@@ -67,7 +67,7 @@ import {
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 dayjs.extend(advancedFormat);
 
@@ -2883,6 +2883,30 @@ const DateWidget = ({
         setVisibleEventCount(Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, skipInFlight]);
+
+    // A shared game's round is resolved by the host and reaches this page as a
+    // new view (multiplayer/). The Events panel opens on it, as it does on a
+    // skip this page ran itself; and once the player has read the round
+    // through, the host is told, so planning begins when everyone has.
+    const openPanelOnRoundRef = React.useRef(null);
+    openPanelOnRoundRef.current = () => setPanel("history");
+    useEffect(() => {
+        const onLanded = () => { if (inSharedGame()) openPanelOnRoundRef.current?.(); };
+        window.addEventListener(SHARED_ROUND_LANDED, onLanded);
+        return () => window.removeEventListener(SHARED_ROUND_LANDED, onLanded);
+    }, []);
+    const toldHostRevealedRef = React.useRef("");
+    useEffect(() => {
+        const id = latestTurnRecord?.id || "";
+        if (!inSharedGame() || skipInFlight || !id || toldHostRevealedRef.current === id) return;
+        // What is still unseen is the record's own (runtime/unseenEvents.js),
+        // not this render's count, which is the round before's for one render.
+        const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+        if (unseenEvents.unseenInTurn(ids).size > 0) return;
+        toldHostRevealedRef.current = id;
+        void requestFromHost("revealed", { round: Number(latestTurnRecord?.round) || 0 });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [latestTurnRecord?.id, writtenEventCount, visibleEventCount, skipInFlight]);
 
     // Half of what the camera needs to turn the names an event carries
     // ("Ireland", "Donetsk") into a place on the map: the half that only moves

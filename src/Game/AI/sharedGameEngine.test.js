@@ -10,8 +10,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { MAX_UNITS_PER_POLITY, enforceUnitVolume, normalizeWorldState } from "../../runtime/gameState.js";
-import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { humanCountriesOf, isSharedGame, setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { idlePulseUnitOps } from "./idlePulse.js";
+
+// These run as the host's engine does while it shares a game.
+setHostingSharedGame(true);
+
+test("a save that still lists human polities is single player wherever it is not being hosted", () => {
+  const left = { country: "France", humanCountries: ["France", "Germany"] };
+  setHostingSharedGame(false);
+  try {
+    // The app was closed mid-game, or the save came from a host's export.
+    assert.deepEqual(humanCountriesOf(left), ["France"]);
+    assert.equal(isSharedGame(left), false);
+  } finally {
+    setHostingSharedGame(true);
+  }
+  assert.deepEqual(humanCountriesOf(left), ["France", "Germany"]);
+  assert.equal(isSharedGame(left), true);
+});
 
 const shared = { country: "France", humanCountries: ["France", "Germany"] };
 const unit = (id, ownerCode, index, source = "ai") => ({

@@ -26,8 +26,10 @@
 //   scenario-defined custom stats (which may be military; the host cannot yet
 //   mark them public), and without its history.
 // - Agreements carry no secrecy flag yet, so every treaty is public.
-// - Scenes, suggestions and intercepts are single-player features still keyed to
-//   the host's seat; other seats get none of them.
+// - Scenes and intercepts are single-player features still keyed to the host's
+//   seat; other seats get none of them.
+// - The AI's suggested orders are each device's own, asked with that player's
+//   own key and kept on that device (client/seatWrites.js): no view carries any.
 
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { normalizeReports } from "../../runtime/reports.js";
@@ -58,16 +60,16 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 
 // The narrator's and the engine's own. Never in any view.
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
-  "boardReviewedRound", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
+  "actionSuggestions", "boardReviewedRound", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "notes",
-  "pendingEventOutreach", "politicalSimulation", "simulationHistory", "simulationReminders",
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "simulationReminders",
   "storylines",
 ]);
 
-// The host seat's single-player features (a scene in progress, its suggestions,
-// the key its own intercepts are sealed with): its own view only.
+// The host seat's single-player features (a scene in progress, the key its own
+// intercepts are sealed with): its own view only.
 const HOST_SEAT_WORLD_KEYS = Object.freeze([
-  "activeInteractive", "actionSuggestions", "interactiveOffer", "lastInteractiveOfferRound", "spySeal",
+  "activeInteractive", "interactiveOffer", "lastInteractiveOfferRound", "spySeal",
 ]);
 
 const ownsUnit = (world, unitId, viewer) => {
@@ -105,10 +107,35 @@ const FILTERED_WORLD_KEYS = Object.freeze({
     return list(world.spies).map((spy) => spyAsSeenBy(audience, spy)).filter(Boolean);
   },
 
-  // A government's projects are its own business.
-  projects: (world, viewer, { host }) => list(world.projects).filter((project) => (clean(project?.ownerCode)
-    ? same(project.ownerCode, viewer)
-    : same(host, viewer))),
+  // A government's Projects board is its own business: what it is working on,
+  // and what its services have learned of anyone else's work. The host's seat
+  // has the game's own board, as single player does; every other person's is
+  // kept beside it (world.seatBoards, gameHost.js "board").
+  projects: (world, viewer, { host }) => {
+    if (same(host, viewer)) return list(world.projects);
+    const boards = isRecord(world.seatBoards) ? world.seatBoards : {};
+    const mine = Object.keys(boards).find((country) => same(country, viewer));
+    return mine ? list(boards[mine]) : [];
+  },
+
+  // The turns as every player's Events panel reads them (GameUI/time.jsx): when
+  // each ran and which events it wrote, in the order they are shown, with the
+  // viewer's own orders. The narrator's summary of the turn, the model's raw
+  // answer, the engine's receipt and everyone else's orders stay with the host.
+  simulationHistory: (world, viewer, { host }) => list(world.simulationHistory).filter(isRecord).map((entry) => ({
+    date: clean(entry.date),
+    fromDate: clean(entry.fromDate),
+    toDate: clean(entry.toDate),
+    round: Number(entry.round) || 0,
+    mode: clean(entry.mode),
+    source: clean(entry.source) || "ai",
+    eventIds: list(entry.eventIds).map(clean).filter(Boolean),
+    plannedActions: list(entry.plannedActions).filter((action) => (clean(action?.ownerCode)
+      ? same(action.ownerCode, viewer)
+      : same(host, viewer))),
+    // Why a turn fell back names the host's model and its provider's error.
+    ...(same(host, viewer) && clean(entry.fallbackReason) ? { fallbackReason: clean(entry.fallbackReason) } : {}),
+  })),
 
   // A subordination as the viewer believes it to stand; a covert one only once
   // learned; its loyalty only for the overlord; who else knows, never.
@@ -272,6 +299,36 @@ const logSeenBy = (events, viewer) => {
   });
 };
 
+// Who is in a thread, as a member's own screen reads it. The chat panel builds
+// a thread's participants from its log, with the reader as the implicit player
+// (runtime/chatThreads.js projectChatThread). In the stored log that reader is
+// the thread's owner: its members are everyone else. So in another member's
+// copy the member's own joining is left out, and the owner joins at the start:
+// a thread the United States opened with China reads, for China, as a thread
+// with the United States.
+const membersSeenBy = (events, viewer, owner) => {
+  const ownerJoins = (created) => ({
+    id: `${clean(created?.id) || "thread"}-owner`,
+    kind: "member_joined",
+    time: clean(created?.time),
+    by: "",
+    member: { code: owner, name: owner },
+  });
+  const out = [];
+  let ownerListed = false;
+  for (const event of list(events)) {
+    const membership = event?.kind === "member_joined" || event?.kind === "member_left";
+    if (membership && (same(event.member?.name, viewer) || same(event.member?.code, viewer))) continue;
+    out.push(event);
+    if (event?.kind === "chat_created" && !ownerListed) {
+      ownerListed = true;
+      out.push(ownerJoins(event));
+    }
+  }
+  if (!ownerListed) out.unshift(ownerJoins(null));
+  return out;
+};
+
 export const projectChats = (chats, viewer, { host = "" } = {}) => list(chats).flatMap((chat) => {
   if (!isRecord(chat)) return [];
   const owner = threadOwner(chat, host);
@@ -295,10 +352,26 @@ export const projectChats = (chats, viewer, { host = "" } = {}) => list(chats).f
     if (fold(rest.role) === "user") return { ...rest, role: "leader", ...authorFields(author, rest) };
     return rest;
   };
-  const messages = list(chat.messages).map((message) => (isRecord(message)
-    ? asSeen(message, (line) => clean(line.speaker || line.code) || (fold(line.role) === "user" ? owner : ""))
-    : message));
-  const log = Array.isArray(chat.events) ? (isOwner ? chat.events : logSeenBy(chat.events, viewer)) : null;
+  const log = Array.isArray(chat.events)
+    ? (isOwner ? chat.events : membersSeenBy(logSeenBy(chat.events, viewer), viewer, owner))
+    : null;
+  // The thread's lines, beside its log: one the log holds is shown only where
+  // the viewer's part of the log holds it; one written beside the log was said
+  // just now, to everyone in the thread.
+  const messageIds = (events) => new Set(list(events).filter((event) => event?.kind === "message").map((event) => clean(event.id)));
+  const logged = messageIds(chat.events);
+  const heard = messageIds(log);
+  const messages = list(chat.messages)
+    .filter((message) => !isRecord(message) || !logged.has(clean(message.id)) || heard.has(clean(message.id)))
+    .map((message) => (isRecord(message)
+      ? asSeen(message, (line) => clean(line.speaker || line.code) || (fold(line.role) === "user" ? owner : ""))
+      : message));
+  // The votes and demands kept beside a log are read from the whole of it; the
+  // viewer's screen reads its own from the part it is sent.
+  if (log && !isOwner) {
+    delete rest.polls;
+    delete rest.demands;
+  }
   return [{
     ...rest,
     countries,

@@ -205,6 +205,124 @@ test("diplomacy: a thread belongs to whoever opened it, the AI answers, and no o
   assert.match(s.ack(s.guest, id(4)).error, /does not write to itself/);
 });
 
+test("diplomacy between people: each writes their own lines, the model answers for neither, and each reads a thread with the other", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+
+  // The host opens a thread with the country the guest plays.
+  await s.request(s.hostPlayer, { t: "say", id: id(2), thread: null, to: [RUSSIA], text: "Riga to Moscow." });
+  assert.equal(s.ack(s.hostPlayer, id(2)).ok, true);
+  await s.clock.flush();
+  const thread = s.store.docs.chat.find((chat) => chat.player === LATVIA);
+  assert.deepEqual(thread.countries.map((entry) => entry.name), [RUSSIA]);
+  assert.deepEqual(s.replies, [], "Russia is a person's: nothing is asked of the model");
+
+  // The guest reads it as a thread with Latvia, and answers in it.
+  const seen = () => s.shown(s.guest).chat.find((chat) => chat.id === thread.id);
+  assert.deepEqual(seen().countries.map((entry) => entry.name), [LATVIA]);
+  assert.deepEqual(seen().messages.map((message) => [message.role, message.speaker]), [["leader", LATVIA]]);
+  await s.request(s.guest, { t: "say", id: id(3), thread: thread.id, to: [], text: "Moscow to Riga." });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  await s.clock.flush();
+  assert.deepEqual(s.replies, []);
+  assert.deepEqual(seen().messages.map((message) => [message.role, message.speaker]), [["leader", LATVIA], ["user", RUSSIA]]);
+  const hosts = s.shown(s.hostPlayer).chat.find((chat) => chat.id === thread.id);
+  assert.deepEqual(hosts.countries.map((entry) => entry.name), [RUSSIA]);
+  assert.deepEqual(hosts.messages.map((message) => [message.role, message.speaker]), [["user", LATVIA], ["leader", RUSSIA]]);
+
+  // A thread the guest opens with the host is the guest's, and the host answers in it.
+  await s.request(s.guest, { t: "say", id: id(4), thread: null, to: [LATVIA], text: "A second channel." });
+  const second = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  assert.deepEqual(second.countries.map((entry) => entry.name), [LATVIA]);
+  await s.request(s.hostPlayer, { t: "say", id: id(5), thread: second.id, to: [], text: "Received." });
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  await s.clock.flush();
+  assert.deepEqual(s.replies, []);
+
+  // With an AI government at the table too, that government is asked, once.
+  await s.request(s.hostPlayer, { t: "say", id: id(6), thread: null, to: [RUSSIA, ESTONIA], text: "A Baltic conference." });
+  await s.clock.flush();
+  const conference = s.store.docs.chat.find((chat) => chat.countries.length === 2);
+  assert.deepEqual(s.replies, [{ chatId: conference.id, seat: LATVIA }]);
+  await s.request(s.guest, { t: "say", id: id(7), thread: conference.id, to: [], text: "Moscow attends." });
+  await s.clock.flush();
+  assert.deepEqual(s.replies.at(-1), { chatId: conference.id, seat: RUSSIA });
+});
+
+test("a guest's thread keeps its owner through the game's own normalizer and reconciler, beside the host's thread with the same country", async () => {
+  const { normalizeChats, reconcileChatsForPlayer } = await import("../../runtime/gameState.js");
+  const world = { polityOverrides: Object.fromEntries([LATVIA, RUSSIA, ESTONIA].map((name) => [name, { code: name, name, status: "active" }])) };
+  const line = (id, speaker, text) => ({ id, role: "user", speaker, code: speaker, text });
+  const stored = normalizeChats([
+    { id: "lv-est", countries: [{ code: ESTONIA, name: ESTONIA }], messages: [line("m1", LATVIA, "Riga to Tallinn")] },
+    { id: "ru-est", player: RUSSIA, countries: [{ code: ESTONIA, name: ESTONIA }], messages: [line("m2", RUSSIA, "Moscow to Tallinn")] },
+    { id: "ru-lv", player: RUSSIA, countries: [{ code: LATVIA, name: LATVIA }], messages: [line("m3", RUSSIA, "Moscow to Riga")] },
+  ]);
+  assert.deepEqual(stored.map((chat) => chat.player ?? ""), ["", RUSSIA, RUSSIA]);
+  // The host's game is reconciled for the host's country (the institutions do
+  // this): Russia's threads are neither merged into Latvia's nor dropped.
+  const after = reconcileChatsForPlayer(stored, world, LATVIA);
+  assert.deepEqual(after.map((chat) => [chat.id, chat.player ?? "", chat.countries.map((entry) => entry.name).join()]), [
+    ["lv-est", "", ESTONIA],
+    ["ru-est", RUSSIA, ESTONIA],
+    ["ru-lv", RUSSIA, LATVIA],
+  ]);
+  assert.deepEqual(after.map((chat) => chat.messages.length), [1, 1, 1]);
+});
+
+test("each player keeps a Projects board of its own: the host's is the game's, another person's is kept beside it", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const names = (projects) => (projects ?? []).map((project) => project.name);
+
+  // The guest's advisor put a project on its board; what is not a project is dropped.
+  await s.request(s.guest, { t: "board", id: id(2), projects: [{ name: "Northern Fleet refit", status: "active", summary: "Dry docks at Severodvinsk." }, { nonsense: true }, "text"] });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual(Object.keys(s.store.docs.world.seatBoards), [RUSSIA]);
+  assert.deepEqual(names(s.store.docs.world.seatBoards[RUSSIA]), ["Northern Fleet refit"]);
+  assert.deepEqual(names(s.store.docs.world.projects), [], "the game's own board is the host's, untouched");
+  assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
+  assert.deepEqual(names(s.shown(s.hostPlayer).world.projects), []);
+  assert.equal(JSON.stringify(s.shown(s.hostPlayer)).includes("Northern Fleet"), false, "nothing of it reaches the host's view");
+
+  // The host's own board is the game's, as in single player.
+  await s.request(s.hostPlayer, { t: "board", id: id(3), projects: [{ name: "Riga port expansion" }] });
+  assert.deepEqual(names(s.store.docs.world.projects), ["Riga port expansion"]);
+  assert.deepEqual(names(s.shown(s.hostPlayer).world.projects), ["Riga port expansion"]);
+  assert.deepEqual(names(s.shown(s.guest).world.projects), ["Northern Fleet refit"]);
+  assert.equal(JSON.stringify(s.shown(s.guest)).includes("Riga port"), false);
+
+  // A board is a list; an emptied one is kept as nothing.
+  await s.request(s.guest, { t: "board", id: id(4), projects: { name: "not a list" } });
+  assert.match(s.ack(s.guest, id(4)).error, /list of projects/);
+  await s.request(s.guest, { t: "board", id: id(5), projects: [] });
+  assert.deepEqual(s.store.docs.world.seatBoards, {});
+  assert.deepEqual(names(s.shown(s.guest).world.projects), []);
+});
+
+test("when the game stops being shared the save is single player again", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  await s.host.stop();
+  assert.equal("humanCountries" in s.store.docs.game, false);
+  // A connection closing late, or a request arriving late, changes nothing.
+  s.host.leave(s.guest);
+  await s.request(s.guest, { t: "order", id: id(2), text: "Too late" });
+  await s.clock.flush();
+  assert.equal("humanCountries" in s.store.docs.game, false);
+  assert.equal(s.store.docs.actions.some((action) => action.ownerCode === RUSSIA), false);
+});
+
 test("a round: everyone ready resolves it, with everyone who plays written into the game first, then new views", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);

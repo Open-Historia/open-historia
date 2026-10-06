@@ -2,8 +2,9 @@
 // Run: node --test src/multiplayer/client/remoteRuntime.test.js
 //
 // While a shared game is on, the game's document reads are answered from the
-// host's view and writes to them are turned away; everything else is this
-// device's own. Off, nothing changes.
+// host's view, and a write to one is read by a hook and answered with the
+// document the page holds; everything else is this device's own. Off, nothing
+// changes.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -45,20 +46,56 @@ test("on, the game's documents come from the host's view, and a newer view repla
   assert.deepEqual(published.at(-1), { url: urlFor("world"), value: { units: [3] } });
 });
 
-test("writes to the host's documents are turned away with a reason; a turn cannot be committed here", async () => {
-  const refused = [];
-  startRemoteRuntime({ publish: () => {}, urlFor, onRefusedWrite: (key) => refused.push(key) });
+test("a write never reaches the host's game or this device's store: a hook reads it, and the page is answered with the document it holds", async () => {
+  const writes = [];
+  const shown = [];
+  const runtime = startRemoteRuntime({
+    publish: (entries) => shown.push(...entries),
+    urlFor,
+    onWrite: ({ key, wanted, held }) => {
+      writes.push({ key, wanted, held });
+      // The hook may answer in the shape the page's own writers save in.
+      return key === "actions" ? [{ id: "shaped" }] : undefined;
+    },
+  });
+  runtime.apply({ rev: 1, docs: { world: { units: [1], projects: [] }, game: { country: "Spain", round: 3 }, events: [], chat: [], actions: [] } });
   network.length = 0;
-  for (const key of ["world", "actions", "chat", "events", "game"]) {
-    const reply = await body(await target.fetch(`/api/runtime/json/${key}?v=token`, { method: "PUT", body: "[]" }));
-    assert.equal(reply.status, 409);
-    assert.match(reply.json.error, /requests/);
-  }
+
+  const wanted = { units: [1, 2], projects: [], actionSuggestions: ["a"] };
+  const reply = await body(await target.fetch("/api/runtime/json/world?v=token", { method: "PUT", body: JSON.stringify(wanted) }));
+  assert.deepEqual(reply, { status: 200, json: { units: [1], projects: [] } }, "the host's view, whatever was written");
+  assert.deepEqual(writes, [{ key: "world", wanted, held: { units: [1], projects: [] } }]);
+  assert.deepEqual((await body(await target.fetch("/api/runtime/json/actions?v=token", { method: "PUT", body: "[]" }))).json, [{ id: "shaped" }]);
+
+  // What is this device's own is laid over every view of the document from here on.
+  runtime.patch("world", { actionSuggestions: ["a"] });
+  assert.deepEqual(shown.at(-1), { url: urlFor("world"), value: { units: [1], projects: [], actionSuggestions: ["a"] } });
+  assert.deepEqual((await body(await target.fetch("/api/runtime/json/world?v=token"))).json.actionSuggestions, ["a"]);
+  runtime.apply({ rev: 2, docs: { world: { units: [9], projects: [] } } });
+  assert.deepEqual(shown.at(-1).value, { units: [9], projects: [], actionSuggestions: ["a"] });
+  const before = shown.length;
+  runtime.patch("world", { actionSuggestions: undefined }, { quiet: true });
+  assert.equal(shown.length, before, "quietly: a view is about to show it");
+  assert.deepEqual(runtime.held("world"), { units: [9], projects: [] });
+
+  // A turn is never committed here, and the rollback archive is the host's.
   assert.equal((await target.fetch("/api/runtime/turn-commit", { method: "PUT", body: "{}" })).status, 409);
   assert.equal((await target.fetch("/api/runtime/json/snapshots?v=token", { method: "PUT", body: "[]" })).status, 409);
   assert.deepEqual((await body(await target.fetch("/api/runtime/json/snapshots?v=token"))).json, []);
-  assert.deepEqual(refused, ["world", "actions", "chat", "events", "game"]);
+  // A document the host has not sent cannot be written either.
+  assert.equal((await target.fetch("/api/runtime/json/flags?v=token", { method: "PUT", body: "{}" })).status, 409);
   assert.equal(network.length, 0);
+});
+
+test("a save that repeats without end is stopped", async () => {
+  const runtime = startRemoteRuntime({ publish: () => {}, urlFor, onWrite: () => undefined });
+  runtime.apply({ rev: 1, docs: { world: {}, game: {}, events: [], chat: [], actions: [] } });
+  const statuses = [];
+  for (let n = 0; n < 40; n += 1) statuses.push((await target.fetch("/api/runtime/json/world?v=token", { method: "PUT", body: "{}" })).status);
+  assert.equal(statuses.slice(0, 30).every((status) => status === 200), true, "an ordinary run of saves is answered");
+  assert.equal(statuses.at(-1), 409, "one that never stops is turned away");
+  // Another document is counted on its own.
+  assert.equal((await target.fetch("/api/runtime/json/actions?v=token", { method: "PUT", body: "[]" })).status, 200);
 });
 
 test("what is this device's own passes through: the advisor, the map's files, the library, other origins", async () => {

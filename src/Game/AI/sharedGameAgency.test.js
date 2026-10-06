@@ -14,8 +14,11 @@ import {
   playerAgencyViolationReason,
   screenGeneratedWorldEvents,
 } from "./nativeWorldIntegrity.js";
-import { humanCountriesOf, isSharedGame, orderOwner } from "../../runtime/humanPolities.js";
+import { humanCountriesOf, isSharedGame, orderOwner, setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { normalizeActionEntry } from "../../runtime/gameState.js";
+
+// These run as the host's engine does while it shares a game.
+setHostingSharedGame(true);
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";

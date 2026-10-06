@@ -14,6 +14,11 @@ const roleListeners = new Set();
 
 export const inSharedGame = () => remoteRuntimeActive();
 
+// Said on the window when a round the host resolved has reached this page: its
+// events are in the page's documents, none of them shown yet. The time controls
+// open the Events panel on it, as they do on a time skip the page ran itself.
+export const SHARED_ROUND_LANDED = "oh:shared-round-landed";
+
 // A guest's rounds, replies and stat sheets are all the host's work, on the
 // host's AI key; the role says which one this page is. For useSyncExternalStore.
 export const sharedGameRole = () => role;

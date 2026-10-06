@@ -186,6 +186,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
         ) : null}
         <button type="button" style={button} onClick={onClose}>Cancel</button>
       </div>
+      {busy && !error ? <p style={note}>Starting the game on this computer. If it is busy with something else, this can take a minute or two.</p> : null}
       {error ? <p style={errorText}>{error}</p> : null}
     </section>
   );

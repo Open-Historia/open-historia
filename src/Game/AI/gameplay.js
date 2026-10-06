@@ -7723,9 +7723,23 @@ const applySimulationResult = async ({
   // belongs to the period rather than to one event with its last.
   const lastTurnEventId = normalizeString(normalizeArray(worldWithImpacts.simulationHistory?.[0]?.eventIds).at(-1));
 
+  // In a shared game (runtime/humanPolities.js) a thread the turn opens is
+  // written to the host's own player, and its opening lines are the AI's. A
+  // country another person plays is never one of the governments speaking in
+  // it: that person writes their own lines, in a thread they open themselves.
+  const otherPeople = new Set(humanCountriesOf(baseGame).map(regionKey).filter((key) => key !== regionKey(baseGame.country)));
+  const withoutOtherPeople = (chatLike) => {
+    if (!otherPeople.size) return chatLike;
+    const countries = normalizeArray(chatLike?.countries)
+      .filter((country) => !otherPeople.has(regionKey(normalizeString(typeof country === "string" ? country : country?.name || country?.code))));
+    return countries.length ? { ...chatLike, countries } : null;
+  };
+
   for (const event of freshEvents) {
     for (const createdChat of event.impacts.createdChats) {
-      const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
+      const opened = withoutOtherPeople(createdChat);
+      if (!opened) continue;
+      const nextChat = await buildGeneratedChat(opened, event.id, worldWithImpacts, {
         fallbackTitle: event.title,
         playerName: baseGame.country,
         revealWith: event.id,
@@ -7737,7 +7751,7 @@ const applySimulationResult = async ({
   // Unprompted outreach: polities reaching out on their own initiative during
   // the simulated period, not tied to any event (treaty feelers, summit
   // invitations). Same chat machinery, no linked event.
-  for (const chatLike of normalizeArray(result.outreach)) {
+  for (const chatLike of normalizeArray(result.outreach).map(withoutOtherPeople).filter(Boolean)) {
     const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
       playerName: baseGame.country,
       revealWith: lastTurnEventId,
@@ -12394,9 +12408,26 @@ export const runChatActionBatch = async ({
     : eventsFromLegacyChat(stored);
   const projected = projectChatThread(events);
   const lifecycleResponseActors = new Set((lifecycleDecisionContext?.cases || []).map((entry) => regionKey(entry?.polity)).filter(Boolean));
-  const aiParticipants = projected.countries
+  // In a shared game (runtime/humanPolities.js) other people sit at this table
+  // too: every member a person plays, and the thread's owner when the one
+  // writing now is one of its members. A stored thread is written around its
+  // owner (chat.player, or the host's seat), who is in no member list. Each
+  // person writes their own lines: the model never answers for one, and a
+  // thread between people alone asks it nothing.
+  const savedGame = bundle.savedGame || bundle.game;
+  const peopleKeys = new Set(humanCountriesOf(savedGame).map(regionKey));
+  const threadOwner = peopleKeys.size > 1
+    ? normalizeString(stored.player) || normalizeString(savedGame?.country)
+    : "";
+  const memberNames = projected.countries
     .map((country) => normalizeString(country?.name))
-    .filter((name) => name && regionKey(name) !== regionKey(player))
+    .filter((name) => name && regionKey(name) !== regionKey(player));
+  const otherPeople = [
+    ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
+    ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
+  ].filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
+  const aiParticipants = memberNames
+    .filter((name) => !otherPeople.some((person) => regionKey(person) === regionKey(name)))
     .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
     .filter((name) => !formalBusinessRequested || autonomousBallotActors.has(regionKey(name)));
   if (!aiParticipants.length) return { events: [], applied: [], rejected: [], actions: [] };
@@ -12440,7 +12471,7 @@ export const runChatActionBatch = async ({
   // every AI participant and the player, who is exactly who a covert Puppet most
   // needs to deceive.
   const briefingWorld = normalizeWorldState(bundle.world);
-  const inTheRoom = [...aiParticipants, player];
+  const inTheRoom = [...aiParticipants, ...otherPeople, player];
   const subordinationBlocks = aiParticipants
     .map((speaker) => describePuppetBriefing(puppetBriefingFor(briefingWorld, speaker, { present: inTheRoom }), speaker))
     .filter(Boolean);
@@ -12468,7 +12499,8 @@ export const runChatActionBatch = async ({
   const recent = shownMessages.slice(-24);
   const lines = recent.map((message) => {
     const absent = absentFrom(message);
-    return `[${message.id}] ${message.speaker || (message.role === "user" ? player : "someone")}: ${message.text}`
+    // A line with no name on it was written by the thread's own player.
+    return `[${message.id}] ${message.speaker || (message.role === "user" ? threadOwner || player : "someone")}: ${message.text}`
       + (absent.length ? ` (not heard by ${absent.join(", ")})` : "");
   });
   const transcript = [
@@ -12480,6 +12512,7 @@ export const runChatActionBatch = async ({
   const rosterText = [
     ...aiParticipants.map((name) => `- ${name} — AI-controlled: you act for it`),
     `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
+    ...otherPeople.map((name) => `- ${name} — HUMAN-controlled (another player): never speak or act for it; it answers for itself`),
   ].join("\n");
 
   const politicalContextWorld = evaluation?.politicalWorldOverride || bundle.world;
@@ -12593,7 +12626,7 @@ export const runChatActionBatch = async ({
       describeLeaderStanding(bundle.world, { player, speakers: aiParticipants }),
       // The regions where any of them is the lawful owner, the holder or a
       // claimant and those differ, as a one-to-one leader is told.
-      await describeTerritoryForConversation(bundle.world, loadRegionCatalog, [player, ...aiParticipants]),
+      await describeTerritoryForConversation(bundle.world, loadRegionCatalog, [player, ...aiParticipants, ...otherPeople]),
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
       institutionLifecyclePrompt,
       formalInstitutionPrompt,
@@ -12629,7 +12662,7 @@ export const runChatActionBatch = async ({
   const turnTime = normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate);
   const outcome = applyChatActionBatch(partitioned.conversational, {
     aiParticipants,
-    humanParticipants: [player],
+    humanParticipants: [player, ...otherPeople],
     knownPolities: known,
     messageIds: shownMessages.map((message) => message.id),
     polls: projected.polls,

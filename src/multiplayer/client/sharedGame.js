@@ -9,16 +9,24 @@
 //     plays the host's game through it.
 //
 // Either way the page then reads only its view (client/remoteRuntime.js) and
-// sends requests (client/gameClient.js); it never writes the game.
+// sends requests (client/gameClient.js); it never writes the game. What the
+// game's own screens save is read for the few things that are the player's own
+// to change (client/seatWrites.js): those are asked of the host or kept on this
+// device, and the rest of the save changes nothing.
 //
 // The signaling relays are signaling/relays.js's (a local one for tests).
 
 import { useSyncExternalStore } from "react";
 import { JSON_URLS, publishJsonWriteBatch } from "../../runtime/assets.js";
 import { activateGame, createGame, getLibraryState, refreshLibraryCatalog, setSharedGameEntry } from "../../runtime/library.js";
+import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
+import { unseenEvents } from "../../runtime/unseenEvents.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
+import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
+import { UNSENT_NOTICES, planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { relayChannelFactory } from "../signaling/relays.js";
@@ -59,27 +67,124 @@ export const sharedGameActive = () => state.mode !== "off" && state.mode !== "en
 
 let current = null; // { client, runtime, gameId, session?, screen?, pendingViews: [] }
 
+// How long the host's screen waits for its engine window to open the game.
+const ENGINE_START_MS = 120_000;
+
 const deviceIdentity = () => loadDeviceIdentity(localStorage);
 
 // The page's caches take each view the way they take a finished turn.
-const beginRuntime = (onRefusedWrite) => startRemoteRuntime({
+const beginRuntime = (onWrite) => startRemoteRuntime({
   publish: (entries) => publishJsonWriteBatch(entries),
   urlFor: (key) => JSON_URLS[key] || "",
-  onRefusedWrite,
+  onWrite,
 });
 
-const refusedWrite = (key) => set({
-  notices: [...state.notices, { level: "warn", text: `That change (${key}) is made by the host in a shared game, and this one cannot be requested yet.`, at: Date.now() }].slice(-20),
-});
+// What the round bar says: the host's notices (client/gameClient.js) and this
+// page's own, in the order they were said.
+const noticesNow = () => [...(current?.hostNotices ?? []), ...(current?.ownNotices ?? [])]
+  .sort((left, right) => (left.at || 0) - (right.at || 0))
+  .slice(-20);
+
+// This page's own word to its player. The same thing twice in a row is said once.
+const notify = (text, level = "warn") => {
+  if (!current) return;
+  const own = current.ownNotices ?? [];
+  const last = own.at(-1);
+  if (last?.text === text && Date.now() - (last.at || 0) < 20_000) return;
+  current.ownNotices = [...own, { level, text, at: Date.now() }].slice(-20);
+  set({ notices: noticesNow() });
+};
+
+// The player's own Projects board, asked of the host. The page shows it at
+// once; the host's next view of the world then carries it, or the host's
+// reason for refusing puts the board back as it was.
+const sendBoard = (owner, projects) => {
+  owner.boardWrites = (owner.boardWrites ?? 0) + 1;
+  const mine = owner.boardWrites;
+  owner.boardKept = false;
+  owner.runtime.patch("world", { projects }, { quiet: true });
+  void owner.client.request("board", { projects }).then((answer) => {
+    // A later change to the board has taken this one's place.
+    if (current !== owner || owner.boardWrites !== mine) return;
+    if (answer.ok) {
+      owner.boardKept = true;
+      return;
+    }
+    owner.runtime.patch("world", { projects: undefined });
+    notify(`The Projects board was not changed: ${answer.error || "the host did not answer."}`);
+  });
+};
+
+// A document in the shape the page's own writers save it in, which is the
+// shape their caches expect back (runtime/assets.js writeJson).
+const asThePageSavesIt = (key, value) => {
+  if (key === "world") return normalizeWorldState(value);
+  if (key === "chat") return normalizeChats(value);
+  if (key === "actions") return normalizeActions(value);
+  if (key === "events") return normalizeEvents(value);
+  return value;
+};
+
+// One of the game's screens saved a document (client/remoteRuntime.js).
+const ownWrite = ({ key, wanted, held }) => {
+  const owner = current;
+  if (!owner?.runtime) return undefined;
+  if (key === "world") {
+    const plan = planWorldWrite(held, wanted);
+    if (Object.keys(plan.device).length) {
+      owner.suggestedInRound = Number(owner.round);
+      owner.runtime.patch("world", plan.device, { quiet: true });
+    }
+    if (plan.board) sendBoard(owner, plan.board);
+    for (const what of plan.unsent) notify(UNSENT_NOTICES[what]);
+  }
+  return asThePageSavesIt(key, owner.runtime.held(key));
+};
 
 // A view reaches the page's documents, and its game document the library's
 // entry for the game it is shown in (library.js setSharedGameEntry): the menu
 // bar and the loading screen name the player's country and the host's date.
 const applyToRuntime = (view) => {
-  const applied = current.runtime.apply(view);
+  const owner = current;
   const game = view?.docs?.game;
-  if (applied && current.gameId && game && typeof game === "object") {
-    setSharedGameEntry({ gameId: current.gameId, country: game.country, currentDate: game.gameDate });
+  const world = view?.docs?.world;
+  const arriving = Boolean(world && typeof world === "object");
+  // The AI's suggestions were for the round they were asked in.
+  if (game && typeof game === "object") {
+    if (suggestionsOutlived(owner.suggestedInRound, game.round)) {
+      owner.suggestedInRound = undefined;
+      owner.runtime.patch("world", { actionSuggestions: undefined }, { quiet: arriving });
+    }
+    owner.round = Number(game.round);
+  }
+  let landed = null;
+  if (arriving) {
+    // The host has kept the board it was asked to: its own copy is the one shown.
+    if (owner.boardKept) {
+      owner.boardKept = false;
+      owner.runtime.patch("world", { projects: undefined }, { quiet: true });
+    }
+    // A round the host resolved lands here as a new newest turn. It is shown
+    // one event at a time, as a time skip this page ran itself is, so it is
+    // marked before any screen can read it (runtime/unseenEvents.js). The turn
+    // a player finds when they join was not theirs to watch: it is shown whole.
+    const turn = revealedTurnOf(world);
+    if (turn && owner.turnKey !== undefined && turn.key !== owner.turnKey) {
+      unseenEvents.markTurnUnseen(turn.eventIds);
+      landed = turn;
+      // Whatever the AI suggested was for the round that has just ended.
+      owner.suggestedInRound = undefined;
+      owner.runtime.patch("world", { actionSuggestions: undefined }, { quiet: true });
+    }
+    owner.turnKey = turn?.key ?? owner.turnKey ?? "";
+  }
+  const applied = owner.runtime.apply(view);
+  if (applied && owner.gameId && game && typeof game === "object") {
+    setSharedGameEntry({ gameId: owner.gameId, country: game.country, currentDate: game.gameDate });
+  }
+  // The Events panel opens on the round (GameUI/time.jsx).
+  if (applied && landed && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SHARED_ROUND_LANDED, { detail: { round: landed.round, events: landed.eventIds.length } }));
   }
   return applied;
 };
@@ -94,17 +199,20 @@ const makeClient = (send) => createGameClient({
     }
     return applyToRuntime(view);
   },
-  onChange: ({ lobby, round, notices }) => set({
-    lobby,
-    round,
-    notices,
-    mode: state.mode === "opening" ? "lobby" : lobby?.started && state.mode === "lobby" ? "playing" : state.mode,
-  }),
+  onChange: ({ lobby, round, notices }) => {
+    if (current) current.hostNotices = notices;
+    set({
+      lobby,
+      round,
+      notices: current ? noticesNow() : notices,
+      mode: state.mode === "opening" ? "lobby" : lobby?.started && state.mode === "lobby" ? "playing" : state.mode,
+    });
+  },
 });
 
 const startViews = () => {
   if (!current || current.runtime) return;
-  current.runtime = beginRuntime(refusedWrite);
+  current.runtime = beginRuntime(ownWrite);
   for (const view of current.pendingViews.splice(0)) applyToRuntime(view);
 };
 
@@ -131,6 +239,16 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
         screen.hello(identity.id, name || "Host");
       }
     },
+    // The engine makes the game's AI calls. Each one it finishes is announced
+    // here as this window's own are, a moment later (its record is stored just
+    // after the call ends), so the AI debug console shows it; and what the
+    // engine logs goes in this window's diagnostics log.
+    onAi: (detail) => {
+      setTimeout(() => window.dispatchEvent(new CustomEvent(GENERATION_COMPLETE_EVENT, { detail })), 600);
+    },
+    onLog: (entries) => {
+      for (const entry of entries) logDebugEvent(entry.category, `(host's engine) ${entry.message}`, entry.detail || undefined, { problem: entry.problem });
+    },
   });
   current.screen = screen;
   current.client = makeClient((message) => screen.request(message));
@@ -141,10 +259,12 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
       throw new Error(opened?.error || "The engine window did not open.");
     }
   }
-  // The engine page takes a moment to boot; ask until it answers.
-  for (let attempt = 0; attempt < 40 && !state.engine?.open && state.mode === "opening"; attempt += 1) {
+  // The engine page takes a moment to boot and to read the game, and a good
+  // deal longer on a machine busy with something else: ask until it answers.
+  const giveUpAt = Date.now() + ENGINE_START_MS;
+  while (Date.now() < giveUpAt && !state.engine?.open && state.mode === "opening") {
     screen.control("open", { settings, name: name || "Host" });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     if (state.engine?.error) break;
   }
   if (!state.engine?.open) {

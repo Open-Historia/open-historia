@@ -5,16 +5,30 @@
 // game.country stays first: it is the host's own seat, the one every
 // single-player path of the engine already speaks to.
 //
+// The list counts only in the engine that is hosting the game (the host's
+// engine window says so with setHostingSharedGame). The host clears it when the
+// game stops being shared, but a save can still carry one: the app was closed
+// mid-game, or the save was exported from a host. Opened anywhere else it is
+// single player, and the AI plays every country but the player's as it always
+// has.
+//
 // An order carries its owner in ownerCode (the name units and projects use for
 // the polity they belong to). Single player's orders have none: they are the
 // player's.
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
+let hosting = false;
+
+// The host's engine window, while it runs a shared game (multiplayer/host/engineMain.js).
+export const setHostingSharedGame = (value) => {
+  hosting = Boolean(value);
+};
+
 export const humanCountriesOf = (game) => {
   const names = [];
   const seen = new Set();
-  const extra = Array.isArray(game?.humanCountries) ? game.humanCountries : [];
+  const extra = hosting && Array.isArray(game?.humanCountries) ? game.humanCountries : [];
   for (const value of [game?.country, ...extra]) {
     const name = clean(value);
     const key = name.toLocaleLowerCase();
