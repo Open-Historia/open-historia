@@ -38,7 +38,7 @@ import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
 import RBush from "ol/structs/RBush.js";
-import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, isSliver, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, isSliver, leftAloneTally, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1254,8 +1254,9 @@ const OlMap = ({
     // A hole wider than BORDER_CLEANUP.maxWidthInsideOneRegion is filled only
     // when two or more regions are on its rim: one region all the way round is
     // a lake or an inlet that region was drawn around, not a crack between
-    // regions (topologySweep.js cracksAmong).
-    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
+    // regions (topologySweep.js cracksAmong). `onLeftAlone(hole)` hears of
+    // each one passed over for that.
+    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity, onLeftAlone } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
       // How many of the pass's regions are on a hole's rim, as far as two.
@@ -1270,7 +1271,7 @@ const OlMap = ({
         }
         return holders;
       };
-      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width })) {
+      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width, onLeftAlone })) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
@@ -1303,7 +1304,9 @@ const OlMap = ({
     // Narrow overlaps between feats[from, to) and their later-ordered extent
     // neighbours. R2.4: the VectorSource spatial index is asked only for the
     // regions whose extents can actually meet A, never every pair.
-    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip } = {}) => {
+    // `onLeftAlone(a, b)` hears of each pair that overlaps narrowly and is not
+    // trimmed, because what it shares is too much of the smaller region.
+    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip, onLeftAlone } = {}) => {
       const items = [];
       for (let i = from; i < to; i += 1) {
         const a = feats[i];
@@ -1336,7 +1339,10 @@ const OlMap = ({
           // smaller region is left as it is: that is not a sliver, and the
           // trim below would take it out of a region that has little else
           // (topologySweep.js isSliver).
-          if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) continue;
+          if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) {
+            onLeftAlone?.(a, b);
+            continue;
+          }
           // Deterministic conservative rule: the larger region keeps the tiny
           // overlap; the smaller one is trimmed to its exact boundary. This is
           // only done for narrow overlaps.
@@ -1541,6 +1547,11 @@ const OlMap = ({
       let parts = 1;
       let skippedPairs = 0;
       let repairsLeft = 0;
+      // What the two guards passed over, for the note after the save: holes
+      // one region surrounds and pairs that share too much of the smaller
+      // region, each counted once over all the passes (topologySweep.js
+      // leftAloneTally).
+      const leftAlone = leftAloneTally();
       const outcome = (affectedRegions) => ({
         changed: affectedRegions > 0,
         gaps: totals.gaps,
@@ -1552,6 +1563,7 @@ const OlMap = ({
         passes,
         parts,
         skippedPairs,
+        ...leftAlone.counts(),
         stopped,
         error,
         elapsedMs: elapsed(),
@@ -1613,7 +1625,7 @@ const OlMap = ({
           });
           parts = Math.max(parts, search.parts);
           const holes = local ? search.holes.filter((hole) => touchesHotspot(hole.geom.getExtent(), hotspots)) : search.holes;
-          const gaps = assignGapTargets(holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices });
+          const gaps = assignGapTargets(holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices, onLeftAlone: leftAlone.hole });
           report({ gapsFound: gaps.length });
           await yieldToBrowser();
 
@@ -1628,6 +1640,7 @@ const OlMap = ({
               minWidth: floor,
               maxPairVertices: BORDER_CLEANUP.maxUnionVertices,
               onSkip: () => { skippedThisPass += 1; },
+              onLeftAlone: (a, b) => leftAlone.pair(a.getId(), b.getId()),
             }));
             report({ regionsChecked: to, overlapsFound: overlapsFound.length });
             await yieldToBrowser();
@@ -1656,6 +1669,9 @@ const OlMap = ({
               overlapsTrimmed += 1;
               applied.push(item);
               changed.add(regionSource.getFeatureById(item.loserId));
+              // If an earlier pass had passed this pair over, it was not left
+              // alone after all.
+              leftAlone.trimmed(item.winnerId, item.loserId);
             }
           }
           const byTarget = new globalThis.Map();

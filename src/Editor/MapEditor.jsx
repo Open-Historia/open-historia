@@ -20,7 +20,7 @@ import PolitiesPanel from "./PolitiesPanel.jsx";
 import GroupsPanel from "./GroupsPanel.jsx";
 import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
-import { BORDER_CLEANUP, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, describeCleanupLeftAlone, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
 import ProvinceImportPanel from "./ProvinceImportPanel.jsx";
 import LayersPanel from "./LayersPanel.jsx";
 import ReferencePanel from "./ReferencePanel.jsx";
@@ -107,15 +107,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [scenarioAction, setScenarioAction] = useState(""); // "save" | "save-exit" | "play" while writing scenario
   const [scenarioDirty, setScenarioDirty] = useState(false);
   // The "Cleaning up the borders" screen: progress from repairTopologyEverywhere
-  // while a scenario save runs, null otherwise; and the one-line result left
-  // beside the buttons for a few seconds after a plain Save.
+  // while a scenario save runs, null otherwise; and the result left beside the
+  // buttons for a few seconds after a plain Save, as its lines: what was
+  // repaired, then what the guards left alone.
   const [borderCleanup, setBorderCleanup] = useState(null);
-  const [cleanupNote, setCleanupNote] = useState("");
+  const [cleanupNote, setCleanupNote] = useState([]);
   // Set by the screen's "Save now" button; the sweep reads it between steps.
   const cleanupStopRef = useRef(false);
   useEffect(() => {
-    if (!cleanupNote) return undefined;
-    const timer = setTimeout(() => setCleanupNote(""), 9000);
+    if (!cleanupNote.length) return undefined;
+    // Nine seconds for the result, and five more to read each line under it.
+    const timer = setTimeout(() => setCleanupNote([]), 9000 + 5000 * (cleanupNote.length - 1));
     return () => clearTimeout(timer);
   }, [cleanupNote]);
   // Whether the scenario's own map has arrived and been loaded. The Workshop
@@ -433,7 +435,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
       }
       setScenarioDirty(false);
-      setCleanupNote(describeCleanupResult(cleanup, cleanupError));
+      // What was repaired, then a line for each kind of thing the two guards
+      // passed over (topologySweep.js describeCleanupLeftAlone).
+      setCleanupNote([describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean));
       if (!play && closeAfter) onClose?.();
       return true;
     } catch (e) {
@@ -1482,7 +1486,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onUpload={uploadBasemap}
       />
 
-      <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />
+      <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />
       <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
       {fmgAvailable && (
