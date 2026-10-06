@@ -51,7 +51,7 @@ import { getUnitById, setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMotionSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMapSettingValue, useMotionSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import {
@@ -971,8 +971,15 @@ const PanelChrome = ({
 // day and, until this line, no way to see them going.
 const RequestsTodayCaption = () => {
     const [day, setDay] = useState(() => requestDay());
+    // Held as state, like the day: a value read from storage while rendering is
+    // one the compiler keeps from the first render, so this line went on saying
+    // what a skip cost under the setting it was first drawn with.
+    const [saving, setSaving] = useState(() => savingRequests());
     useEffect(() => {
-        const refresh = () => setDay(requestDay());
+        const refresh = () => {
+            setDay(requestDay());
+            setSaving(savingRequests());
+        };
         window.addEventListener("ai:request-budget", refresh);
         const timer = setInterval(refresh, 60000);
         return () => {
@@ -982,10 +989,9 @@ const RequestsTodayCaption = () => {
     }, []);
     // A skip is one request; function calling is what can add to it (Settings →
     // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
-    // The switch is on unless turned off, so its value is read with that
-    // default; the hook is only what redraws this line when it is flipped.
-    useMapSetting(MAP_SETTING_KEYS.lookupFunctions);
-    const cost = describeJumpCost({ lookups: !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions) });
+    // That switch is on unless it was turned off.
+    const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
+    const cost = describeJumpCost({ lookups: !saving && lookupsOn });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
     const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));

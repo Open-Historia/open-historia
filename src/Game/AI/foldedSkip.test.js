@@ -336,4 +336,33 @@ test("the folded rules reach the prompt only for a folded skip", () => {
     assert.ok(rules.includes(lever), `the rules name ${lever}`);
   }
   assert.match(rules, /Nothing checks your events afterwards\./);
+  // The history fold is the last block of the prompt: nothing of the skip's follows it.
+  assert.match(body, /const historyJob = foldedSkip \? normalizeString\(variables\.foldedHistoryJob\) : "";/);
+  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+});
+
+// What the player is told a skip costs, under the skip buttons and in Settings.
+test("the time panel says one request, and three only while function calling can add to it", () => {
+  const time = readFileSync(new URL("../GameUI/time.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const caption = time.slice(time.indexOf("const RequestsTodayCaption = () => {"), time.indexOf("const JumpNode ="));
+  // Both switches are held as state. A value read from storage while rendering
+  // is one the compiler keeps from the first render: seen in the app, where the
+  // line went on saying "1 request" after Save AI requests was switched off.
+  assert.match(caption, /const \[saving, setSaving\] = useState\(\(\) => savingRequests\(\)\);/);
+  assert.match(caption, /setSaving\(savingRequests\(\)\);/);
+  assert.match(caption, /const lookupsOn = useMapSettingValue\(MAP_SETTING_KEYS\.lookupFunctions, "1"\) !== "0";/);
+  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn \}\);/);
+  for (const line of [
+    "\"a skip uses 1 request\"",
+    "\"a skip uses 1 request, plus one per extra segment\"",
+    "`a skip uses 1 request, at most ${cost.max} when the model looks things up`",
+    "`a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment`",
+  ]) assert.ok(caption.includes(line), line);
+  assert.equal(/twenty/.test(caption), false, "no mode in which a skip is twenty requests is left to describe");
+
+  const settings = readFileSync(new URL("../GameUI/settings.jsx", import.meta.url), "utf8");
+  assert.match(settings, /"On \(default\): a time skip is one request\. /);
+  assert.match(settings, /`Off: for a key with no daily limit\. A time skip is still one request, [^`]*so a skip never uses more than \$\{lookupCap\}\. /);
+  assert.match(settings, /const lookupCap = describeJumpCost\(\{ lookups: true \}\)\.max;/);
+  assert.equal(/each checked by a request of their own|twenty requests or more/.test(settings), false);
 });
