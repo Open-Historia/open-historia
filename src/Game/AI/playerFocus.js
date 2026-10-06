@@ -38,8 +38,11 @@ export const normalizePlayerFocus = (value) => {
 // said about it (the simulator's playerRelated mark, or its name in the words),
 // and what happens inside its territory — the regions and cities it holds and
 // the polities it absorbed, so riots in Lahore are the British Empire's even
-// when the event never names it. Whole words, case and accents folded.
-const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+// when the event never names it. Whole words, case and accents folded, in any
+// script: kept to a-z and 0-9, a name in Cyrillic or Arabic folded to nothing,
+// so a Project named in the player's language never spared its event from the
+// filler filter, and one owned by a polity so named read as the player's own.
+const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
 
 // Shorter names match too much ("Ob", "Uri"); the polity's own names are
 // allowed down to three letters, as the world share counts them.

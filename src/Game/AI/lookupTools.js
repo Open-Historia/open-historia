@@ -572,11 +572,14 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
 // paragraph. A city answers with the region it stands in. Longest names first,
 // so "South Ossetia" is not also reported as "Ossetia".
 
+// Words of any script: on a map whose regions and cities are named in
+// Cyrillic, Greek or Arabic, every name used to fold to nothing here and none
+// could be found in a text.
 const foldForSearch = (value) => String(value ?? "")
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase()
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .trim();
 
 const MIN_PLACE_NAME_CHARS = 4;

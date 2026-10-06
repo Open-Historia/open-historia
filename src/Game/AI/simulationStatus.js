@@ -188,8 +188,17 @@ export const discardParkedTurn = () => {
 // debug report labels its section honestly rather than matching on the wording.
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
 export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
+// The request did reach the model, and the connection closed while its answer
+// was arriving (providerErrors.js connectionClosedError). The first note above
+// sends the reader to the URL, the key and the model name, none of which can be
+// wrong when an answer had started; a player's report of a local model going
+// down mid-turn carried it all the same.
+// Not named *_NOTE like its two neighbours: a constant so named is taken for
+// interface text and put in the language catalog (scripts/i18n/extractStrings.mjs),
+// and this is only ever read in a saved report.
+export const RESPONSE_CUT_SHORT_REMARK = "(no complete response body — the connection closed while the model was still answering, so there was nothing whole to parse. The provider URL, API key and model name were right: the request reached the model. See the failure reason above.)";
 
 // True when a fallback's rawResponse is one of the notes above rather than
 // model text that failed to parse or validate.
 export const isResponseBodyNote = (rawResponse) =>
-  rawResponse === NO_RESPONSE_BODY_NOTE || rawResponse === EMPTY_RESPONSE_BODY_NOTE;
+  rawResponse === NO_RESPONSE_BODY_NOTE || rawResponse === EMPTY_RESPONSE_BODY_NOTE || rawResponse === RESPONSE_CUT_SHORT_REMARK;

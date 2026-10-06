@@ -3,6 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   activeWarIdsForPolity,
   applyWarUpdates,
@@ -14,6 +15,7 @@ import {
   repairWarLedgerPayload,
   splitWarStartNote,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 
 // A war exists only because a warUpdates record started it, and a battle can
@@ -332,6 +334,71 @@ test("an unbindable combat event is reported for unbinding, never for deletion",
   assert.deepEqual(candidate.events[0].combatants, []);
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates), [], "no war record was conjured either");
   assert.match(repair.residual, /no event.warId/, "the residual complaint is about the ledger, and is only logged");
+});
+
+// A player's log (a small local model answering in Russian): a month's
+// warUpdates was a Markdown heading and a sentence saying nothing had changed,
+// with the model's reminder to itself on the end. Each line was read as a war
+// record with no operation: 'Unsupported warUpdates operation "" for ###
+// Обновления войн:.', which on a strict pass refuses the answer and has the
+// month asked for again. On the last attempt the salvage "dropped 2 war
+// record(s)" by those "ids", which is how the sentence came to be quoted in
+// the next prompt. Both lines are verbatim.
+const PROSE_HEADING = "### Обновления войн:";
+const PROSE_NOTHING_CHANGED = "Нет изменений. В этом периоде ни одна война не началась, не закончилась и не изменилась — на карте нет активных конфликтов. ### Конец обновлений. **ВАЖНО:** Отвечай ТОЛЬКО валидным JSON объектом без каких-либо объяснений, комментариев или предисловий. Не добавляй текст перед или после JSON.";
+
+test("a line with no separator is prose, not a war record", () => {
+  const warUpdates = `${PROSE_HEADING}\n${PROSE_NOTHING_CHANGED}`;
+  assert.deepEqual(decodeWarUpdates(warUpdates), []);
+  assert.deepEqual(decodeWarUpdates([PROSE_HEADING, PROSE_NOTHING_CHANGED]), [], "nor as members of a list");
+  assert.deepEqual(warUpdateProseLines(warUpdates), [PROSE_HEADING, PROSE_NOTHING_CHANGED], "what was ignored can still be said");
+
+  // The answer is not refused over them, so the month is not asked for twice.
+  const quiet = () => ({
+    events: [{ id: "e1", date: "2014-09-12", title: "Harvest comes in across the south", description: "Grain yields are above the five-year average.", kind: "economy" }],
+    warUpdates,
+  });
+  assert.equal(validateWarLedgerPayload(quiet(), { world }), "");
+
+  // The last attempt has nothing to drop, so nothing of them is quoted back.
+  const candidate = quiet();
+  const repair = repairWarLedgerPayload(candidate, { world });
+  assert.deepEqual(repair.droppedIds, []);
+  assert.equal(repair.residual, "");
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates), []);
+});
+
+test("prose around a real war record costs the record nothing", () => {
+  const record = "war-france-germany-1914~start~Germany~France~1~Declaration of war";
+  const candidate = { events: declaration(), warUpdates: `${PROSE_HEADING}\n${record}\n${PROSE_NOTHING_CHANGED}` };
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => [update.id, update.op]), [["war-france-germany-1914", "start"]]);
+  assert.deepEqual(warUpdateProseLines(candidate.warUpdates), [PROSE_HEADING, PROSE_NOTHING_CHANGED]);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+  // Read as records, no single removal made the batch valid and the salvage
+  // dropped every record of the segment, the declared war with them.
+  const repair = repairWarLedgerPayload(candidate, { world });
+  assert.deepEqual(repair.droppedIds, []);
+  const merge = applyWarUpdates({ world, updates: candidate.warUpdates, events: candidate.events, stopDate: "1914-08-31", round: 2 });
+  assert.deepEqual(merge.appliedIds, ["war-france-germany-1914"]);
+});
+
+test("a line with the separator and no real operation is still a record, and still refused", () => {
+  const refused = (warUpdates) => validateWarLedgerPayload({ events: declaration(), warUpdates }, { world });
+  assert.equal(refused("war-france-germany-1914~declare~Germany~France~1~Declaration of war"), 'Unsupported warUpdates operation "declare" for war-france-germany-1914.');
+  assert.equal(refused("war-france-germany-1914~"), 'Unsupported warUpdates operation "" for war-france-germany-1914.');
+  assert.deepEqual(warUpdateProseLines("war-france-germany-1914~\n\n   \nwar-a-b~end~~~1~peace"), [], "blank lines are not prose either");
+});
+
+// gameplay.js does not load under bare node, so its side is checked in its
+// source: the ignored lines are said once per answer, and the receipt the next
+// prompt opens with quotes dropped ids short (applicationReceipt.js).
+test("the time skip says which lines it ignored, and its receipt quotes war ids short", () => {
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("const validateSegmentLedgers = "), source.indexOf("const validateSegmentStorylines = "));
+  assert.ok(body.indexOf("warUpdateProseLines(candidate?.warUpdates)") > 0, "read from the answer as it arrived");
+  assert.ok(body.indexOf("warUpdateProseLines(candidate?.warUpdates)") < body.indexOf("reconcileCombatWarState(candidate"), "before the field is rewritten");
+  assert.match(body, /War ledger: \$\{repair\.droppedIds\.length\} war record\(s\) were dropped`\s*\+ `\$\{repair\.droppedIds\.length \? ` \(\$\{quoteReceiptIds\(repair\.droppedIds\)\}\)` : ""\}/);
+  assert.doesNotMatch(body, /noteReceipt\([^;]*droppedIds\.join/s, "never the ids as the model wrote them");
 });
 
 test("a war starts on its earliest linked event by the calendar, BC years included", () => {

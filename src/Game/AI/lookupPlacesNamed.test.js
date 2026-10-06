@@ -87,6 +87,40 @@ test("accents and case are folded on both sides", () => {
   assert.equal(placesNamedIn(context, "ZAPORÍZHZHIA falls silent.")[0]?.regionId, "r-zaporizhia");
 });
 
+test("a map named in another script is read the same way", () => {
+  // Folded to a-z0-9, every name on a map like this one was the empty name, and
+  // no text ever named a place on it.
+  const cyrillic = buildLookupContext({
+    regions: [
+      { id: "r-krym", name: "Крым", owner: "Российская Федерация", geometry: square(33, 44) },
+      { id: "r-donetsk", name: "Донецкая область", aliases: ["Донецк"], owner: "Украина", geometry: square(37, 47) },
+    ],
+    world: { regionClaimants: { "r-krym": ["Украина"] } },
+    cities: [{ name: "Севастополь", coordinates: [33.5, 44.6] }, { name: "Мариуполь", coordinates: [37.5, 47.1] }],
+  });
+  const places = placesNamedIn(cyrillic, "Колонны входят в город Мариуполь; Донецкая область ждёт, а Крым и СЕВАСТОПОЛЬ спокойны.");
+  assert.deepEqual(places, [
+    { place: "Мариуполь", kind: "city", regionId: "r-donetsk", region: "Донецкая область", controller: "Украина" },
+    { place: "Донецкая область", kind: "region", regionId: "r-donetsk", controller: "Украина" },
+    { place: "Крым", kind: "region", regionId: "r-krym", controller: "Российская Федерация", claimants: ["Украина"] },
+    { place: "Севастополь", kind: "city", regionId: "r-krym", region: "Крым", controller: "Российская Федерация", claimants: ["Украина"] },
+  ]);
+  // The longer name still wins, and a word is still a whole word: another
+  // form of the name is another word.
+  assert.deepEqual(placesNamedIn(cyrillic, "Донецкая область под обстрелом.").map((place) => place.place), ["Донецкая область"]);
+  assert.deepEqual(placesNamedIn(cyrillic, "В Крыму тихо, крымчане ждут."), []);
+
+  const chinese = buildLookupContext({
+    regions: [{ id: "r-hk", name: "香港特别行政区", owner: "中国", geometry: square(114, 22) }],
+    world: {},
+    cities: [],
+  });
+  // Where punctuation sets the name apart. A sentence written without spaces is
+  // one word to this reader, which does not cut Chinese into words.
+  assert.deepEqual(placesNamedIn(chinese, "示威地点：香港特别行政区。").map((place) => place.regionId), ["r-hk"]);
+  assert.deepEqual(placesNamedIn(chinese, "示威者聚集在香港特别行政区政府总部外。"), []);
+});
+
 test("places come back in the order the text names them, each once, and capped", () => {
   const places = placesNamedIn(context, "From Crimea to Luhansk Oblast and back to Crimea, then Oman.");
   assert.deepEqual(places.map((place) => place.place), ["Crimea", "Luhansk Oblast", "Oman"]);

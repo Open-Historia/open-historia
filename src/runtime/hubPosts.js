@@ -24,6 +24,7 @@ import {
   normalizeHubSuggestionRef,
   normalizeHubUnlinked,
 } from "../../server/hubProvenance.js";
+import { fetchHubFile, fetchHubIndex, importCountOf } from "./hubFiles.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
@@ -47,26 +48,13 @@ export const BUNDLE_LINK_PATTERN =
 export const SCENARIO_KEY_LINE = "Scenario-Key";
 const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
 
-// Self-hosted import counts (keyed by hub issue number), read back through the
-// server proxy from our own counter Worker. Unlike GitHub's release download
-// counts, this covers EVERY scenario — including attachment posts — and is
-// deduped per person. Empty object if the counter isn't configured/reachable.
-const fetchImportCounts = async () => {
-  try {
-    const response = await fetch("/api/hub/import-counts");
-    if (!response.ok) return {};
-    const data = await response.json();
-    return data && typeof data === "object" ? data : {};
-  } catch {
-    return {};
-  }
-};
-
 // Official = posted by someone with real access to the hub repo, as reported
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-export const parsePost = (issue, importsById) => {
+// `hubIndex` is the hub's index (hubFiles.js): where a post's import count
+// comes from.
+export const parsePost = (issue, hubIndex) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   // The issue-form body is a series of "### <label>\n<value>" sections. Show only
@@ -96,13 +84,14 @@ export const parsePost = (issue, importsById) => {
     .trim();
   const description = fullDescription.replace(/\s+/g, " ");
   const coverImageUrl = firstHubImage(body);
-  // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
-  // It is deduped per person (an account, or an IP hash) and covers every scenario —
-  // release assets and attachment posts alike. We deliberately do NOT fall back to
-  // GitHub's release download count: that counts every file download, including
-  // repeat downloads by the same person and non-import curiosity clicks, so it both
-  // over-counts and disagrees between posts. One accurate source for all.
-  const installs = importsById?.[String(issue.number)]?.count ?? null;
+  // The import count is how many times the post's file has been downloaded from
+  // the hub's releases, as GitHub counts it and the hub's index reports it
+  // (hubFiles.js). It counts downloads, not people: importing again after
+  // clearing the download cache counts again. It used to come from a counter of
+  // the game's own, one per install, which ran on a free Cloudflare allowance
+  // that was spent within hours of every day; what that counter had reached is
+  // carried into these numbers by the hub.
+  const installs = importCountOf(hubIndex, issue.number);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -144,9 +133,9 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
     );
   });
   if (hubCache.issues === issues) return hubCache.posts;
-  const importsById = await fetchImportCounts();
+  const hubIndex = await fetchHubIndex({ force });
   const posts = issues
-    .map((issue) => parsePost(issue, importsById))
+    .map((issue) => parsePost(issue, hubIndex))
     // The parser already decides whether a post has an importable scenario
     // bundle. Do not surface malformed or misfiled "scenario" issues whose
     // Import button would otherwise be disabled.
@@ -202,9 +191,11 @@ export const hubCopyStatus = (copies, post) => {
 };
 
 // A file on the hub (a bundle, a suggestion), through the allowlisted
-// /api/hub/file proxy: GitHub's attachments send no CORS headers.
-export const downloadHubFile = async (fileUrl) => {
-  const response = await fetch(`/api/hub/file?url=${encodeURIComponent(fileUrl)}`);
+// /api/hub/file proxy: GitHub's files send no CORS headers. A post's file comes
+// from its copy in the hub's releases when there is one (hubFiles.js); `copy:
+// false` is for a suggestion, which is a comment's attachment and never copied.
+export const downloadHubFile = async (fileUrl, { copy = true } = {}) => {
+  const response = await fetchHubFile(fileUrl, { copy });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);

@@ -205,6 +205,17 @@ test("decodePuppetUpdates accepts objects as well as compact lines", () => {
   assert.equal(fromLine.kind, fromObject.kind);
 });
 
+// A heading or "No changes." where records go has no ~ in it, and is no record:
+// read as one, the whole sentence was the operation.
+test("a line with no separator is prose, not a puppet record", () => {
+  const prose = "### Марионеточные государства:\nНет изменений.";
+  assert.deepEqual(decodePuppetUpdates(prose), []);
+  assert.deepEqual(decodePuppetUpdates(prose.split("\n")), []);
+  const [kept] = decodePuppetUpdates(`${prose}\ninstall~USSR~Poland~satellite~40~open~1~Seated`);
+  assert.equal(kept.op, "install");
+  assert.equal(decodePuppetUpdates("obliterate~USSR~Poland").length, 1, "a line with the separator is still a record, whatever its verb");
+});
+
 test("an unknown verb is dropped rather than guessed at", () => {
   const held = apply(baseWorld, "install~USSR~Poland~satellite~40~open~1~Seated").world;
   const { world } = apply(held, "obliterate~USSR~Poland~~~~1~Not a verb");

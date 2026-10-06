@@ -225,7 +225,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status,
         <div
           title={post.official ? "Official: posted by a hub maintainer (verified by GitHub, not by the title)" : undefined}
           style={{
-            // The OFFICIAL badge marks a verified post (hub-owner). A random poster writing
+            // The OFFICIAL badge marks a post made by a team member (the hub's owner or a collaborator). A random poster writing
             // "official" in their title stays white.
             color: post.official ? "#e4e4e7" : "#fff",
             fontSize: "0.95rem",
@@ -602,18 +602,12 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // the player edits it the link stays, marked edited, so they can suggest
       // their changes back to the post (server/hubProvenance.js).
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // Nothing is reported anywhere: the download of the post's file from the
+      // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
       // A basemap that just failed to download is not tried again this session
       // (runtime/missingBasemap.js); Import & Play opens the picker next.
       noteMissingBasemapTried(details?.scenario);
-      // Best-effort: tell the server this import succeeded so it can count it
-      // (once per install) on the hub's self-hosted import counter. Never blocks
-      // or fails the import — fire and forget.
-      fetch("/api/hub/import-log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
-      }).catch(() => {});
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
@@ -772,7 +766,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
               Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
-              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a verified post.</span>
+              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a post made by a team member of the game.</span>
             </div>
             <div style={{ flex: 1 }} />
             <input

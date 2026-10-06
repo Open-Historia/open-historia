@@ -26,6 +26,26 @@ export const errorPayloadText = (error) => {
     return String(error.message ?? error.detail ?? error.type ?? error.code ?? "").trim();
 };
 
+// What a failed response's body says, for the message the player reads; the
+// caller's own words (`fallback`) when it says nothing. `payload` is the parsed
+// body, or { rawText } when it was not JSON (main.jsx readErrorPayload).
+export const extractErrorMessage = (payload, fallback) => {
+    if (!payload) return fallback;
+    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
+    if (payload.error?.message) return payload.error.message;
+    if (payload.message) return payload.message;
+    // { "error": "model 'x' not found" }: Ollama, koboldcpp and the game's own
+    // relay say it as a plain string, which used to be dropped for the fallback
+    // (a relayed "ECONNREFUSED" read "…is busy right now"). After `message`,
+    // which is the detail when a gateway sends both
+    // ({ "error": "Bad Request", "message": "…" }).
+    if (typeof payload.error === "string" && payload.error.trim()) return payload.error.trim();
+    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
+        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
+    }
+    return fallback;
+};
+
 // Deliberately generous. A wrong guess here costs one extra request five seconds
 // later; a missed one costs the player their turn and tells them to go and debug
 // a model that was never the problem.
@@ -302,6 +322,101 @@ export const toolStreamRefusalError = (providerLabel, error, retried) => {
     // call to the next entry.
     refusal.providerFailure = classifyProviderFailure({ payload: error });
     return refusal;
+};
+
+// ---------------------------------------------------------------------------
+// The connection, not the provider
+// ---------------------------------------------------------------------------
+//
+// A server that cannot be reached, or a connection that drops while the answer
+// is arriving, is neither the provider being busy nor the model misbehaving,
+// and used to be reported as one or the other. A player's log has both. Their
+// local model's server went down in the middle of a skip: the answer being read
+// failed as a bare "network error" (so the turn's report blamed "the provider
+// URL, API key or model name"), and every call after it was told the server was
+// "busy" and waited fifteen seconds twice over before saying so, because the
+// game's relay reports a refused connection with the status a busy gateway uses.
+//
+// For the Fallback list both are the mark it has always had for a server the
+// browser could not reach (main.jsx asUnreachable): the entry sits out and the
+// call goes on to the next one, with no wait and no second try on this one.
+export const couldNotBeReached = () => ({ kind: "busy", reason: "could not be reached" });
+
+// fetch() itself failing: the server could not be reached at all. Matched on
+// the browsers' own wording, so a TypeError from a bug in the game is never
+// mistaken for one. An error that already carries the mark is one too.
+const UNREACHABLE_TEXT = /failed to fetch|fetch failed|networkerror|network error|load failed|network request failed|error in (?:input|body) stream/i;
+export const isUnreachableError = (error) => error?.providerFailure?.reason === "could not be reached"
+    || (error instanceof TypeError && UNREACHABLE_TEXT.test(String(error.message)));
+
+// The same thing happening later: fetch() had answered, and the connection
+// broke while the body was being read. Chromium words that "network error" and
+// Firefox "Error in input stream" (or "body stream"). The list above knew
+// neither, so a model whose server went down mid-answer left no mark at all.
+const BROKEN_BODY_TEXT = /^network error$|^error in (?:input|body) stream$/i;
+export const isBrokenBodyError = (error) => error instanceof TypeError && BROKEN_BODY_TEXT.test(String(error.message).trim());
+
+// The connection closed while the answer was still arriving. What the player
+// reads, whichever way it showed: a body that failed to read partway, or a
+// stream that ended before the provider said it had finished and left a
+// structured answer short or no answer at all (a reply in words is kept:
+// toolResponsePayload.js unmarkedEndVerdict).
+export const CONNECTION_CLOSED_MESSAGE = "The connection closed before the model finished its answer.";
+
+// `connectionClosed` lets the task runner say so in the turn's report instead
+// of the note it writes for a request that never got an answer at all.
+export const connectionClosedError = (cause) => {
+    const error = new Error(CONNECTION_CLOSED_MESSAGE, cause ? { cause } : undefined);
+    error.providerFailure = couldNotBeReached();
+    error.connectionClosed = true;
+    return error;
+};
+
+// A body that should be one JSON object and is not, because it stops partway
+// or never starts: the buffered form of the same closed connection. Anything
+// else that fails to parse (a complete object a gateway got wrong, plain text)
+// is left to say what it always said.
+export const isCutOffJsonBody = (text) => {
+    const body = String(text ?? "").trim();
+    return !body || (/^[{[]/.test(body) && !/[}\]]$/.test(body));
+};
+
+// ---------------------------------------------------------------------------
+// The model ran into its output limit
+// ---------------------------------------------------------------------------
+//
+// Every provider says so on the answer itself: finish_reason "length" (OpenAI
+// and everything shaped like it), finishReason "MAX_TOKENS" (Gemini),
+// stop_reason "max_tokens" (Anthropic). Nothing read it. A structured answer
+// cut there does not parse, the task runner told the model its JSON was invalid
+// and asked for it again under the same limit, and it was cut at the same
+// place: the same log has a local server's replies stopping mid-sentence at
+// about 4,100 characters time after time, two requests spent on each.
+//
+// `data` is the envelope as the provider sent it or as streamAssembly.js
+// rebuilt it. The answer is still handed back: text that holds a whole JSON
+// payload is used as it always was, and what to do with one that does not is
+// the caller's to decide (gameplay.js runJsonTask stops instead of asking again).
+export const stoppedAtOutputLimit = (data) =>
+    data?.choices?.[0]?.finish_reason === "length"
+    || data?.candidates?.[0]?.finishReason === "MAX_TOKENS"
+    || data?.stop_reason === "max_tokens";
+
+// What the player reads when such an answer could not be used.
+export const OUTPUT_LIMIT_MESSAGE = "The model stopped at its output limit before it finished its answer.";
+
+// The server never answered: nothing is listening at the address, the name
+// does not resolve, the connection was refused or reset. `server` is its
+// address as the player entered it and `reason` what the connection reported
+// (ECONNREFUSED, ENOTFOUND), which between them say which of those it was.
+export const unreachableServerMessage = (server, reason) => {
+    return `${server} could not be reached (${reason}). Check that the AI server is running and that its address in Settings → AI is right.`;
+};
+
+export const unreachableServerError = (server, reason) => {
+    const error = new Error(unreachableServerMessage(server, reason));
+    error.providerFailure = couldNotBeReached();
+    return error;
 };
 
 // A web page where an API reply should be. It means the endpoint address points

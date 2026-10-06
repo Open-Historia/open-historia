@@ -5,7 +5,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isRelayRefusal, RELAY_CUT_OFF_MESSAGE, RELAY_REFUSED_HEADER, withRelayCutoffHint } from "./relayResponse.js";
+import {
+    isRelayRefusal,
+    isRelayUnreachable,
+    RELAY_CUT_OFF_MESSAGE,
+    RELAY_REFUSED_HEADER,
+    relayUnreachableReason,
+    withRelayCutoffHint,
+} from "./relayResponse.js";
 
 const encoder = new TextEncoder();
 
@@ -60,6 +67,35 @@ test("the relay refusing this device is told apart from an endpoint's own 403", 
     assert.equal(isRelayRefusal(rejectedKey), false, "a relayed 403 from the AI endpoint keeps the pin");
     assert.equal(isRelayRefusal(new Response("{}", { status: 200, headers: { [RELAY_REFUSED_HEADER]: "refused" } })), false);
     assert.equal(isRelayRefusal(null), false);
+});
+
+// A 502 is what a gateway in front of a busy model answers, and the game waits
+// and asks again. The relay answers 502 too when it could not connect at all,
+// and that must not be waited on: a server that is not running is not busy.
+test("the relay failing to connect is told apart from an endpoint's own 502", async () => {
+    const unreachable = () => new Response(JSON.stringify({ error: " (ECONNREFUSED)", unreachable: true, code: "ECONNREFUSED" }), {
+        status: 502,
+        headers: { [RELAY_REFUSED_HEADER]: "unreachable" },
+    });
+    assert.equal(isRelayUnreachable(unreachable()), true);
+    assert.equal(await relayUnreachableReason(unreachable()), "ECONNREFUSED");
+
+    // A gateway's own 502, relayed: no header, whatever its body claims.
+    const busyGateway = new Response(JSON.stringify({ error: "Bad gateway", unreachable: true }), { status: 502 });
+    assert.equal(isRelayUnreachable(busyGateway), false);
+    assert.equal(isRelayUnreachable(new Response("{}", { status: 403, headers: { [RELAY_REFUSED_HEADER]: "refused" } })), false);
+    assert.equal(isRelayUnreachable(new Response("{}", { status: 200, headers: { [RELAY_REFUSED_HEADER]: "unreachable" } })), false);
+    assert.equal(isRelayUnreachable(null), false);
+    assert.equal(isRelayRefusal(unreachable()), false);
+});
+
+test("with no code, the reason is the relay's own words, and a body that cannot be read says nothing", async () => {
+    const worded = new Response(JSON.stringify({ error: "socket hang up", unreachable: true, code: "" }), { status: 502 });
+    assert.equal(await relayUnreachableReason(worded), "socket hang up");
+    // The relay's message for an error with no words of its own is the code in brackets.
+    assert.equal(await relayUnreachableReason(new Response(JSON.stringify({ error: " (EHOSTUNREACH)" }), { status: 502 })), "EHOSTUNREACH");
+    assert.equal(await relayUnreachableReason(new Response("<html>502</html>", { status: 502 })), "");
+    assert.equal(await relayUnreachableReason(new Response(JSON.stringify({ error: { message: "nested" } }), { status: 502 })), "");
 });
 
 test("a response with no body is handed back untouched", () => {

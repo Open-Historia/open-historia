@@ -97,6 +97,32 @@ test("openai: reads a real SSE body end to end", async () => {
   );
 });
 
+// A whole body names the answer and the model that wrote it. The envelope a
+// stream is rebuilt into does as well, from the first chunk that carries them:
+// it is how a KoboldCpp server is known for one (koboldCpp.js).
+test("openai: the rebuilt envelope keeps the answer's id and model, as a whole body has them", async () => {
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { id: "chatcmpl-A1", object: "chat.completion.chunk", model: "koboldcpp/Qwen3-8B-Q4_K_M", choices: [{ index: 0, finish_reason: null, delta: { role: "assistant", content: "ok" } }] },
+    { id: "chatcmpl-A1", object: "chat.completion.chunk", model: "koboldcpp/Qwen3-8B-Q4_K_M", choices: [{ index: 0, finish_reason: "stop", delta: {} }] },
+  ]));
+  assert.equal(data.id, "chatcmpl-A1");
+  assert.equal(data.model, "koboldcpp/Qwen3-8B-Q4_K_M");
+  assert.equal(data.choices[0].message.content, "ok");
+
+  // A stream that names neither gains neither key.
+  const bare = finishOpenAIStream(runOpenAI([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]));
+  assert.equal("id" in bare, false);
+  assert.equal("model" in bare, false);
+  // The first chunk to name them is the one kept, a later usage frame or not.
+  const late = finishOpenAIStream(runOpenAI([
+    { id: 7, choices: [{ delta: { content: "a" } }] },
+    { id: "koboldcpp", model: "koboldcpp/x", choices: [{ delta: { content: "b" } }] },
+    { id: "other", model: "other", choices: [], usage: { prompt_tokens: 1 } },
+  ]));
+  assert.equal(late.id, "koboldcpp");
+  assert.equal(late.model, "koboldcpp/x");
+});
+
 // ---------------------------------------------------------------------------
 // Anthropic Messages
 
@@ -420,6 +446,209 @@ test("gemini: a signed function call keeps its thoughtSignature on the rebuilt p
 });
 
 // ---------------------------------------------------------------------------
+// What each chunk carried — what the line under a skip's spinner is told
+// (requestActivity.js): reasoning or answer, and how much.
+
+const collect = () => {
+  const heard = [];
+  return { heard, onReceived: (report) => heard.push([report.reasoningChars, report.answerChars]) };
+};
+
+test("openai: each chunk says how much reasoning and how much answer it carried", async () => {
+  const { heard, onReceived } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { role: "assistant" } }] },
+    { choices: [{ delta: { reasoning_content: "thinking" } }] },
+    { choices: [{ delta: { reasoning: "more" } }] },
+    { choices: [{ delta: { content: "Here: " } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[]}' } }] } }] },
+    { choices: [{ finish_reason: "tool_calls", delta: {} }] },
+  ]), null, null, onReceived);
+  // One report per network chunk, the [DONE] line included: nothing, then
+  // reasoning, then the answer as text and as a tool call's arguments.
+  assert.deepEqual(heard, [[0, 0], [8, 0], [4, 0], [0, 6], [0, 13], [0, 0], [0, 0]]);
+});
+
+test("openai: reasoning written between <think> tags in the content is reasoning", async () => {
+  const { heard, onReceived } = collect();
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "<thi" } }] },
+    { choices: [{ delta: { content: "nk>The player wants" } }] },
+    { choices: [{ delta: { content: " a war.</th" } }] },
+    { choices: [{ delta: { content: "ink>" } }] },
+    { choices: [{ delta: { content: '{"events":[]}' } }] },
+    { choices: [{ finish_reason: "stop", delta: {} }] },
+  ]), null, null, onReceived);
+  // The opening tag is split across two frames: its first half cannot be known
+  // for reasoning yet, and everything after it is, until the tag closes.
+  assert.deepEqual(heard.slice(0, 5), [[0, 4], [19, 0], [11, 0], [0, 4], [0, 13]]);
+  // The content itself is untouched: main.jsx strips the block from the answer.
+  assert.equal(data.choices[0].message.content, '<think>The player wants a war.</think>{"events":[]}');
+});
+
+test("anthropic: thinking is counted as reasoning without joining the answer", async () => {
+  const { heard, onReceived } = collect();
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Let me plan this." } },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"events":[]}' } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
+  ], { done: false }), null, null, onReceived);
+  assert.deepEqual(heard, [[0, 0], [17, 0], [0, 0], [0, 5], [0, 0], [0, 13], [0, 0]]);
+  assert.deepEqual(data.content.map((block) => block.type), ["text", "tool_use"]);
+});
+
+test("gemini: text, a whole function call and a thought summary are each counted", async () => {
+  const { heard, onReceived } = collect();
+  await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "Weighing it up.", thought: true }] } }] },
+    { candidates: [{ content: { parts: [{ text: "ok" }] } }] },
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_jump_result", args: { events: [] } } }] }, finishReason: "STOP" }] },
+  ], { done: false }), null, null, onReceived);
+  assert.deepEqual(heard, [[15, 0], [0, 2], [0, 13]]);
+});
+
+test("a chunk that carried nothing readable is still reported, as zeros", async () => {
+  const encoder = new TextEncoder();
+  const { heard, onReceived } = collect();
+  const response = {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        controller.enqueue(encoder.encode("data: {\"choices\":[{\"delta\":"));
+        controller.enqueue(encoder.encode("{\"content\":\"split\"}}]}\n\n"));
+        controller.close();
+      },
+    }),
+  };
+  await readOpenAIStreamedResponse(response, null, null, onReceived);
+  assert.deepEqual(heard, [[0, 0], [0, 0], [0, 5]]);
+});
+
+test("a throwing receiver never breaks the stream", async () => {
+  const data = await readOpenAIStreamedResponse(
+    sseResponse([{ choices: [{ delta: { content: "survived" } }] }]),
+    null,
+    null,
+    () => { throw new Error("the row exploded"); },
+  );
+  assert.equal(data.choices[0].message.content, "survived");
+});
+
+// ---------------------------------------------------------------------------
+// A stream that just stops is not one that finished.
+//
+// Every provider says when an answer is over, or why it is not. A stream with
+// neither is, as a rule, a connection that closed early, and its envelope used
+// to be handed on as a whole answer: half a tool call failed to parse
+// downstream and the task paid for a second request. The envelope is marked,
+// and main.jsx decides by what the call wanted: a structured answer that is not
+// all there fails the call, a reply in words is kept
+// (toolResponsePayload.test.js has that rule).
+
+const rawSse = (text) => {
+  const encoder = new TextEncoder();
+  return {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    }),
+  };
+};
+
+test("openai: a stream with no finish reason and no [DONE] is marked as closed early", async () => {
+  const cut = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[{"title":"A wa' } }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+
+  // Either sign of an ending is enough: servers send one, the other, or both.
+  const finished = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "ok" } }] },
+    { choices: [{ finish_reason: "stop", delta: {} }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in finished, false);
+  const doneOnly = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+  assert.equal("closedEarly" in doneOnly, false);
+  // Cut at the output limit is an ending the provider reported, not a closed connection.
+  const atLimit = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: '{"events":[' }, finish_reason: "length" }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in atLimit, false);
+  assert.equal(atLimit.choices[0].finish_reason, "length");
+  // Nor is a stream the provider ended with an error: it said why.
+  const refused = await readOpenAIStreamedResponse(sseResponse([{ error: { message: "overloaded" } }], { done: false }));
+  assert.equal("closedEarly" in refused, false);
+  // Nothing at all came back.
+  assert.equal((await readOpenAIStreamedResponse(sseResponse([], { done: false }))).closedEarly, true);
+});
+
+test("anthropic: a message with no stop reason and no message_stop is marked as closed early", async () => {
+  const cut = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"events":[{"title":"A wa' } },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+  assert.equal(cut.partialToolJson, '{"events":[{"title":"A wa');
+
+  const stopped = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+  ], { done: false }));
+  assert.equal("closedEarly" in stopped, false);
+  const messageStop = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "Done." } },
+    { type: "message_stop" },
+  ], { done: false }));
+  assert.equal("closedEarly" in messageStop, false);
+  const overloaded = await readAnthropicStreamedResponse(sseResponse([
+    { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+  ], { done: false }));
+  assert.equal("closedEarly" in overloaded, false);
+});
+
+test("gemini: a stream with no finish reason is marked as closed early", async () => {
+  const cut = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "The year opens" }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+
+  const finished = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "The year opens." }] }, finishReason: "STOP" }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in finished, false);
+  const blocked = await readGeminiStreamedResponse(sseResponse([{ promptFeedback: { blockReason: "SAFETY" } }], { done: false }));
+  assert.equal("closedEarly" in blocked, false, "the provider said why there is no answer");
+});
+
+// The last line of a body is not always followed by a newline. It used to be
+// dropped, which lost a final frame; now that an ending is looked for, losing
+// the frame that carries it would fail a whole answer.
+test("a last line with no newline after it is still read", async () => {
+  const finishOnLastLine = await readOpenAIStreamedResponse(rawSse(
+    'data: {"choices":[{"delta":{"content":"whole"}}]}\n\n'
+    + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+  ));
+  assert.equal(finishOnLastLine.choices[0].message.content, "whole");
+  assert.equal(finishOnLastLine.choices[0].finish_reason, "stop");
+  assert.equal("closedEarly" in finishOnLastLine, false);
+
+  const doneOnLastLine = await readOpenAIStreamedResponse(rawSse('data: {"choices":[{"delta":{"content":"whole"}}]}\n\ndata: [DONE]'));
+  assert.equal("closedEarly" in doneOnLastLine, false);
+
+  // Half a frame is still nothing: the text before it stands, and the stream reads as cut.
+  const halfFrame = await readOpenAIStreamedResponse(rawSse('data: {"choices":[{"delta":{"content":"half"}}]}\n\ndata: {"choices":[{"delta":{"con'));
+  assert.equal(halfFrame.choices[0].message.content, "half");
+  assert.equal(halfFrame.closedEarly, true);
+});
+
+// ---------------------------------------------------------------------------
 // Gemini: an answer asked for as JSON text (a watched time skip, main.jsx
 // callGemini). This API streams text and never a function call's arguments, so
 // the text is where the events are read from as they are written.
@@ -447,4 +676,32 @@ test("gemini: a thought summary is not part of the answer", () => {
   ] } }] }, (progress) => seen.push(progress.json));
   assert.deepEqual(seen, ['{"events":[]}']);
   assert.equal(finishGeminiStream(state).candidates[0].content.parts[0].text, '{"events":[]}');
+});
+
+// The two together, through the reader a skip uses: the line under the skip's
+// spinner is told what each chunk of a JSON-text answer carried
+// (requestActivity.js) while the watcher reads the same text for its events,
+// and a thought summary is reasoning to the one and nothing to the other.
+test("gemini: a JSON-text answer is counted as it is written, and a thought summary as reasoning", async () => {
+  const { heard, onReceived } = collect();
+  const watched = [];
+  const thought = "Weighing the fronts.";
+  const first = '{"events":[{"title":"A treaty"}';
+  const second = '],"stopDate":"2016-02-01"}';
+  const data = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: thought, thought: true }] } }] },
+    { candidates: [{ content: { parts: [{ text: first }] } }] },
+    { candidates: [{ content: { parts: [{ text: second }] }, finishReason: "STOP" }] },
+  ], { done: false }), null, (progress) => watched.push(progress.json), onReceived);
+  assert.deepEqual(heard, [[thought.length, 0], [0, first.length], [0, second.length]]);
+  assert.deepEqual(watched, [first, first + second], "the thought summary never reaches the text the events are read from");
+  assert.equal(data.candidates[0].content.parts[0].text, first + second);
+  assert.equal("closedEarly" in data, false);
+
+  // The same answer on a stream that just stops is marked, with what it carried.
+  const cut = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: first }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+  assert.equal(cut.candidates[0].content.parts[0].text, first);
 });

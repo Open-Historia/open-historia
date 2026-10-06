@@ -3,15 +3,17 @@
 // Flags shared by other people, read straight from the hub repo's issues.
 //
 // Mirrors communityBasemaps.js deliberately, including the parts that look odd:
-// there is no index file and no CI. The GitHub Issues API query IS the index, so a
-// post is live for everyone the moment its author hits Submit (bounded only by the
-// cache below). Listing goes direct to api.github.com because it sends CORS;
-// file downloads must go through /api/hub/file because GitHub attachments do not.
+// the GitHub Issues API query IS the list, so a post is live for everyone the
+// moment its author hits Submit (bounded only by the cache below). Listing goes
+// direct to api.github.com because it sends CORS; file downloads must go through
+// /api/hub/file because GitHub's files do not, and they come from the hub's
+// releases once the hub has copied the post's file there (hubFiles.js).
 //
 // Kept free of React/OpenLayers deps so the editor and the game can both use it.
 
 import { unzipBundle, looksLikeZip } from "./bundleZip.js";
 import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
+import { fetchHubFile } from "./hubFiles.js";
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
@@ -132,7 +134,7 @@ export const fetchCommunityFlags = async ({ force = false } = {}) => {
 // hub proxy (Express locally, the node/Worker on the website — see router.js).
 export const loadCommunityFlagDataUrl = async (post) => {
   if (!post?.imageUrl) throw new Error("That post has no flag image.");
-  const r = await fetch(`/api/hub/file?url=${encodeURIComponent(post.imageUrl)}`);
+  const r = await fetchHubFile(post.imageUrl);
   if (!r.ok) {
     const p = await r.json().catch(() => ({}));
     throw new Error(p.error || `Download failed (HTTP ${r.status}).`);
@@ -149,7 +151,7 @@ export const loadCommunityFlagDataUrl = async (post) => {
 // skipped — those are the built-ins every picker already lists.
 export const loadCommunityFlagPack = async (post) => {
   if (!post?.packUrl) throw new Error("That post has no scenario bundle.");
-  const r = await fetch(`/api/hub/file?url=${encodeURIComponent(post.packUrl)}`);
+  const r = await fetchHubFile(post.packUrl);
   if (!r.ok) {
     const p = await r.json().catch(() => ({}));
     throw new Error(p.error || `Download failed (HTTP ${r.status}).`);

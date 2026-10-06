@@ -1289,7 +1289,12 @@ const looksLikeStorylineStateProse = (value) => {
 
 const parseStorylineRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  // Fields joined by the separator make a record, so a line with none is not
+  // one. It is prose a model wrote where records go, a heading or "No
+  // changes." (nativeWarLedger.js has the report this comes from). Read as a
+  // record it had an id and no status, and a strict pass refused the whole
+  // answer over it.
+  if (!text || !text.includes(STORYLINE_RECORD_SEPARATOR)) return null;
 
   // Format:
   // id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventIndexesCSV~state
@@ -1422,12 +1427,16 @@ const STORYLINE_LINK_STOPWORDS = new Set([
   "republic", "state", "states", "process", "current", "continues", "continued",
 ]);
 
+// The letters, marks and digits of any script. Kept to a-z and 0-9, a
+// storyline and an event written in Russian or Arabic shared no words however
+// plainly one advanced the other, and only an actor the event named in a
+// structured field could link them. English text reads as it always did.
 const storylineLinkText = (value) =>
   normalizeString(value)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 

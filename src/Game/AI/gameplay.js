@@ -26,6 +26,7 @@ import {
   mergeReceipts,
   noteMalformedImpacts,
   noteReceipt,
+  quoteReceiptIds,
   renderLastTurnReceipt,
   tallyAppliedEvents,
   withReceiptDraft,
@@ -139,6 +140,7 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { OUTPUT_LIMIT_MESSAGE, isUnreachableError } from "./providerErrors.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -305,6 +307,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -371,7 +374,7 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill, isVotingRuleUnspecified } from "./institutionGovernanceRetry.js";
 import {
   autonomousInstitutionBallotDirective,
@@ -389,7 +392,6 @@ import {
 import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
-  applyInstitutionLifecycleChatBatchCore,
   applyInstitutionLifecycleImpactBatchCore,
   buildInstitutionLifecycleDecisionContext,
   commitInstitutionLifecycleChatBatch,
@@ -446,6 +448,7 @@ import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normali
 import {
   EMPTY_RESPONSE_BODY_NOTE,
   NO_RESPONSE_BODY_NOTE,
+  RESPONSE_CUT_SHORT_REMARK,
   assertNoTurnRunning,
   beginSimulation,
   discardPendingJumpSegment,
@@ -757,6 +760,15 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     }
   });
 
+  // Prose where war records go (a heading, "No changes.") is not a record and
+  // never reaches the ledger (nativeWarLedger.js parseWarUpdateRecord). Said
+  // here, once for the answer and before anything rewrites the field. It is
+  // not a rejection and not a note for the next turn: such a line names no war.
+  const warProse = warUpdateProseLines(candidate?.warUpdates);
+  if (warProse.length) {
+    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
+  }
+
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
   // explicit opposing combatants; anything ambiguous comes back as an error.
@@ -842,11 +854,13 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       residual: repair.residual,
     });
     if (repair.droppedIds.length || repair.strippedEvents) {
+      // The ids are quoted short (quoteReceiptIds): a malformed record's "id" is
+      // whatever the model wrote there, and this note is read by it next turn.
       noteReceipt(
         receipt,
         "dropped",
         `War ledger: ${repair.droppedIds.length} war record(s) were dropped`
-          + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
+          + `${repair.droppedIds.length ? ` (${quoteReceiptIds(repair.droppedIds)})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
           + `because the records could not be tied to their events — ${firstComplaintLine(first)}`,
         repair.droppedIds.length
           ? countedNote(repair.droppedIds.length, "warRecordsOne", "warRecordsMany")
@@ -2839,23 +2853,12 @@ const runJsonTask = async (taskKey, {
   // complete event this attempt has produced, and an empty list when an attempt
   // begins. A preview only, through no validator. Only a time skip passes it.
   onPartialEvents = null,
-  // Evaluation harness: pin every attempt to one exact Fallback-list entry and
-  // expose the assembled prompt plus per-attempt transport metrics. Ordinary
-  // gameplay leaves both unset.
-  forceEntryId = "",
-  capture = null,
   // The prompt pack, when it is not the active game's: a scenario's, for a task
   // run in the Workshop (generateScenarioPrehistory).
   promptPack = null,
 }) => {
   const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
-  if (capture && typeof capture === "object") {
-    capture.taskKey = taskKey;
-    capture.systemPrompt = systemPrompt;
-    capture.userMessage = String(userMessage ?? "");
-    capture.attempts = [];
-  }
 
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
@@ -2966,6 +2969,16 @@ const runJsonTask = async (taskKey, {
   // The call found no model whose context window takes this request
   // (contextWindow.js): kept so a time skip can refuse rather than go canned.
   let tooBigForEveryModel = null;
+  // The task ended on a connection that closed while the answer was arriving
+  // (providerErrors.js connectionClosedError): the report below says that, not
+  // that the request never got an answer.
+  let connectionClosed = false;
+  // The task ended on the connection either way: that, or a server that could
+  // not be reached at all (providerErrors.js couldNotBeReached). Handed back
+  // with the result, so a caller that asks again differently when the provider
+  // REFUSED the request does not take this for a refusal (a folded time skip:
+  // foldedSkip.js providerRefusedContract).
+  let transportFailure = false;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3036,8 +3049,6 @@ const runJsonTask = async (taskKey, {
       // Telemetry: the record for THIS attempt comes back through the sink, so
       // the validation outcome below lands on the call that produced it.
       const attemptSink = {};
-      const transportCapture = {};
-      if (capture && typeof capture === "object") capture.attempts.push(transportCapture);
       // One reader per attempt: a rejected attempt's events leave the panel when the next starts.
       const streamed = [];
       const eventReader = typeof onPartialEvents === "function"
@@ -3105,8 +3116,6 @@ const runJsonTask = async (taskKey, {
           staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
-          __capture: transportCapture,
-          __forceEntryId: forceEntryId,
           ...(requestKind ? { requestKind } : {}),
           ...(typeof onRequest === "function" ? { onRequest } : {}),
           // The arguments as they assemble (streamAssembly.js). A lookup round's
@@ -3164,7 +3173,8 @@ const runJsonTask = async (taskKey, {
       // JSON, or was cut off when the answer ran out of room, must not cost the
       // turn written in full before it: the answer is read again without them
       // (jsonSalvage.js parseWithoutTrailingFields). Asking again would be a
-      // second request for a turn already in hand.
+      // second request for a turn already in hand. Before the output-limit
+      // check below, so a cut that fell inside a rider is not a lost turn.
       if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
         const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD]);
         if (rescued) {
@@ -3176,6 +3186,10 @@ const runJsonTask = async (taskKey, {
           }, { problem: true });
         }
       }
+      // The model stopped at its output limit (main.jsx callAI says so through
+      // the sink) and nothing in what arrived parses. Whatever does parse is
+      // judged below like any other answer.
+      const cutAtLimitUnusable = !parsed && attemptSink.stoppedAtOutputLimit === true;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.
@@ -3394,7 +3408,7 @@ const runJsonTask = async (taskKey, {
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
           : validateGameplayPayload(taskKey, parsed))
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+        : { valid: false, error: cutAtLimitUnusable ? OUTPUT_LIMIT_MESSAGE : "Response did not contain parseable JSON or tool arguments." };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
         const contractError = validateStatContract(taskKey, parsed, statContract);
@@ -3509,6 +3523,13 @@ const runJsonTask = async (taskKey, {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
       }
+      // Cut at the output limit with nothing to keep: the same request under
+      // the same limit would be cut at the same place, and asking costs the
+      // player a second request to find that out. A player's log has a local
+      // server's answers stopping mid-sentence at 4,171 and then 4,173
+      // characters, one request each. The task ends here with that reason, and
+      // its fallback (or the caller's hold) takes it from there.
+      if (cutAtLimitUnusable) break;
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
@@ -3532,6 +3553,8 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
+    connectionClosed = actualError?.connectionClosed === true;
+    transportFailure = connectionClosed || isUnreachableError(actualError);
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -3593,7 +3616,7 @@ const runJsonTask = async (taskKey, {
   }
 
   if (typeof fallback !== "function") {
-    throw new Error(`AI task "${taskKey}" failed: ${failureReason}`);
+    throw Object.assign(new Error(`AI task "${taskKey}" failed: ${failureReason}`), transportFailure ? { transportFailure: true } : {});
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
@@ -3610,9 +3633,10 @@ const runJsonTask = async (taskKey, {
   // No body at all is itself the diagnosis, so say so instead of leaving the
   // field empty and letting the report guess it is an old turn. The marker
   // goes in the same field the raw text uses, so it survives the reload path
-  // (applySimulationResult → world.json) with no extra plumbing.
+  // (applySimulationResult → world.json) with no extra plumbing. A connection
+  // that closed mid-answer has its own marker: the request did get through.
   const rawResponse = capturedRawText
-    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : connectionClosed ? RESPONSE_CUT_SHORT_REMARK : NO_RESPONSE_BODY_NOTE);
   if (capturedRawText) {
     console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
   } else {
@@ -3621,6 +3645,9 @@ const runJsonTask = async (taskKey, {
   return {
     generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
     payload: await fallback(),
+    // Beside the generation, not in it: that record is written into the game's
+    // history, and this is for the caller alone.
+    ...(transportFailure ? { transportFailure: true } : {}),
   };
 };
 
@@ -8679,7 +8706,7 @@ const getWorldDirectorWorker = () => {
   }
 };
 
-const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8, additionalActors = []) => {
+const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8) => {
   const out = [];
   const seen = new Set();
   const push = (value) => {
@@ -8694,7 +8721,6 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   // can matter to history, but the prompt below explicitly keeps that evidence
   // separate from authority to invent a sovereign player choice.
   push(playerPolity);
-  for (const actor of normalizeArray(additionalActors)) push(actor);
 
   for (const storyline of normalizeArray(analysis?.attentionStorylines)) {
     for (const participant of normalizeArray(storyline?.participants)) push(participant);
@@ -8708,8 +8734,8 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   return out;
 };
 
-const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity, additionalActors = [] }) => {
-  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8, additionalActors);
+const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity }) => {
+  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8);
   if (!actorPolities.length) return "";
 
   const set = buildBoundedPoliticalDecisionContextSet(world, {
@@ -12739,11 +12765,6 @@ export const runChatActionBatch = async ({
   budget = null,
   spender = "",
   onRequest = null,
-  // Developer Political World A/B lab. A frozen bundle keeps both arms on the
-  // exact same campaign snapshot; only the explicit Political Decision Context
-  // projection may be omitted/overridden. dryRun keeps formal Council actions
-  // inside an in-memory governance application and never persists them.
-  evaluation = null,
   // The campaign this round belongs to. The institution commits below carry
   // it, so the store refuses them if the player switched saves while the model
   // was answering. Read here, before the model call, when not given: game.json
@@ -12755,15 +12776,10 @@ export const runChatActionBatch = async ({
   // post-turn autonomous ballot is different: it is world simulation and must
   // see the just-committed canonical proposal/ballot state even before the
   // timeline reveal has finished animating.
-  const frozenBundle = evaluation?.bundleOverride && typeof evaluation.bundleOverride === "object"
-    ? evaluation.bundleOverride
-    : null;
-  const readBundle = frozenBundle || (useCanonicalState
+  const readBundle = useCanonicalState
     ? await readGameStateBundle({ force: true })
-    : await readSeenGameStateBundle({ force: true }));
-  const bundle = frozenBundle
-    ? { ...readBundle, savedGame: readBundle.savedGame || readBundle.game, unseen: readBundle.unseen ?? new Set() }
-    : useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
+    : await readSeenGameStateBundle({ force: true });
+  const bundle = useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
   const unseen = bundle.unseen ?? new Set();
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
@@ -12894,9 +12910,8 @@ export const runChatActionBatch = async ({
     `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
   ].join("\n");
 
-  const politicalContextWorld = evaluation?.politicalWorldOverride || bundle.world;
   const focusInstitution = stored.institutionId
-    ? resolveInstitutionRecord(politicalContextWorld, stored.institutionId)
+    ? resolveInstitutionRecord(bundle.world, stored.institutionId)
     : null;
   const focusProposal = normalizeString(institutionProposalId)
     ? Object.values(focusInstitution?.proposals || {}).find((proposal) => regionKey(proposal?.id) === regionKey(institutionProposalId)) || null
@@ -12909,17 +12924,9 @@ export const runChatActionBatch = async ({
     normalizeString(autonomousBallotWork?.proposalTitle),
     lifecycleResponseRequested ? normalizeString(institutionLifecyclePrompt) : "",
   ].filter(Boolean).join("\n");
-  const evaluationPriorityActors = normalizeArray(evaluation?.additionalPoliticalActors)
-    .map(normalizeString)
-    .filter((name) => name && aiParticipants.some((participant) => regionKey(participant) === regionKey(name)));
-  const politicalActorOrder = evaluation
-    ? [...evaluationPriorityActors, ...aiParticipants]
-      .filter((name, index, rows) => rows.findIndex((candidate) => regionKey(candidate) === regionKey(name)) === index)
-    : aiParticipants;
   const politicalContextOptions = {
     // Keep the normal one-request group-diplomacy projection byte-for-byte on
-    // the established participant order. Evaluation may override only the actor
-    // ordering so a selected sensitivity actor survives the bounded Council set.
+    // the established participant order.
     actorPolities: aiParticipants,
     counterpartByActor: Object.fromEntries(aiParticipants.map((name) => [name, player])),
     maxActors: formalBusinessRequested ? 32 : 6,
@@ -12931,21 +12938,11 @@ export const runChatActionBatch = async ({
       pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
       perceptions: 3, relations: 2, agreements: 2, wars: 2, institutions: 6,
     },
-    ...(evaluation ? {
-      actorPolities: politicalActorOrder,
-      counterpartByActor: Object.fromEntries(politicalActorOrder.map((name) => [name, player])),
-    } : {}),
   };
-  const politicalDecisionSet = evaluation?.politicalContextMode === "omit"
-    ? { text: "" }
-    : buildBoundedPoliticalDecisionContextSet(politicalContextWorld, politicalContextOptions);
+  const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, politicalContextOptions);
   const politicalDecisionPrompt = politicalDecisionSet.text
     ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
     : "";
-  if (evaluation?.capture && typeof evaluation.capture === "object") {
-    evaluation.capture.politicalContextText = politicalDecisionPrompt;
-    evaluation.capture.aiParticipants = [...aiParticipants];
-  }
 
   // Each AI participant also sees only the documents its own government can read.
   // One-request group diplomacy contains several governments in one model call,
@@ -12986,7 +12983,6 @@ export const runChatActionBatch = async ({
     signal,
     userMessage: [
       normalizeString(catchUp),
-      normalizeString(evaluation?.sharedDirective),
       playerMessage
         ? `${player} has just said: ${playerMessage}`
         : formalBusinessRequested && autonomousBallotWork
@@ -13022,8 +13018,6 @@ export const runChatActionBatch = async ({
     ...(requestKind ? { requestKind } : {}),
     ...(budget ? { budget, spender: spender || "institutionBallots" } : {}),
     ...(typeof onRequest === "function" ? { onRequest } : {}),
-    ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-    ...(evaluation?.capture ? { capture: evaluation.capture.task || (evaluation.capture.task = {}) } : {}),
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
@@ -13062,33 +13056,19 @@ export const runChatActionBatch = async ({
   let formalRejected = [];
   let lifecycleRejected = [];
   if (stored.institutionId && !lifecycleGovernanceThread) {
-    committedInstitution = evaluation?.dryRun
-      ? applyInstitutionalChatGovernanceBatch({
-        world: bundle.world,
-        chats: bundle.chats,
-        events: bundle.events,
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-      })
-      : await commitInstitutionalChatGovernanceBatch({
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
+    committedInstitution = await commitInstitutionalChatGovernanceBatch({
+      institutionId: stored.institutionId,
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      formalActions: partitioned.formal,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     // An AI sponsor's submit refused only for want of a charter voting rule
     // gets the one-time rule backfill and one more try
-    // (institutionGovernanceRetry.js). Never in an evaluation's dry run.
-    const stalledSubmit = evaluation?.dryRun
-      ? null
-      : normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
+    // (institutionGovernanceRetry.js).
+    const stalledSubmit = normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
     if (stalledSubmit?.command) {
       const expectedGameId = normalizeString(bundle.game?.id || bundle.game?.gameId);
       try {
@@ -13113,49 +13093,17 @@ export const runChatActionBatch = async ({
     }
     formalRejected = committedInstitution.rejected || [];
   } else if (stored.lifecycleInstitutionId && lifecycleActions.length) {
-    if (evaluation?.dryRun) {
-      // Evaluation must remain observational even if a future caller points it at
-      // an invitation/accession negotiation. Mirror the lifecycle commit's pure
-      // core application on scratch state rather than touching canonical storage.
-      const scratchChats = normalizeChats(bundle.chats).map((entry) => {
-        if (normalizeString(entry?.id) !== normalizeString(stored.id)) return entry;
-        return normalizeChatEntry({
-          ...entry,
-          lifecycleInstitutionId: stored.lifecycleInstitutionId,
-          lifecycleCaseIds: stored.lifecycleCaseIds || [],
-          events: [...normalizeArray(entry?.events), ...outcome.events],
-        }) || entry;
-      });
-      const scratchLifecycle = applyInstitutionLifecycleChatBatchCore({
-        world: bundle.world,
-        chats: scratchChats,
-        events: normalizeEvents(bundle.events),
-        playerCountry: player,
-        date: turnTime,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleActions,
-      });
-      const scratchWorld = nextCursors && typeof nextCursors === "object" && Object.keys(nextCursors).length
-        ? { ...scratchLifecycle.world, chatKnowledgeCursors: { ...(scratchLifecycle.world?.chatKnowledgeCursors || {}), ...nextCursors } }
-        : scratchLifecycle.world;
-      committedLifecycle = {
-        ...scratchLifecycle,
-        world: scratchWorld,
-        channel: normalizeChats(scratchLifecycle.chats).find((entry) => normalizeString(entry?.id) === normalizeString(stored.id)) || null,
-      };
-    } else {
-      committedLifecycle = await commitInstitutionLifecycleChatBatch({
-        chatId: stored.id,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleCaseIds: stored.lifecycleCaseIds || [],
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        lifecycleActions,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
-    }
+    committedLifecycle = await commitInstitutionLifecycleChatBatch({
+      chatId: stored.id,
+      institutionId: stored.lifecycleInstitutionId,
+      lifecycleCaseIds: stored.lifecycleCaseIds || [],
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      lifecycleActions,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     lifecycleRejected = committedLifecycle.rejected || [];
   }
 
@@ -13990,7 +13938,6 @@ const foldedTurnReview = ({ context, merged, state }) => {
 };
 
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
-  const evaluation = context?.evaluation && typeof context.evaluation === "object" ? context.evaluation : null;
   const {
     bundle,
     dateStep,
@@ -14052,9 +13999,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // every skip is, with Save AI requests on or off, unless a provider has
   // refused the folded request this session. Decided once, when the skip starts,
   // and kept through a held segment's retry: the segments already in hand were
-  // written under it. The lab's A/B runs are never folded, since they compare
-  // the skip's own contract.
-  if (state.folded === undefined) state.folded = !evaluation && !foldedSkipRefused;
+  // written under it.
+  if (state.folded === undefined) state.folded = !foldedSkipRefused;
   if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
@@ -14113,20 +14059,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
         `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
       );
-      const politicalDecisionContext = evaluation?.politicalContextMode === "omit"
-        ? ""
-        : buildWorldInitiativePoliticalDecisionContext({
-          world: evaluation?.politicalWorldOverride || ledgerWorld,
-          analysis: worldInitiative.analysis,
-          playerPolity: normalizeString(bundle.game?.country),
-          additionalActors: evaluation?.additionalPoliticalActors || [],
-        });
-      let evaluationSegmentCapture = null;
-      if (evaluation?.capture && typeof evaluation.capture === "object") {
-        if (!Array.isArray(evaluation.capture.segments)) evaluation.capture.segments = [];
-        evaluationSegmentCapture = { segmentIndex, politicalContextText: politicalDecisionContext };
-        evaluation.capture.segments.push(evaluationSegmentCapture);
-      }
+      const politicalDecisionContext = buildWorldInitiativePoliticalDecisionContext({
+        world: ledgerWorld,
+        analysis: worldInitiative.analysis,
+        playerPolity: normalizeString(bundle.game?.country),
+      });
       // What the player has going on across THIS segment's window, and the
       // block that tells the simulator about it (playerFocus.js). Written with
       // the code-appended directives, where an author's guidance cannot reach it.
@@ -14202,12 +14139,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           spend.onRequest?.(status);
         },
         ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0, history: Boolean(historyJob) }) } : {}),
-        ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-        ...(evaluationSegmentCapture ? { capture: evaluationSegmentCapture.task || (evaluationSegmentCapture.task = {}) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || segmentCount > 1
+        ...(segmentCount > 1
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: showEvents } : {}),
@@ -14216,7 +14151,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext, buildSegmentInstruction({
+        userMessage: [lastTurnReceipt, gmChangeNarration, politicalDecisionContext, buildSegmentInstruction({
           mode,
           segmentIndex,
           segmentCount,
@@ -14368,14 +14303,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (state.folded) {
         let refused = false;
         let refusal = null;
+        // A call that ended on the connection (the server could not be reached,
+        // or closed while the answer was arriving) is no refusal, whatever
+        // statuses came before it: the task runner says which it was
+        // (`transportFailure`), and the turn fails the way any skip does.
         try {
           answer = await askSegment(true);
-          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses);
+          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses, { transportFailure: answer.transportFailure === true });
         } catch (error) {
           // A request too large for every model the player has is the same
           // case: the folded one is the larger of the two.
           const tooBig = error?.providerFailure?.kind === "tooBig";
-          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses))) throw error;
+          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses, { transportFailure: error?.transportFailure === true }))) throw error;
           refused = true;
           refusal = error;
         }
@@ -14469,9 +14408,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   } catch (error) {
     // A deliberate cancel must still cancel.
     if (signal?.aborted || error?.name === "AbortError") throw error;
-    // A/B evaluation is observational. Never replace a failed arm with canned
-    // history and never create resumable pending-jump state in the live game.
-    if (evaluation) throw error;
     const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
 
     // The request fits no model the player has (contextWindow.js): canned events
@@ -14527,7 +14463,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // for the whole skip, never per segment; a failed repair leaves it overdue.
   // Outside the try on purpose: nothing here may hold the turn as a failed
   // segment, and a repair never throws except on the player's Cancel.
-  if (!evaluation) await repairSkipStorylineMotion({ context, state, signal });
+  await repairSkipStorylineMotion({ context, state, signal });
 };
 
 // ---- What a time skip spends ---------------------------------------------------
@@ -15253,19 +15189,16 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null } = {}) => {
-  const evaluationMode = evaluation && typeof evaluation === "object";
-  // Starting a fresh LIVE turn abandons any jump still held on a failed segment.
-  // The A/B lab is observational and must not touch any live pending/simulation
-  // state, even when one of its candidate generations fails.
-  if (!evaluationMode) {
-    discardPendingProjectsJump();
-    discardPendingJumpSegment();
-    // A kept skip too, and its stored copy: this skip starts from the campaign
-    // as it stands, and a new round makes the kept one stale anyway.
-    if (discardParkedTurn()) void forgetStoredParkedTurn(activeCampaignId());
-    beginSimulation();
-  }
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal } = {}) => {
+  // Starting a fresh turn abandons any jump still held on a failed segment. Its
+  // state was captured against a world snapshot this one is about to re-read, so
+  // applying it later would write a turn built on stale ground.
+  discardPendingProjectsJump();
+  discardPendingJumpSegment();
+  // A kept skip too, and its stored copy: this skip starts from the campaign
+  // as it stands, and a new round makes the kept one stale anyway.
+  if (discardParkedTurn()) void forgetStoredParkedTurn(activeCampaignId());
+  beginSimulation();
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
   // and counted into one log line when the skip lands. The request count comes
   // from the skip's budget once there is one.
@@ -15273,11 +15206,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = withDiplomaticLedgerMigration(
-    evaluationMode && evaluation.bundleOverride
-      ? evaluation.bundleOverride
-      : await readGameStateBundle({ force: true }),
-  );
+  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
@@ -15339,8 +15268,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     baseColors,
     bundle,
     // Stamped here, at the read, not at the write minutes later.
-    campaignId: evaluationMode ? "political-world-ab-eval" : activeCampaignId(),
-    evaluation: evaluationMode ? evaluation : null,
+    campaignId: activeCampaignId(),
     dateStep,
     mode,
     originDate,
@@ -15378,34 +15306,18 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // What this skip may spend and what it has spent (requestBudget.js): one
     // request where it can be, never more than the cap, while requests are
     // being saved.
-    requests: evaluationMode
-      ? { saving: false, budget: createJumpBudget({ cap: 999, unlimited: true }), used: 0, refused: 0 }
-      : createJumpRequests({
-        segments: segmentCount,
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
-      }),
+    requests: createJumpRequests({
+      segments: segmentCount,
+      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
+    }),
     phases,
   };
   budgetForPhases = jumpState.requests;
 
   await runJumpSegments({ context: jumpContext, onEvents, onProgress, signal, state: jumpState });
-  if (evaluationMode) {
-    // Return the validated candidate round exactly where normal gameplay would
-    // begin its apply/review pipeline. Nothing below this point is persisted.
-    const payload = mergeSegmentPayloads(jumpState.segmentPayloads, { targetDate });
-    return {
-      evaluation: true,
-      payload,
-      events: normalizeArray(payload?.events),
-      generation: jumpState.generation,
-      requests: { used: jumpState.requests?.used || 0, refused: jumpState.requests?.refused || 0 },
-      originDate,
-      targetDate,
-    };
-  }
   return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
   } finally {
-    if (!evaluationMode) endSimulation();
+    endSimulation();
   }
 };
 

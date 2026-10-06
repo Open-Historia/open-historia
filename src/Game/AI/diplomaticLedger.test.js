@@ -257,6 +257,37 @@ test("a relation update that names an unresolvable polity is rejected", () => {
   assert.match(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), /could not resolve both polities/);
 });
 
+// A model restating a pact it already recorded writes `start` again, often with
+// the title a word different. That is repaired when the titles share most of
+// their words, and the words were split on a-z0-9: two titles in Cyrillic,
+// Greek or Arabic had none, were never compatible, and the answer was refused.
+// (Words are still what a space or a mark of punctuation sets apart, four
+// letters or more: a Chinese title, written without spaces, is one word.)
+test("a pact started again under nearly its own title is repaired in other scripts too", () => {
+  for (const [recorded, restated, another] of [
+    ["Франко-русский союз", "Франко-русский военный союз", "Торговое соглашение о зерне"],
+    ["Γαλλορωσική συμμαχία", "Γαλλορωσική στρατιωτική συμμαχία", "Εμπορική συμφωνία σιτηρών"],
+  ]) {
+    const allied = {
+      ...world,
+      agreements: [{
+        id: "franco-russian-alliance", title: recorded, type: "alliance", status: "active", parties: ["France", "Russia"],
+        startedDate: "1894-01-04", terms: "Mutual military assistance against Germany", sourceEventIds: ["e0"],
+      }],
+    };
+    const again = (title) => ({
+      events: alliance(),
+      relationUpdates: "",
+      agreementUpdates: `franco-russian-alliance~start~alliance~France,Russia~1~${title}~Mutual military assistance against Germany`,
+    });
+    const repaired = again(restated);
+    assert.equal(validateDiplomaticLedgerPayload(repaired, { world: allied, allowNativeBinding: true }), "", restated);
+    assert.deepEqual(agreementIds(repaired), [], "the redundant start is dropped; the pact stands as it was");
+    // Another instrument under the same id is still a collision.
+    assert.match(validateDiplomaticLedgerPayload(again(another), { world: allied, allowNativeBinding: true }), /franco-russian-alliance/, another);
+  }
+});
+
 test("a later record on the same pair replaces the score; an unbound record is dropped on apply", () => {
   const events = alliance();
   const seeded = applyDiplomaticUpdates({
@@ -425,4 +456,94 @@ test("the salvage pass leaves a clean answer exactly as it was", () => {
   const before = JSON.stringify(candidate);
   assert.deepEqual(salvageDiplomaticLedgerPayload(candidate, { world }), []);
   assert.equal(JSON.stringify(candidate), before, "objects stay objects, untouched");
+});
+
+// What a small model writes where it has nothing to report: a heading and a
+// sentence, in its own language, where the prompt asks for an empty string (a
+// player's log has the war ledger's: "### Обновления войн:" and "Нет
+// изменений. …"). A line with no ~ in it is not a record. Read as one, it was
+// a relation between that sentence and nobody.
+test("a line with no separator is prose, not a relation or an agreement", () => {
+  const heading = "### Обновления отношений:";
+  const nothing = "Нет изменений. В этом периоде отношения не изменились.";
+  const prose = `${heading}\n${nothing}`;
+  assert.deepEqual(decodeRelationUpdates(prose), []);
+  assert.deepEqual(decodeRelationUpdates([heading, nothing]), [], "nor as members of a list");
+  assert.deepEqual(decodeAgreementUpdates(prose), []);
+  assert.deepEqual(decodeAgreementUpdates([heading, nothing]), []);
+
+  // Refused the whole answer on a strict pass: 'could not resolve both
+  // polities: "### Обновления отношений:" / ""'.
+  const strict = { events: alliance(), relationUpdates: prose, agreementUpdates: prose };
+  assert.equal(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }), "");
+  // And on the salvage pass was dropped by name, into the next prompt.
+  const salvaged = { events: alliance(), relationUpdates: prose, agreementUpdates: prose };
+  assert.deepEqual(salvageDiplomaticLedgerPayload(salvaged, { world }), []);
+
+  // Around real records it costs them nothing.
+  const mixed = {
+    events: alliance(),
+    relationUpdates: `${heading}\nFrance~Russia~70~friendly~1~Alliance concluded\n${nothing}`,
+    agreementUpdates: "",
+  };
+  assert.equal(validateDiplomaticLedgerPayload(mixed, { world, allowNativeBinding: true }), "");
+  assert.deepEqual(decodeRelationUpdates(mixed.relationUpdates).map((update) => [update.a, update.b, update.score]), [["France", "Russia", 70]]);
+
+  // A line that has the separator and names nobody is still a record, and refused.
+  const bad = { events: alliance(), relationUpdates: "France~Atlantis~-40~strained~1~Dispute", agreementUpdates: "" };
+  assert.match(validateDiplomaticLedgerPayload(bad, { world, allowNativeBinding: true }), /could not resolve both polities/);
+});
+
+// A game played in another language: the map's polities keep their names and
+// carry the player's as aliases, and every title, summary and event is written
+// in that language. The words these checks compare were cut to a-z and 0-9, so
+// such text had none.
+const russianWorld = {
+  ...world,
+  polityOverrides: {
+    France: { code: "France", name: "France", aliases: ["Франция"] },
+    Russia: { code: "Russia", name: "Russia", aliases: ["Россия"] },
+    Germany: { code: "Germany", name: "Germany", aliases: ["Германия"] },
+  },
+};
+const russianEvents = () => [
+  { id: "e1", date: "1894-01-03", title: "Германия спустила на воду новый броненосец", description: "В Киле спущен на воду броненосец.", kind: "military" },
+  { id: "e2", date: "1894-01-04", title: "Франция и Россия заключили военную конвенцию", description: "Париж и Петербург подписали конвенцию о взаимной военной помощи.", kind: "diplomacy" },
+];
+
+test("a relation record with no event number is tied to its event in another script", () => {
+  // It named no event, the engine found none for it, and it was dropped
+  // without a word: the relation never moved.
+  const candidate = { events: russianEvents(), relationUpdates: "France~Russia~70~friendly~Военная конвенция подписана", agreementUpdates: "" };
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world: russianWorld, allowNativeBinding: true }), "");
+  assert.deepEqual(
+    decodeRelationUpdates(candidate.relationUpdates).map((update) => [update.a, update.b, update.eventIds]),
+    [["France", "Russia", ["e2"]]],
+  );
+});
+
+test("two wordings of one agreement's title agree in another script, and two agreements do not", () => {
+  const signed = (title) => ({
+    ...russianWorld,
+    agreements: [{ id: "franco-russian-alliance", title, type: "alliance", status: "active", parties: ["France", "Russia"], startedDate: "1894-01-04", terms: "Взаимная военная помощь против Германии" }],
+  });
+  const restated = (title, ledger) => {
+    const candidate = {
+      events: russianEvents(),
+      relationUpdates: "",
+      agreementUpdates: `franco-russian-alliance~start~alliance~France,Russia~2~${title}~Взаимная помощь распространена на Австро-Венгрию`,
+    };
+    const error = validateDiplomaticLedgerPayload(candidate, { world: ledger, allowNativeBinding: true });
+    return error || decodeAgreementUpdates(candidate.agreementUpdates).map((update) => update.op).join(",");
+  };
+
+  // Refused as a second agreement under a taken id, which is a second request.
+  assert.equal(restated("Франко-русский военный союз 1894 года", signed("Франко-русский союз")), "update");
+  assert.match(restated("Договор о торговле зерном", signed("Франко-русский союз")), /already exists; use update/);
+  // Chinese is not written in words, so a title agrees with one it contains.
+  assert.equal(restated("法俄同盟条约", signed("法俄同盟")), "update");
+  assert.match(restated("粮食贸易协定", signed("法俄同盟")), /already exists; use update/);
+  // Titles in a-z and 0-9 are compared as they always were.
+  assert.equal(restated("The Franco-Russian Military Alliance", signed("Franco-Russian Alliance")), "update");
+  assert.match(restated("Grain Trade Treaty", signed("Franco-Russian Alliance")), /already exists; use update/);
 });

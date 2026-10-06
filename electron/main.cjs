@@ -63,6 +63,14 @@ if (IS_BETA) app.setName(BETA_APP_NAME);
 const BETA_UPDATE_MANIFEST =
   "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/latest.json";
 
+// Where the stable app's update screen sends a player who wants the beta: the
+// Windows installer itself, and elsewhere the release page, which lists the
+// builds for each system. The beta installs beside the stable app, as its own
+// application with its own saves (see above), so trying it risks nothing.
+const BETA_DOWNLOAD_URL = process.platform === "win32"
+  ? "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe"
+  : "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta";
+
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
 // full stop, so nothing may be written next to the code (see server/dataDir.js).
@@ -230,6 +238,12 @@ const setupAutoUpdater = () => {
   // waits for the banner's button — ~100MB is not pulled out from under a player
   // mid-session on a metered connection.
   autoUpdater.autoDownload = false;
+  // Every installer is published under one fixed name on a rolling release, so
+  // the "old" block map electron-updater fetches for a differential download is
+  // the new one: it concludes nothing changed, assembles the old installer
+  // again, fails the checksum and only then downloads in full. Go straight to
+  // the full download.
+  autoUpdater.disableDifferentialDownload = true;
   // If they download but never press Restart, it installs on the next quit
   // instead of being thrown away.
   autoUpdater.autoInstallOnAppQuit = true;
@@ -437,7 +451,9 @@ const verifyMapData = () => {
 const createSetupWindow = () =>
   new BrowserWindow({
     width: 560,
-    height: 360,
+    // Tall enough for the update screen with both of its offers (open the game
+    // now, download the beta) without scrolling.
+    height: 470,
     resizable: false,
     // No menu bar, no dev chrome — this is a setup dialog, not a browser.
     autoHideMenuBar: true,
@@ -705,7 +721,9 @@ const boot = async () => {
     fs,
     recordFile: path.join(USER_ROOT, "launch-update.json"),
     showWindow: openSetupWindow,
-    send: (payload) => sendToSetup("setup:update", payload),
+    // The stable app's update screen also offers the beta (setup.html); the
+    // beta has nothing newer to offer.
+    send: (payload) => sendToSetup("setup:update", { ...payload, betaOffer: !IS_BETA }),
     waitForLater: waitForUpdateLater,
     log: logMain,
   }).catch((error) => {
@@ -801,4 +819,8 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
   });
   ipcMain.handle("setup:cancel", () => app.quit());
+  // "Download the beta" on the update screen: in the player's own browser, so
+  // the download is where they can see it. Nothing about this launch changes:
+  // the update goes on installing.
+  ipcMain.handle("setup:open-beta", () => shell.openExternal(BETA_DOWNLOAD_URL));
 }

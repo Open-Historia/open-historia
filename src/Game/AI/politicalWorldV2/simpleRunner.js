@@ -26,7 +26,10 @@ const providerPauseReason = (error) => {
   const message = clean(error?.message || error).toLocaleLowerCase();
   if (/quota|balance.*exhaust|resource[_ -]?exhaust/.test(message)) return "provider-quota";
   if (/rate limit|rate limiting|too many requests/.test(message)) return "provider-rate-limit";
-  if (/temporarily unavailable|failed to fetch|network|econn|gateway|timed? out|timeout/.test(message)) return "provider-unavailable";
+  // "connection closed" and "could not be reached" are how a server that dropped
+  // mid-answer or was never there now reads (AI/providerErrors.js); the first
+  // used to arrive as the browser's "network error", which the list had.
+  if (/temporarily unavailable|failed to fetch|network|econn|gateway|timed? out|timeout|connection closed|could not be reached/.test(message)) return "provider-unavailable";
   if (/unauthori[sz]ed|forbidden|api key|authentication|permission/.test(message)) return "provider-config";
   return "task-error";
 };

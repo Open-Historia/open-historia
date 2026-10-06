@@ -222,19 +222,22 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ## 7. Cloudflare Workers (the control/edge plane)
 
-### 7.1 Import counter — `tools/import-counter/`
+### 7.1 Import counter — `tools/import-counter/` (retired)
 
-A tiny Worker that counts community-scenario imports. The game server pings it once per successful install via `server/server.js` → `/api/hub/import-log` (`server/server.js`), giving real numbers even for scenarios GitHub can't count (issue attachments).
+A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's *Copy post files to releases* workflow copies each post's attachment into a release, adds the downloads up every half hour, and writes them (with where each copy is) to `index.json` on its `hub-index` branch; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. See [runtime-services.md](runtime-services.md).
+
+Until 2026-10-05 the count was kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game.
+
+Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| Entry | `worker.js` |
-| Storage | KV binding `IMPORTS` (counts live in each key's metadata so `/counts` is one list call) |
-| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js`) |
-| Override | `OH_IMPORT_COUNTER_URL` env on the game server |
-| Dedup | Website: once per **account _and_ IP** (skip if either seen); app/anonymous web: once per **IP**. Raw IPs never stored — hashed with `HASH_SALT` |
-| Read routes | `/counts` (all), `/count/<hub-issue-number>` (one) |
+| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
+| `POST /hit` | Accepted and ignored: the download the import made is what counted it |
+| Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers (`data/legacy-import-counts.json` there) |
+
+It takes effect when this `worker.js` is on `main` and the site is deployed (§6.1).
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
@@ -244,7 +247,7 @@ The web-mode control plane (source of truth: the admin repo). Serves the signed 
 |---|---|---|
 | `NODES` | KV | Small hot keys + TTL items (magic-link tokens, sessions via `acct:`/`magic:`/`sess:` prefixes) |
 | `OH_ACCOUNTS` | D1 (`oh-accounts`) | Nodes table, users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
-| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | Direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
+| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
 The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js`). No game rebuild is needed for a directory change.
@@ -329,7 +332,7 @@ Opening the game installs a waiting update; the update banner (`src/runtime/AppU
 
 | Build | As the game opens | While it is open |
 |---|---|---|
-| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. | The banner: **Update now** downloads, **Restart now** installs. |
+| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. The stable app's screen also offers **Download the beta** (`betaOffer`, `setup:open-beta`): the beta's Windows installer, or its release page on other systems, opened in the player's browser while the update goes on. The beta is a separate app with its own saves, and its own update screen makes no such offer. | The banner: **Update now** downloads, **Restart now** installs. |
 | **Website** | The first `version.json` check after the page loads, if it answers within 15 s (`LAUNCH_UPDATE_WINDOW_MS`), reloads onto the new bundle under a cover. | The banner's **Update now** reloads. |
 | **Android** | The same first check (`/api/app-update` → the release's `latest.json`): a cover downloads the APK with a progress bar (`UpdatePlugin.java`, `OhUpdate`, through `src/runtime/native/appInstaller.js`) and opens Android's installer on it. Android asks the player to confirm, and the first time to allow installs from the app (`REQUEST_INSTALL_PACKAGES`); it refuses an APK not signed with the installed app's key. **Not now** cancels the download. The APK is kept in the app's cache under its build number, so closing the installer and tapping **Update now** later does not download it again; it is deleted once the app is on that build. | The banner's **Update now** does the same download in the banner; after a failure it falls back to the phone's browser, as every update used to. |
 | **macOS** | Nothing: Squirrel.Mac needs a signed app, and the build is unsigned. | The banner links to the new zip. |

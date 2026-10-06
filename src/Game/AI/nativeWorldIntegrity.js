@@ -1930,11 +1930,13 @@ const mirrorPrimaryAgencyRow = (agency) => {
 
 const INSTITUTION_SUBPRINCIPAL_HINT_RE = /\b(?:council|committee|secretariat|commission|assembly|board|bureau|office|service|agency|command|directorate|mission|delegation|court|panel|ministers?|ministerial|summit|conference|working group)\b/i;
 
+// Words of any script: an institution named in Cyrillic, Arabic or Chinese
+// used to fold to nothing here, and so could never be the one a text named.
 const normalizeInstitutionAuthorityPhrase = (value) => normalizeString(value)
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
   .toLocaleLowerCase()
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .trim();
 
 const activeInstitutionEntries = (world = {}) => {
