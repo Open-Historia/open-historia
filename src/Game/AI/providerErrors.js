@@ -304,6 +304,13 @@ export const toolStreamRefusalError = (providerLabel, error, retried) => {
     return refusal;
 };
 
+// What the player reads when the game server's relay had to stop an answer it
+// had already begun to pass on (relayResponse.js puts it on the read error).
+// Kept here, with the other messages the player reads, so the language packs
+// carry it: relayResponse.js is not a file the catalog is read from.
+export const RELAY_CUT_OFF_MESSAGE =
+    "The AI answer was cut off partway through the game server's relay. If a local model needs longer, raise OH_RELAY_TIMEOUT_MS on the server.";
+
 // A web page where an API reply should be. It means the endpoint address points
 // at a website rather than its API: a gateway's own 404 page, a login screen, a
 // proxy's error page, or — when the address has no http(s):// — the game's own

@@ -1043,10 +1043,20 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    abortUpstream();
-  }, RELAY_TIMEOUT_MS);
+  // A deadline on SILENCE, restarted by every chunk: the first byte gets the
+  // whole window (prompt evaluation on a local model), and a model that is
+  // still streaming tokens is never cut off for being long. It used to be a
+  // limit on the whole answer, so a thinking model on a slow provider that was
+  // still writing at ten minutes was stopped there.
+  let timeout = null;
+  const armTimeout = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      abortUpstream();
+    }, RELAY_TIMEOUT_MS);
+  };
+  armTimeout();
 
   try {
     if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
@@ -1114,6 +1124,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     let received = 0;
     await new Promise((resolve, reject) => {
       upstream.on("data", (chunk) => {
+        armTimeout();
         received += chunk.length;
         if (received > RELAY_MAX_RESPONSE_BYTES) {
           upstream.destroy(new Error("The AI endpoint's response is too large to relay."));
@@ -1128,31 +1139,45 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       });
       upstream.on("end", resolve);
       upstream.on("error", reject);
+      // The endpoint's connection dropping mid-answer is not always an error
+      // on the response; without this the relay waited out its deadline.
+      upstream.on("close", () => {
+        if (!upstream.complete) reject(new Error("The AI endpoint closed the connection before its answer was complete."));
+      });
     });
 
     completed = true;
     res.end();
   } catch (error) {
+    // Headers are already out, so there is no status left to set. Ending the
+    // response here used to write a clean end of stream, and the game took a
+    // cut-off answer for a complete one: it failed to parse half a tool call,
+    // spent a second request that was cut the same way, and the advisor kept
+    // truncated replies as finished. Breaking the connection makes the
+    // browser's reader fail instead (src/Game/AI/relayResponse.js says why).
+    // A client that went away has destroyed it already.
+    const cutOff = (reason) => {
+      if (res.writableEnded || res.destroyed) return;
+      appendLog({ level: "warn", source: "server", event: "relay.cut", message: reason.message });
+      res.destroy(reason);
+    };
     // The relay's own deadline used to abort the upstream and then send
     // NOTHING: no status, no body, no res.end(), so the game sat on an open
     // socket forever instead of failing. Answer it.
     if (timedOut) {
-      if (!res.headersSent) {
-        sendError(res, 504, new Error(
-          `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
-            + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
-        ));
-      } else if (!res.writableEnded && !res.destroyed) {
-        res.end();
-      }
+      const late = new Error(
+        `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
+          + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
+      );
+      if (!res.headersSent) sendError(res, 504, late);
+      else cutOff(late);
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
       sendError(res, 502, error);
+    } else if (res.headersSent) {
+      cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {
-      // Headers are already out, so there is no status left to set — end the
-      // response rather than leaking the socket. (A client that went away has
-      // destroyed it already; there is nothing to answer.)
       res.end();
     }
   } finally {
