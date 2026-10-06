@@ -1414,6 +1414,9 @@ const OlMap = ({
       };
       return { before, remember };
     };
+    // The trim takes ALL of the winner out of the loser, so one call clears
+    // every sliver the two share: the sweep calls it once for a pair of
+    // regions, not once for each sliver between them.
     const trimOverlap = (item, remember) => {
       const winner = regionSource.getFeatureById(item.winnerId);
       const loser = regionSource.getFeatureById(item.loserId);
@@ -1745,9 +1748,10 @@ const OlMap = ({
           totals.gapsFound += gaps.length;
           totals.overlapsFound += overlapsFound.length;
 
-          // Overlaps first (the loser trimmed to the winner's boundary), then
-          // the cracks, every crack of one target in one union. Past
-          // maxApplyMillis the rest are left for the next save.
+          // Overlaps first (the loser trimmed to the winner's boundary, every
+          // sliver of one pair in one trim), then the cracks, every crack of
+          // one target in one union. Past maxApplyMillis the rest are left for
+          // the next save.
           const repairCount = overlapsFound.length + gaps.length;
           report({ phase: "apply", repairCount, repairsDone: 0 });
           if (!repairCount) break;
@@ -1765,19 +1769,31 @@ const OlMap = ({
             if (repairsFailed.size) repairsFailed.delete(repairKey(item));
           };
           const failed = (item) => repairsFailed.add(repairKey(item));
+          // The slivers of one pair of regions, in the order the pairs were
+          // found. Two regions that disagree along a border share a sliver
+          // wherever their lines cross (the default world's 49,647 lie between
+          // 7,541 pairs), and one trim removes them all: the second trim of a
+          // pair had nothing left to take and cost as much as the first.
+          const byPair = new globalThis.Map();
           for (const item of overlapsFound) {
-            if (attempted % 25 === 0 && overApplyBudget()) break;
-            attempted += 1;
-            if (trimOverlap(item, edit.remember)) {
-              overlapsTrimmed += 1;
-              applied.push(item);
-              changed.add(regionSource.getFeatureById(item.loserId));
+            const pair = `${item.winnerId}\n${item.loserId}`;
+            if (!byPair.has(pair)) byPair.set(pair, []);
+            byPair.get(pair).push(item);
+          }
+          for (const items of byPair.values()) {
+            if (overApplyBudget()) break;
+            attempted += items.length;
+            const [{ winnerId, loserId }] = items;
+            if (trimOverlap(items[0], edit.remember)) {
+              overlapsTrimmed += items.length;
+              applied.push(...items);
+              changed.add(regionSource.getFeatureById(loserId));
               // If an earlier pass had passed this pair over, it was not left
               // alone after all.
-              leftAlone.trimmed(item.winnerId, item.loserId);
-              notFailed(item);
+              leftAlone.trimmed(winnerId, loserId);
+              items.forEach(notFailed);
             } else {
-              failed(item);
+              items.forEach(failed);
             }
           }
           const byTarget = new globalThis.Map();

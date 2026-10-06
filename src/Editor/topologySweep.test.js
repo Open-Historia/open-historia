@@ -308,7 +308,7 @@ test("what the guards left alone is counted once, however many passes meet it", 
   const run = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
   assert.ok(run.indexOf("const leftAlone = leftAloneTally();") < run.indexOf("while (passes < BORDER_CLEANUP.maxPasses"), "made before the first pass");
   assert.ok(run.includes("...leftAlone.counts(),"), "in the result");
-  assert.ok(run.includes("leftAlone.trimmed(item.winnerId, item.loserId);"), "told of every trim");
+  assert.ok(run.includes("leftAlone.trimmed(winnerId, loserId);"), "told of every trim");
 });
 
 test("the loading screen reports each phase in plain words with a bar that only moves forward", () => {
@@ -765,6 +765,38 @@ test("the width decides what is repaired: the same crack is filled by a deep cle
   assert.equal(found("deep").length, 1);
   assert.equal(found("quick").length, 0, "wider than 500 m: a quick clean leaves it");
   assert.ok(found("deep")[0].width > 800 && found("deep")[0].width < 1000);
+});
+
+test("one trim clears every sliver two regions share, so the sweep trims a pair once", () => {
+  // Two squares 100 km a side. The right one's side crosses the left one's
+  // twice over: two tongues 400 m deep reach into the left square, 20 km
+  // apart, so the two regions share two slivers.
+  const KM = 1000;
+  const left = new Polygon([[[0, 0], [100 * KM, 0], [100 * KM, 100 * KM], [0, 100 * KM], [0, 0]]]);
+  const right = new Polygon([[
+    [100 * KM, 0], [200 * KM, 0], [200 * KM, 100 * KM], [100 * KM, 100 * KM],
+    [100 * KM, 80 * KM], [100 * KM - 400, 80 * KM], [100 * KM - 400, 60 * KM], [100 * KM, 60 * KM],
+    [100 * KM, 40 * KM], [100 * KM - 400, 40 * KM], [100 * KM - 400, 20 * KM], [100 * KM, 20 * KM],
+    [100 * KM, 0],
+  ]]);
+  const options = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  assert.equal(overlapGeoms(left, right, options).length, 2, "two slivers between one pair");
+  // The right square is the larger by its two tongues, so it keeps them and
+  // the left one is trimmed: once.
+  const trimmed = subtractFrom(left, right);
+  assert.equal(overlapGeoms(trimmed, right, options).length, 0, "both gone after one trim");
+  assert.equal(planarGeometryArea(trimmed), 100 * KM * 100 * KM - 2 * 400 * 20 * KM);
+  // A second trim of the pair has nothing left to take.
+  assert.equal(planarGeometryArea(subtractFrom(trimmed, right)), planarGeometryArea(trimmed));
+
+  // The sweep gathers what it found by winner and loser, and trims each pair
+  // once, counting every sliver of the pair as attempted and as trimmed.
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const sweep = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
+  assert.ok(sweep.includes("const pair = `${item.winnerId}\\n${item.loserId}`;"), "gathered by winner and loser");
+  assert.match(sweep, /for \(const items of byPair\.values\(\)\) \{\n\s+if \(overApplyBudget\(\)\) break;\n\s+attempted \+= items\.length;/, "the time is read before every pair");
+  assert.equal(sweep.split("trimOverlap(").length - 1, 1, "one call a pair");
+  assert.ok(sweep.includes("if (trimOverlap(items[0], edit.remember)) {\n              overlapsTrimmed += items.length;\n              applied.push(...items);"), "a trim counts every sliver it cleared, and the next pass looks around each of them");
 });
 
 test("the note and the screen say the width the sweep ran at", () => {
@@ -1491,7 +1523,7 @@ test("the Workshop's sweep welds to find and never to repair, and counts what is
   assert.ok(welder.includes("out = weldedGeometry(geom, tables);"), "and a union of regions by the same tables");
   // The result carries the counts.
   for (const field of ["welded,", "partsApart,", "pairsFailed: pairsFailed.size,", "repairsFailed: repairsFailed.size,"]) assert.ok(sweep.includes(field), `the result has ${field}`);
-  assert.ok(sweep.includes("fillGaps(targetId, items, edit.remember, failed)") && sweep.includes("} else {\n              failed(item);"), "a trim or a fill that cannot be made is counted");
+  assert.ok(sweep.includes("fillGaps(targetId, items, edit.remember, failed)") && sweep.includes("} else {\n              items.forEach(failed);"), "a trim or a fill that cannot be made is counted");
   // Repairs are made from the regions as they are: nothing welded reaches them.
   const repairs = olMap.slice(olMap.indexOf("const beginTopologyEdit = () =>"), olMap.indexOf("const finishTopologyEdit ="));
   assert.ok(repairs.includes("subtractFrom(loser.getGeometry(), winner.getGeometry())") && repairs.includes("unionGeoms([target.getGeometry(), item.geom])"));
