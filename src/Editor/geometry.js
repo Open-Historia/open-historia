@@ -241,17 +241,21 @@ export const enclosedGapsOfUnion = (unioned, { maxWidth = BORDER_CLEANUP.maxWidt
 // The caller decides which region wins; the rule is deliberately deterministic
 // rather than a guess at campaign semantics. `minWidth` (the sweep's 2 m) drops
 // defects too narrow to be anything but coordinate-rounding noise; the default
-// of 0 keeps everything.
+// of 0 keeps everything. Each piece also carries `shared`, the area of ALL the
+// two regions share, pieces of any width included: a trim takes all of it, so
+// that is what says whether it is a sliver (topologySweep.js isSliver).
 export const overlapGeoms = (a, b, { maxWidth = BORDER_CLEANUP.maxWidth, minWidth = 0 } = {}) => {
   const hit = intersectionGeom(a, b);
   if (!hit) return [];
+  const polys = asMultiPolygonCoords(hit);
+  const shared = polys.reduce((sum, poly) => sum + Math.max(0, polyArea(poly)), 0);
   const out = [];
-  for (const poly of asMultiPolygonCoords(hit)) {
+  for (const poly of polys) {
     const area = Math.max(0, polyArea(poly));
     const perimeter = ringPerimeter(poly[0]);
     const width = perimeter > 0 ? (2 * area) / perimeter : Infinity;
     if (!Number.isFinite(width) || width > maxWidth || width < minWidth) continue;
-    out.push({ geom: new Polygon(poly.map((ring) => ring.map((pt) => pt.slice()))), area, width });
+    out.push({ geom: new Polygon(poly.map((ring) => ring.map((pt) => pt.slice()))), area, width, shared });
   }
   return out.sort((a, b) => a.width - b.width || a.area - b.area);
 };

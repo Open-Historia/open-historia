@@ -38,7 +38,7 @@ import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
 import RBush from "ol/structs/RBush.js";
-import { BORDER_CLEANUP, findEnclosedGaps, hotspotsOf, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, isSliver, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1250,10 +1250,27 @@ const OlMap = ({
     // it touches most (the larger region on ties); a hole touching nothing is
     // dropped. Neighbours come from the spatial index, limited to the pass's
     // regions and sorted by their order so proposals are deterministic.
+    //
+    // A hole wider than BORDER_CLEANUP.maxWidthInsideOneRegion is filled only
+    // when two or more regions are on its rim: one region all the way round is
+    // a lake or an inlet that region was drawn around, not a crack between
+    // regions (topologySweep.js cracksAmong).
     const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
-      for (const row of holes) {
+      // How many of the pass's regions are on a hole's rim, as far as two.
+      const rimRegionsOf = (row) => {
+        const ring = geometryRings(row.geom)[0] || [];
+        let holders = 0;
+        for (const feature of regionSource.getFeaturesInExtent(row.geom.getExtent())) {
+          if (!selectedSet.has(feature)) continue;
+          const index = boundaryIndexOf(feature);
+          if (holdsRim(ring, ([x, y], reach) => index.getInExtent([x - reach, y - reach, x + reach, y + reach]))) holders += 1;
+          if (holders > 1) break;
+        }
+        return holders;
+      };
+      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width })) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
@@ -1315,6 +1332,11 @@ const OlMap = ({
           if (!pieces.length) continue;
           const aArea = areaOf(a);
           const bArea = areaOf(b);
+          // A pair that shares more than BORDER_CLEANUP.maxSliverShare of the
+          // smaller region is left as it is: that is not a sliver, and the
+          // trim below would take it out of a region that has little else
+          // (topologySweep.js isSliver).
+          if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) continue;
           // Deterministic conservative rule: the larger region keeps the tiny
           // overlap; the smaller one is trimmed to its exact boundary. This is
           // only done for narrow overlaps.
