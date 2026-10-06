@@ -573,13 +573,23 @@ async function providerFetch(url, options = {}) {
         return await directFetch(url, options);
     } catch (error) {
         const aborted = options.signal?.aborted || error?.name === "AbortError";
+        // The endpoint is remembered as one that needs the relay (or, in the
+        // app, native HTTP) once that way has got an answer where the browser
+        // got none: that is what shows it sends no CORS headers. A server that
+        // is simply not running fails both ways. It used to be remembered all
+        // the same, before the second way was tried, so one request made while
+        // a model server was down (or before it was started) sent every later
+        // one through the relay for the rest of the session, under the relay's
+        // limits, whether the browser could reach that server directly or not.
         if (PAGE_IS_LOCAL && !aborted && error instanceof TypeError) {
+            const relayed = await relayFetch(url, options);
             relayOnlyOrigins.add(origin);
-            return relayFetch(url, options);
+            return relayed;
         }
         if (NATIVE_HTTP && !aborted && error instanceof TypeError) {
+            const answered = await nativeHttpFetch(url, options);
             relayOnlyOrigins.add(origin);
-            return nativeHttpFetch(url, options);
+            return answered;
         }
         // Hosted page, local backend, and the browser rejected the reply: this is
         // almost always the backend not allowing this origin, and "Failed to fetch"

@@ -119,6 +119,21 @@ test("a server the relay could not reach moves the call to the next entry, or fa
     assert.equal(alone.error.providerFailure.midAnswer, undefined, "it never answered at all: the report does not say it broke mid-answer");
 });
 
+test("a server that was only down is not remembered as one that needs the relay", () => {
+    // The browser's fetch fails the same way for a server with no CORS headers
+    // and for one that is not running. Only the first needs the relay, and what
+    // shows it is the relay getting an answer: remembered after that, not before.
+    const from = main.indexOf("async function providerFetch(");
+    const fetcher = main.slice(from, main.indexOf("// Generic SSE text streamer", from));
+    assert.match(fetcher, /const relayed = await relayFetch\(url, options\);\s*relayOnlyOrigins\.add\(origin\);\s*return relayed;/,
+        "relayFetch throws for an endpoint the relay could not reach either, so nothing is remembered then");
+    // The app's native HTTP stands in for the relay, and is remembered the same way.
+    assert.match(fetcher, /const answered = await nativeHttpFetch\(url, options\);\s*relayOnlyOrigins\.add\(origin\);\s*return answered;/);
+    assert.equal(fetcher.split("relayOnlyOrigins.add(origin);").length - 1, 2, "and nowhere before an answer");
+    // Still only for the failure a missing CORS header gives, and never for the player's cancel.
+    assert.equal(fetcher.split("!aborted && error instanceof TypeError").length - 1, 3);
+});
+
 test("a relayed 502 that is read by its body is still not a busy provider", () => {
     // The second line: anything that reads the relay's JSON without its header
     // (classifyProviderFailure) comes to the same failure, and is not waited on.
