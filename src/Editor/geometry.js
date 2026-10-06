@@ -12,7 +12,7 @@
 import polygonClipping from "polygon-clipping";
 import Polygon from "ol/geom/Polygon.js";
 import MultiPolygon from "ol/geom/MultiPolygon.js";
-import { BORDER_CLEANUP } from "./topologySweep.js";
+import { BORDER_CLEANUP, nodeBoundaries, weldFlatCoordinates, weldTable } from "./topologySweep.js";
 
 const ringArea = (ring) => {
   let a = 0;
@@ -208,6 +208,79 @@ export const unionAllGeoms = (geoms) => {
   if (!inputs.length) return null;
   const res = polygonClipping.union(inputs[0], ...inputs.slice(1));
   return res?.length ? coordsToOl(res) : null;
+};
+
+// ---------------------------------------------------------------------------
+// Welding: what the save-time sweep turns to when polygon-clipping refuses a
+// call (topologySweep.js says why it does, and what was measured).
+//
+// The two tables for a set of geometries, x and y: each coordinate value that
+// lies within `reach` of another, and the value it gives way to. One axis at
+// a time, so the working array is one copy of one axis.
+export const weldTablesFor = (geoms, reach = BORDER_CLEANUP.weldReach) => {
+  let points = 0;
+  for (const geom of geoms) points += geom.getFlatCoordinates().length / geom.getStride();
+  return [0, 1].map((axis) => {
+    const values = new Float64Array(points);
+    let n = 0;
+    for (const geom of geoms) {
+      const flat = geom.getFlatCoordinates();
+      const stride = geom.getStride();
+      for (let i = axis; i < flat.length; i += stride) {
+        values[n] = flat[i];
+        n += 1;
+      }
+    }
+    return weldTable(values, reach);
+  });
+};
+
+// A geometry with the tables applied: a copy that differs from it in the
+// welded values and nothing else, or the geometry itself when it holds none.
+// Never written back into a region: it is only what polygon-clipping is shown.
+export const weldedGeometry = (geom, tables) => {
+  const flat = weldFlatCoordinates(geom.getFlatCoordinates(), tables, geom.getStride());
+  if (!flat) return geom;
+  const copy = geom.clone();
+  copy.setFlatCoordinates(geom.getLayout(), flat);
+  copy.changed();
+  return copy;
+};
+
+// Where each ring of a polygon geometry ends in its flat coordinates.
+const ringEnds = (geom) => {
+  const type = geom.getType();
+  return type === "Polygon" ? geom.getEnds() : type === "MultiPolygon" ? geom.getEndss().flat() : [];
+};
+
+// A whole set of regions welded: each one's near-equal values made equal
+// (the tables above), then each one's neighbours' corners put into its edges
+// where they lie on them (topologySweep.js nodeBoundaries). `neighboursOf(i,
+// box)` hands back the places in `geoms` of the regions that reach the box;
+// the map's spatial index answers it in the Workshop. Returned are the tables,
+// for welding a union of these regions later, and one geometry per region:
+// the region's own when nothing in it changed.
+export const weldRegions = (geoms, neighboursOf, reach = BORDER_CLEANUP.weldReach) => {
+  const tables = weldTablesFor(geoms, reach);
+  const welded = geoms.map((geom) => weldedGeometry(geom, tables));
+  const shapes = welded.map((geom) => ({ flat: geom.getFlatCoordinates(), ends: ringEnds(geom), extent: geom.getExtent(), stride: geom.getStride() }));
+  const noded = nodeBoundaries(shapes, neighboursOf, reach);
+  return {
+    tables,
+    geoms: welded.map((geom, index) => {
+      const next = noded[index];
+      if (!next) return geom;
+      if (geom.getType() === "Polygon") return new Polygon(next.flat, geom.getLayout(), next.ends);
+      // The rings back in their polygons, as many to each as it had.
+      let ring = 0;
+      const endss = geom.getEndss().map((ends) => {
+        const own = next.ends.slice(ring, ring + ends.length);
+        ring += ends.length;
+        return own;
+      });
+      return new MultiPolygon(next.flat, geom.getLayout(), endss);
+    }),
+  };
 };
 
 // Return enclosed holes in the UNION of the supplied regions. These are the
