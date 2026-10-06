@@ -25,6 +25,7 @@ import {
 } from "./contextWindow.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
+import { describeOutputLimit, localOutputLimit } from "./outputLimit.js";
 import { withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -234,8 +235,10 @@ const refuseCutShortAnswer = (data, text) => {
 // into the outgoing body, so a deliberately-set key can override a built-in
 // one; a nested built-in object (e.g. Gemini's generationConfig) must be
 // supplied whole to override any of its keys. Invalid input is ignored, not
-// fatal — a malformed settings field should never break a turn.
-function parseCustomParams(raw, providerLabel) {
+// fatal — a malformed settings field should never break a turn. `quiet` is for
+// a reader that only wants to know what the request will carry (the log line):
+// the provider caller parses the same field a moment later and says it once.
+function parseCustomParams(raw, providerLabel, { quiet = false } = {}) {
     const trimmed = (raw ?? "").trim();
     if (!trimmed) return {};
 
@@ -244,9 +247,9 @@ function parseCustomParams(raw, providerLabel) {
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             return parsed;
         }
-        console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
+        if (!quiet) console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
     } catch (error) {
-        console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
+        if (!quiet) console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
     }
 
     return {};
@@ -1300,6 +1303,11 @@ async function callOpenAIStyleChatCompletions({
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
             : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
+        // What a LOCAL server is told the answer may run to when neither the
+        // task nor the entry names a limit: left unsaid, the server's own small
+        // default cuts a turn's JSON partway (outputLimit.js). 0 for a hosted
+        // endpoint, where no limit named still means none is sent.
+        const localLimit = localOutputLimit({ localEndpoint: streamLocalEndpoint, taskTokens: maxTokens, customParams: requestCustomParams });
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
         // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
@@ -1347,9 +1355,14 @@ async function callOpenAIStyleChatCompletions({
                 // asked for 8192 can spend all 8192 thinking and emit no answer at all.
                 // Add headroom for the thinking, and drop the cap entirely once a reply
                 // has already come back as reasoning-only.
+                //
+                // A local server is the exception to "omit the field": it gets
+                // localLimit instead of nothing (see above). That is the floor a
+                // local request always carries, not a cap a caller asked for, so
+                // lifting the cap for reasoning does not remove it.
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
-                    : {}),
+                    : (localLimit ? { [tokenLimitField]: localLimit } : {})),
                 ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
@@ -2465,6 +2478,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
         maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
         reasoning: getReasoningEnabled(),
     };
+    // The output limit the request to THIS entry carries, for its log line. On
+    // an OpenAI-style entry it depends on the entry: its own custom parameters
+    // may set one, and a local server is given one when nothing else does
+    // (outputLimit.js), which a report has to be able to see.
+    const outputLimitShown = (entry) => {
+        if (entry?.provider !== "openai" && entry?.provider !== "openai-compatible") return callShape.maxTokens;
+        return describeOutputLimit({
+            taskTokens: providerOpts.maxTokens,
+            customParams: parseCustomParams(entry.customParams, entry.label, { quiet: true }),
+            localEndpoint: entry.provider === "openai-compatible" && isLocalEndpoint(normalizeEndpoint(entry.endpoint)),
+        });
+    };
 
     // What the call actually cost, and how long it sat before answering.
     //
@@ -2554,7 +2579,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ),
             attempt: (entry, { canFallBack, onChunk }) => {
                 if (record) record.provider = entry.provider;
-                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, callShape, { verbose: true });
+                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, { ...callShape, maxTokens: outputLimitShown(entry) }, { verbose: true });
                 return runWithLookups(lookups, history, (roundHistory, roundOpts) => dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
                     ...providerOpts,
                     ...roundOpts,
@@ -2605,7 +2630,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
             logDebugEvent("ai-call", `${label}: ${answeredBy.label} [${answeredBy.provider}] stopped at its output limit; the answer may be cut short.`, {
                 replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
                 viaToolCall: Boolean(result?.toolInput),
-                maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
+                maxTokens: outputLimitShown(answeredBy),
             });
             try {
                 tellOutputLimit?.();
