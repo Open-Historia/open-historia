@@ -121,8 +121,11 @@ test("on the desktop store: a hub game names this library's copy of the file, or
     });
     const card = (id) => store.getGameCatalog().games.find((entry) => entry.id === id);
     const unrelated = card(importGame().game.id);
-    store.createScenario({ id: "hub-copy", name: "Hub Map", setActive: false });
-    store.updateScenario("hub-copy", { hubOrigin: origin });
+    // The post's map, downloaded: only an import says where a scenario came from.
+    store.importScenarioBundle(
+      { schema: "open-historia-scenario-bundle/2", scenario: { id: "hub-copy", name: "Hub Map" }, data: {}, hubOrigin: origin },
+      { setSelected: false },
+    );
     const copied = card(importGame().game.id);
     ${report(`{
       unrelated: { scenarioId: unrelated.scenarioId, missing: unrelated.scenarioMissing, origin: unrelated.importedScenarioOrigin?.postId },

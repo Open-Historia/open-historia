@@ -1041,6 +1041,53 @@ const jumpImpactsSchema = {
   ),
 };
 
+// ---- The folded time skip -------------------------------------------------------
+// While requests are being saved a skip is ONE request (requestBudget.js): no
+// second request checks its events afterwards, so each event carries every
+// consequence itself, the board included, and the agents' reports ride at the
+// end of the same answer. The contract a skip is SENT then is the lean one above
+// plus two things, added per call by foldJumpTool below:
+//   impacts.projectOps   the board, moved by the event that moved it;
+//   agentReports         one report per agent that is due one, when any is.
+// With saving off the checks are requests of their own and the skip is sent the
+// lean contract, exactly as before. The schema an answer is VALIDATED against
+// (JUMP_FORWARD_SCHEMA) accepts both, so neither answer costs a turn its schema
+// check; gameplay.js decides what each skip does with the extra fields.
+//
+// The board's op is the board's own (projectOpSchema) without the fields an
+// event never sets: the priority is the player's dial, the links and the map
+// focus are the board's bookkeeping, the nested spelling of a create is
+// tolerance for a habit this contract never teaches, and a completion's effects
+// (onComplete) are the completing event's own impacts here, since that event
+// moves the map itself. Fewer optional fields is also less grammar for a
+// provider that compiles the schema (geminiSchema.js), on a contract every
+// event of every skip carries. Its field notes are in the prompt
+// ([Projects & Operations]), as the other compact families' are.
+const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "project", "onComplete"]);
+
+const foldedProjectOpsSchema = compactJumpImpactSchema({
+  type: "array",
+  description:
+    "The Projects & Operations board, moved by THIS event: one op per effort the event itself started, advanced, "
+    + "set back, completed or ended. Shapes and rules under [Projects & Operations]. Most events have none.",
+  items: {
+    ...projectOpSchema,
+    properties: Object.fromEntries(
+      Object.entries(projectOpSchema.properties).filter(([key]) => !FOLDED_PROJECT_OP_OMITS.has(key)),
+    ),
+  },
+});
+
+// What the validation schema accepts under an event's impacts: the lean jump
+// impacts, and the board's op whole, so a folded answer and a habit both pass.
+const jumpAnswerImpactsSchema = {
+  ...jumpImpactsSchema,
+  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps },
+};
+
+// The field a folded skip's agents' reports come back in (gameplay.js).
+export const AGENT_REPORTS_FIELD = "agentReports";
+
 // Category tags (runtime/eventTags.js): the timeline's filter chips.
 const eventTagsSchema = {
   type: "array",
@@ -1078,10 +1125,16 @@ const eventSchema = {
       maxItems: 8,
       items: nonEmptyTextSchema("One canonical belligerent polity name."),
     },
-    impacts: jumpImpactsSchema,
+    impacts: jumpAnswerImpactsSchema,
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
+};
+
+// The event of the lean contract: no board (see "The folded time skip" above).
+const leanJumpEventSchema = {
+  ...eventSchema,
+  properties: { ...eventSchema.properties, impacts: jumpImpactsSchema },
 };
 
 const interactiveSchema = {
@@ -1184,6 +1237,16 @@ export const JUMP_FORWARD_SCHEMA = {
       description:
         "Compact newline-separated subordination updates - one polity directing another while it remains a separate country. Ops: install, reclassify, loyalty, reveal, release, annex, revolt, suppress. Empty string when no subordination changes. Record format is documented in the live prompt.",
     },
+    // A folded skip's agents' reports (see "The folded time skip" above). Loose
+    // here on purpose: each report is checked against the agents' own schema
+    // (SPY_INTERCEPT_SCHEMA) when it is filed, so a malformed one costs that
+    // report and never the turn. The contract a skip is SENT declares the shape
+    // in full, and only when an agent is due (foldJumpTool).
+    [AGENT_REPORTS_FIELD]: {
+      type: "array",
+      description: "The player's agents' reports: one per agent listed under [Agents' Reports], and only when that block is present.",
+      items: { type: "object" },
+    },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
   // reads it as `payload?.clearActions !== false`, so a missing value already
@@ -1198,6 +1261,16 @@ export const JUMP_FORWARD_SCHEMA = {
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// The lean contract a skip is SENT while its checks are requests of their own:
+// the answer schema without the board and without the agents' reports.
+const JUMP_FORWARD_LEAN_SCHEMA = (() => {
+  const { [AGENT_REPORTS_FIELD]: _agentReports, ...properties } = JUMP_FORWARD_SCHEMA.properties;
+  return {
+    ...JUMP_FORWARD_SCHEMA,
+    properties: { ...properties, events: { ...properties.events, items: leanJumpEventSchema } },
+  };
+})();
 
 // The bounded semantic geography pass: place wording that exact matching could
 // not resolve, mapped onto the losing side's real regions, or UNRESOLVED.
@@ -3098,14 +3171,63 @@ export const ACTIONS_TOOL = makeTool(
 export const JUMP_FORWARD_TOOL = makeTool(
   "submit_jump_result",
   "Submit the events, stop date, summary and resolved-action state from a timeline jump.",
-  JUMP_FORWARD_SCHEMA,
+  JUMP_FORWARD_LEAN_SCHEMA,
 );
 
 export const AUTO_JUMP_FORWARD_TOOL = makeTool(
   "submit_jump_result",
   "Submit the events and result of an automatic timeline jump that stops at the next notable moment.",
-  AUTO_JUMP_FORWARD_SCHEMA,
+  JUMP_FORWARD_LEAN_SCHEMA,
 );
+
+// A skip's tool as the folded contract (see "The folded time skip"): the board
+// under each event's impacts when `board` is set (a skip with nothing on the
+// board is not asked to keep one), and the agents' reports when `agentReports`
+// is. Takes the tool the task would have been sent, so a scenario's own stat
+// keys (getGameplayToolForStatIndices) are kept. The reports come last, written
+// after the events they have to agree with. Anything that is not a skip's tool,
+// and a skip with neither, comes back as it was.
+export const foldJumpTool = (tool, { board = true, agentReports = false } = {}) => {
+  const events = tool?.schema?.properties?.events;
+  const impacts = events?.items?.properties?.impacts;
+  if (!impacts?.properties || (!board && !agentReports)) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        events: board ? {
+          ...events,
+          items: {
+            ...events.items,
+            properties: {
+              ...events.items.properties,
+              impacts: { ...impacts, properties: { ...impacts.properties, projectOps: foldedProjectOpsSchema } },
+            },
+          },
+        } : events,
+        ...(agentReports ? {
+          [AGENT_REPORTS_FIELD]: {
+            type: "array",
+            description:
+              "One report per agent listed under [Agents' Reports], written after the events and consistent with them. "
+              + "None for an agent that is not listed.",
+            items: {
+              type: "object",
+              properties: {
+                agent: nonEmptyTextSchema("The agent's key, copied exactly from [Agents' Reports], such as agent_1."),
+                ...SPY_INTERCEPT_SCHEMA.properties,
+              },
+              required: ["agent", "exchanges"],
+              additionalProperties: false,
+            },
+          },
+        } : {}),
+      },
+    },
+  };
+};
 
 export const DESCRIPTION_TO_ACTION_TOOL = makeTool(
   "submit_description_to_action",

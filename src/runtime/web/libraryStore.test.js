@@ -201,6 +201,107 @@ test("a hub Update still clears an asset the new bundle leaves out", async () =>
   assert.equal(updated.assetStatus.regionsGeojson, true);
 });
 
+// ---- links to the community hub (server/hubProvenance.js, shared with the desktop store) ----
+
+const HUB_FILE = (version) => `https://github.com/user-attachments/files/${version}/hub-map.zip`;
+// A post's file as the Community tab hands it to the import: the bundle, stamped with where it came from.
+const hubBundle = (name, version = 1) => ({ ...scenarioBundle(name), hubOrigin: { postId: 42, bundleUrl: HUB_FILE(version) } });
+const PUBLISH_KEY = "oh-3f2a9c1e5d7b9a01";
+const NEW_PUBLISH_KEY = "oh-0a1b2c3d4e5f6a7b";
+
+test("an Unlink is for good here as on the desktop, whoever writes afterwards", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", hubBundle("Hub Map"))).scenario.id;
+  const write = async (body) => ok(await scenarios("PUT", id, body)).scenario;
+  const imported = ok(await scenarios("GET", id)).scenario;
+  assert.equal(imported.hubOrigin.postId, 42, "an import says where the scenario came from");
+  assert.equal(imported.hubOrigin.editedAt, undefined);
+
+  // The player's own post: published and found, then unlinked.
+  await write({ hubPublished: { key: PUBLISH_KEY, postIds: [55] } });
+  const ownUnlinked = await write({ hubPublished: null });
+  assert.equal(ownUnlinked.hubPublished, null);
+  assert.deepEqual(ownUnlinked.hubUnlinked, { postIds: [55], keys: [PUBLISH_KEY] }, "the scenario remembers the post and its key");
+  assert.equal(ownUnlinked.updatedAt, imported.updatedAt, "an Unlink is bookkeeping, not an edit");
+  const afterStaleWrite = await write({ hubPublished: { key: PUBLISH_KEY, postIds: [55], commentCounts: { 55: 2 } } });
+  assert.equal(afterStaleWrite.hubPublished, null, "a record read before the Unlink is not written back");
+  const republished = await write({ hubPublished: { key: NEW_PUBLISH_KEY, postIds: [55, 60] } });
+  assert.equal(republished.hubPublished.key, NEW_PUBLISH_KEY, "publishing again is followed as usual");
+  assert.deepEqual(republished.hubPublished.postIds, [60], "but the unlinked post never comes back");
+  assert.equal(ok(await scenarios("PUT", id, { hubPublished: { postIds: [70] } })).scenario.hubPublished.key, NEW_PUBLISH_KEY, "and no post is linked by hand");
+
+  // The post it was downloaded from.
+  const linkRefused = await scenarios("PUT", id, { hubOrigin: { postId: 99, bundleUrl: HUB_FILE(9) } });
+  assert.equal(linkRefused.status, 400, "a scenario write cannot link a scenario to a post");
+  assert.match(linkRefused.data.error, /cannot be linked/);
+  const updated = ok(await scenarios("PUT", `${id}/import`, hubBundle("Hub Map v2", 2))).scenario;
+  assert.equal(updated.hubOrigin.bundleUrl, HUB_FILE(2), "a copy still linked takes its post's newer file");
+  assert.equal(updated.hubOrigin.editedAt, undefined);
+  const originUnlinked = await write({ hubOrigin: null });
+  assert.equal(originUnlinked.hubOrigin, null);
+  assert.deepEqual(originUnlinked.hubUnlinked, { postIds: [55, 42], keys: [PUBLISH_KEY] });
+  assert.equal((await scenarios("PUT", id, { hubOrigin: { postId: 42, bundleUrl: HUB_FILE(3) } })).status, 400);
+  const updateRefused = await scenarios("PUT", `${id}/import`, hubBundle("Hub Map v3", 3));
+  assert.equal(updateRefused.status, 400, "an Update cannot link it again either");
+  assert.match(updateRefused.data.error, /not linked to that community post/);
+
+  const card = (await library()).scenarios.find((entry) => entry.id === id);
+  assert.equal(card.name, "Hub Map v2", "the refused Update wrote nothing over the player's scenario");
+  assert.equal(card.hubOrigin, null);
+  assert.deepEqual(card.hubPublished.postIds, [60]);
+  assert.deepEqual(card.hubUnlinked, { postIds: [55, 42], keys: [PUBLISH_KEY] }, "the card carries what was unlinked, for the search to skip");
+});
+
+test("a check for suggestions that lands with an Unlink finds the scenario unlinked", async () => {
+  // A write here is a read, a change and a put with awaits between them. Both
+  // of these began from the same record, and the check's put used to land
+  // last, with the post the player had just unlinked back in it.
+  await reset();
+  const id = ok(await scenarios("POST", "", { name: "Own Map" })).scenario.id;
+  const record = { key: PUBLISH_KEY, postIds: [55] };
+  ok(await scenarios("PUT", id, { hubPublished: record }));
+  const [unlink, check] = await Promise.all([
+    scenarios("PUT", id, { hubPublished: null }),
+    scenarios("PUT", id, { hubPublished: { ...record, commentCounts: { 55: 3 } } }),
+  ]);
+  ok(unlink);
+  assert.equal(ok(check).scenario.hubPublished, null, "the check is told what the store kept");
+  const after = ok(await scenarios("GET", id)).scenario;
+  assert.equal(after.hubPublished, null);
+  assert.deepEqual(after.hubUnlinked, { postIds: [55], keys: [PUBLISH_KEY] });
+});
+
+test("an Update and an Unlink of one scenario take turns", async () => {
+  // An Update is several writes here, where the desktop store does it in one
+  // request. Pressed together, each waits for the other: an Unlink that came
+  // second stands over the copy the Update left, and one that came first has
+  // the Update refused, so the player's own scenario is not replaced.
+  await reset();
+  const updatedFirst = ok(await scenarios("POST", "import", hubBundle("Hub Map"))).scenario.id;
+  const [update, unlink] = await Promise.all([
+    scenarios("PUT", `${updatedFirst}/import`, hubBundle("Hub Map v2", 2)),
+    scenarios("PUT", updatedFirst, { hubOrigin: null }),
+  ]);
+  ok(update);
+  ok(unlink);
+  const unlinkedCopy = ok(await scenarios("GET", updatedFirst)).scenario;
+  assert.equal(unlinkedCopy.name, "Hub Map v2");
+  assert.equal(unlinkedCopy.hubOrigin, null, "the Unlink stands");
+  assert.deepEqual(unlinkedCopy.hubUnlinked, { postIds: [42], keys: [] });
+
+  const unlinkedFirst = ok(await scenarios("POST", "import", hubBundle("Hub Map"))).scenario.id;
+  const [unlinkBefore, refused] = await Promise.all([
+    scenarios("PUT", unlinkedFirst, { hubOrigin: null }),
+    scenarios("PUT", `${unlinkedFirst}/import`, hubBundle("Hub Map v2", 2)),
+  ]);
+  ok(unlinkBefore);
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /not linked to that community post/);
+  const own = ok(await scenarios("GET", unlinkedFirst)).scenario;
+  assert.equal(own.name, "Hub Map", "nothing was written over it");
+  assert.equal(own.hubOrigin, null);
+});
+
 const newGame = async (name, body = {}) =>
   ok(await games("POST", "", { name, scenarioId: "default", setActive: true, ...body })).game.id;
 

@@ -38,7 +38,7 @@ import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
 import RBush from "ol/structs/RBush.js";
-import { BORDER_CLEANUP, findEnclosedGaps, hotspotsOf, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, isSliver, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -511,7 +511,6 @@ const OlMap = ({
   const importPreviewLayerRef = useRef(null);
   const paintPreviewSourceRef = useRef(null);
   const paintPreviewLayerRef = useRef(null);
-  const topologyAnalysisRef = useRef(null);
   const analyzeTopologyRef = useRef(null);
   const borderAssistSourceRef = useRef(null);
   const borderAssistLayerRef = useRef(null);
@@ -792,8 +791,9 @@ const OlMap = ({
     });
     paintPreviewLayer.setZIndex(58);
 
-    // Selection-scoped topology diagnostics. Nothing here participates in save
-    // or export: yellow/red geometry is a preview overlay only.
+    // What the Shared border tool's check finds after an edit (analyzeTopology):
+    // a crack in yellow, an overlap in red. Nothing here participates in save
+    // or export; it is an overlay only.
     const topologySource = new VectorSource({ wrapX: false });
     const topologyLayer = new VectorLayer({
       source: topologySource,
@@ -971,7 +971,10 @@ const OlMap = ({
         if (!neighbor) return;
         const cmd = mergeRegionFeatures(regionSource, [hit, neighbor]);
         if (!cmd) {
-          window.alert("The border between these two regions could not be removed. Select both, repair them in the Topology panel, then try again.");
+          // A union fails on borders that cross or nearly coincide, and the
+          // save's border cleanup (repairTopologyEverywhere) is the only thing
+          // that repairs those. The Merge button says the same.
+          window.alert("The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again.");
           return;
         }
         regionLayer.changed();
@@ -1147,7 +1150,6 @@ const OlMap = ({
     }
 
 
-    const nameOf = (f) => String(f?.get("name") || f?.getId?.() || "region");
     const expandExtent = (extent, pad) => [extent[0] - pad, extent[1] - pad, extent[2] + pad, extent[3] + pad];
 
     const pointSegmentDistance = (p, a, b) => {
@@ -1213,12 +1215,13 @@ const OlMap = ({
 
     const clearTopologyDiagnostics = () => {
       topologySource.clear();
-      topologyAnalysisRef.current = null;
     };
 
-    // The two conservative defect classes, shared by the Topology panel's
-    // selection pass (analyzeTopology) and the save-time sweep over every
-    // region (repairTopologyEverywhere): same rules, same order, same undo.
+    // The two conservative defect classes, enclosed cracks and thin overlaps,
+    // found by the same rules and in the same order for the save-time sweep
+    // over every region, which repairs them (repairTopologyEverywhere), and
+    // for the Shared border tool's check on its two regions, which only marks
+    // them (analyzeTopology).
     const topologyContext = (feats) => {
       const selectedSet = new Set(feats);
       const featureOrder = new globalThis.Map(feats.map((feature, index) => [feature, index]));
@@ -1247,10 +1250,27 @@ const OlMap = ({
     // it touches most (the larger region on ties); a hole touching nothing is
     // dropped. Neighbours come from the spatial index, limited to the pass's
     // regions and sorted by their order so proposals are deterministic.
+    //
+    // A hole wider than BORDER_CLEANUP.maxWidthInsideOneRegion is filled only
+    // when two or more regions are on its rim: one region all the way round is
+    // a lake or an inlet that region was drawn around, not a crack between
+    // regions (topologySweep.js cracksAmong).
     const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
-      for (const row of holes) {
+      // How many of the pass's regions are on a hole's rim, as far as two.
+      const rimRegionsOf = (row) => {
+        const ring = geometryRings(row.geom)[0] || [];
+        let holders = 0;
+        for (const feature of regionSource.getFeaturesInExtent(row.geom.getExtent())) {
+          if (!selectedSet.has(feature)) continue;
+          const index = boundaryIndexOf(feature);
+          if (holdsRim(ring, ([x, y], reach) => index.getInExtent([x - reach, y - reach, x + reach, y + reach]))) holders += 1;
+          if (holders > 1) break;
+        }
+        return holders;
+      };
+      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width })) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
@@ -1275,7 +1295,6 @@ const OlMap = ({
           area: row.area,
           width: row.width,
           targetId: target.getId(),
-          targetName: nameOf(target),
         });
       }
       return items;
@@ -1284,7 +1303,7 @@ const OlMap = ({
     // Narrow overlaps between feats[from, to) and their later-ordered extent
     // neighbours. R2.4: the VectorSource spatial index is asked only for the
     // regions whose extents can actually meet A, never every pair.
-    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, onPair, minWidth = 0, maxPairVertices = Infinity, onSkip } = {}) => {
+    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip } = {}) => {
       const items = [];
       for (let i = from; i < to; i += 1) {
         const a = feats[i];
@@ -1296,7 +1315,6 @@ const OlMap = ({
           .sort((x, y) => x.index - y.index);
 
         for (const { feature: b } of nearby) {
-          onPair?.();
           // Two regions together heavier than one call can safely be handed
           // (the save-time sweep's BORDER_CLEANUP.maxUnionVertices) are left
           // uncompared, rather than risk the page's memory on them.
@@ -1314,9 +1332,14 @@ const OlMap = ({
           if (!pieces.length) continue;
           const aArea = areaOf(a);
           const bArea = areaOf(b);
+          // A pair that shares more than BORDER_CLEANUP.maxSliverShare of the
+          // smaller region is left as it is: that is not a sliver, and the
+          // trim below would take it out of a region that has little else
+          // (topologySweep.js isSliver).
+          if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) continue;
           // Deterministic conservative rule: the larger region keeps the tiny
           // overlap; the smaller one is trimmed to its exact boundary. This is
-          // only proposed for narrow overlap candidates and always previews first.
+          // only done for narrow overlaps.
           const winner = aArea >= bArea ? a : b;
           const loser = winner === a ? b : a;
           for (const row of pieces) {
@@ -1326,10 +1349,6 @@ const OlMap = ({
               geom: row.geom.clone(),
               area: row.area,
               width: row.width,
-              aId: a.getId(),
-              bId: b.getId(),
-              aName: nameOf(a),
-              bName: nameOf(b),
               winnerId: winner.getId(),
               loserId: loser.getId(),
             });
@@ -1339,43 +1358,28 @@ const OlMap = ({
       return items;
     };
 
-    const analyzeTopology = (ids, { maxWidth = 500 } = {}) => {
-      const width = Math.max(1, Number(maxWidth) || 500);
+    // The Shared border tool's check after each of its edits (the interaction
+    // effect below): the enclosed cracks and thin overlaps left between the
+    // given regions, up to maxWidth, marked on the map in yellow and red. It
+    // repairs nothing. The marks stay until the next check, a save or an
+    // import clears them.
+    const analyzeTopology = (ids, { maxWidth = BORDER_CLEANUP.maxWidth } = {}) => {
+      const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
       topologySource.clear();
-      if (feats.length < 2) {
-        const empty = { maxWidth: width, gaps: [], overlaps: [], selectionCount: feats.length };
-        topologyAnalysisRef.current = empty;
-        return empty;
-      }
+      if (feats.length < 2) return;
 
       const context = topologyContext(feats);
-      let spatialPairs = 0;
-      // Fully enclosed holes in the selection union are the only gap class R2
-      // auto-fills. Open coastline defects are preview/manual territory for now.
+      // Fully enclosed holes in the regions' union are the only gap class
+      // that is ever filled. Open coastline defects are left to the author.
       const gaps = assignGapTargets(enclosedGapGeoms(feats.map((f) => f.getGeometry()), { maxWidth: width }), width, context);
-      const overlapsFound = findNarrowOverlaps(feats, width, context, { onPair: () => { spatialPairs += 1; } });
+      const overlapsFound = findNarrowOverlaps(feats, width, context);
       for (const item of [...gaps, ...overlapsFound]) {
         const overlay = new Feature({ geometry: item.geom.clone(), kind: item.kind });
         overlay.setId(`topology-${item.id}`);
         topologySource.addFeature(overlay);
       }
-
-      const report = {
-        maxWidth: width,
-        selectionCount: feats.length,
-        spatialPairs,
-        gaps,
-        overlaps: overlapsFound,
-      };
-      topologyAnalysisRef.current = report;
       topologyLayer.changed();
-      return {
-        ...report,
-        // React only needs summaries; keep heavyweight OL geometries private.
-        gaps: gaps.map(({ geom, ...item }) => item),
-        overlaps: overlapsFound.map(({ geom, ...item }) => item),
-      };
     };
 
     analyzeTopologyRef.current = analyzeTopology;
@@ -1468,28 +1472,7 @@ const OlMap = ({
       return before.size;
     };
 
-    const repairTopology = (ids, { maxWidth = 500 } = {}) => {
-      // Re-analyze at apply-time. The user may have edited a vertex after preview;
-      // stale geometry must never be committed blindly.
-      analyzeTopology(ids, { maxWidth });
-      const report = topologyAnalysisRef.current;
-      if (!report) return { changed: false, gaps: 0, overlaps: 0 };
-
-      const edit = beginTopologyEdit();
-      let overlapRepairs = 0;
-      for (const item of report.overlaps || []) {
-        if (trimOverlap(item, edit.remember)) overlapRepairs += 1;
-      }
-      let gapRepairs = 0;
-      for (const item of report.gaps || []) {
-        if (fillGap(item, edit.remember)) gapRepairs += 1;
-      }
-      const affectedRegions = finishTopologyEdit(edit);
-      if (!affectedRegions) return { changed: false, gaps: 0, overlaps: 0 };
-      return { changed: true, gaps: gapRepairs, overlaps: overlapRepairs, affectedRegions };
-    };
-
-    // Save-time border cleanup (MapEditor.jsx persistScenario): the panel's
+    // Save-time border cleanup (MapEditor.jsx persistScenario): the repair
     // pass over EVERY region, repeated until a pass finds nothing (at most
     // BORDER_CLEANUP.maxPasses — trimming a sliver can expose a hairline
     // between the winner and a third region), all as ONE undo step. The gap
@@ -1876,7 +1859,7 @@ const OlMap = ({
         if (feats.length < 2) return;
         const cmd = mergeRegionFeatures(regionSource, feats);
         if (!cmd) {
-          window.alert("These regions could not be merged. Repair them in the Topology panel, then try again.");
+          window.alert("These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again.");
           return;
         }
         regionLayer.changed();
@@ -2276,10 +2259,8 @@ const OlMap = ({
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
-      analyzeTopology,
-      repairTopology,
+      // The save-time border cleanup (MapEditor.jsx persistScenario).
       repairTopologyEverywhere,
-      clearTopologyDiagnostics,
 
       // Province Map Importer preview. Bounds arrive as WGS84 lon/lat and are
       // projected here so the source image can be checked against the live map

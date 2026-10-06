@@ -711,7 +711,10 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // The scenario's publish key, written into the post: finding it there is
       // how this install later learns which post is its player's own, and so
       // which posts' comments to read for suggested changes. The same key for
-      // every post made of this scenario; the scenario keeps it.
+      // every post made of this scenario; the scenario keeps it, until its
+      // player unlinks the post. That is for good (server/hubProvenance.js):
+      // the record and its key go, so this mints another, and the post made
+      // now is followed while the unlinked one is never found again.
       const publishKey = scenario.hubPublished?.key || newPublishKey();
       const technicalLines = [
         ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),

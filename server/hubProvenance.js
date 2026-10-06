@@ -22,6 +22,18 @@
 //   suggestions the player rejected wholesale ("Reject all from @…"), never
 //   stored again.
 //
+// hubUnlinked — what the player unlinked this scenario from, for good:
+//   { postIds[], keys[] }
+//   A link is only ever made by the game (hubOrigin when a post is downloaded,
+//   hubPublished when Publish writes a key into a post); all a player can do
+//   to one is remove it, and that is permanent. The posts unlinked (the one
+//   the scenario was downloaded from, the ones its player made of it) and the
+//   publish keys those posts carry are remembered here, and nothing adds them
+//   to the scenario again: hubLinksAfterWrite refuses them in both stores and
+//   the search for the player's own posts skips them. So a check for
+//   suggestions that was still running when the player unlinked, a second
+//   window, or an old post edited to carry a newer key cannot bring one back.
+//
 // hubReviews — how the author got on reviewing each suggestion:
 //   { [suggestionId]: { status, accepted[], rejected[], updatedAt } }
 //
@@ -34,6 +46,8 @@
 //   in place once the download lands; reason is why it failed last time.
 
 const MAX_POST_IDS = 10;
+// Far more than a player unlinks by hand: the cap only bounds a damaged file.
+const MAX_UNLINKED = 1000;
 export const MAX_HUB_SUGGESTIONS = 50;
 const MAX_REVIEWS = 60;
 const MAX_DECISIONS = 5000;
@@ -82,17 +96,55 @@ export const normalizeHubOrigin = (raw) => {
   };
 };
 
-// What a scenario write does to the link. A write that names hubOrigin sets it
-// (the import and Update paths, which stamp it last) or clears it (Unlink).
-// Every other write that changes the scenario is a local edit: the link stays,
-// marked edited, so the Update button stops offering to overwrite the player's
-// work while Suggest changes can still find the original. A write that only
-// records bookkeeping (touch: false) leaves it exactly as it was.
-export const hubOriginAfterWrite = (current, updates = {}, { touch = true } = {}) => {
-  if (Object.prototype.hasOwnProperty.call(updates ?? {}, "hubOrigin")) return normalizeHubOrigin(updates.hubOrigin);
+// What the player unlinked this scenario from (hubUnlinked): the numbers of the
+// posts, and the publish keys those posts carry. null when nothing was.
+export const normalizeHubUnlinked = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+  const postIds = [...new Set((Array.isArray(raw.postIds) ? raw.postIds : []).map(positiveInt).filter(Boolean))]
+    .slice(-MAX_UNLINKED);
+  const keys = [...new Set((Array.isArray(raw.keys) ? raw.keys : []).map(normalizeHubKey).filter(Boolean))]
+    .slice(-MAX_UNLINKED);
+  return postIds.length || keys.length ? { postIds, keys } : null;
+};
+
+const names = (updates, key) => Object.prototype.hasOwnProperty.call(updates ?? {}, key);
+
+// What a scenario write does to the link to the post it was downloaded from. A
+// write that names hubOrigin sets it (the stores' own import and Update, which
+// stamp it last) or, as null, clears it (Unlink). Every other write that
+// changes the scenario is a local edit: the link stays, marked edited, so the
+// Update button stops offering to overwrite the player's work while Suggest
+// changes can still find the original. A write that only records bookkeeping
+// (touch: false) leaves it exactly as it was.
+//
+// Only an explicit null unlinks, because unlinking cannot be taken back: a
+// value that is no link at all is passed over. And a post the scenario was
+// unlinked from (`unlinked`, its hubUnlinked) is never stamped on it again; the
+// link it has may be renewed, which is what an Update does.
+export const hubOriginAfterWrite = (current, updates = {}, { touch = true, unlinked = null } = {}) => {
   const origin = normalizeHubOrigin(current);
+  if (names(updates, "hubOrigin") && updates.hubOrigin === null) return null;
+  const stamped = names(updates, "hubOrigin") ? normalizeHubOrigin(updates.hubOrigin) : null;
+  if (stamped) {
+    const renewed = stamped.postId === origin?.postId;
+    return !renewed && normalizeHubUnlinked(unlinked)?.postIds.includes(stamped.postId) ? origin : stamped;
+  }
   if (!origin || !touch) return origin;
   return origin.editedAt ? origin : { ...origin, editedAt: nowIso() };
+};
+
+// The link an Update stamps on the scenario it replaces. An Update puts the
+// post's newer file in place of a copy of that post, so the scenario has to be
+// one still: a scenario the player unlinked, or one that never came from that
+// post, is their own, and is neither overwritten nor linked. Throws for those;
+// null when the bundle names no post (a file replacing a scenario by hand).
+export const hubOriginForUpdate = (current, bundleOrigin) => {
+  const stamped = normalizeHubOrigin(bundleOrigin);
+  if (!stamped) return null;
+  if (normalizeHubOrigin(current)?.postId !== stamped.postId) {
+    throw new Error("This scenario is not linked to that community post, so it cannot be updated from it.");
+  }
+  return stamped;
 };
 
 // The origin a game export may hand on as "fetch the map from the hub": only
@@ -195,7 +247,9 @@ export const normalizeHubPublished = (raw) => {
   const postIds = [...new Set((Array.isArray(raw.postIds) ? raw.postIds : [raw.postId]).map(positiveInt).filter(Boolean))]
     .slice(0, MAX_POST_IDS);
   // A record needs something to find its post by: the key the post carries, or
-  // a post the player linked by hand.
+  // a post that was linked to it by hand. Linking by hand is gone, and such a
+  // record is still read, until its player unlinks it; a write makes no new
+  // one (hubPublishedAfterWrite).
   if (!key && !postIds.length) return null;
   const blocked = loginList(raw.blocked);
   const suggestions = [];
@@ -242,6 +296,85 @@ export const withContributorBlocked = (published, login, blocked = true) => {
   const list = (current.blocked ?? []).filter((entry) => entry.toLowerCase() !== name.toLowerCase());
   const next = { ...current, blocked: blocked ? [...list, name] : list, commentCounts: {} };
   return normalizeHubPublished(next);
+};
+
+// What a scenario write does to the record of the player's own posts. A write
+// that names hubPublished replaces the record (Publish, a check for
+// suggestions, a contributor blocked) or, as null, clears it (Unlink); any
+// other write leaves it alone.
+//
+// Only an explicit null unlinks, and nothing puts back what was unlinked
+// (`unlinked`, the scenario's hubUnlinked):
+//   - a record carrying an unlinked key is the unlinked record itself, written
+//     by a check that was still running or by another window, and changes
+//     nothing;
+//   - an unlinked post is left out of any record, with its suggestions. Only a
+//     post the record already holds stays: unlinking a scenario from the post
+//     it was downloaded from does not take that post out of its player's own
+//     posts, which is the other Unlink;
+//   - a record with no key is one a post was linked to by hand, while that was
+//     possible. It is kept until it is unlinked, but a write neither makes one
+//     nor gives it another post.
+export const hubPublishedAfterWrite = (current, updates = {}, { unlinked = null } = {}) => {
+  const published = normalizeHubPublished(current);
+  if (!names(updates, "hubPublished")) return published;
+  if (updates.hubPublished === null) return null;
+  const next = normalizeHubPublished(updates.hubPublished);
+  const gone = normalizeHubUnlinked(unlinked);
+  if (!next || gone?.keys.includes(next.key)) return published;
+  if (!next.key && (!published || published.key)) return published;
+  const held = new Set(published?.postIds ?? []);
+  const refused = (postId) => !held.has(postId) && Boolean(!next.key || gone?.postIds.includes(postId));
+  const postIds = next.postIds.filter((postId) => !refused(postId));
+  const suggestions = next.suggestions.filter((ref) => !refused(ref.postId));
+  if (postIds.length === next.postIds.length && suggestions.length === next.suggestions.length) return next;
+  return normalizeHubPublished({ ...next, postIds, suggestions }) ?? published;
+};
+
+// An Unlink is remembered: the post the scenario was downloaded from, or the
+// posts its player made of it and the key they carry, go into hubUnlinked.
+const hubUnlinkedAfterWrite = (current, updates = {}) => {
+  const before = normalizeHubUnlinked(current?.hubUnlinked);
+  const origin = names(updates, "hubOrigin") && updates.hubOrigin === null ? normalizeHubOrigin(current?.hubOrigin) : null;
+  const published = names(updates, "hubPublished") && updates.hubPublished === null
+    ? normalizeHubPublished(current?.hubPublished)
+    : null;
+  if (!origin && !published) return before;
+  return normalizeHubUnlinked({
+    postIds: [...(before?.postIds ?? []), ...(origin ? [origin.postId] : []), ...(published?.postIds ?? [])],
+    keys: [...(before?.keys ?? []), ...(published?.key ? [published.key] : [])],
+  });
+};
+
+// Everything a scenario write does to the scenario's links, for both stores'
+// writeScenarioMeta: hubOrigin, hubPublished and hubUnlinked as they are after
+// it. What the write unlinks counts at once, for the rest of the same write.
+export const hubLinksAfterWrite = (current, updates = {}, { touch = true } = {}) => {
+  const hubUnlinked = hubUnlinkedAfterWrite(current, updates);
+  return {
+    hubOrigin: hubOriginAfterWrite(current?.hubOrigin, updates, { touch, unlinked: hubUnlinked }),
+    hubPublished: hubPublishedAfterWrite(current?.hubPublished, updates, { unlinked: hubUnlinked }),
+    hubUnlinked,
+  };
+};
+
+// The hub bookkeeping a scenario write (PUT /api/scenarios/:id) may carry, for
+// both stores' updateScenario: hubPublished (the player's own posts),
+// hubReviews (suggestions reviewed), and hubOrigin only as null, which unlinks
+// the scenario from the post it was downloaded from. That link is made by the
+// stores themselves, when a post is imported or a copy of it updated, and by
+// nothing else: a write that tries to set one is refused outright, so nobody
+// is left wondering why the link did not take. hubUnlinked is no part of it:
+// only an Unlink adds to that.
+const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
+export const pickHubProvenance = (body) => {
+  const picked = Object.fromEntries(
+    HUB_PROVENANCE_KEYS.filter((key) => names(body, key) && body[key] !== undefined).map((key) => [key, body[key]]),
+  );
+  if (names(picked, "hubOrigin") && picked.hubOrigin !== null) {
+    throw new Error("A scenario cannot be linked to a community post, only unlinked from one.");
+  }
+  return picked;
 };
 
 const REVIEW_STATUSES = new Set(["reviewing", "done", "dismissed"]);

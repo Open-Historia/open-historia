@@ -68,6 +68,7 @@ import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js"
 import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { changedFields, followSavedFields, formDiffers } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
+import { createWorkInProgress } from "../../runtime/workInProgress.js";
 import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
@@ -147,6 +148,10 @@ export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isM
 // its editor to say why the rest of the setup failed (runtime/afterActivation.js).
 const afterActivation = createActivationHandOff();
 const handOffAfterActivation = (work) => afterActivation.put(work);
+// The scenarios an Update is running on (runtime/workInProgress.js). Out here
+// for the same reason as the menu flag: a game started while a post's file is
+// still downloading remounts this tree, and the card must go on saying so.
+const scenarioUpdates = createWorkInProgress();
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
 // widget, forces panel, editor drawer) starts at the screen edge, below a
 // status bar or camera cutout the page is drawn under (Android Chrome in
@@ -264,6 +269,15 @@ const ButtonIcon = ({ kind, size = 15, strokeWidth = 1.9 }) => {
           <path d="M12 4v11" />
           <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
           <path d="M5 19.5h14" />
+        </svg>
+      );
+    // A ring that turns while the button's work runs (styles.css
+    // .oh-working-ring; still, under reduced motion).
+    case "working":
+      return (
+        <svg aria-hidden="true" className="oh-working-ring" {...common}>
+          <circle cx="12" cy="12" r="8" opacity="0.3" />
+          <path d="M12 4a8 8 0 0 1 8 8" />
         </svg>
       );
     case "menu":
@@ -734,7 +748,7 @@ const PromptSectionEditor = ({
   );
 };
 
-const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable }) => {
+const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable, updateNote = "", updating = false }) => {
   const isBuiltIn = scenario.id === "default";
   const assetBadges = Object.entries(scenarioBadgeLabels)
     .filter(([key]) => scenario.assetStatus?.[key])
@@ -890,23 +904,32 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
           <AssetBadgeRow badges={assetBadges} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
             {/* A hub-imported, unmodified scenario whose post has a newer bundle
-                swaps its primary action for Update; everyone else starts games. */}
+                swaps its primary action for Update; everyone else starts games.
+                Updating downloads the post's file and replaces the copy, which
+                takes a few seconds and showed nothing: the button now turns a
+                ring and says so until it is done, and takes no second press
+                (which would download and replace it all again). */}
             <button
+              aria-busy={updating || undefined}
               className="oh-tap-row"
+              disabled={updating}
               onClick={() => (updateAvailable ? onUpdate(scenario) : onPlay(scenario))}
               style={touchFit({
                 ...actionButtonStyle,
-                background: updateAvailable ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
-                borderColor: updateAvailable ? "#27a663dd" : `${scenario.accentColor}dd`,
+                background: updating || updateAvailable ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
+                borderColor: updating || updateAvailable ? "#27a663dd" : `${scenario.accentColor}dd`,
                 color: "#fff",
+                cursor: updating ? "progress" : "pointer",
                 flex: 1,
               }, touch)}
-              title={updateAvailable
+              title={updating || updateAvailable
                 ? "A newer version of this scenario is on the community hub. Updating replaces this copy (existing games keep working)."
                 : undefined}
               type="button"
             >
-              {updateAvailable ? <><ButtonIcon kind="update" /> Update</> : <><ButtonIcon kind="play" /> New Game</>}
+              {updating
+                ? <><ButtonIcon kind="working" /> Updating…</>
+                : updateAvailable ? <><ButtonIcon kind="update" /> Update</> : <><ButtonIcon kind="play" /> New Game</>}
             </button>
             <button className="oh-tap-row" onClick={() => onEdit(scenario.id)} style={touchFit({ ...actionButtonStyle, flex: 1 }, touch)} type="button">
               <ButtonIcon kind="edit" /> Edit
@@ -915,6 +938,33 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
               <ButtonIcon kind="clone" /> Clone Scenario
             </button>
           </div>
+          {/* What came of the last Update when it did not simply work: it
+              failed, or it went through without its new basemap. The ring
+              going back to a plain button says neither, and the only other
+              place the reason is shown is the editor drawer, which is shut
+              when Update is pressed from a card. Only while the card still
+              offers Update (a copy whose basemap is missing does): once the
+              update has gone through, or the basemap has arrived, the note is
+              old news. */}
+          {updateNote && updateAvailable && !updating && (
+            <div
+              role="status"
+              title={updateNote}
+              style={{
+                color: "#fecaca",
+                display: "-webkit-box",
+                fontSize: "0.72rem",
+                lineHeight: 1.4,
+                marginTop: "0.55rem",
+                overflow: "hidden",
+                textShadow: SCENARIO_CARD_TEXT_SHADOW,
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 4,
+              }}
+            >
+              {updateNote}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -2331,14 +2381,30 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const scenarioUpdateAvailable = (scenario) =>
     hubUpdateAvailable(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
 
+  // The scenarios being updated now: each one's cards (it can sit on all three
+  // shelves) show it and cannot be pressed again until it lands or fails.
+  const updatingScenarioIds = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.running, scenarioUpdates.running);
+  // And what each one's last Update left to say, when it did not simply work.
+  const scenarioUpdateNotes = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.notes, scenarioUpdates.notes);
+
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
-  // fresh hubOrigin stamp flips the card back to New Game on refresh.
+  // fresh hubOrigin stamp flips the card back to New Game on refresh. A failed
+  // update leaves the card on Update, with the reason under its buttons and in
+  // the editor's error; so does one that went through without its new basemap.
   const handleScenarioUpdate = async (scenario) => {
     const post = scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null;
-    if (!post?.bundleUrl) return;
+    // A press that got in before the button redrew starts nothing either.
+    if (!post?.bundleUrl || !scenarioUpdates.begin(scenario.id)) return;
     setEditorError(null);
     setIsBusy(true);
+    // Said on the card as well as in the editor drawer, which is shut when
+    // Update is pressed from a card.
+    let outcome = "";
+    const tell = (message) => {
+      outcome = message;
+      setEditorError(message);
+    };
 
     try {
       const { downloadHubBundle } = await import("./communityHub.jsx");
@@ -2353,12 +2419,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
+        tell(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
-      setEditorError(`Update failed: ${nextError.message}`);
+      tell(`Update failed: ${nextError.message}`);
     } finally {
       setIsBusy(false);
+      scenarioUpdates.end(scenario.id, outcome);
     }
   };
 
@@ -2377,16 +2444,22 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorDetails((current) => (current?.scenario?.id === details.scenario.id ? { ...current, scenario: details.scenario } : current));
   };
 
-  // The posts carrying this scenario's key, and the suggestions left on them.
+  // The posts carrying this scenario's key, and the suggestions left on them;
+  // never a post the player unlinked it from (hubUnlinked). What comes back is
+  // the record as the store kept it, which is the one that counts: it refuses
+  // the record of a post unlinked while this was reading the hub.
   const refreshSuggestionsFor = async (scenario, { force = false } = {}) => {
     if (!scenario?.hubPublished) return null;
     const posts = await fetchHubPosts({ force });
     const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, {
       fetchComments: (postId) => fetchPostComments(postId, { force }),
       reviews: scenario.hubReviews,
+      unlinked: scenario.hubUnlinked,
     });
-    if (changed) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: published }));
-    return published;
+    if (!changed) return published;
+    const details = await saveScenario(scenario.id, { hubPublished: published });
+    adoptScenarioSummary(details);
+    return details?.scenario?.hubPublished ?? null;
   };
 
   // When the menu opens, an author learns of new suggestions on their posts:
@@ -2402,7 +2475,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       try {
         const posts = await fetchHubPosts();
         for (const scenario of mine) {
-          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, { reviews: scenario.hubReviews });
+          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, {
+            reviews: scenario.hubReviews,
+            unlinked: scenario.hubUnlinked,
+          });
+          // The player may have unlinked the post while this was reading the
+          // hub: the store then keeps it unlinked and drops this write.
           if (changed) await saveScenario(scenario.id, { hubPublished: published });
         }
       } catch (nextError) {
@@ -2421,8 +2499,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setSuggestTarget(scenario.id);
   };
 
+  // The two Unlinks. A link is made only by the game (a download stamps the
+  // post it came from, Publish writes the key its post is found by) and the
+  // player can only take one away, for good: the stores remember what was
+  // unlinked and never attach it again (server/hubProvenance.js), so each
+  // confirm says that it cannot be undone.
   const handleUnlinkOrigin = async (scenario) => {
-    if (!window.confirm("Unlink this scenario from its community post? It becomes your own scenario: it no longer follows the post, and you can no longer suggest changes to it.")) return;
+    if (!window.confirm("Unlink this scenario from its community post? It becomes your own scenario: it no longer follows the post, and you can no longer suggest changes to it. This cannot be undone: a scenario cannot be linked to a post again.")) return;
     setCommunityBusy(true);
     try {
       adoptScenarioSummary(await saveScenario(scenario.id, { hubOrigin: null }));
@@ -2434,7 +2517,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   const handleForgetPost = async (scenario) => {
-    if (!window.confirm("Stop looking for suggested changes on your post? The post stays on the hub, and you can link it again later.")) return;
+    if (!window.confirm("Stop looking for suggested changes on your post? The post stays on the hub, but this cannot be undone: it can never be linked to this scenario again. Publishing the scenario again makes a new post.")) return;
     setCommunityBusy(true);
     try {
       adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: null }));
@@ -2453,31 +2536,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const published = await refreshSuggestionsFor(scenario, { force: true });
       const waiting = openSuggestionsOf({ ...scenario, hubPublished: published }).length;
       setCommunityNote(!published?.postIds?.length
-        ? "Your post is not on the hub yet. If you posted it before this version of the game, link it by its address."
+        ? "Your post is not on the hub yet. Once you have posted it, the game finds it by itself."
         : waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Checked just now: no suggested changes waiting.");
-    } catch (nextError) {
-      setCommunityNote(nextError.message);
-    } finally {
-      setCommunityBusy(false);
-    }
-  };
-
-  const handleLinkPost = async (scenario, postId) => {
-    setCommunityBusy(true);
-    setCommunityNote("");
-    try {
-      const current = scenario.hubPublished;
-      const details = await saveScenario(scenario.id, {
-        hubPublished: {
-          ...(current ?? {}),
-          postIds: [postId, ...(current?.postIds ?? []).filter((id) => id !== postId)],
-          publishedAt: current?.publishedAt || new Date().toISOString(),
-        },
-      });
-      adoptScenarioSummary(details);
-      const published = await refreshSuggestionsFor(details.scenario, { force: true });
-      const waiting = openSuggestionsOf({ ...details.scenario, hubPublished: published }).length;
-      setCommunityNote(waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Linked. No suggested changes waiting.");
     } catch (nextError) {
       setCommunityNote(nextError.message);
     } finally {
@@ -4317,6 +4377,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
+                      updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
                 </MenuRow>
@@ -4332,6 +4394,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
+                      updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
                 </MenuRow>
@@ -4348,6 +4412,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
                       updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
+                      updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
                 </MenuRow>
@@ -4390,7 +4456,6 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             onReview={(source) => setReviewTarget({ scenarioId: drawerScenario.id, source })}
             onOpenFile={(file) => handleOpenSuggestionFile(drawerScenario, file)}
             onRefresh={() => handleRefreshSuggestions(drawerScenario)}
-            onLinkPost={(postId) => handleLinkPost(drawerScenario, postId)}
             onForgetPost={() => handleForgetPost(drawerScenario)}
             onRejectContributor={handleRejectContributor}
             onUnblockContributor={handleUnblockContributor}
