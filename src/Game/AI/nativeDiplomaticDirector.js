@@ -259,6 +259,13 @@ const parseEventNumbers = (value) => String(value ?? "")
   .map((number) => number - 1)
   .slice(0, 16);
 
+// A record is fields joined by the separator, so a line with none is not one.
+// It is prose a model wrote where records go, a heading or "No changes."
+// (nativeWarLedger.js has the report this comes from). Read as a record it was
+// a relation between that sentence and nobody, which a strict pass refuses the
+// whole answer over, and the salvage pass quoted it back in the next prompt.
+const isRecordLine = (line) => String(line ?? "").includes(SEP);
+
 const parseParties = (value) => unique(
   String(value ?? "")
     .split(",")
@@ -330,7 +337,7 @@ const decodeRelationLine = (line, index) => {
 export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodeRelationLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodeRelationLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       const score = Number(entry.score);
       const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
@@ -349,8 +356,8 @@ export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_
   }
   return String(value ?? "")
     .split(/\r?\n/)
-    .map((line, index) => decodeRelationLine(line, index))
-    .filter((entry) => entry.a || entry.b || entry.summary)
+    .map((line, index) => (isRecordLine(line) ? decodeRelationLine(line, index) : null))
+    .filter((entry) => entry && (entry.a || entry.b || entry.summary))
     .slice(0, limit);
 };
 
@@ -380,7 +387,7 @@ const decodeAgreementLine = (line, index) => {
 export const decodeAgreementUpdates = (value, { limit = MAX_AGREEMENT_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodeAgreementLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodeAgreementLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       return {
         id: clean(entry.id) || `agreement-${index}`,
@@ -1471,7 +1478,7 @@ const decodePuppetLine = (line, index) => {
 export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodePuppetLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodePuppetLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       const loyalty = Number(entry.loyalty);
       return {
@@ -1490,8 +1497,8 @@ export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS
   }
   return String(value ?? "")
     .split(/\r?\n/)
-    .map((line, index) => decodePuppetLine(line, index))
-    .filter((entry) => entry.op || entry.overlord || entry.puppet)
+    .map((line, index) => (isRecordLine(line) ? decodePuppetLine(line, index) : null))
+    .filter((entry) => entry && (entry.op || entry.overlord || entry.puppet))
     .slice(0, limit);
 };
 

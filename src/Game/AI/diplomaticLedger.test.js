@@ -415,6 +415,42 @@ test("the salvage pass leaves a clean answer exactly as it was", () => {
   assert.equal(JSON.stringify(candidate), before, "objects stay objects, untouched");
 });
 
+// What a small model writes where it has nothing to report: a heading and a
+// sentence, in its own language, where the prompt asks for an empty string (a
+// player's log has the war ledger's: "### Обновления войн:" and "Нет
+// изменений. …"). A line with no ~ in it is not a record. Read as one, it was
+// a relation between that sentence and nobody.
+test("a line with no separator is prose, not a relation or an agreement", () => {
+  const heading = "### Обновления отношений:";
+  const nothing = "Нет изменений. В этом периоде отношения не изменились.";
+  const prose = `${heading}\n${nothing}`;
+  assert.deepEqual(decodeRelationUpdates(prose), []);
+  assert.deepEqual(decodeRelationUpdates([heading, nothing]), [], "nor as members of a list");
+  assert.deepEqual(decodeAgreementUpdates(prose), []);
+  assert.deepEqual(decodeAgreementUpdates([heading, nothing]), []);
+
+  // Refused the whole answer on a strict pass: 'could not resolve both
+  // polities: "### Обновления отношений:" / ""'.
+  const strict = { events: alliance(), relationUpdates: prose, agreementUpdates: prose };
+  assert.equal(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }), "");
+  // And on the salvage pass was dropped by name, into the next prompt.
+  const salvaged = { events: alliance(), relationUpdates: prose, agreementUpdates: prose };
+  assert.deepEqual(salvageDiplomaticLedgerPayload(salvaged, { world }), []);
+
+  // Around real records it costs them nothing.
+  const mixed = {
+    events: alliance(),
+    relationUpdates: `${heading}\nFrance~Russia~70~friendly~1~Alliance concluded\n${nothing}`,
+    agreementUpdates: "",
+  };
+  assert.equal(validateDiplomaticLedgerPayload(mixed, { world, allowNativeBinding: true }), "");
+  assert.deepEqual(decodeRelationUpdates(mixed.relationUpdates).map((update) => [update.a, update.b, update.score]), [["France", "Russia", 70]]);
+
+  // A line that has the separator and names nobody is still a record, and refused.
+  const bad = { events: alliance(), relationUpdates: "France~Atlantis~-40~strained~1~Dispute", agreementUpdates: "" };
+  assert.match(validateDiplomaticLedgerPayload(bad, { world, allowNativeBinding: true }), /could not resolve both polities/);
+});
+
 // A game played in another language: the map's polities keep their names and
 // carry the player's as aliases, and every title, summary and event is written
 // in that language. The words these checks compare were cut to a-z and 0-9, so

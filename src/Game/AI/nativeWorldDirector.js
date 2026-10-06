@@ -1289,7 +1289,12 @@ const looksLikeStorylineStateProse = (value) => {
 
 const parseStorylineRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  // Fields joined by the separator make a record, so a line with none is not
+  // one. It is prose a model wrote where records go, a heading or "No
+  // changes." (nativeWarLedger.js has the report this comes from). Read as a
+  // record it had an id and no status, and a strict pass refused the whole
+  // answer over it.
+  if (!text || !text.includes(STORYLINE_RECORD_SEPARATOR)) return null;
 
   // Format:
   // id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventIndexesCSV~state
