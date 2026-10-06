@@ -211,8 +211,17 @@ ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
 
-const sendError = (res, statusCode, error) => {
-  const message = error instanceof Error ? error.message : String(error);
+// `extra` is merged into the JSON body beside `error`, for a caller that has to
+// tell this failure from another with the same status (the AI relay marks an
+// endpoint it could not reach).
+const sendError = (res, statusCode, error, extra = undefined) => {
+  // "Refused on every address" comes as an AggregateError whose own message is
+  // empty (localhost is two addresses, ::1 and 127.0.0.1), so the report read
+  // " (ECONNREFUSED)". What each address said is on its `errors`.
+  const innerMessages = error instanceof Error && !error.message && Array.isArray(error.errors)
+    ? [...new Set(error.errors.map((inner) => inner?.message).filter(Boolean))].join("; ")
+    : "";
+  const message = error instanceof Error ? (error.message || innerMessages) : String(error);
   // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
   // puts the real cause on error.cause — which is the difference between a
   // mistyped endpoint (ENOTFOUND), a backend that is not running
@@ -233,7 +242,7 @@ const sendError = (res, statusCode, error) => {
     message: reported,
     data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
   });
-  res.status(statusCode).json({ error: reported });
+  res.status(statusCode).json({ error: reported, ...extra });
 };
 
 // An optional asset a scenario or game simply does not have — its stats sheet,
@@ -1034,6 +1043,28 @@ const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 // so a local model notices a cancelled request on its next write.
 const relayTransport = (target) => (target.protocol === "https:" ? https : http);
 
+// The endpoint could not be reached, or dropped the connection before it had
+// answered: refused, a name that does not resolve, a reset. The relay answers
+// that with a 502 of its own, and the page could not tell it from a provider's
+// 502 that was relayed as it came, so a model server that was simply not
+// running read as "busy": three attempts fifteen seconds apart, then "is busy
+// right now". Marked at the source, on the error, and said twice so the page
+// reports it at once for what it is: in a header only the relay sets
+// (`X-OH-Relay: unreachable`; an endpoint's own headers are not passed on, so
+// a provider's 502 relayed as it came never carries it), and in the body
+// (`unreachable`, and the socket's own `code`).
+const RELAY_HEADER = "X-OH-Relay";
+const UPSTREAM_UNREACHABLE = Symbol("relay upstream unreachable");
+const upstreamUnreachable = (error) => {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  failure[UPSTREAM_UNREACHABLE] = true;
+  return failure;
+};
+// The socket's own word for it. "Refused on every address" is an AggregateError
+// with the code on each inner error as well as on itself.
+const connectionFailureCode = (error) =>
+  String(error?.code || error?.cause?.code || error?.errors?.find?.((inner) => inner?.code)?.code || "UPSTREAM_CLOSED");
+
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
   let completed = false;
@@ -1043,10 +1074,20 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    abortUpstream();
-  }, RELAY_TIMEOUT_MS);
+  // A deadline on SILENCE, restarted by every chunk: the first byte gets the
+  // whole window (prompt evaluation on a local model), and a model that is
+  // still streaming tokens is never cut off for being long. It used to be a
+  // limit on the whole answer, so a thinking model on a slow provider that was
+  // still writing at ten minutes was stopped there.
+  let timeout = null;
+  const armTimeout = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      abortUpstream();
+    }, RELAY_TIMEOUT_MS);
+  };
+  armTimeout();
 
   try {
     if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
@@ -1096,7 +1137,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         headers: upstreamHeaders,
         signal: controller.signal,
       }, resolve);
-      upstreamRequest.on("error", reject);
+      upstreamRequest.on("error", (error) => reject(upstreamUnreachable(error)));
       upstreamRequest.end(body);
     });
 
@@ -1114,6 +1155,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     let received = 0;
     await new Promise((resolve, reject) => {
       upstream.on("data", (chunk) => {
+        armTimeout();
         received += chunk.length;
         if (received > RELAY_MAX_RESPONSE_BYTES) {
           upstream.destroy(new Error("The AI endpoint's response is too large to relay."));
@@ -1127,32 +1169,54 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         }
       });
       upstream.on("end", resolve);
-      upstream.on("error", reject);
+      // The size cap above destroys the response with an error of its own,
+      // which is the relay's doing and not the endpoint's connection.
+      upstream.on("error", (error) => reject(received > RELAY_MAX_RESPONSE_BYTES ? error : upstreamUnreachable(error)));
+      // The endpoint's connection dropping mid-answer is not always an error
+      // on the response; without this the relay waited out its deadline.
+      upstream.on("close", () => {
+        if (!upstream.complete) reject(upstreamUnreachable(new Error("The AI endpoint closed the connection before its answer was complete.")));
+      });
     });
 
     completed = true;
     res.end();
   } catch (error) {
+    // Headers are already out, so there is no status left to set. Ending the
+    // response here used to write a clean end of stream, and the game took a
+    // cut-off answer for a complete one: it failed to parse half a tool call,
+    // spent a second request that was cut the same way, and the advisor kept
+    // truncated replies as finished. Breaking the connection makes the
+    // browser's reader fail instead (src/Game/AI/relayResponse.js says why).
+    // A client that went away has destroyed it already.
+    const cutOff = (reason) => {
+      if (res.writableEnded || res.destroyed) return;
+      appendLog({ level: "warn", source: "server", event: "relay.cut", message: reason.message });
+      res.destroy(reason);
+    };
     // The relay's own deadline used to abort the upstream and then send
     // NOTHING: no status, no body, no res.end(), so the game sat on an open
     // socket forever instead of failing. Answer it.
     if (timedOut) {
-      if (!res.headersSent) {
-        sendError(res, 504, new Error(
-          `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
-            + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
-        ));
-      } else if (!res.writableEnded && !res.destroyed) {
-        res.end();
-      }
+      const late = new Error(
+        `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
+          + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
+      );
+      if (!res.headersSent) sendError(res, 504, late);
+      else cutOff(late);
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, 502, error);
+      // Still a 502, so nothing that reads the status changes; the mark is what
+      // tells the page this was the connection and not the provider.
+      const unreachable = Boolean(error?.[UPSTREAM_UNREACHABLE]);
+      if (unreachable) res.setHeader(RELAY_HEADER, "unreachable");
+      sendError(res, 502, error, unreachable
+        ? { code: connectionFailureCode(error), unreachable: true }
+        : undefined);
+    } else if (res.headersSent) {
+      cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {
-      // Headers are already out, so there is no status left to set — end the
-      // response rather than leaking the socket. (A client that went away has
-      // destroyed it already; there is nothing to answer.)
       res.end();
     }
   } finally {

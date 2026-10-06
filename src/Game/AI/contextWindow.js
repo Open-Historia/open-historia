@@ -223,6 +223,69 @@ export const createContextWindowMemory = (storage, { now = Date.now } = {}) => {
     return { get, learn, declare, refusal, forget };
 };
 
+// ---------------------------------------------------------------------------
+// The output limit a KoboldCpp server is told
+// ---------------------------------------------------------------------------
+//
+// An OpenAI-style request names no max_tokens unless the task or the entry
+// does, so that a long turn's JSON is never cut short: to a hosted provider,
+// and to llama.cpp, LM Studio and Ollama, no limit means the model's own.
+// KoboldCpp reads the same silence as a small default of its own (the evidence,
+// and how a KoboldCpp server is told from the others, is in outputLimit.js).
+//
+// LOCAL_OUTPUT_LIMIT_TOKENS is what the game names for it then.
+//
+// KoboldCpp only. On the other local servers a figure could only cut short an
+// answer that completes today: a long skip written in a language that takes
+// more tokens, or a model whose thinking counts against the limit.
+//
+// 4096, the room the preflight above already leaves for an answer, and not
+// more: KoboldCpp takes max_tokens out of the context window before it reads
+// the prompt, so a large figure squeezes the prompt it was meant to make room
+// for. A player who wants more sets max_tokens in the entry's custom
+// parameters, and an answer that still runs into the limit says so
+// (providerErrors.js OUTPUT_LIMIT_MESSAGE).
+export const LOCAL_OUTPUT_LIMIT_TOKENS = DEFAULT_ANSWER_RESERVE_TOKENS;
+
+// The names an entry's custom parameters can set an output limit under:
+// OpenAI's two, and the ones local servers take in their own dialects
+// (text-generation-webui, KoboldCpp, llama.cpp, Ollama).
+const OUTPUT_LIMIT_PARAMS = Object.freeze([
+    "max_tokens", "max_completion_tokens", "max_new_tokens", "max_output_tokens", "max_length", "n_predict", "num_predict",
+]);
+
+const positiveNumber = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : 0;
+};
+
+// The limit an entry's own custom parameters set, or 0 when they set none.
+export const entryOutputLimit = (customParams) => {
+    if (!customParams || typeof customParams !== "object") return 0;
+    for (const key of OUTPUT_LIMIT_PARAMS) {
+        const tokens = positiveNumber(customParams[key]);
+        if (tokens) return tokens;
+    }
+    return 0;
+};
+
+// The max_tokens the game adds to an OpenAI-style request on its own account,
+// or 0 to add none. Only for a KoboldCpp server (`koboldCpp`), and only when
+// nothing else names a limit: the entry's own parameter always stands, and so
+// does the task's budget, which the request carries itself.
+//
+// `capLifted`: the caller has withdrawn the task's budget so that a model which
+// spent all of it thinking gets more room (main.jsx liftedCapForReasoning). To
+// every other server that means "your own maximum". To KoboldCpp it would mean
+// its small default, which is less room than before, so there a limit stays:
+// the task's figure or this one, whichever is larger.
+export const outputLimitFor = ({ koboldCpp = false, taskTokens = 0, customParams = null, capLifted = false } = {}) => {
+    if (!koboldCpp || entryOutputLimit(customParams)) return 0;
+    const own = positiveNumber(taskTokens);
+    if (own && !capLifted) return 0;
+    return Math.max(LOCAL_OUTPUT_LIMIT_TOKENS, own);
+};
+
 // What the player is told when no entry can take the request, before anything
 // was sent. `entries` are the ones refused, with why.
 export const nothingFitsMessage = (refused, requestTokens) => {

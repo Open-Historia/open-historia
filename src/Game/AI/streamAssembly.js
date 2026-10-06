@@ -29,6 +29,13 @@
 // object partialArgs fragments build. Purely an observer: what it does or throws
 // can never change the envelope returned here.
 //
+// And an `onContent` hook, which is how the skip's progress row can say what an
+// open request is doing (requestActivity.js): it fires after each frame that
+// added to the answer, with how many characters of reasoning and of answer (text
+// or tool-call arguments) the frame carried. Unlike `onActivity` it says nothing
+// for a keep-alive or an empty frame: "something is arriving" and "the model has
+// begun to answer" are different facts, and the row shows the second.
+//
 // Separate from main.jsx (which pulls in the whole browser runtime and so cannot
 // be unit-tested) for the same reason as jsonSalvage.js, providerErrors.js and
 // geminiSchema.js. Its one import, streamedEvents.js, imports nothing, so this
@@ -44,6 +51,47 @@ const observe = (hook, payload) => {
 };
 
 // ---------------------------------------------------------------------------
+// What each frame carried (the `onContent` hook)
+
+// Calls `onContent({ reasoning, answer })` with what has been added since the
+// last call, as `measure()` counts it, and says nothing when nothing was. Run
+// after every frame; each reader hands in how its own state is counted.
+const contentMeter = (onContent, measure) => {
+    if (typeof onContent !== "function") return () => {};
+    let seen = measure();
+    return () => {
+        const now = measure();
+        const reasoning = Math.max(0, now.reasoning - seen.reasoning);
+        const answer = Math.max(0, now.answer - seen.answer);
+        seen = now;
+        if (reasoning || answer) observe(onContent, { reasoning, answer });
+    };
+};
+
+// Reasoning written inline. Qwen, DeepSeek and their kin, served by something
+// that does not separate it, put their chain of thought into the answer text
+// between <think> tags (main.jsx stripThinking takes it back out). Counted as
+// thinking, or the row would say the model was writing its answer for the
+// minutes it spent deciding what to write.
+//
+// Fed each new piece of content in order; returns whether the text now stands
+// inside a think block. A tag split across two pieces is still seen: the last
+// few characters are carried over.
+export const createThinkTagScanner = () => {
+    let inside = false;
+    let carried = "";
+    return (piece) => {
+        const text = (carried + String(piece ?? "")).toLowerCase();
+        const opened = text.lastIndexOf("<think>");
+        const closed = text.lastIndexOf("</think>");
+        if (opened > closed) inside = true;
+        else if (closed > opened) inside = false;
+        carried = text.slice(-8);
+        return inside;
+    };
+};
+
+// ---------------------------------------------------------------------------
 // SSE plumbing
 
 // Reads an SSE body and hands each `data:` payload to onFrame as parsed JSON.
@@ -56,10 +104,15 @@ const observe = (hook, payload) => {
 // is still arriving, and a keep-alive comment or half a frame answers it just as
 // well as a token does. Wrapped like the onChunk callbacks, since a throwing UI
 // callback must never cost the player a turn.
+//
+// Returns { sawDone }: whether the body carried the `[DONE]` line an
+// OpenAI-style stream ends with. With no finish reason either, a body that
+// simply stopped is a connection that closed early (see "How a stream ended").
 async function readSSE(response, onFrame, onActivity) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let sawDone = false;
     try {
         for (;;) {
             const { done, value } = await reader.read();
@@ -73,6 +126,7 @@ async function readSSE(response, onFrame, onActivity) {
             for (const line of lines) {
                 if (!line.startsWith("data:")) continue;
                 const data = line.slice(5).trim();
+                if (data === "[DONE]") sawDone = true;
                 if (!data || data === "[DONE]") continue;
                 let chunk;
                 try { chunk = JSON.parse(data); } catch { continue; }
@@ -82,7 +136,86 @@ async function readSSE(response, onFrame, onActivity) {
     } finally {
         try { reader.releaseLock(); } catch { /* stream already closed */ }
     }
+    return { sawDone };
 }
+
+// ---------------------------------------------------------------------------
+// How a stream ended
+//
+// Every provider says when it has finished: OpenAI-style streams with a
+// finish_reason and a closing `[DONE]`, Anthropic with a stop_reason and a
+// message_stop event, Gemini with a finishReason. A body that ends with none of
+// them did not finish. Its connection closed: a proxy's timeout, a server that
+// was stopped, a relay that gave up. The readers used to hand that back as an
+// ordinary envelope, so half a tool call went on to the task runner as "the
+// response did not contain parseable JSON" and the runner answered by sending
+// the whole request again.
+//
+// So each finisher marks such an envelope `endedEarly`, and the callers in
+// main.jsx refuse it. Two exceptions, both because a usable answer is never
+// thrown away over how the connection behaved afterwards:
+//   - the provider's own error inside the stream already says why it stopped,
+//     and has its own handling;
+//   - a tool call whose arguments arrived whole is a whole answer. Cut-off
+//     arguments do not parse (that is the all-or-nothing rule below), so one
+//     that parses lost nothing.
+// Whether TEXT is usable is the caller's to judge, since only it knows whether
+// text was what it asked for.
+
+// How each provider says the answer ran into its output limit, read off the
+// envelope: finish_reason "length" (OpenAI-style), finishReason "MAX_TOKENS"
+// (Gemini), stop_reason "max_tokens" (Anthropic). Streamed or buffered, since
+// the readers rebuild the buffered envelope.
+export const stoppedAtOutputLimit = (data) => {
+    if (!data || typeof data !== "object") return false;
+    const reasons = [data.choices?.[0]?.finish_reason, data.candidates?.[0]?.finishReason, data.stop_reason];
+    return reasons.some((reason) => ["length", "max_tokens"].includes(String(reason ?? "").toLowerCase()));
+};
+
+const parsesAsObject = (text) => {
+    if (typeof text !== "string" || !text.trim()) return false;
+    try {
+        const value = JSON.parse(text);
+        return Boolean(value) && typeof value === "object";
+    } catch {
+        return false;
+    }
+};
+
+// The same question for the chat reader in main.jsx (streamTextSSE), which
+// forwards text as it arrives and builds no envelope: does this frame say the
+// provider has finished? Any of the three spellings, since that reader serves
+// all of them, and Gemini's refusal of a prompt before it generates anything,
+// which is the provider stopping too.
+export const streamFrameEnds = (frame) => Boolean(
+    frame?.choices?.[0]?.finish_reason
+    || frame?.candidates?.[0]?.finishReason
+    || frame?.promptFeedback?.blockReason
+    || frame?.type === "message_stop"
+    || (frame?.type === "message_delta" && frame?.delta?.stop_reason),
+);
+
+// And for a BUFFERED body that would not parse: was it cut short? JSON whose
+// string or containers are still open when the text runs out, or no body at
+// all. Anything else that fails to parse is a body that is whole and wrong (a
+// gateway's plain-text error), which is a different failure and keeps its own
+// message.
+export const isCutShortJson = (text) => {
+    const body = String(text ?? "").trim();
+    if (!body) return true;
+    if (body[0] !== "{" && body[0] !== "[") return false;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (const ch of body) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = inString;
+        else if (ch === '"') inString = !inString;
+        else if (!inString && (ch === "{" || ch === "[")) depth += 1;
+        else if (!inString && (ch === "}" || ch === "]")) depth -= 1;
+    }
+    return inString || depth > 0;
+};
 
 // ---------------------------------------------------------------------------
 // OpenAI-style chat completions
@@ -95,8 +228,16 @@ export const createOpenAIStreamState = () => ({
     // each arriving under its own `index` in the tool_calls deltas.
     toolCalls: [],
     finishReason: null,
+    // The closing `[DONE]` line, which is not a frame: the reader sets it.
+    done: false,
     streamError: null,
     usage: null,
+    // What the server calls the model it answered with, and the id it gave the
+    // answer: every chunk repeats them, and a buffered body carries them once.
+    // Kept because they say what kind of server answered (outputLimit.js reads
+    // KoboldCpp off them), which the model name in the request does not.
+    model: "",
+    id: "",
 });
 
 export function applyOpenAIFrame(state, chunk, onToolProgress) {
@@ -104,6 +245,9 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // error in a frame on an otherwise fine 200. Keep it so the caller can tell
     // "busy, ask again" from "the model said nothing".
     if (chunk?.error && !state.streamError) state.streamError = chunk.error;
+    // The first chunk to name them is the one kept (they do not change).
+    if (!state.model && typeof chunk?.model === "string") state.model = chunk.model;
+    if (!state.id && typeof chunk?.id === "string") state.id = chunk.id;
     // Token accounting rides on the final frame and has no `choices`, so it has
     // to be picked up before the early return below. Native OpenAI only sends it
     // when asked (stream_options.include_usage); most local gateways send it
@@ -145,7 +289,14 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
 }
 
 export function finishOpenAIStream(state) {
+    // Neither a finish reason nor `[DONE]`: the stream did not finish (see
+    // "How a stream ended"), unless every tool call in it is whole.
+    const wholeCalls = state.toolCalls.length > 0 && state.toolCalls.every((call) => parsesAsObject(call.arguments));
+    const endedEarly = !state.finishReason && !state.done && !state.streamError && !wholeCalls;
     return {
+        // Where a buffered body has them, so a reader need not know which arrived.
+        ...(state.id ? { id: state.id } : {}),
+        ...(state.model ? { model: state.model } : {}),
         choices: [{
             finish_reason: state.finishReason,
             message: {
@@ -161,13 +312,40 @@ export function finishOpenAIStream(state) {
             },
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
     };
 }
 
-export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress) {
+// How much reasoning and how much answer an OpenAI-style stream has delivered
+// so far. Reasoning is its own delta field, or text inside <think> tags; the
+// answer is the rest of the text plus every tool call's arguments.
+const openAIContentMeasure = (state) => {
+    const insideThinkTags = createThinkTagScanner();
+    let scanned = 0;
+    let inlineThinking = 0;
+    return () => {
+        if (state.content.length > scanned) {
+            const piece = state.content.slice(scanned);
+            if (insideThinkTags(piece)) inlineThinking += piece.length;
+            scanned = state.content.length;
+        }
+        const toolArguments = state.toolCalls.reduce((total, call) => total + call.arguments.length, 0);
+        return {
+            reasoning: state.reasoning.length + inlineThinking,
+            answer: state.content.length - inlineThinking + toolArguments,
+        };
+    };
+};
+
+export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createOpenAIStreamState();
-    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, openAIContentMeasure(state));
+    const { sawDone } = await readSSE(response, (chunk) => {
+        applyOpenAIFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
+    state.done = sawDone;
     return finishOpenAIStream(state);
 }
 
@@ -180,6 +358,12 @@ export const createAnthropicStreamState = () => ({
     // then calls the tool is three blocks whose deltas arrive under one stream.
     blocks: new Map(),
     stopReason: null,
+    // The closing message_stop event has been seen.
+    stopped: false,
+    // How much extended thinking has arrived. Counted, never kept: the text
+    // itself must not reach the answer (see the thinking_delta note below), but
+    // "the model is thinking" is worth knowing while it does (onContent).
+    thinkingChars: 0,
     streamError: null,
     // Anthropic splits the accounting across two events: message_start carries
     // the input side (including the cache_read figure that proves a prefix cache
@@ -231,7 +415,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         }
         // Extended thinking. Deliberately not accumulated into text: extractAnthropicText
         // has always filtered thinking out, and a chain of thought must never be
-        // handed back as if it were the answer.
+        // handed back as if it were the answer. Only its length is kept.
+        else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") state.thinkingChars += delta.thinking.length;
         return state;
     }
 
@@ -241,6 +426,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         // than replacing it, or the input and cache figures would be lost.
         if (chunk.usage) state.usage = { ...state.usage, ...chunk.usage };
     }
+
+    if (type === "message_stop") state.stopped = true;
 
     return state;
 }
@@ -278,18 +465,36 @@ export function finishAnthropicStream(state) {
         if (block.text) content.push({ type: "text", text: block.text });
     }
 
+    // Neither a stop reason nor message_stop: the stream did not finish (see
+    // "How a stream ended"), unless a tool call arrived whole and none was cut.
+    const wholeCall = !partialToolJson && content.some((block) => block.type === "tool_use");
+    const endedEarly = !state.stopReason && !state.stopped && !state.streamError && !wholeCall;
+
     return {
         content,
         stop_reason: state.stopReason,
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
     };
 }
 
-export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress) {
+// The same count for a Messages stream: thinking deltas, and every block's text
+// or tool arguments.
+const anthropicContentMeasure = (state) => () => {
+    let answer = 0;
+    for (const block of state.blocks.values()) answer += block.text.length + block.json.length;
+    return { reasoning: state.thinkingChars, answer };
+};
+
+export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createAnthropicStreamState();
-    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, anthropicContentMeasure(state));
+    await readSSE(response, (chunk) => {
+        applyAnthropicFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
     return finishAnthropicStream(state);
 }
 
@@ -436,6 +641,10 @@ export function finishGeminiStream(state) {
         try { partialToolJson = JSON.stringify(entry.args); } catch { partialToolJson = ""; }
     }
 
+    // No finishReason on any frame: the stream did not finish (see "How a
+    // stream ended"), unless a function call arrived whole and none was cut.
+    const endedEarly = !state.finishReason && !state.streamError && !(state.calls.length > 0 && !partialToolJson);
+
     return {
         candidates: [{
             content: {
@@ -449,12 +658,32 @@ export function finishGeminiStream(state) {
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usageMetadata: state.usage } : {}),
     };
 }
 
-export async function readGeminiStreamedResponse(response, onActivity, onToolProgress) {
+// The same count for Gemini: its text, and each function call once it has
+// arrived (whole, on this API, so a skip goes from nothing to the whole answer
+// in one frame). Its thinking is not streamed unless asked for, and the game
+// does not ask, so there is no reasoning to count.
+const geminiContentMeasure = (state) => {
+    let counted = 0;
+    let callChars = 0;
+    return () => {
+        for (; counted < state.calls.length; counted += 1) {
+            try { callChars += JSON.stringify(state.calls[counted]?.functionCall?.args ?? {}).length; } catch { callChars += 1; }
+        }
+        return { reasoning: 0, answer: state.text.length + callChars };
+    };
+};
+
+export async function readGeminiStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createGeminiStreamState();
-    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, geminiContentMeasure(state));
+    await readSSE(response, (chunk) => {
+        applyGeminiFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
     return finishGeminiStream(state);
 }

@@ -117,6 +117,8 @@ import {
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { OUTPUT_LIMIT_MESSAGE } from "./providerErrors.js";
+import { isCancelAllAbort } from "./aiRequestControl.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -398,6 +400,7 @@ import {
 } from "./scriptedEventResolution.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
+  CONNECTION_CLOSED_RESPONSE,
   HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
   attemptHeldTurn,
@@ -3305,7 +3308,7 @@ const runJsonTask = async (taskKey, {
   // Lookup functions for this task (buildTaskLookups): { tools, execute,
   // maxRounds? }. Declared beside the output function on every provider; the
   // model's calls are answered inside callAI and the answers go back as the
-  // next turns of the same conversation (main.jsx runWithLookups).
+  // next turns of the same conversation (lookupRounds.js runWithLookups).
   lookups = null,
   // Some request classes need the task validator but must not expose the task's
   // normal output function declaration to the provider. `undefined` keeps the
@@ -3416,6 +3419,11 @@ const runJsonTask = async (taskKey, {
   // both on "logging wasn't added yet". The first case is the more common one
   // and points straight at provider settings, so say which happened.
   let sawResponseBody = false;
+  // The call ended because the connection closed or broke once the answer had
+  // started (providerErrors.js connectionClosedError; the relay's cut-off). A
+  // third meaning of "no response body", and not one the provider settings can
+  // fix, so the report says which (CONNECTION_CLOSED_RESPONSE).
+  let connectionClosedMidAnswer = false;
   // Why the FIRST answer was rejected, and the answer itself when it was a
   // complete one. Both exist for the same reason: attempt 2 can die before it
   // produces anything (a provider 500, a timeout), and when it does, everything
@@ -3430,6 +3438,11 @@ const runJsonTask = async (taskKey, {
   // carried through the task runner so a valid-but-unreconciled canonical turn
   // can be held by the jump instead of being replaced by deterministic filler.
   let noFallbackError = null;
+  // The call was stopped by "Cancel all AI requests" (Settings → AI requests;
+  // aiRequestControl.js). That stop reaches the request through callAI's own
+  // scope and leaves the `signal` this task was handed untouched, so without
+  // this it is one more failed call and takes the fallback below.
+  let cancelledAll = null;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3513,6 +3526,9 @@ const runJsonTask = async (taskKey, {
       if (eventReader) {
         try { onPartialEvents([]); } catch { /* as above */ }
       }
+      // Set by callAI when the answer it hands back was stopped at the
+      // provider's output limit (main.jsx onOutputLimit).
+      let cutAtOutputLimit = false;
       let response;
       try {
         response = await callAI(systemPrompt, history, {
@@ -3548,6 +3564,7 @@ const runJsonTask = async (taskKey, {
           __debugSink: attemptSink,
           ...(requestKind ? { requestKind } : {}),
           ...(typeof onRequest === "function" ? { onRequest } : {}),
+          onOutputLimit: () => { cutAtOutputLimit = true; },
           // The arguments as they assemble (streamAssembly.js). A lookup round's
           // call is ignored by name, so only the answer itself is read.
           ...(eventReader ? {
@@ -3597,6 +3614,13 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // Stopped at the output limit with nothing in it that parses. An answer
+      // the salvage can still read is judged below like any other; this one
+      // cannot be used, and asking again sends the same request under the same
+      // limit, to be cut at the same place (a player's log: 4,171 characters,
+      // then 4,173, then the canned fallback). It ends the task instead, with
+      // the reason that names what to change.
+      const unusableCut = cutAtOutputLimit && !parsed;
       let pregameDecodedTransportSections = null;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
@@ -3820,7 +3844,7 @@ const runJsonTask = async (taskKey, {
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
           : validateGameplayPayload(taskKey, parsed))
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+        : { valid: false, error: unusableCut ? OUTPUT_LIMIT_MESSAGE : "Response did not contain parseable JSON or tool arguments." };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
         const contractError = validateStatContract(taskKey, parsed, statContract);
@@ -3956,6 +3980,14 @@ const runJsonTask = async (taskKey, {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
       }
+      // Not asked again (see unusableCut above): what follows is the task's own
+      // fallback rules, as for any attempt that ends without an answer.
+      if (unusableCut) {
+        logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} was cut at the output limit with nothing usable in it; not asked again.`, {
+          responseChars: rawText.length,
+        }, { verbose: true });
+        break;
+      }
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
@@ -3986,7 +4018,9 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
+    if (actualError?.providerFailure?.midAnswer) connectionClosedMidAnswer = true;
     if (shouldPreventDeterministicFallback(actualError)) noFallbackError = actualError;
+    if (isCancelAllAbort(actualError)) cancelledAll = actualError;
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -4001,7 +4035,7 @@ const runJsonTask = async (taskKey, {
     // report is about, so it is also a problem for View log's "problems only".
     // The error itself carries the stack — one frame normally, a real call path
     // in detailed mode.
-    logDebugEvent("ai", `Task "${taskKey}" failed${controller.signal.aborted ? " (aborted)" : ""}: ${failureReason}`, actualError instanceof Error ? actualError : undefined, { problem: true });
+    logDebugEvent("ai", `Task "${taskKey}" failed${controller.signal.aborted || cancelledAll ? " (aborted)" : ""}: ${failureReason}`, actualError instanceof Error ? actualError : undefined, { problem: true });
   } finally {
     idle.cancel();
   }
@@ -4013,6 +4047,20 @@ const runJsonTask = async (taskKey, {
     throw signal.reason instanceof Error
       ? signal.reason
       : new DOMException("Timeline jump cancelled.", "AbortError");
+  }
+
+  // "Cancel all AI requests" is the player's own cancel as well. For a time
+  // skip the fallback below is a canned turn written into the game, which is
+  // the one thing the player had just asked the game not to go on with: a
+  // single-request skip stopped that way used to land as "Turn generated by
+  // fallback: Cancelled by player." It ends as the skip's own Cancel does
+  // instead, with the abort handed up and nothing written (runJumpSegments
+  // rethrows an AbortError; the Timeline logs a cancelled turn). Before the
+  // salvage below, too: an earlier answer is not a turn the player still wants.
+  // Every other task keeps its harmless fallback, as with the two cases after
+  // this one.
+  if (cancelledAll && ["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    throw cancelledAll;
   }
 
   // The request does not fit any model the player has (contextWindow.js). A
@@ -4079,7 +4127,9 @@ const runJsonTask = async (taskKey, {
   // goes in the same field the raw text uses, so it survives the reload path
   // (applySimulationResult → world.json) with no extra plumbing.
   const rawResponse = capturedRawText
-    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+    || (sawResponseBody
+      ? EMPTY_RESPONSE_BODY_NOTE
+      : connectionClosedMidAnswer ? CONNECTION_CLOSED_RESPONSE : NO_RESPONSE_BODY_NOTE);
   if (capturedRawText) {
     console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
   } else {

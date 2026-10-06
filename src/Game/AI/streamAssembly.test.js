@@ -12,12 +12,16 @@ import {
   createAnthropicStreamState,
   createGeminiStreamState,
   createOpenAIStreamState,
+  createThinkTagScanner,
   finishAnthropicStream,
   finishGeminiStream,
   finishOpenAIStream,
+  isCutShortJson,
   readAnthropicStreamedResponse,
   readGeminiStreamedResponse,
   readOpenAIStreamedResponse,
+  stoppedAtOutputLimit,
+  streamFrameEnds,
 } from "./streamAssembly.js";
 
 // A Response-shaped stub carrying the SSE body a provider would send.
@@ -384,4 +388,241 @@ test("gemini: a signed function call keeps its thoughtSignature on the rebuilt p
     { functionCall: { name: "list_powers", args: {} }, thoughtSignature: "sig-one" },
     { functionCall: { name: "find_region", args: { name: "Kharkiv" } } },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// What each frame carried — what the skip's progress row shows of an open
+// request (requestActivity.js): nothing yet, thinking, or writing its answer.
+
+const collect = () => {
+  const heard = [];
+  return { heard, onContent: (delta) => heard.push(delta) };
+};
+
+test("openai: reasoning and answer are reported apart, in characters, as each frame adds them", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { role: "assistant", content: "" } }] },
+    { choices: [{ delta: { reasoning_content: "The player holds Crimea, so" } }] },
+    { choices: [{ delta: { reasoning: " the Black Sea Fleet matters." } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { arguments: "]}" } }] } }] },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    { choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard, [
+    { reasoning: 27, answer: 0 },
+    { reasoning: 29, answer: 0 },
+    { reasoning: 0, answer: 11 },
+    { reasoning: 0, answer: 2 },
+  ], "the opening frame, the finish frame, the usage frame and [DONE] carried nothing, and say nothing");
+});
+
+test("openai: answer text counts as the answer, on the rungs that write the payload as content", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: '{"events":' } }] },
+    { choices: [{ delta: { content: "[]}" } }] },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 0, answer: 10 }, { reasoning: 0, answer: 3 }]);
+});
+
+test("openai: thinking written inline between <think> tags is thinking, not the answer", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "<think>The fleet" } }] },
+    { choices: [{ delta: { content: " cannot sail before spring." } }] },
+    // The closing tag split across two frames.
+    { choices: [{ delta: { content: " So: </thi" } }] },
+    { choices: [{ delta: { content: 'nk>{"events":[]}' } }] },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard.map((delta) => (delta.answer ? "writing" : "thinking")), ["thinking", "thinking", "thinking", "writing"]);
+  assert.equal(heard.reduce((total, delta) => total + delta.reasoning + delta.answer, 0), 16 + 27 + 10 + 16, "every character is counted once");
+});
+
+test("the think-tag scanner follows a block opened, closed and opened again, whatever the case", () => {
+  const inside = createThinkTagScanner();
+  assert.equal(inside("plain text"), false);
+  assert.equal(inside("<THINK>hmm"), true);
+  assert.equal(inside("more"), true);
+  assert.equal(inside("done</Think> answer"), false);
+  assert.equal(inside(" <thi"), false);
+  assert.equal(inside("nk> again"), true, "a tag split across pieces");
+  assert.equal(inside("</think>"), false);
+  assert.equal(inside(""), false);
+  assert.equal(createThinkTagScanner()("<think>a</think>b"), false, "a whole block in one piece ends outside it");
+});
+
+test("anthropic: thinking deltas, text and tool arguments are each reported, and thinking still never reaches the answer", async () => {
+  const { heard, onContent } = collect();
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    { type: "message_start", message: { usage: { input_tokens: 12 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "let me consider" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Simulating." } },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"summary":"x"}' } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } },
+    { type: "message_stop" },
+  ], { done: false }), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 15, answer: 0 }, { reasoning: 0, answer: 11 }, { reasoning: 0, answer: 15 }]);
+  assert.deepEqual(data.content.map((block) => block.type), ["text", "tool_use"], "the thinking is counted, never kept");
+});
+
+test("gemini: text as it arrives, and a function call once, when it lands whole", async () => {
+  const { heard, onContent } = collect();
+  await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "Simulating " }] } }] },
+    { usageMetadata: { promptTokenCount: 90 } },
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_jump_result", args: { events: [] } } }] }, finishReason: "STOP" }] },
+  ], { done: false }), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 0, answer: 11 }, { reasoning: 0, answer: 13 }]);
+});
+
+test("a content listener that throws never breaks the stream, and none at all costs nothing", async () => {
+  const data = await readOpenAIStreamedResponse(
+    sseResponse([{ choices: [{ delta: { content: "survived" } }] }]),
+    undefined, undefined, () => { throw new Error("the row exploded"); },
+  );
+  assert.equal(data.choices[0].message.content, "survived");
+  const quiet = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "fine" } }] }]));
+  assert.equal(quiet.choices[0].message.content, "fine");
+});
+
+// ---------------------------------------------------------------------------
+// How a stream ended
+//
+// A body that stops with nothing to say the provider had finished is a
+// connection that closed, not an answer. It used to come back as an ordinary
+// envelope: half a tool call went on to the task runner as unparseable JSON,
+// and the runner sent the whole request again.
+
+test("openai: a stream that just stops, with no finish reason and no [DONE], is marked as ended early", async () => {
+  const cut = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[{"title":"A wa' } }] } }] },
+  ], { done: false }));
+  assert.equal(cut.endedEarly, true);
+
+  const prose = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "The Tsar's envoy repl" } }] }], { done: false }));
+  assert.equal(prose.endedEarly, true, "text that stops is cut off however much of it arrived");
+
+  const nothing = await readOpenAIStreamedResponse(sseResponse([], { done: false }));
+  assert.equal(nothing.endedEarly, true, "and so is a body with nothing in it");
+});
+
+test("openai: either end marker is enough, and a finished stream gains no key", async () => {
+  const frames = [{ choices: [{ delta: { content: "done" } }] }];
+  const withDone = await readOpenAIStreamedResponse(sseResponse(frames));
+  assert.equal("endedEarly" in withDone, false, "[DONE] alone: some gateways send no finish reason");
+  const withReason = await readOpenAIStreamedResponse(sseResponse([...frames, { choices: [{ delta: {}, finish_reason: "stop" }] }], { done: false }));
+  assert.equal("endedEarly" in withReason, false, "a finish reason alone: some gateways send no [DONE]");
+});
+
+test("openai: a tool call that arrived whole is a whole answer, whatever the connection did next", async () => {
+  const data = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_actions", arguments: '{"topics"' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { arguments: ":[]}" } }] } }] },
+  ], { done: false }));
+  assert.equal("endedEarly" in data, false);
+  // One whole call beside one cut off is not a whole answer.
+  const mixed = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "a", function: { name: "list_powers", arguments: "{}" } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 1, id: "b", function: { name: "find_region", arguments: '{"na' } }] } }] },
+  ], { done: false }));
+  assert.equal(mixed.endedEarly, true);
+});
+
+test("openai: the provider's own error inside the stream is not a closed connection", async () => {
+  const data = await readOpenAIStreamedResponse(sseResponse([{ error: { message: "Service temporarily overloaded", code: 503 } }], { done: false }));
+  assert.equal("endedEarly" in data, false, "it said why it stopped, and that has its own handling");
+  assert.equal(data.error.code, 503);
+});
+
+test("anthropic: a stream with neither a stop reason nor message_stop is marked as ended early", async () => {
+  const cut = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"events":[{"title":"A wa' } },
+  ], { done: false }));
+  assert.equal(cut.endedEarly, true);
+  assert.equal(cut.partialToolJson, '{"events":[{"title":"A wa');
+
+  const text = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "The envoy repl" } },
+  ], { done: false }));
+  assert.equal(text.endedEarly, true);
+});
+
+test("anthropic: a stop reason, a message_stop or a whole tool call each mean it finished", async () => {
+  const block = [
+    { type: "content_block_start", index: 0, content_block: { type: "text" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+  ];
+  const stopReason = await readAnthropicStreamedResponse(sseResponse([...block, { type: "message_delta", delta: { stop_reason: "end_turn" } }], { done: false }));
+  assert.equal("endedEarly" in stopReason, false);
+  const messageStop = await readAnthropicStreamedResponse(sseResponse([...block, { type: "message_stop" }], { done: false }));
+  assert.equal("endedEarly" in messageStop, false);
+  const wholeCall = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "submit_event_consolidation" } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"summary":"A quiet year."}' } },
+  ], { done: false }));
+  assert.equal("endedEarly" in wholeCall, false);
+  const refused = await readAnthropicStreamedResponse(sseResponse([{ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }], { done: false }));
+  assert.equal("endedEarly" in refused, false);
+});
+
+test("gemini: a stream with no finishReason is marked as ended early, unless a call arrived whole", async () => {
+  const cut = await readGeminiStreamedResponse(sseResponse([{ candidates: [{ content: { parts: [{ text: "The year opens" }] } }] }], { done: false }));
+  assert.equal(cut.endedEarly, true);
+
+  const finished = await readGeminiStreamedResponse(sseResponse([{ candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }] }], { done: false }));
+  assert.equal("endedEarly" in finished, false);
+  const wholeCall = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_event_consolidation", args: { summary: "A quiet year." } } }] } }] },
+  ], { done: false }));
+  assert.equal("endedEarly" in wholeCall, false);
+  const blocked = await readGeminiStreamedResponse(sseResponse([{ promptFeedback: { blockReason: "SAFETY" } }], { done: false }));
+  assert.equal("endedEarly" in blocked, false, "a refused prompt says why");
+});
+
+test("each provider's way of saying the answer hit its output limit is read off the envelope", () => {
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "length", message: { content: "{\"topics\":[{" } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [] } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ content: [], stop_reason: "max_tokens" }), true);
+  // Streamed: the finishers carry the reason into the same place.
+  assert.equal(stoppedAtOutputLimit(finishOpenAIStream(runOpenAI([{ choices: [{ delta: { content: "{\"a\":" }, finish_reason: "length" }] }]))), true);
+  assert.equal(stoppedAtOutputLimit(finishGeminiStream(runGemini([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "MAX_TOKENS" }] }]))), true);
+  assert.equal(stoppedAtOutputLimit(finishAnthropicStream(runAnthropic([{ type: "message_delta", delta: { stop_reason: "max_tokens" } }]))), true);
+  // An answer that finished, in each spelling, and nothing at all.
+  for (const data of [
+    { choices: [{ finish_reason: "stop" }] }, { choices: [{ finish_reason: "tool_calls" }] }, { choices: [{ finish_reason: null }] },
+    { candidates: [{ finishReason: "STOP" }] }, { stop_reason: "end_turn" }, { stop_reason: "tool_use" }, {}, null, "length",
+  ]) assert.equal(stoppedAtOutputLimit(data), false, JSON.stringify(data));
+});
+
+test("the chat reader's question, does this frame say the provider finished, is answered for every provider", () => {
+  assert.equal(streamFrameEnds({ choices: [{ delta: {}, finish_reason: "stop" }] }), true);
+  assert.equal(streamFrameEnds({ candidates: [{ content: { parts: [{ text: "." }] }, finishReason: "STOP" }] }), true);
+  assert.equal(streamFrameEnds({ type: "message_delta", delta: { stop_reason: "end_turn" } }), true);
+  assert.equal(streamFrameEnds({ type: "message_stop" }), true);
+  assert.equal(streamFrameEnds({ promptFeedback: { blockReason: "SAFETY" } }), true);
+  for (const frame of [
+    { choices: [{ delta: { content: "more" }, finish_reason: null }] },
+    { candidates: [{ content: { parts: [{ text: "more" }] } }] },
+    { type: "content_block_delta", delta: { type: "text_delta", text: "more" } },
+    { type: "message_delta", delta: {} }, {}, null,
+  ]) assert.equal(streamFrameEnds(frame), false, JSON.stringify(frame));
+});
+
+test("a buffered body that stops partway is told apart from one that is whole and wrong", () => {
+  assert.equal(isCutShortJson('{"choices":[{"message":{"content":"The Tsar'), true, "inside a string");
+  assert.equal(isCutShortJson('{"choices":[{"message":{"content":"ok"}}'), true, "containers still open");
+  assert.equal(isCutShortJson(""), true, "no body at all");
+  assert.equal(isCutShortJson("  \n"), true);
+  assert.equal(isCutShortJson('{"choices":[]}'), false, "whole");
+  assert.equal(isCutShortJson('{"a":"a brace } and a quote \\" inside a string"}'), false);
+  assert.equal(isCutShortJson("upstream request timeout"), false, "a gateway's plain-text error keeps its own message");
+  assert.equal(isCutShortJson('{"a":1,}'), false, "malformed, but not cut short");
 });

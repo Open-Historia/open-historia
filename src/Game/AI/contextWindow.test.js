@@ -8,10 +8,14 @@ import assert from "node:assert/strict";
 
 import {
     CONTEXT_WINDOW_MARGIN,
+    DEFAULT_ANSWER_RESERVE_TOKENS,
+    LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
+    entryOutputLimit,
     estimateTokens,
     nothingFitsMessage,
+    outputLimitFor,
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
@@ -147,4 +151,31 @@ test("when nothing fits, the message names every entry and what to do", () => {
     assert.match(message, /small \(Local\): this request/);
     assert.match(message, /was not sent/);
     assert.match(message, /Settings → AI/);
+});
+
+// --- the output limit a KoboldCpp server is told ---
+//
+// Who is told one, and what an answer has to say for a server to count as
+// KoboldCpp, is pinned in outputLimit.test.js. Here: the figure, and that it is
+// the same room the preflight leaves.
+
+test("the limit named for a KoboldCpp server is the room the preflight already leaves for an answer", () => {
+    assert.equal(LOCAL_OUTPUT_LIMIT_TOKENS, DEFAULT_ANSWER_RESERVE_TOKENS, "the request and the preflight agree on the answer's room");
+    assert.equal(LOCAL_OUTPUT_LIMIT_TOKENS, 4096);
+    // A request that fits the preflight with the default reserve still fits
+    // once KoboldCpp has taken the limit out of its window.
+    const memory = createContextWindowMemory(memoryStorage());
+    memory.learn("kobold", { limitTokens: 16384 });
+    const fits = Math.floor(16384 * CONTEXT_WINDOW_MARGIN) - DEFAULT_ANSWER_RESERVE_TOKENS;
+    assert.equal(memory.refusal("kobold", fits), "");
+    assert.ok(fits + outputLimitFor({ koboldCpp: true }) <= 16384);
+});
+
+test("the game names a limit for a KoboldCpp server only, and only when the entry and the task name none", () => {
+    assert.equal(outputLimitFor({ koboldCpp: true }), LOCAL_OUTPUT_LIMIT_TOKENS);
+    assert.equal(outputLimitFor({ koboldCpp: false }), 0);
+    assert.equal(outputLimitFor({ koboldCpp: true, customParams: { max_tokens: 2048 } }), 0);
+    assert.equal(outputLimitFor({ koboldCpp: true, taskTokens: 8192 }), 0);
+    assert.equal(entryOutputLimit({ max_tokens: 2048 }), 2048);
+    assert.equal(entryOutputLimit({ temperature: 0.7 }), 0);
 });

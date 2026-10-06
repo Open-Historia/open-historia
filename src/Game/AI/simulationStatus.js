@@ -118,5 +118,19 @@ export const discardHeldTurns = () => {
   for (const kind of [...heldTurns.keys()]) discardHeldTurn(kind);
 };
 
-// Compared by identity in a render path (time.jsx).
+// Compared by identity in a render path (time.jsx, through isNoResponseNote).
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
+
+// The same field when the connection was up and then was not: it broke while
+// the answer was arriving, or closed before the provider said it had finished
+// (providerErrors.js connectionClosedError; the relay's cut-off). The note
+// above would send the reader to the provider settings, which were good enough
+// to start an answer. A player's log has exactly that: their model server went
+// down mid-answer, and the report blamed "the provider URL, API key or model
+// name". Report text, never on screen, and so not named *_NOTE: the language
+// catalog reads constants named that way as interface text.
+export const CONNECTION_CLOSED_RESPONSE = "(no usable response — the connection closed or broke before the model finished its answer, so there was nothing whole to parse. See the failure reason above. The AI server may have stopped or been restarted, or the network, a proxy or the game server's relay cut the connection. The provider URL, API key and model name were good enough to start the answer.)";
+
+// Either note: a fallback with no model output to show (time.jsx labels the
+// field by it).
+export const isNoResponseNote = (text) => text === NO_RESPONSE_BODY_NOTE || text === CONNECTION_CLOSED_RESPONSE;

@@ -176,6 +176,85 @@ describe("AI relay", () => {
     assert.ok(Date.now() - startedAt < 10000, "the deadline must fire promptly");
   });
 
+  // Reads a relayed body to the end. Resolves with the text, or rejects the way
+  // the game's own stream readers would.
+  const readAll = async (response) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text;
+      text += decoder.decode(value, { stream: true });
+    }
+  };
+
+  // Once the first chunk has gone out there is no status left to set. The relay
+  // used to res.end() here, a clean end of stream, so the game took half an
+  // answer for a whole one.
+  test("an answer the relay's deadline cuts off does not end like a complete one", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: {\"n\":1}\n\n");
+      /* then silence */
+    });
+    const port = await startServer({ OH_RELAY_TIMEOUT_MS: "1200" });
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 200);
+    await assert.rejects(readAll(response));
+
+    // What the game's reader sees on that path.
+    const { withRelayCutoffHint, RELAY_CUT_OFF_MESSAGE } = await import("../src/Game/AI/relayResponse.js");
+    const hinted = withRelayCutoffHint(await relay(port, upstream));
+    const cut = await readAll(hinted).then(() => null, (error) => error);
+    assert.equal(cut?.message, RELAY_CUT_OFF_MESSAGE);
+    assert.match(cut.message, /OH_RELAY_TIMEOUT_MS/);
+
+    // And what the Fallback list makes of it: a server that could not be
+    // reached, mid-answer, so the call moves to the next entry rather than
+    // failing as an error nobody recognised.
+    const { asUnreachable, isUnreachableFailure } = await import("../src/Game/AI/providerErrors.js");
+    const failure = asUnreachable(cut).providerFailure;
+    assert.equal(isUnreachableFailure(failure), true);
+    assert.equal(failure.midAnswer, true);
+  });
+
+  test("an endpoint that drops mid-answer breaks the relayed stream too", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: {\"n\":1}\n\n");
+      setTimeout(() => res.socket.destroy(), 200);
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 200);
+    await assert.rejects(readAll(response));
+  });
+
+  test("a model still streaming is not cut off for being slow overall", async () => {
+    // The deadline is on silence: eight chunks 300 ms apart run well past a
+    // 1.2 s window, and none of the gaps comes near it.
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      let n = 0;
+      const tick = setInterval(() => {
+        n += 1;
+        res.write(`data: {"n":${n}}\n\n`);
+        if (n === 8) {
+          clearInterval(tick);
+          res.end("data: [DONE]\n\n");
+        }
+      }, 300);
+    });
+    const port = await startServer({ OH_RELAY_TIMEOUT_MS: "1200" });
+    const text = await readAll(await relay(port, upstream));
+    assert.match(text, /"n":8/);
+    assert.match(text, /\[DONE\]/);
+  });
+
   test("a transport failure says what actually failed, not just \"fetch failed\"", async () => {
     // Nothing is listening here: the player mistyped a port, or their model
     // server is not running. The reason has to survive into the bug report.
@@ -185,6 +264,56 @@ describe("AI relay", () => {
     assert.equal(response.status, 502);
     const { error } = await response.json();
     assert.match(error, /ECONNREFUSED/);
+  });
+
+  // The page reads every 502 as "the provider is busy" and waits on it. An
+  // endpoint that is not running is not busy, so the relay says which it was.
+  test("an endpoint that cannot be reached is marked as that, with the socket's own code", async () => {
+    const deadPort = await freePort();
+    const port = await startServer();
+    const refused = await relay(port, `http://127.0.0.1:${deadPort}/v1/chat/completions`);
+    assert.equal(refused.status, 502, "the status is unchanged");
+    // The header is the relay's alone: what the page reads before it reads
+    // anything else of the response (src/Game/AI/relayResponse.js).
+    assert.equal(refused.headers.get("x-oh-relay"), "unreachable");
+    const body = await refused.json();
+    assert.equal(body.unreachable, true);
+    assert.equal(body.code, "ECONNREFUSED");
+    assert.match(body.error, /ECONNREFUSED/);
+
+    // "localhost" is two addresses, and refused on both is an AggregateError
+    // with an empty message: it read " (ECONNREFUSED)".
+    const both = await (await relay(port, `http://localhost:${deadPort}/v1/chat/completions`)).json();
+    assert.equal(both.unreachable, true);
+    assert.equal(both.code, "ECONNREFUSED");
+    assert.match(both.error, /\S+ ECONNREFUSED/, "says what refused, not only the code in brackets");
+
+    // Accepted, then dropped before a single byte of an answer.
+    const hangsUp = await startUpstream((req) => {
+      req.resume();
+      req.socket.destroy();
+    });
+    const dropped = await relay(port, hangsUp);
+    assert.equal(dropped.status, 502);
+    assert.equal(dropped.headers.get("x-oh-relay"), "unreachable");
+    assert.equal((await dropped.json()).unreachable, true);
+  });
+
+  test("a provider's own 502 is relayed as it came, with no mark", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      // An endpoint cannot put the relay's mark on its own answer: its headers
+      // are not passed on.
+      res.writeHead(502, { "Content-Type": "application/json", "X-OH-Relay": "unreachable" });
+      res.end(JSON.stringify({ error: { message: "Bad gateway", type: "server_error" } }));
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("x-oh-relay"), null);
+    const body = await response.json();
+    assert.deepEqual(body, { error: { message: "Bad gateway", type: "server_error" } });
+    assert.equal("unreachable" in body, false);
   });
 });
 
