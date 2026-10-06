@@ -398,6 +398,7 @@ import {
 } from "./scriptedEventResolution.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
+  CONNECTION_CLOSED_RESPONSE,
   HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
   attemptHeldTurn,
@@ -3377,6 +3378,11 @@ const runJsonTask = async (taskKey, {
   // both on "logging wasn't added yet". The first case is the more common one
   // and points straight at provider settings, so say which happened.
   let sawResponseBody = false;
+  // The call ended because the connection closed or broke once the answer had
+  // started (providerErrors.js connectionClosedError; the relay's cut-off). A
+  // third meaning of "no response body", and not one the provider settings can
+  // fix, so the report says which (CONNECTION_CLOSED_RESPONSE).
+  let connectionClosedMidAnswer = false;
   // Why the FIRST answer was rejected, and the answer itself when it was a
   // complete one. Both exist for the same reason: attempt 2 can die before it
   // produces anything (a provider 500, a timeout), and when it does, everything
@@ -3966,6 +3972,7 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
+    if (actualError?.providerFailure?.midAnswer) connectionClosedMidAnswer = true;
     if (shouldPreventDeterministicFallback(actualError)) noFallbackError = actualError;
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
@@ -4059,7 +4066,9 @@ const runJsonTask = async (taskKey, {
   // goes in the same field the raw text uses, so it survives the reload path
   // (applySimulationResult → world.json) with no extra plumbing.
   const rawResponse = capturedRawText
-    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+    || (sawResponseBody
+      ? EMPTY_RESPONSE_BODY_NOTE
+      : connectionClosedMidAnswer ? CONNECTION_CLOSED_RESPONSE : NO_RESPONSE_BODY_NOTE);
   if (capturedRawText) {
     console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
   } else {

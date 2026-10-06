@@ -42,23 +42,28 @@ import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
+    asUnreachable,
     busyProviderMessage,
     classifyProviderFailure,
     connectionClosedError,
     contextWindowMessage,
     describeHtmlErrorPage,
     errorPayloadText,
+    extractErrorMessage,
     isBusyErrorPayload,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isUnreachableError,
+    isUnreachableFailure,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
+    UNREACHABLE_FAILURE,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE, extractJsonPayload } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
@@ -191,16 +196,8 @@ async function readErrorPayload(response) {
     }
 }
 
-function extractErrorMessage(payload, fallback) {
-    if (!payload) return fallback;
-    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
-    if (payload.error?.message) return payload.error.message;
-    if (payload.message) return payload.message;
-    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
-        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
-    }
-    return fallback;
-}
+// extractErrorMessage (what an error response says, whatever shape it came in)
+// lives in providerErrors.js with the other readers of provider errors.
 
 // The body of a reply that claimed success. A 200 carrying a web page (a gateway
 // landing page, a proxy's error screen) used to surface as JSON.parse's
@@ -813,10 +810,8 @@ const waitingCannotFix = (failure) => failure.kind === "unusable" || failure.kin
 
 // A server the browser could not reach at all (a local model that is not
 // running, the network down) is busy for the Fallback list: worth skipping for a
-// minute, and worth trying again after. Matched on the browsers' own wording, so
-// a TypeError from a bug in this file is never mistaken for one.
-const UNREACHABLE_TEXT = /failed to fetch|fetch failed|networkerror|load failed|network request failed/i;
-const isUnreachableError = (error) => error instanceof TypeError && UNREACHABLE_TEXT.test(String(error.message));
+// minute, and worth trying again after. isUnreachableError and its wordings are
+// in providerErrors.js ("A server that could not be reached"), with their tests.
 
 // An entry that is missing what its provider needs cannot answer until the
 // player edits it — the same as a rejected key.
@@ -865,7 +860,12 @@ async function resolveConfiguredModel(provider, { entrySettings, endpoint = "", 
 
         if (!response.ok) {
             const payload = await readErrorPayload(response);
-            throw new Error(extractErrorMessage(payload, `Could not load models from ${providerLabel}.`));
+            // Carries how it failed: the relay's "could not reach the endpoint"
+            // is a server that is not running, not one with no models on it.
+            throw providerFailureError(
+                extractErrorMessage(payload, `Could not load models from ${providerLabel}.`),
+                classifyProviderFailure({ status: response.status, payload }),
+            );
         }
 
         const data = await response.json();
@@ -882,10 +882,15 @@ async function resolveConfiguredModel(provider, { entrySettings, endpoint = "", 
         if (signal?.aborted) throw signal.reason ?? error;
         console.warn(`Could not auto-detect model for ${providerLabel}:`, error);
         // A server that cannot be reached may come back; one that answers
-        // with no models needs the player.
+        // with no models needs the player. Reached through the relay, a server
+        // that was only down used to read as the second, and its entry was
+        // marked Unusable "until it is edited" (a player's log, in the minute
+        // their local model server was not answering).
         throw providerFailureError(
             `Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`,
-            isUnreachableError(error) ? { kind: "busy", reason: "could not be reached" } : { kind: "unusable", reason: "no model found on the server" },
+            isUnreachableError(error) || isUnreachableFailure(error?.providerFailure)
+                ? { ...UNREACHABLE_FAILURE }
+                : { kind: "unusable", reason: "no model found on the server" },
         );
     }
 }
@@ -2354,13 +2359,8 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
     }
 }
 
-// A call that failed without the provider saying why, because it never reached
-// the provider at all (isUnreachableError).
-const asUnreachable = (error, signal) => {
-    if (error?.providerFailure || signal?.aborted || error?.name === "AbortError") return error;
-    if (isUnreachableError(error)) error.providerFailure = { kind: "busy", reason: "could not be reached" };
-    return error;
-};
+// asUnreachable (a call that failed because the connection to the provider
+// did) is in providerErrors.js, "A server that could not be reached".
 
 // What happened to an entry, in the words a Settings row and a notice use.
 const describeFailure = (entry, failure) => {
@@ -2369,7 +2369,7 @@ const describeFailure = (entry, failure) => {
     case "unusable": return `can't be used: ${failure.reason}`;
     case "rateLimited": return "is rate limited";
     case "tooBig": return `cannot take a request this size (${failure.reason})`;
-    default: return failure?.reason === "could not be reached" ? "could not be reached" : "is busy";
+    default: return isUnreachableFailure(failure) ? "could not be reached" : "is busy";
     }
 };
 

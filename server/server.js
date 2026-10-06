@@ -211,8 +211,17 @@ ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
 
-const sendError = (res, statusCode, error) => {
-  const message = error instanceof Error ? error.message : String(error);
+// `extra` is merged into the JSON body beside `error`, for a caller that has to
+// tell this failure from another with the same status (the AI relay marks an
+// endpoint it could not reach).
+const sendError = (res, statusCode, error, extra = undefined) => {
+  // "Refused on every address" comes as an AggregateError whose own message is
+  // empty (localhost is two addresses, ::1 and 127.0.0.1), so the report read
+  // " (ECONNREFUSED)". What each address said is on its `errors`.
+  const innerMessages = error instanceof Error && !error.message && Array.isArray(error.errors)
+    ? [...new Set(error.errors.map((inner) => inner?.message).filter(Boolean))].join("; ")
+    : "";
+  const message = error instanceof Error ? (error.message || innerMessages) : String(error);
   // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
   // puts the real cause on error.cause — which is the difference between a
   // mistyped endpoint (ENOTFOUND), a backend that is not running
@@ -233,7 +242,7 @@ const sendError = (res, statusCode, error) => {
     message: reported,
     data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
   });
-  res.status(statusCode).json({ error: reported });
+  res.status(statusCode).json({ error: reported, ...extra });
 };
 
 // An optional asset a scenario or game simply does not have — its stats sheet,
@@ -1034,6 +1043,25 @@ const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 // so a local model notices a cancelled request on its next write.
 const relayTransport = (target) => (target.protocol === "https:" ? https : http);
 
+// The endpoint could not be reached, or dropped the connection before it had
+// answered: refused, a name that does not resolve, a reset. The relay answers
+// that with a 502 of its own, and the page could not tell it from a provider's
+// 502 that was relayed as it came, so a model server that was simply not
+// running read as "busy": three attempts fifteen seconds apart, then "is busy
+// right now". Marked at the source, on the error, and said in the body
+// (`unreachable` and the socket's own `code`) so the page reports it at once
+// for what it is.
+const UPSTREAM_UNREACHABLE = Symbol("relay upstream unreachable");
+const upstreamUnreachable = (error) => {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  failure[UPSTREAM_UNREACHABLE] = true;
+  return failure;
+};
+// The socket's own word for it. "Refused on every address" is an AggregateError
+// with the code on each inner error as well as on itself.
+const connectionFailureCode = (error) =>
+  String(error?.code || error?.cause?.code || error?.errors?.find?.((inner) => inner?.code)?.code || "UPSTREAM_CLOSED");
+
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
   let completed = false;
@@ -1106,7 +1134,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         headers: upstreamHeaders,
         signal: controller.signal,
       }, resolve);
-      upstreamRequest.on("error", reject);
+      upstreamRequest.on("error", (error) => reject(upstreamUnreachable(error)));
       upstreamRequest.end(body);
     });
 
@@ -1138,11 +1166,13 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         }
       });
       upstream.on("end", resolve);
-      upstream.on("error", reject);
+      // The size cap above destroys the response with an error of its own,
+      // which is the relay's doing and not the endpoint's connection.
+      upstream.on("error", (error) => reject(received > RELAY_MAX_RESPONSE_BYTES ? error : upstreamUnreachable(error)));
       // The endpoint's connection dropping mid-answer is not always an error
       // on the response; without this the relay waited out its deadline.
       upstream.on("close", () => {
-        if (!upstream.complete) reject(new Error("The AI endpoint closed the connection before its answer was complete."));
+        if (!upstream.complete) reject(upstreamUnreachable(new Error("The AI endpoint closed the connection before its answer was complete.")));
       });
     });
 
@@ -1174,7 +1204,11 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, 502, error);
+      // Still a 502, so nothing that reads the status changes; the mark is what
+      // tells the page this was the connection and not the provider.
+      sendError(res, 502, error, error?.[UPSTREAM_UNREACHABLE]
+        ? { code: connectionFailureCode(error), unreachable: true }
+        : undefined);
     } else if (res.headersSent) {
       cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {

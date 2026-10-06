@@ -207,7 +207,17 @@ describe("AI relay", () => {
     // What the game's reader sees on that path.
     const { withRelayCutoffHint, RELAY_CUT_OFF_MESSAGE } = await import("../src/Game/AI/relayResponse.js");
     const hinted = withRelayCutoffHint(await relay(port, upstream));
-    await assert.rejects(readAll(hinted), (error) => error.message === RELAY_CUT_OFF_MESSAGE && /OH_RELAY_TIMEOUT_MS/.test(error.message));
+    const cut = await readAll(hinted).then(() => null, (error) => error);
+    assert.equal(cut?.message, RELAY_CUT_OFF_MESSAGE);
+    assert.match(cut.message, /OH_RELAY_TIMEOUT_MS/);
+
+    // And what the Fallback list makes of it: a server that could not be
+    // reached, mid-answer, so the call moves to the next entry rather than
+    // failing as an error nobody recognised.
+    const { asUnreachable, isUnreachableFailure } = await import("../src/Game/AI/providerErrors.js");
+    const failure = asUnreachable(cut).providerFailure;
+    assert.equal(isUnreachableFailure(failure), true);
+    assert.equal(failure.midAnswer, true);
   });
 
   test("an endpoint that drops mid-answer breaks the relayed stream too", async () => {
@@ -254,6 +264,49 @@ describe("AI relay", () => {
     assert.equal(response.status, 502);
     const { error } = await response.json();
     assert.match(error, /ECONNREFUSED/);
+  });
+
+  // The page reads every 502 as "the provider is busy" and waits on it. An
+  // endpoint that is not running is not busy, so the relay says which it was.
+  test("an endpoint that cannot be reached is marked as that, with the socket's own code", async () => {
+    const deadPort = await freePort();
+    const port = await startServer();
+    const refused = await relay(port, `http://127.0.0.1:${deadPort}/v1/chat/completions`);
+    assert.equal(refused.status, 502, "the status is unchanged");
+    const body = await refused.json();
+    assert.equal(body.unreachable, true);
+    assert.equal(body.code, "ECONNREFUSED");
+    assert.match(body.error, /ECONNREFUSED/);
+
+    // "localhost" is two addresses, and refused on both is an AggregateError
+    // with an empty message: it read " (ECONNREFUSED)".
+    const both = await (await relay(port, `http://localhost:${deadPort}/v1/chat/completions`)).json();
+    assert.equal(both.unreachable, true);
+    assert.equal(both.code, "ECONNREFUSED");
+    assert.match(both.error, /\S+ ECONNREFUSED/, "says what refused, not only the code in brackets");
+
+    // Accepted, then dropped before a single byte of an answer.
+    const hangsUp = await startUpstream((req) => {
+      req.resume();
+      req.socket.destroy();
+    });
+    const dropped = await relay(port, hangsUp);
+    assert.equal(dropped.status, 502);
+    assert.equal((await dropped.json()).unreachable, true);
+  });
+
+  test("a provider's own 502 is relayed as it came, with no mark", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Bad gateway", type: "server_error" } }));
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.deepEqual(body, { error: { message: "Bad gateway", type: "server_error" } });
+    assert.equal("unreachable" in body, false);
   });
 });
 

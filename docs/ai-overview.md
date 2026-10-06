@@ -254,7 +254,7 @@ Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` —
 
 - **Retries**: `retries = 3`, `retryDelay = 15000` ms. Retried on `429`/`503` (Gemini treats `429` as fatal "quota exhausted", `main.jsx`). Guarded by `canRetryBeforeDeadline(deadline, retryDelay)` (`main.jsx`) so a retry that would overrun the deadline is not attempted.
 - **Abort**: an `AbortSignal` (`signal`) propagates from `runJsonTask`'s controller through the caller to `fetch`/relay. An `AbortError` never triggers the relay fallback and never falls back to canned events (see [Cancellation](#cancellation--timeouts)).
-- **Errors**: `readErrorPayload`/`extractErrorMessage` (`main.jsx`) surface the provider's own message.
+- **Errors**: `readErrorPayload` (`main.jsx`) and `extractErrorMessage` (`providerErrors.js`) surface the provider's own message.
 
 ### Structured output modes (per provider)
 
@@ -331,6 +331,14 @@ Two ways, and neither is the model answering badly (`providerErrors.js` holds bo
 `retries = 3`, `retryDelay = 15000` ms, bounded by `canRetryBeforeDeadline`.
 
 `RETRYABLE_HTTP_STATUSES` is **429, 502, 503, 504**. 502 and 504 are there because a proxy having a bad moment is exactly as temporary as a 503, and `providerErrors.js` has always treated all four as "busy" when they arrive inside a stream — the status code now agrees with the stream frame. Before that, an identical 502 got three attempts as a frame and zero as a status.
+
+**A dead connection is not a busy provider.** A server that cannot be reached is `{ kind: "busy", reason: "could not be reached" }` for the Fallback list (`UNREACHABLE_FAILURE`, `providerErrors.js`): skipped for a minute, the call moved to the next entry, the notice naming the entry as one that *could not be reached*. It is never waited on by a provider caller (`shouldRetryProviderFailure` refuses it). It arrives three ways, and `asUnreachable` (`providerErrors.js`, applied in `callAI` to whatever a provider call throws) brings them to that one failure:
+
+- `fetch()` rejects (`isUnreachableError`): the browser could not connect at all.
+- A body reader rejects (`isBrokenConnectionError`: Chromium's bare `network error`, Firefox's `Error in input stream`, Node's `terminated`): the connection broke once the answer had started. The error becomes the one a stream that closed unfinished raises ([an answer that stopped before it was finished](#an-answer-that-stopped-before-it-was-finished)), so both read *"The connection closed before the model finished its answer."* and carry `midAnswer`; a relay cut-off is recognised by its cause and keeps its own sentence.
+- The relay answers `502` with `unreachable: true` and the socket's `code`, because the browser reached the relay and the relay did not reach the endpoint. `classifyProviderFailure` reads the mark; a provider's own 502, relayed as it came, has none and stays busy. Model discovery (`resolveConfiguredModel`) reads it too, so a server that is only down is no longer marked Unusable.
+
+`extractErrorMessage` (`providerErrors.js`) reads a bare-string `error`, which is how the game server's own routes say it, so the relay's words are the failure's message. When a mid-answer break ends a task in its fallback, the report's "Model response" field carries `CONNECTION_CLOSED_RESPONSE` (`simulationStatus.js`) in place of the note that blames the provider URL, key or model name.
 
 **Gemini's 429 is handled separately and first**, because it is two different situations wearing one status code: a per-minute rate limit (waiting fixes it — the common case on a free tier) versus a spent daily allowance or balance (waiting cannot). `isQuotaExhaustedPayload` tells them apart and defaults to *retryable*, since a wrong guess costs one request while the opposite costs a turn. `retryDelayMsFromPayload` honours Google's own `RetryInfo` when present. Before this, one per-minute trip on a free-tier key destroyed the turn.
 
