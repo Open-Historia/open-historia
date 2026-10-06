@@ -15,6 +15,7 @@ import {
 } from "./util.js";
 import FALLBACK_COLORS from "./generated/fallbackColors.js";
 import { builtInMap as BUILT_IN_MAP, builtInRevision as BUILT_IN_REVISION, regionsUrl as BUILT_IN_REGIONS_URL } from "./generated/defaultScenarioMeta.js";
+import { fetchWorldFile } from "../worldFiles.js";
 import {
   DEFAULT_SCENARIO_ID, DEFAULT_GAME_ID, EMPTY_FEATURE_COLLECTION, COVER_IMAGE_ASSET_KEY,
   JSON_ASSET_KEYS, STORAGE_JSON_ASSET_KEYS, OPTIONAL_JSON_ASSET_KEYS, RUNTIME_ONLY_JSON_ASSET_KEYS,
@@ -651,11 +652,11 @@ const builtInCoarseRegionsText = () => {
 // ownership by) is too big to bundle, so fetch it once from the content origin
 // (the Worker proxy → GitHub Release) and cache it for the session. It is what
 // a scenario without a map of its own — and without the built-in stamp — renders on.
-const CONTENT_BASE = (import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+// Asked for by name, the deep-cleaned edition first (runtime/worldFiles.js).
 let defaultRegionsGeojsonPromise = null;
 const fetchDefaultRegionsGeojson = () => {
   if (!defaultRegionsGeojsonPromise) {
-    defaultRegionsGeojsonPromise = fetch(`${CONTENT_BASE}/default-regions.geojson`, { cache: "force-cache" })
+    defaultRegionsGeojsonPromise = fetchWorldFile("stock", { cache: "force-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .catch(() => null)
       .then((data) => {

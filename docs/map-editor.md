@@ -47,7 +47,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `FlagPicker.jsx` | Overlay to choose a country flag (My flags / built-in / community). |
 | `DocumentsMenu.jsx` | Top-left menu: new/open/save/export-JSON/export-for-game + author field. In the standalone editor the two exports run the border cleanup first (§24). Deleting a saved map asks first, says when the delete fails, and is disabled for the map that is open (the saves kept writing to the deleted id, and every one failed). |
 | `exportPreset.js` | `buildGameSeed` + tier detection + region normalization + verbatim-polity logic. |
-| `regionImport.js` | Loads `regions-seed.geojson` into the OL source; resolves owner NAMEs from `gid0`. |
+| `regionImport.js` | Loads `regions-seed.geojson` into the OL source (on the website it is asked for by name, newest edition first: `runtime/worldFiles.js`); resolves owner NAMEs from `gid0`. |
 | `documentMigration.js` | Brings a legacy code-keyed document forward to name-keyed on open. |
 | `documentIO.js` | REST client for `/api/mapeditor/documents` + local JSON download. |
 | `customBackground.js` | Loads uploaded backgrounds (GeoJSON/KML/KMZ/SHP/GeoTIFF/PMTiles/image) into OL layers; persistence helpers. |
