@@ -1341,7 +1341,10 @@ const readInstalledBuiltInStamp = () => {
 // Which edition of the built-in's content — its countries' names, colours,
 // claims — a world carries on its map (builtInMap). A new map is a new stamp; the
 // same map with new content is a new revision. 1 when unstamped: the content the
-// map first shipped with.
+// map first shipped with. 2 renamed the countries to their common names. 3 is
+// the same 4,848 regions under the same ids with their borders deep-cleaned
+// (the Workshop's own save-time cleanup at 1.5 km: 106 cracks filled and 59
+// slivers trimmed across 152 regions, none moved by more than 0.6% of its area).
 const builtInRevisionOf = (world) => {
   const value = Number(world?.builtInRevision);
   return Number.isInteger(value) && value > 0 ? value : 1;
@@ -1349,15 +1352,20 @@ const builtInRevisionOf = (world) => {
 const readBuiltInSeedRevision = () => builtInRevisionOf(readJsonFile(path.join(BUILT_IN_SEED_DIR, "world.json"), null));
 const readInstalledBuiltInRevision = () => builtInRevisionOf(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "world"), null));
 
-// The manifest's byte size for the stock world: how an older install's built-in
+// The manifest's byte sizes for the stock world: how an older install's built-in
 // regions.geojson is recognised as that world (the fetcher wrote it there before
-// the stock map had a home of its own).
-const readStockRegionsBytes = () => {
+// the stock map had a home of its own). The current edition's size, and those
+// of the editions before it (`earlierBytes`): such an install holds the stock
+// world as it was when it was installed, which since the world was
+// deep-cleaned is no longer the file the manifest pins.
+const readStockRegionsSizes = () => {
   const manifest = readJsonFile(MAP_ASSETS_MANIFEST, null);
   const entry = (manifest?.assets ?? []).find(
     (asset) => asset?.path === "server/data/stock/regions.geojson",
   );
-  return Number(entry?.bytes) || null;
+  return [entry?.bytes, ...(Array.isArray(entry?.earlierBytes) ? entry.earlierBytes : [])]
+    .map(Number)
+    .filter((bytes) => bytes > 0);
 };
 
 // Where a scenario without a map of its own gets its geometry. An install that
@@ -1407,8 +1415,7 @@ const listGameIdsOnDisk = () => {
 const retireLegacyBuiltInRegions = () => {
   const legacy = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
   if (!fs.existsSync(legacy)) return null;
-  const stockBytes = readStockRegionsBytes();
-  const isStock = stockBytes !== null && fs.statSync(legacy).size === stockBytes;
+  const isStock = readStockRegionsSizes().includes(fs.statSync(legacy).size);
   if (!isStock) return legacy;
   if (fs.existsSync(STOCK_REGIONS_PATH)) {
     removeFileIfPresent(legacy);
@@ -1474,8 +1481,10 @@ const keepScenarioJsonForGame = (gameId, scenarioId) => {
 
 // The seed carries newer content on the same map — its countries renamed, say.
 // Every campaign keeps its own world, colours, flags and tags and reads only the
-// geometry from here, which a revision never changes, so the built-in is simply
-// brought up to date and its campaigns stay on it. A copy the player edited is
+// geometry from here. A revision keeps every region and its id, which is all a
+// campaign's world is keyed on, so the built-in is simply brought up to date
+// and its campaigns stay on it; the regions' outlines may be tidied (revision 3
+// closed the cracks between them), never redrawn. A copy the player edited is
 // kept, with the campaigns started on it, before the built-in is reseeded.
 const refreshBuiltInContent = (stamp) => {
   const gamesOnBuiltIn = listGameIdsOnDisk().filter(
@@ -1500,6 +1509,10 @@ const seedRegionsBytes = () => {
     return null;
   }
 };
+// The size the seed's map had in its earlier editions on this stamp: before
+// revision 3 cleaned its borders. An install's copy of one of these is this
+// map, where a size is all there is to tell it by (its record lost beside it).
+const BUILT_IN_EARLIER_REGIONS_BYTES = [5544501];
 
 // Once per process while the copy stays whole: the packaged seed cannot change
 // while the server runs, and ensure* runs on the read path (every poll), so the
@@ -1528,7 +1541,8 @@ const syncBuiltInScenarioFromSeed = () => {
   // campaigns started on it keep in a fork before the built-in is reseeded.
   const regionsPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
   const regionsBytes = fs.existsSync(regionsPath) ? fs.statSync(regionsPath).size : null;
-  const holdsSeedMap = regionsBytes !== null && regionsBytes === seedRegionsBytes();
+  const holdsSeedMap = regionsBytes !== null
+    && (regionsBytes === seedRegionsBytes() || BUILT_IN_EARLIER_REGIONS_BYTES.includes(regionsBytes));
   const hasRecord = fs.existsSync(worldPath) || fs.existsSync(getScenarioMetaPath(DEFAULT_SCENARIO_ID));
   const firstRun = !hasRecord && regionsBytes === null;
   const completing = holdsSeedMap && !fs.existsSync(worldPath);

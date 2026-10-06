@@ -561,11 +561,15 @@ const builtInMap = () => {
   return builtIn;
 };
 
-test("the built-in map: exactly the gaps the one-union sweep found, and within a small budget nothing false and no call over it", async () => {
+test("the built-in map: exactly the holes the one-union sweep found, and within a small budget nothing false and no call over it", async () => {
   const { features, source, plan, whole } = builtInMap();
-  const tolerances = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  // The map is shipped deep-cleaned, so at the save's own width there is
+  // nothing on it to find (the next test). Read up to 20 km it has four
+  // holes, three stretches of water and a triangle between Kamchatka and
+  // Magadan, and the staged search has to find those as one union does.
+  const tolerances = { maxWidth: 20_000, minWidth: BORDER_CLEANUP.minWidth };
   const before = enclosedGapsOfUnion(whole, tolerances).map(key);
-  assert.ok(before.length > 50, `the stock map has its known cracks (${before.length})`);
+  assert.equal(before.length, 4, `the map's holes up to 20 km wide (${before.length})`);
   const options = {
     plan,
     geometryOf: (f) => f.getGeometry(),
@@ -588,74 +592,59 @@ test("the built-in map: exactly the gaps the one-union sweep found, and within a
     onRefused: () => { refusals += 1; },
   });
   whole250.withinBudget();
-  assert.equal(now.parts, 1, "236,003 vertices fit the budget: one union, as always");
-  assert.deepEqual(now.holes.map(key), before, "and the very same cracks, crack by crack");
+  assert.equal(now.parts, 1, "235,996 vertices fit the budget: one union, as always");
+  assert.deepEqual(now.holes.map(key), before, "and the very same holes, hole by hole");
   assert.deepEqual([refusals, welds, now.welded, now.apart], [0, 0, false, 0], "no union is refused, nothing is welded, nothing is left apart");
 
   const tight = spyUnion(20000);
   const parts = await findEnclosedGaps(features, { ...options, union: tight.union, budget: 20000 });
   assert.ok(parts.parts > 1, `a 20,000-vertex budget reads the map in parts (${parts.parts})`);
   assert.ok(Math.max(...tight.calls) <= 20000);
-  assert.ok(parts.holes.length > 0, "most cracks lie inside one part and are still found");
-  for (const hole of parts.holes) assert.ok(before.includes(key(hole)), "a crack found in parts is one the whole map has");
+  assert.ok(parts.holes.length > 0, "most holes lie inside one part and are still found");
+  for (const hole of parts.holes) assert.ok(before.includes(key(hole)), "a hole found in parts is one the whole map has");
 });
 
-// What 1.5 km takes on the built-in map, and what it must leave alone. The
-// limit was 500 m, which left eight cracks behind, 501 to 977 m: each a
-// triangle where two or three regions of one country had the border they share
-// simplified differently (358 km of the Wyoming–Montana line, nowhere wider
-// than 900 m, is the longest). Above them the map has nothing until 4,402 m
-// (one more triangle, between Kamchatka and Magadan), and the narrowest water
-// it leaves as a hole, the lower Uruguay river, measures 7,031 m; no two
-// regions overlap by more than 930 m (East and West Antarctica). So the limit
+// The built-in map is shipped deep-cleaned (its revision 3), and this holds it
+// there: a save of it has nothing to repair, at either width.
+//
+// What the deep clean took, for the numbers quoted beside BORDER_CLEANUP: 106
+// cracks and 59 slivers across 152 regions. A quick clean (500 m) would have
+// left eight of the cracks, 501 to 977 m: each a triangle where two or three
+// regions of one country had the border they share simplified differently
+// (358 km of the Wyoming–Montana line, nowhere wider than 900 m, was the
+// longest). No two regions overlapped by more than 930 m (East and West
+// Antarctica).
+//
+// What it must leave alone is still on the map. The narrowest hole left is
+// 4,402 m (a triangle between Kamchatka and Magadan), and the narrowest water
+// left as a hole, the lower Uruguay river, measures 7,031 m. So the limit
 // sits in an empty band. A revision of the map that puts a lake or an enclave
-// inside it shows here, before a save fills it in.
-test("the built-in map at 1.5 km: the cracks 500 m left behind are filled, and no water or region is within reach", () => {
+// inside it, or a new crack, shows here before a save fills it in.
+test("the built-in map is shipped deep-cleaned: a save finds nothing within 1.5 km, and no water or region is within reach", () => {
   const { features, source, whole } = builtInMap();
   const { maxWidth, minWidth } = BORDER_CLEANUP;
   const holes = enclosedGapsOfUnion(whole, { maxWidth: Infinity, minWidth });
-  const filled = holes.filter((hole) => hole.width <= maxWidth);
+  const within = holes.filter((hole) => hole.width <= maxWidth);
   const left = holes.filter((hole) => hole.width > maxWidth);
-  const beyondOldLimit = filled.filter((hole) => hole.width > 500);
-  assert.equal(beyondOldLimit.length, 8, "eight cracks between 500 m and 1.5 km");
-  for (const hole of beyondOldLimit) {
-    assert.equal(vertexCountOf(hole.geom), 4, `a ${Math.round(hole.width)} m crack is a triangle, not a shoreline`);
-  }
-  const widestFilled = Math.max(...filled.map((hole) => hole.width));
+  assert.equal(within.length, 0, "no crack a deep clean would fill, and so none a quick one would");
   const narrowestLeft = Math.min(...left.map((hole) => hole.width));
-  assert.ok(widestFilled < 1000, `the widest crack filled is ${Math.round(widestFilled)} m`);
   assert.ok(narrowestLeft > 4000, `the narrowest hole left alone is ${Math.round(narrowestLeft)} m`);
   const water = left.filter((hole) => vertexCountOf(hole.geom) > 4);
   assert.ok(water.length >= 10, "the lakes, lagoons and the Caspian are holes, and stay");
   assert.ok(Math.min(...water.map((hole) => hole.width)) > 7000, "the narrowest of them is over 7 km");
 
-  // The guard on holes leaves every one of them a crack: each has two or more
-  // regions on its rim (the save fills the same 106 with it as without).
-  const rimRegionsOf = (hole) => source.getFeaturesInExtent(hole.geom.getExtent())
-    .filter((feature) => holdsRim(hole.geom.getCoordinates()[0], boundaryNear(feature.getGeometry()))).length;
-  for (const hole of filled) assert.ok(rimRegionsOf(hole) > 1, `a ${Math.round(hole.width)} m crack lies between regions`);
-  assert.equal(cracksAmong(filled, rimRegionsOf).length, filled.length, "none is left alone as one region's water");
-
-  // The overlaps: every piece two neighbouring regions share, however wide.
+  // The overlaps: every piece two neighbouring regions share that is not
+  // rounding noise, however wide.
   const order = new Map(features.map((feature, index) => [feature, index]));
   const pieces = [];
-  let largestShare = 0;
   for (let i = 0; i < features.length; i += 1) {
     const geom = features[i].getGeometry();
     for (const other of source.getFeaturesInExtent(geom.getExtent())) {
       if (!(order.get(other) > i)) continue;
-      const shared = overlapGeoms(geom, other.getGeometry(), { maxWidth: Infinity, minWidth });
-      if (!shared.length) continue;
-      pieces.push(...shared);
-      largestShare = Math.max(largestShare, shared[0].shared / Math.min(planarGeometryArea(geom), planarGeometryArea(other.getGeometry())));
+      pieces.push(...overlapGeoms(geom, other.getGeometry(), { maxWidth: Infinity, minWidth }));
     }
   }
-  assert.ok(pieces.length > 50, `the stock map has its known slivers (${pieces.length})`);
-  const beyond = pieces.filter((piece) => piece.width > 500);
-  assert.equal(beyond.length, 1, "one sliver between 500 m and 1.5 km");
-  assert.ok(beyond[0].width < 1000, `and nothing wider: ${Math.round(beyond[0].width)} m is the widest piece two regions share`);
-  // The guard on slivers passes over none of them either (the same 59).
-  assert.ok(largestShare < 0.01, `no pair shares more than ${(largestShare * 100).toFixed(2)}% of its smaller region, far under a tenth`);
+  assert.equal(pieces.length, 0, "no two regions share a sliver a save would trim, or anything wider");
 });
 
 test("the Workshop's save runs this search, with the budget on overlaps and gap targets too", () => {
@@ -1036,7 +1025,7 @@ test("welding makes coordinate values within a micron of each other one value, a
   assert.equal(weldFlatCoordinates(flat, [new Map(), new Map()]), null);
 });
 
-test("the built-in map has no value to weld, and welded all the same its search finds the very same cracks", async () => {
+test("the built-in map has no value to weld, and welded all the same its search finds the very same holes", async () => {
   const { features, source, plan } = builtInMap();
   const geoms = features.map((feature) => feature.getGeometry());
   const tables = weldTablesFor(geoms);
@@ -1061,14 +1050,15 @@ test("the built-in map has no value to weld, and welded all the same its search 
     union: unionAllGeoms,
     gapsOf: enclosedGapsOfUnion,
     isCovered: (point) => source.getFeaturesAtCoordinate(point).length > 0,
-    maxWidth: BORDER_CLEANUP.maxWidth,
+    // Up to 20 km, where the cleaned map still has holes to find (four).
+    maxWidth: 20_000,
     minWidth: BORDER_CLEANUP.minWidth,
     between: noWait,
   };
   const asItIs = await findEnclosedGaps(features, options);
   const forced = await findEnclosedGaps(features, { ...options, weld: (geom) => ofRegion.get(geom) || weldedGeometry(geom, welded.tables), welded: true });
   assert.deepEqual([asItIs.welded, forced.welded, forced.parts, forced.apart], [false, true, 1, 0]);
-  assert.ok(asItIs.holes.length > 50);
+  assert.equal(asItIs.holes.length, 4);
   assert.deepEqual(forced.holes.map((hole) => hole.geom.getCoordinates()), asItIs.holes.map((hole) => hole.geom.getCoordinates()), "the same holes, coordinate for coordinate");
 });
 

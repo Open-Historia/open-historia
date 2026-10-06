@@ -110,7 +110,9 @@ export const BORDER_CLEANUP = Object.freeze({
   // Wyoming–Montana line, nowhere wider than 900 m). 1,500 m takes them and
   // nothing else: the map has no hole between 977 m and 4,402 m, the
   // narrowest water left as a hole (the lower Uruguay river) measures
-  // 7,031 m, and no two regions overlap by more than 930 m.
+  // 7,031 m, and no two regions overlap by more than 930 m. (All of this was
+  // measured on the built-in map as it shipped until revision 3 of its seed,
+  // which is that map deep-cleaned: a save of it now finds nothing.)
   //
   // A map cut from the stock world is why the wider limit has two guards (the
   // next two numbers). Its regions were each simplified on their own, so
@@ -136,9 +138,9 @@ export const BORDER_CLEANUP = Object.freeze({
   // (CLEANUP_MODES below), and the other, the quick one, stops at quickWidth.
   maxWidth: 1500,
   // The quick clean's width: the limit every save had before 1.5 km. On the
-  // built-in map it fills 98 cracks and trims 58 slivers across 143 regions,
-  // where the deep clean's 106, 59 and 152 include the eight cracks 501 to
-  // 977 m wide described above. Both read every region; the width decides
+  // built-in map as it was before its seed was deep-cleaned it filled 98
+  // cracks and trimmed 58 slivers across 143 regions, where the deep clean's
+  // 106, 59 and 152 include the eight cracks 501 to 977 m wide described above. Both read every region; the width decides
   // what is repaired, not what is looked at, so the search costs the same.
   quickWidth: 500,
   // A hole with ONE region on its rim is not a crack between regions: it is
@@ -168,7 +170,7 @@ export const BORDER_CLEANUP = Object.freeze({
   // Regions per overlap batch between repaints.
   overlapBatch: 200,
   // The most vertices one polygon-clipping call is handed (see above), half its
-  // own ceiling. The stock 4,848-region map is 236,003 vertices in all, so it
+  // own ceiling. The stock 4,848-region map is 235,996 vertices in all, so it
   // is always one union, exactly as before.
   maxUnionVertices: 250_000,
   // The search's wall-clock budget in milliseconds, over every phase and

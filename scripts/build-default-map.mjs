@@ -8,7 +8,8 @@
 // resolved from GID_0; nothing is unclaimed on the modern map). It is what every
 // scenario without a map of its own renders on — the hub's re-ownership presets
 // key their ownership by these GADM ids — and what the `map-data` release ships as
-// `default-regions-names.geojson` (scripts/map-assets.json).
+// `default-regions-names-clean.geojson` (scripts/map-assets.json): the seed is
+// the deep-cleaned edition, so the stock world built from it is too.
 //
 // It used to be the built-in Modern Day scenario's own map and this script wrote
 // that scenario's files. Modern Day has since been redrawn: its map is authored in
