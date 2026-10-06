@@ -229,7 +229,7 @@ These strings are wired into external contracts (release assets players download
 | **`android`** (rolling release tag) | `android-apk.yml` | The APK is republished to this single rolling release; the app updates itself from it. |
 | **`desktop-stable` / `desktop-beta`** (release tags) | `package.json` `build.publish`, `electron-builder.beta.yml` `publish`, `desktop-installer.yml`, `desktop-beta.yml` | The installed apps read their update feed (`latest*.yml`) from these URLs, which are baked into every install; the README links `desktop-stable`. |
 | **Installer asset names** (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, and the `Open-Historia-Beta-*` set) | `artifactName` in `package.json` `build` and `electron-builder.beta.yml`; `latest.json` in both desktop workflows | The update feeds and `latest.json` name them, and the README and site link them by name. |
-| **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
+| **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
 | **The Android WebView host** (Capacitor `hostname`) | `mobile/capacitor.config.json` | The WebView origin the Android app serves under. |
 | **`Build: N`** convention | `android-apk.yml` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
 
@@ -251,8 +251,8 @@ The gitignored / release-hosted files:
 | `public/assets/countries.pmtiles` | `countries.pmtiles` |
 | `public/assets/cities.pmtiles` | `cities.pmtiles` |
 | `public/assets/cities-seed.json` | `cities-seed.json` |
-| `public/assets/regions-seed.geojson` | `regions-seed-z8.geojson` |
-| `server/data/stock/regions.geojson` | `default-regions-names.geojson` |
+| `public/assets/regions-seed.geojson` | `regions-seed-z8-clean.geojson` |
+| `server/data/stock/regions.geojson` | `default-regions-names-clean.geojson` |
 
 Rules of thumb:
 - **Never `git add`** any `*.pmtiles`, the seed geojson/json, or the default scenario's `regions.geojson`. They're gitignored; don't `-f` them in.

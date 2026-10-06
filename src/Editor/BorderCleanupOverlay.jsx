@@ -13,7 +13,7 @@
 // BORDER_CLEANUP.maxMillis; the button is for the player who will not wait
 // that long.)
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BORDER_CLEANUP, describeCleanupProgress } from "./topologySweep.js";
 
 export const SAVE_NOW_AFTER_MS = 10_000;
@@ -32,8 +32,9 @@ const CleanupCard = ({ state, onStop }) => {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   const searching = state.phase !== "save" && state.phase !== "done";
   const canStop = typeof onStop === "function" && searching && seconds * 1000 >= SAVE_NOW_AFTER_MS;
-  // The sweep's width as the text below gives it: 1.5 km.
-  const maxWidthKm = BORDER_CLEANUP.maxWidth / 1000;
+  // The sweep's width as the text below gives it: 0.5 km for the quick clean,
+  // 1.5 km for the deep one (the sweep's progress carries the one it runs at).
+  const maxWidthKm = (Number(state.maxWidth) || BORDER_CLEANUP.maxWidth) / 1000;
   return (
     <div
       role="status"
@@ -140,6 +141,138 @@ const CleanupCard = ({ state, onStop }) => {
 const BorderCleanupOverlay = ({ state, onStop }) => {
   if (!state) return null;
   return <CleanupCard key={Number(state.startedAt) || 0} state={state} onStop={onStop} />;
+};
+
+// Which clean the author chose last, kept on this device so the question
+// opens with that answer under the keyboard. Deep until one is chosen: it is
+// what every save ran before it asked.
+const CLEAN_MODE_KEY = "oh_editor_border_clean";
+export const lastCleanMode = () => {
+  try {
+    return window.localStorage.getItem(CLEAN_MODE_KEY) === "quick" ? "quick" : "deep";
+  } catch {
+    return "deep";
+  }
+};
+export const rememberCleanMode = (mode) => {
+  try {
+    window.localStorage.setItem(CLEAN_MODE_KEY, mode === "quick" ? "quick" : "deep");
+  } catch {
+    // A device that keeps nothing asks with the deep clean first, as at the start.
+  }
+};
+
+const CHOICE_BUTTON = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  width: "100%",
+  padding: "11px 14px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.07)",
+  color: "white",
+  textAlign: "left",
+  cursor: "pointer",
+};
+const CHOICE_TITLE = { fontSize: 14.5, fontWeight: 800 };
+const CHOICE_TEXT = { fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.68)" };
+
+// What a save asks before it cleans the borders (MapEditor.jsx chooseClean):
+// a quick clean or a deep one. Both read every region; they differ in how
+// wide a crack or a sliver may be and still be repaired
+// (topologySweep.js CLEANUP_MODES). `choice` is { last } while the question
+// is up, `last` being the answer given last time; `onChoose` hears "quick",
+// "deep", or null when the author backs out, and then nothing is saved.
+// Each sentence is in an element of its own, so the translator finds it whole.
+export const BorderCleanupChoice = ({ choice, onChoose }) => {
+  const lastRef = useRef(null);
+  // The editor redraws while the question is up (its autosave ticks), and each
+  // time hands in a new function: read through a ref, so the focus is given
+  // once, when the question opens, and not taken back with every redraw.
+  const chooseRef = useRef(onChoose);
+  useEffect(() => {
+    chooseRef.current = onChoose;
+  });
+  useEffect(() => {
+    if (!choice) return undefined;
+    lastRef.current?.focus?.();
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      chooseRef.current(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [choice]);
+  if (!choice) return null;
+  const deepKm = BORDER_CLEANUP.maxWidth / 1000;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="oh-border-clean-title"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onChoose(null);
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        background: "rgba(8,8,9,0.82)",
+      }}
+    >
+      <div
+        style={{
+          width: "min(440px, 100%)",
+          borderRadius: 14,
+          background: "#1b1b1e",
+          border: "1px solid rgba(255,255,255,0.12)",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+          padding: "22px 24px",
+          color: "white",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <div id="oh-border-clean-title" style={{ fontSize: 17, fontWeight: 800 }}>Clean up the borders</div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "rgba(255,255,255,0.7)" }}>
+          Every region is checked for cracks and slivers first, and the ones narrow enough are repaired. Choose how wide one may be and still be repaired.
+        </div>
+        <button type="button" ref={choice.last === "quick" ? lastRef : null} onClick={() => onChoose("quick")} style={CHOICE_BUTTON}>
+          <div style={CHOICE_TITLE}>Quick clean</div>
+          <div style={CHOICE_TEXT}>{`Up to ${BORDER_CLEANUP.quickWidth} m wide. Leaves the wider gaps as they are.`}</div>
+        </button>
+        <button type="button" ref={choice.last === "quick" ? null : lastRef} onClick={() => onChoose("deep")} style={CHOICE_BUTTON}>
+          <div style={CHOICE_TITLE}>Deep clean</div>
+          <div style={CHOICE_TEXT}>{`Up to ${deepKm} km wide. Closes the wider gaps too, so there is more to repair.`}</div>
+        </button>
+        <div>
+          <button
+            type="button"
+            onClick={() => onChoose(null)}
+            style={{
+              padding: "7px 14px",
+              borderRadius: 9,
+              border: "1px solid rgba(255,255,255,0.22)",
+              background: "transparent",
+              color: "rgba(255,255,255,0.8)",
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // The result left beside the save buttons for a few seconds after a plain Save

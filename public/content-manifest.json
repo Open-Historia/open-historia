@@ -24,16 +24,16 @@
       "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101",
       "bytes": 7857627
     },
-    "regions-seed.geojson": {
-      "sha256": "5c468ae1fc0607f90d1a30f22ea12a97acbc464f733b307fc2a1ad32ec660aca",
-      "bytes": 12708948
+    "regions-seed-clean.geojson": {
+      "sha256": "c26df2ddaedc8ea95013a7d31c78e31ad0dedbb6d3967b16991c42f315fa9849",
+      "bytes": 13077300
     },
-    "default-regions.geojson": {
-      "sha256": "4e92b2f8210306b85c51a8affdb1a92bc0e3aa8ffb5dce137a66c08c71ccaa8a",
-      "bytes": 12818777
+    "default-regions-names-clean.geojson": {
+      "sha256": "e568191996059bbf32f4ad9c5f54e4b10388f2a69f413c5744b0f422082cce10",
+      "bytes": 54728204
     }
   },
   "keyid": "oh-root-1",
-  "issued": "2026-09-23T03:31:15.108Z",
-  "expires": "2027-09-23T03:31:15.108Z"
+  "issued": "2026-10-06T23:14:02.350Z",
+  "expires": "2027-10-06T23:14:02.350Z"
 }
