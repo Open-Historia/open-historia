@@ -24,12 +24,18 @@ test("saving-mode turn review can carry queued-order attribution and final event
   assert.ok(finish >= 0 && apply > finish && directors > apply, "association repair must happen before unit/territory/structure directors and final curation");
 });
 
-test("non-saving mode asks for bounded attribution only when the plan finds unresolved orders and candidate events", () => {
-  const start = source.indexOf("const runStandaloneActionOutcomeReview");
-  const end = source.indexOf("// The agents' reports", start);
-  const body = source.slice(start, end);
-  assert.match(body, /buildActionOutcomeAssociationPlan/);
-  assert.match(body, /if \(!plan\) return null/);
-  assert.match(body, /budget\?\.take\("review"\)/);
-  assert.match(body, /ACTION_OUTCOME_ASSOCIATION_TOOL/);
+test("attribution is never a request of its own: it rides the one review a refused skip gets, in every mode", () => {
+  // With Save AI requests off this used to be one more request after the skip
+  // (runStandaloneActionOutcomeReview). A skip is one request in every mode now
+  // (requestBudget.js): its events cite their own orders, and the association
+  // pass exists only as a job of the combined review.
+  assert.doesNotMatch(source, /runStandaloneActionOutcomeReview|ACTION_OUTCOME_ASSOCIATION_TOOL/);
+  const finish = source.slice(source.indexOf("const finishTimelineJump"), source.indexOf("export const simulateTimelineJump"));
+  assert.match(finish, /const actionPlan = review\.actionOutcomePlan \?\? null;/);
+  assert.match(finish, /const actionAnswer = review\.parts\?\.actions \?\? null;/);
+  // The one place the plan is built is the review, which asks the skip's budget.
+  assert.equal(source.match(/buildActionOutcomeAssociationPlan\(/g)?.length, 1);
+  const review = source.slice(source.indexOf("const runTurnReview = async"), source.indexOf("const fileReviewedAgentReports"));
+  assert.match(review, /buildActionOutcomeAssociationPlan\(/);
+  assert.match(review, /requests\.budget\.take\("review"\)/);
 });

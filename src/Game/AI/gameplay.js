@@ -152,6 +152,7 @@ import {
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
@@ -163,9 +164,10 @@ import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
-import { createLookupCarry } from "./toolTurns.js";
+import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
 import {
   BACKGROUND_REQUEST,
+  SKIP_SPENDERS,
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
@@ -209,11 +211,15 @@ import {
   resolveHelperValues,
 } from "./promptContext.js";
 import {
+  HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
+  buildSkipHistoryJob,
   countWords,
   deferredConsolidationStillDue,
+  judgeSkipHistoryAnswer,
   planHistoryConsolidation,
+  seedHistoryDocumentText,
 } from "./historyConsolidation.js";
 import {
   expandBakedRegionsForRename,
@@ -280,7 +286,6 @@ import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import {
   ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-  ACTION_OUTCOME_ASSOCIATION_TOOL,
   applyActionOutcomeAssociations,
   buildActionOutcomeAssociationPlan,
   normalizeActionOutcomeAssociationAnswer,
@@ -1411,15 +1416,15 @@ const JUMP_LEVERS = [
 ].join("\n");
 
 // ---- The folded skip's own rules -------------------------------------------------
-// While requests are being saved a skip is ONE request (requestBudget.js): no
-// second request reconciles its events with the units, the fronts, the
-// structures or the board afterwards, so the simulator is told to finish each
-// event itself. These are the rules the separate checks carried (the unit,
-// territory and structure directors' templates, the curator's, in
-// defaultPrompts.json), said once, in the simulator's own terms. Built at call
-// time, like the levers above: a campaign's frozen templates never see an edit
-// to defaultPrompts.json, and with saving off the checks still run as requests
-// of their own, where this block would be untrue.
+// A skip is ONE request (requestBudget.js): no second request reconciles its
+// events with the units, the fronts, the structures or the board afterwards, so
+// the simulator is told to finish each event itself. These are the rules the
+// separate checks carried (the unit, territory and structure directors'
+// templates, the curator's, in defaultPrompts.json), said once, in the
+// simulator's own terms. Built at call time, like the levers above: a
+// campaign's frozen templates never see an edit to defaultPrompts.json, and the
+// one skip that is not folded (a provider refused the folded request, so its
+// checks follow as a request of their own) must not be told nothing checks it.
 const FOLDED_SKIP_CONSEQUENCES = [
   "[Every Event Carries Its Consequences]",
   "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
@@ -1557,6 +1562,11 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // with its passes was measured at 23 requests where the player expected three.
 // The full prompt costs more characters and no extra request, which on a free
 // key is the right way round. The toggle takes effect once saving is off.
+//
+// Inside a time skip the rounds are the skip's own budget's to give
+// (requestBudget.js, runJsonTask below): two for an ordinary skip, so the skip
+// is three requests at most, and that function calling is the only thing that
+// makes it more than one.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 
 // audience: who is asking (audience.js). Every task that carries lookups today is
@@ -2183,6 +2193,10 @@ ${brief}`);
   // And the agents whose reports are due ride on it (prepareFoldedSkip).
   const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
   if (agentReports) blocks.push(agentReports);
+  // The history document's fold, when one is due, is a job of its own inside
+  // its fences (historyConsolidation.js buildSkipHistoryJob). It goes at the
+  // very end of the prompt, below, where nothing of the skip's follows it.
+  const historyJob = foldedSkip ? normalizeString(variables.foldedHistoryJob) : "";
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
   // orders (playerFocus.js): each order's id is what an event cites in actionIds.
@@ -2214,6 +2228,7 @@ ${brief}`);
   }
 
   if (Array.isArray(lookups?.tools) && lookups.tools.length) blocks.push(LOOKUP_DIRECTIVE);
+  if (historyJob) blocks.push(historyJob);
 
   return blocks.filter(Boolean).join("\n\n");
 };
@@ -2815,6 +2830,11 @@ const runJsonTask = async (taskKey, {
   // saved: it keeps strict-then-retry. For something asked once per campaign and
   // built on for the rest of it, not for anything asked every turn.
   strictFirst = false,
+  // The opposite, whatever the setting: the first answer is repaired in place
+  // and a flaw the schema names is cut out, never sent back. A time skip passes
+  // it, because a skip is one request in every mode (requestBudget.js) and being
+  // told to redo it is a second one.
+  salvage = false,
   // The answer's events as the model writes them (streamedEvents.js): every
   // complete event this attempt has produced, and an empty list when an attempt
   // begins. A preview only, through no validator. Only a time skip passes it.
@@ -2953,7 +2973,7 @@ const runJsonTask = async (taskKey, {
   // made only when there is nothing usable to keep. The model still learns what
   // was dropped or changed — the jump's application receipt tells it at the top
   // of the next turn — it just does not cost the player a request to say so.
-  const salvageFirst = savingRequests() && !strictFirst;
+  const salvageFirst = (salvage || savingRequests()) && !strictFirst;
   // What schema salvage cut out of the answer that was finally taken.
   let removedFromAnswer = [];
   // Lookup rounds answered on one attempt, for the next (toolTurns.js).
@@ -2965,11 +2985,23 @@ const runJsonTask = async (taskKey, {
       // means the skip has nothing left for this task at all; a refused retry
       // leaves whatever the first answer can still give (the salvage pass below).
       if (budget && !budget.take(outputAttempt === 1 ? (spender || taskKey) : `${spender || taskKey}Retry`)) {
-        const spent = `this time skip has used its ${budget.cap} requests`;
+        // Refused for the cap, or because a skip does not spend on this at all.
+        const spent = budget.allows?.(spender || taskKey) === false
+          ? "a time skip makes no request of its own for this"
+          : `this time skip has used its ${budget.cap} requests`;
         failureReason = outputAttempt === 1 ? `Not asked: ${spent}.` : `${failureReason} Not asked again: ${spent}.`;
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} not made: ${spent}.`, { spends: budget.log }, { verbose: true });
         break;
       }
+      // Function calling inside a time skip is the skip's budget's to give: every
+      // round of questions is a whole request, so this attempt may ask only as
+      // many as the budget has free once every segment has kept its own (two
+      // for an ordinary skip, which makes three requests the most a skip is).
+      // Rounds an earlier attempt already had answered are carried, not asked
+      // again, so they count toward the limit without costing anything now.
+      const lookupRounds = budget && !budget.unlimited && Array.isArray(lookups?.tools) && lookups.tools.length
+        ? carriedRoundCount(lookupCarry) + budget.free
+        : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
       // Observational only, and off unless enabled from DevTools: measures the
       // exact prompt about to be sent; never filters or reorders it.
@@ -3049,7 +3081,17 @@ const runJsonTask = async (taskKey, {
           // carry is the task's, so the retry starts with the rounds already
           // answered instead of paying for them again.
           lookups: Array.isArray(lookups?.tools) && lookups.tools.length
-            ? { ...lookups, carry: lookupCarry, onRound: () => { idle.cancel(); idle.start(); } }
+            ? {
+              ...lookups,
+              ...(lookupRounds === null ? {} : { maxRounds: Number.isInteger(lookups.maxRounds) ? Math.min(lookups.maxRounds, lookupRounds) : lookupRounds }),
+              carry: lookupCarry,
+              onRound: () => {
+                idle.cancel();
+                idle.start();
+                // The request this round is about to make is one of the skip's.
+                budget?.take(`${spender || taskKey}Lookup`);
+              },
+            }
             : null,
           // Names this call in the ai-call transport entries, so a task's own
           // entries and the request/response pair underneath them line up.
@@ -3952,13 +3994,11 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "" } = {}) => {
-  // The document this pass revises, and the revision it was read at: a pass
-  // that lands against a different revision (a hand edit in the meantime)
-  // appends rather than overwrites (applyHistoryDocumentUpdate).
-  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
-  const historyDocumentContext = buildHistoryDocumentDirective(bundle.world);
-  const variables = await buildTemplateVariables(bundle, {
+// What one pass of the consolidator is shown: the material it folds, as text,
+// and the document directive (historyConsolidation.js). Shared by the pass that
+// is a request of its own and the one a time skip carries (prepareSkipHistoryFold).
+const historyConsolidationVariables = async (bundle, events, chats, actions = []) => ({
+  ...(await buildTemplateVariables(bundle, {
     taskKey: "eventConsolidator",
     // Resolved orders are consolidated alongside the events they caused. Capping
     // the history that gets SENT each turn is not enough on its own: drop the old
@@ -3972,7 +4012,66 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     }),
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
-  });
+  })),
+  historyDocumentContext: buildHistoryDocumentDirective(bundle.world),
+});
+
+// A pass's boundary as plain JSON: what its ledger entry records, and what a
+// batch applier needs to be rebuilt after a reload (batchApplierFor).
+const consolidationResume = (plan, bundle, { campaignId, world }) => ({
+  kind: "consolidation",
+  campaignId,
+  actionIds: plan.actionsToConsolidate.map((action) => action.id),
+  chatIds: plan.closedChats.map((chat) => chat.id),
+  throughDate: plan.throughEvent?.date || bundle.game.gameDate,
+  throughEventId: plan.throughEvent?.id || "",
+  throughRound: bundle.game.round,
+  baseRevision: world.historyDocument?.revision ?? 0,
+  eventCount: plan.eventsToConsolidate.length,
+  chatCount: plan.closedChats.length,
+});
+
+// ---- The history fold a time skip carries ---------------------------------------
+// A skip is ONE request (requestBudget.js), so a fold that is due is not a
+// request after it: it is a job inside the skip's own prompt
+// (historyConsolidation.js buildSkipHistoryJob) and a field of its answer.
+//
+// Planned HERE, before the skip, on the campaign as it stands and for the round
+// the skip is about to produce, so the cadence is the one a pass after the skip
+// kept, and nothing the skip writes is in it. Three things come back:
+//   null                nothing is due: nothing is asked, and nothing is asked
+//                       after the skip either. Whatever the skip adds waits
+//                       for the next one.
+//   { separate: true }  due, but not the skip's to carry: the player sends
+//                       this pass through the provider's batch endpoint
+//                       (Settings → Batch background AI tasks), or a batch is
+//                       already out for these events. The pass after the skip
+//                       handles it, as it always has.
+//   { brief, resume, baseRevision, currentText }
+//                       due and carried: the consolidator's own prompt, whole,
+//                       and the boundary the fold will record.
+const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() } = {}) => {
+  const plan = planHistoryConsolidation(bundle, { round: (Number(bundle.game?.round) || 0) + 1 });
+  if (!plan.due) return null;
+  if (hasPendingBatch("eventConsolidator", campaignId)) return { separate: true };
+  if (batchBackgroundTasksEnabled() && providerSupportsBatch("eventConsolidator")) return { separate: true };
+  const world = normalizeWorldState(bundle.world);
+  const variables = await historyConsolidationVariables(bundle, plan.eventsToConsolidate, plan.closedChats, plan.actionsToConsolidate);
+  const { systemPrompt } = await buildTaskSystemPrompt("eventConsolidator", { variables, lookups: null, reminders: false });
+  return {
+    brief: systemPrompt,
+    resume: consolidationResume(plan, bundle, { campaignId, world }),
+    baseRevision: world.historyDocument?.revision ?? 0,
+    currentText: seedHistoryDocumentText(world),
+  };
+};
+
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "" } = {}) => {
+  // The document this pass revises, and the revision it was read at: a pass
+  // that lands against a different revision (a hand edit in the meantime)
+  // appends rather than overwrites (applyHistoryDocumentUpdate).
+  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
+  const variables = await historyConsolidationVariables(bundle, events, chats, actions);
   const { generation, payload, deferred } = await runJsonTask("eventConsolidator", {
     // The deterministic digest cannot judge importance, so it carries no
     // document: the pass appends it to the document instead of rewriting.
@@ -3987,7 +4086,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     ...(typeof onRequest === "function" ? { onRequest } : {}),
     ...(signal ? { signal } : {}),
-    variables: { ...variables, historyDocumentContext },
+    variables,
     // Off the critical path when the caller supplies an applier: the summary
     // may land later through the batch poller.
     sync: typeof onBatchResult !== "function",
@@ -4064,28 +4163,56 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null } = {}) => {
+// `skipFold`: what the time skip this turn came from did about the fold itself
+// (foldedTurnReview's `review.history`), when it was a folded skip:
+//   { due: false }                  nothing was due before the skip, so nothing
+//                                   is folded now either;
+//   { due: true, ok: true, ... }    the skip's own answer carried the fold, and
+//                                   it is written here with no request;
+//   { due: true, ok: false, ... }   the answer's fold could not be used. It
+//                                   waits for the next skip, unless the pile
+//                                   has outgrown HISTORY_CONSOLIDATION's
+//                                   ownRequestThreshold, when it is asked for
+//                                   below like any pass.
+// Absent, this is a pass of its own, as it is for everything that is not a
+// folded skip.
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null, skipFold = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
+  if (skipFold && !force) {
+    if (!skipFold.due) return world;
+    if (skipFold.ok) {
+      const entry = consolidationEntryFor(skipFold.resume, skipFold.summary, "ai", world.consolidatedHistory);
+      const documentUpdate = applyHistoryDocumentUpdate(world, {
+        document: skipFold.document,
+        summary: skipFold.summary,
+        source: "ai",
+        throughDate: entry.throughDate,
+        throughEventId: entry.throughEventId,
+        throughRound: entry.throughRound,
+        baseRevision: skipFold.baseRevision,
+      });
+      logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
+      return normalizeWorldState({
+        ...world,
+        consolidatedHistory: [...world.consolidatedHistory, entry],
+        historyDocument: documentUpdate.historyDocument,
+      });
+    }
+    const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
+    if (waiting <= HISTORY_CONSOLIDATION.ownRequestThreshold) {
+      logDebugEvent("turn", `History consolidation waits for the next skip: this skip's answer ${skipFold.reason || "gave no usable fold"}.`, { unfoldedEvents: waiting }, { problem: true });
+      return world;
+    }
+    logDebugEvent("turn", `History consolidation is asked for on its own: ${waiting} events are unfolded and this skip's answer ${skipFold.reason || "gave no usable fold"}.`, undefined, { problem: true });
+  }
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
   // Cheats tool and the tests.
-  const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = planHistoryConsolidation(bundle, { force });
+  const plan = planHistoryConsolidation(bundle, { force });
+  const { eventsToConsolidate, closedChats, actionsToConsolidate } = plan;
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
-  // The pass's boundary as plain JSON: what the entry records, and what a
-  // batch applier needs to be rebuilt after a reload (batchApplierFor).
-  const resume = {
-    kind: "consolidation",
-    campaignId,
-    actionIds: actionsToConsolidate.map((action) => action.id),
-    chatIds: closedChats.map((chat) => chat.id),
-    throughDate: throughEvent?.date || bundle.game.gameDate,
-    throughEventId: throughEvent?.id || "",
-    throughRound: bundle.game.round,
-    baseRevision: world.historyDocument?.revision ?? 0,
-    eventCount: eventsToConsolidate.length,
-    chatCount: closedChats.length,
-  };
+  const resume = consolidationResume(plan, bundle, { campaignId, world });
   // Whether to ask and the answer, together in a time skip's replay
   // (heldTurnReplay.js): a skip kept for its campaign and written later neither
   // asks nor spends again, and decides the same way even when a batch has been
@@ -5526,7 +5653,13 @@ const resolveRegionTransfers = async (containers, world, {
     let payload = fallback();
     let source = "fallback";
 
-    try {
+    // Inside a time skip nothing asks but the skip itself (requestBudget.js
+    // SKIP_SPENDERS). The label stays unresolved, its transfer fails safe below,
+    // and the receipt tells the model, which writes the map's own name next
+    // time, or looks it up first when function calling is on.
+    const insideSkip = Boolean(requests?.budget) && !requests.budget.allows("geography");
+    if (insideSkip) requests.budget.take("geography");
+    else try {
       const response = await runJsonTask("geographyResolver", {
         lookups: buildTaskLookups({ world }),
         fallback,
@@ -7227,11 +7360,12 @@ const applySimulationResult = async ({
   // visibly neglected; every supplemental event passes the same integrity
   // screen and the same curator. Not a quota: a quiet world may return none.
   //
-  // Not while requests are being saved. It is a second search — a whole request,
-  // and a curator pass after it — to pad a skip that came back thin, and a thin
-  // skip is still a skip: the lanes it neglected are the ones the world director
-  // selects first next turn.
-  const breadthRepair = review ? null : await replayAnswer(replay, "breadthRepair", () => maybeRepairWorldBreadthAfterCuration({
+  // Not for a time skip (requestBudget.js SKIP_SPENDERS serves no repair). It
+  // is a second search — a whole request, and a curator pass after it — to pad
+  // a skip that came back thin, and a thin skip is still a skip: the lanes it
+  // neglected are the ones the world director selects first next turn.
+  const breadthRepairAllowed = !review && (!requests?.budget || requests.budget.allows("repair"));
+  const breadthRepair = !breadthRepairAllowed ? null : await replayAnswer(replay, "breadthRepair", () => maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
     bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
@@ -7990,7 +8124,9 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests, signal: projects?.signal, campaignId, replay });
+        // A folded skip did the fold itself, or planned that none was due
+        // (foldedTurnReview): no request of its own then.
+      }, { requests, signal: projects?.signal, campaignId, replay, skipFold: review?.history ?? null });
     } catch (error) {
       if (projects?.signal?.aborted) throw error;
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
@@ -8241,22 +8377,13 @@ const applySimulationResult = async ({
 
   // Spies report on the world the turn just produced. Awaited so the reports are
   // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // While requests are being saved the reports came in the time skip's own
-  // answer (foldedTurnReview; or with the turn review, when a provider refused
-  // that skip) and are only filed here; a turn with neither (a resolved
-  // interactive event, a game-master command) waits for the next skip's. With
-  // saving off, after a time skip only, each agent due a report makes its own
-  // request (refreshSpyIntercepts).
+  // The reports came in the time skip's own answer (foldedTurnReview; or with
+  // the turn review, when a provider refused that skip) and are only filed
+  // here. A turn with neither (a resolved interactive event, a game-master
+  // command) waits for the next skip's. No agent makes a request of its own
+  // after a skip any more: with Save AI requests off each one due a report
+  // used to, a request apiece.
   if (review) await fileReviewedAgentReports(review, { campaignId });
-  else if (!savingRequests() && (result.mode === "jump" || result.mode === "auto")) {
-    await refreshSpyIntercepts({
-      campaignId,
-      round: Number(nextGame.round) || 0,
-      originDate: normalizeString(baseGame.gameDate),
-      signal: projects?.signal,
-      requests,
-    });
-  }
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
   // And the advisor flags each new paper in its conversation.
@@ -8952,12 +9079,14 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
   // A canned fallback means the model is not answering; repair calls to the same
   // provider would only fail again after costing their wait.
   if (normalizeString(state?.generation?.source) === "fallback") return none;
-  // While requests are being saved (requestBudget.js) no repair is asked for:
-  // each is a request of its own, to move a storyline the skip left still. Every
-  // issue is settled as skipped instead, which is exactly a failed repair — its
-  // copy-forward is withdrawn below, the storyline stays overdue, and overdue
-  // storylines are what the next skip is told to move first.
-  const savingRequestsNow = Boolean(state?.requests?.saving);
+  // No repair is asked for inside a time skip (requestBudget.js SKIP_SPENDERS):
+  // each is a request of its own, to move a storyline the skip left still, and
+  // a skip is one request in every mode. Every issue is settled as skipped
+  // instead, which is exactly a failed repair — its copy-forward is withdrawn
+  // below, the storyline stays overdue, and overdue storylines are what the next
+  // skip is told to move first. What follows the skip check still runs for a
+  // budget that does serve repairs, which today is none.
+  const noRepairRequests = Boolean(state?.requests?.budget) && !state.requests.budget.allows("repair");
 
   // ONE stop date for detecting the issues, prompting the repair and validating
   // it: the merged one the round is applied at. (Detecting at one date and
@@ -9012,8 +9141,8 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
     // Over its limits the issue is treated exactly like a failed repair: the
     // storyline stays overdue for the main pass. Issues arrive in attention
     // order, so the cap keeps the most urgent ones.
-    const skipReason = savingRequestsNow
-      ? "requests are being saved"
+    const skipReason = noRepairRequests
+      ? "a time skip is one request"
       : motionRepairSkipReason(issue, { budget, failures: motionRepairFailures, campaignId, round });
     if (skipReason) {
       settledIds.add(issueId);
@@ -11399,13 +11528,12 @@ const playersAgentIn = (bundle, target) => {
     entry.owner === player && entry.target === target && (entry.status === "active" || entry.status === "turned"));
 };
 
-// `requests` is the time skip the report belongs to (createJumpRequests), so it
-// is asked of that skip's budget and counted in what the skip cost.
-export const gatherIntelligence = async (target, { signal, requestKind, requests = null, campaignId = "" } = {}) => {
+// A report asked for by itself: the trickle between turns (maybeGatherIntelligence).
+// No time skip asks this way: a skip's agents report in the skip's own answer.
+export const gatherIntelligence = async (target, { signal, requestKind, campaignId = "" } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
-  // The turn's campaign when a turn asked for the report, else the open one,
-  // stamped before the read.
+  // The campaign the caller names, else the open one, stamped before the read.
   const campaign = normalizeString(campaignId) || activeCampaignId();
   const bundle = await readGameStateBundle({ force: true });
   const spy = playersAgentIn(bundle, name);
@@ -11419,7 +11547,6 @@ export const gatherIntelligence = async (target, { signal, requestKind, requests
     userMessage: prepared.userMessage,
     variables: prepared.variables,
     ...(requestKind ? { requestKind } : {}),
-    ...jumpTaskOptions(requests, "spies"),
   });
   return storeSpyReport(bundle, spy, payload, { campaignId: campaign });
 };
@@ -11494,38 +11621,6 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
     spyReportInFlight = false;
   }
 };
-
-// With saving off, after a time skip: the agents due a report of their own
-// (agentReports.js) make one request each — not every agent after every turn,
-// which cost a player with five agents five requests a skip. On the skip's
-// signal, so Cancel stops them, and counted in what the skip cost.
-// `round` is the round the skip produced and `originDate` the date it started.
-// `campaignId`: the campaign whose turn just landed. The agents report one at a
-// time, a request each; once another campaign is open the rest stay silent
-// rather than spend requests on, and file reports into, a campaign that is not
-// theirs.
-export const refreshSpyIntercepts = async ({ campaignId = "", round = 0, originDate = "", signal = null, requests = null } = {}) => {
-  if (!isActiveFeatureEnabled("espionage") || !stillCampaign(campaignId)) return;
-  let world;
-  let filed;
-  try {
-    world = normalizeWorldState(await readWorldState({ force: true }));
-    filed = normalizeIntercepts(await readInterceptsState({ force: true }).catch(() => ({})));
-  } catch {
-    return;
-  }
-  const player = normalizeString((await readGameData()).country);
-  const { justPlaced, overdue } = agentsDueToReport({ agents: activeSpies(world, player), filed, round, originDate });
-  for (const spy of [...justPlaced, ...overdue]) {
-    if (signal?.aborted || !stillCampaign(campaignId)) return;
-    try {
-      await gatherIntelligence(spy.target, { signal, requests, campaignId });
-    } catch (error) {
-      console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
-    }
-  }
-};
-
 
 // ---- First readings -------------------------------------------------------
 //
@@ -13669,17 +13764,28 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 
 // ---- The folded time skip -------------------------------------------------------
 //
-// While requests are being saved (the default) a skip is ONE request. Until
-// 2026-10 it was two on most turns: the skip, and a "turn review" that read its
-// events back and asked for the units they moved, the fronts, the structures,
-// the repeats, the Projects board and the agents' reports (runTurnReview). The
-// review existed because the simulator narrated a town falling and wrote no op
-// for it. The answer to that is a prompt that says so, not a second request to
-// catch it: now each event carries every consequence itself
-// (FOLDED_SKIP_CONSEQUENCES), the board among them (projectsDirective.js), and
-// the agents' reports ride at the end of the same answer. That is also what lets
-// a skip be shown event by event as it is written: an event that arrives is
-// finished, map and all.
+// A skip is ONE request, whatever the settings. Until 2026-10 it was two on
+// most turns while requests were being saved (the skip, and a "turn review"
+// that read its events back and asked for the units they moved, the fronts, the
+// structures, the repeats, the Projects board and the agents' reports,
+// runTurnReview), and with saving off it was a request for each of those, and
+// for each agent: twenty or more. The checks existed because the simulator
+// narrated a town falling and wrote no op for it. The answer to that is a
+// prompt that says so, not more requests to catch it: now each event carries
+// every consequence itself (FOLDED_SKIP_CONSEQUENCES), the board among them
+// (projectsDirective.js), and the agents' reports ride at the end of the same
+// answer, with the history document's fold after them when one is due
+// (prepareSkipHistoryFold). That is also what lets a skip be shown event by
+// event as it is written: an event that arrives is finished, map and all.
+//
+// What can still make a skip more than one request (requestBudget.js
+// SKIP_SPENDERS), never past the cap of three:
+//   - function calling, with Save AI requests off and the lookup functions on:
+//     a round of questions is a request, and a skip may ask two;
+//   - an answer that could not be used at all is asked for once more;
+//   - a provider that refuses the folded request (below);
+//   - two things a player switches on: the automatic Stats refresh, and NPC
+//     votes in an institution, on the skips where they fall due.
 //
 // What the review's parts became:
 //   units, territory, structures   the event's own unitOps, regionControlOps,
@@ -13692,24 +13798,22 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 //   the Projects board             impacts.projectOps, lifted off the events
 //                                  and applied by the board's own machinery
 //                                  (foldedTurnReview);
-//   the agents' reports            the answer's agentReports.
-//
-// With saving off the checks are still requests of their own, every one of them
-// always (the switches that turned them off one by one are gone), and the skip
-// is sent the contract it always was.
+//   the agents' reports            the answer's agentReports;
+//   folding old history            the answer's history, a fenced job of its
+//                                  own in the prompt.
 //
 // The folded contract is larger than the one it replaces, and a provider can
 // refuse a function declaration for its size alone (geminiSchema.js). So a
 // folded request that a provider refuses outright is asked again the old way,
-// with the review after it, and the rest of the session's skips are asked that
-// way from the start. A player loses nothing but the saving.
+// with the review after it as ONE request, and the rest of the session's skips
+// are asked that way from the start. A player loses nothing but a request.
 let foldedSkipRefused = false;
 
 // What a folded skip carries besides its events, gathered once before its first
-// request: the doubted board entries a fresh agent can now settle, and the
-// agents whose reports ride on it, each with the brief its own request would
-// have carried. Nothing here costs a request.
-const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
+// request: the doubted board entries a fresh agent can now settle, the agents
+// whose reports ride on it, each with the brief its own request would have
+// carried, and the history fold when one is due. Nothing here costs a request.
+const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) => {
   const world = normalizeWorldState(bundle.world);
   const playerCountry = normalizeString(bundle.game?.country);
   // The skip keeps the board exactly when it is shown one: an empty board has
@@ -13742,12 +13846,22 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
       console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
     }
   }
+  // The fold of the history document, when one is due (prepareSkipHistoryFold).
+  // A fold that cannot be prepared is one the skip does not carry: the pass
+  // after the skip then decides, as it does for any skip that is not folded.
+  let history = { separate: true };
+  try {
+    history = await prepareSkipHistoryFold(bundle, { campaignId });
+  } catch (error) {
+    console.warn("[ai] the history fold could not be prepared for this skip; it is left to the pass after it.", error?.message || error);
+  }
   return {
     board: boardShown,
     boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
     agentJobs,
     // What the unit and structure directors would have been told (regionTypesBlock).
     regionTypeRules: await regionTypeRulesFor(bundle.world).catch(() => ""),
+    history,
   };
 };
 
@@ -13769,14 +13883,30 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
 const foldedTurnReview = ({ context, merged, state }) => {
   const { bundle } = context;
   const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
+  // The history fold (compactHistoryIfNeeded reads this as `skipFold`). Nothing
+  // due before the skip means nothing is folded after it either. A fold this
+  // skip did not carry (`separate`) is the pass after it's own business, so the
+  // record says nothing about it.
+  const fold = state.foldedPrep?.history ?? null;
+  if (!fold?.separate) review.history = { due: false };
   const rawEvents = normalizeArray(merged.events);
   const rawHidden = normalizeArray(state.hiddenEvents);
   const eventOps = rawEvents.map(boardOpsOf);
   const hiddenOps = rawHidden.map(boardOpsOf);
   merged.events = rawEvents.map(withoutBoardOps);
   state.hiddenEvents = rawHidden.map(withoutBoardOps);
-  // A canned turn carries nothing of the model's: the board is not looked at.
+  // A canned turn carries nothing of the model's: the board is not looked at,
+  // and no history is folded (or asked for: the model is not answering).
   if (normalizeString(state.generation?.source) === "fallback") return review;
+
+  if (fold && !fold.separate) {
+    review.history = {
+      due: true,
+      resume: fold.resume,
+      baseRevision: fold.baseRevision,
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText }),
+    };
+  }
 
   const priorEvents = normalizeEvents(bundle.events);
   // The candidates as reviewCandidateEvents builds them, each still knowing
@@ -13837,6 +13967,7 @@ const foldedTurnReview = ({ context, merged, state }) => {
     boardKept: Boolean(review.parts.board),
     agentReports: review.agentReports.length,
     agentsAsked: jobs.length,
+    history: !review.history ? "left to the pass after the skip" : !review.history.due ? "not due" : review.history.ok ? "folded" : `waits (${review.history.reason})`,
   }, { verbose: true });
   return review;
 };
@@ -13900,12 +14031,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // that heard them no longer happened. Empty when nobody touched the world.
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
 
-  // Whether this skip is the folded one (see "The folded time skip" above).
-  // Decided once, when the skip starts, and kept through a held segment's retry:
-  // the segments already in hand were written under it. The lab's A/B runs are
-  // never folded, since they compare the skip's own contract.
-  if (state.folded === undefined) state.folded = Boolean(state.requests?.saving) && !evaluation && !foldedSkipRefused;
-  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables });
+  // Whether this skip is the folded one (see "The folded time skip" above):
+  // every skip is, with Save AI requests on or off, unless a provider has
+  // refused the folded request this session. Decided once, when the skip starts,
+  // and kept through a held segment's retry: the segments already in hand were
+  // written under it. The lab's A/B runs are never folded, since they compare
+  // the skip's own contract.
+  if (state.folded === undefined) state.folded = !evaluation && !foldedSkipRefused;
+  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
   let segmentIndex = state.nextSegment;
@@ -14022,11 +14155,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // agents report once, at the end of the last segment, when every event
       // they have to agree with is written.
       const agentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
+      // So does the history fold, when one is due and this skip carries it
+      // (prepareSkipHistoryFold): last of all, as a job of its own.
+      const historyJob = state.folded && isFinalSegment ? buildSkipHistoryJob(state.foldedPrep?.history?.brief) : "";
       const foldedVariables = {
         foldedSkip: true,
         foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
         foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
         foldedRegionTypeRules: normalizeString(state.foldedPrep?.regionTypeRules),
+        foldedHistoryJob: historyJob,
       };
       // Every provider response this segment causes, so a contract the provider
       // would not take can be told from an answer that was simply no good.
@@ -14034,14 +14171,20 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const statuses = [];
 
       const askSegment = (folded) => runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+        // Function calling, when the player has it on (lookupFunctionsEnabled):
+        // the only thing that makes a skip more than one request, and bounded
+        // by the skip's budget (runJsonTask).
         lookups: buildTaskLookups(segmentBundle),
         // The skip itself always runs; asking again is what the budget weighs.
         ...spend,
+        // One request in every mode: a flaw is cut out or repaired in place,
+        // never sent back to be redone (requestBudget.js).
+        salvage: true,
         onRequest: (status) => {
           statuses.push(Number(status));
           spend.onRequest?.(status);
         },
-        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0 }) } : {}),
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0, history: Boolean(historyJob) }) } : {}),
         ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
         ...(evaluationSegmentCapture ? { capture: evaluationSegmentCapture.task || (evaluationSegmentCapture.task = {}) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
@@ -14249,6 +14392,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
         delete payload[AGENT_REPORTS_FIELD];
       }
+      // And the history fold, the same way (judged in foldedTurnReview).
+      if (payload && typeof payload === "object" && HISTORY_FIELD in payload) {
+        if (state.folded && historyJob && segmentGeneration?.source !== "fallback") state.foldedHistoryAnswer = payload[HISTORY_FIELD];
+        delete payload[HISTORY_FIELD];
+      }
 
       // Only now is the answer taken, so only now does its draft count.
       if (segmentGeneration?.source !== "fallback") {
@@ -14368,14 +14516,21 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // ---- What a time skip spends ---------------------------------------------------
 //
 // Every request a skip makes is asked of the skip's budget first and counted on
-// the way back (requestBudget.js). While requests are being saved the budget is
-// real — one request where it can be, never more than the cap — and the checks
-// after the skip go out together as the turn review below. With saving switched
-// off the budget grants everything, and the skip runs exactly as it always did.
+// the way back (requestBudget.js). The budget is real in every mode: ONE
+// request, the skip itself; more only for what SKIP_SPENDERS names, function
+// calling first among it; never past the cap. Save AI requests decides whether
+// the model may look things up at all (lookupFunctionsEnabled), not how many
+// requests a skip's checks are: there are none of those any more.
+//
+// Each segment's own request is reserved before anything else can ask, so a
+// round of function calling or a retry in one segment never costs a later
+// segment its skip.
 const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false } = {}) => {
   const saving = savingRequests();
-  const budget = createJumpBudget({ cap: jumpRequestCap({ segments }), unlimited: !saving });
-  if (saving && reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
+  const pieces = Math.max(1, Math.round(Number(segments) || 1));
+  const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces }), only: SKIP_SPENDERS });
+  budget.reserve("jump", pieces);
+  if (reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
   return {
     saving,
     budget,
@@ -14400,9 +14555,13 @@ const reportJumpRequests = (requests) => {
     requestLedger.noteJump({ used: requests.used, refused: requests.refused });
   } catch { /* a count is never worth a turn */ }
   const skipped = requests.budget.skipped;
+  // What a skip never spends a request on (requestBudget.js SKIP_SPENDERS), and
+  // would have been asked for here before a skip was one request.
+  const denied = [...new Set(requests.budget.denied ?? [])];
   logDebugEvent("turn", `This time skip used ${requests.used} request${requests.used === 1 ? "" : "s"}`
     + `${requests.refused ? ` (and was refused ${requests.refused} time${requests.refused === 1 ? "" : "s"} by a rate limit)` : ""}`
-    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}.`, {
+    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}`
+    + `${denied.length ? `; not asked, because a skip makes no request for it: ${denied.join(", ")}` : ""}.`, {
     saving: requests.saving,
     spends: requests.budget.log,
   });
@@ -14414,14 +14573,15 @@ const reportJumpRequests = (requests) => {
 // timeline, the Projects board, the agents' reports — as ONE request instead of
 // one each (turnReview.js says how several jobs share a prompt safely).
 //
-// No longer what a skip normally does. While requests are being saved a skip is
-// folded: its events carry their own consequences and nothing is asked after it
-// (see "The folded time skip"). This is what is left for the one case where
-// that cannot be: a provider that refused the folded request, whose skip was
-// asked again the way it always was and is checked here. With saving off each
-// check makes its own request, as before. Every check always runs: the six
-// switches that turned them off one by one are gone (2026-10), since a check
-// left off only ever meant a map that did not match the story.
+// No longer what a skip normally does. A skip is folded, in every mode: its
+// events carry their own consequences and nothing is asked after it (see "The
+// folded time skip"). This is what is left for the one case where that cannot
+// be: a provider that refused the folded request, whose skip was asked again
+// the way it always was and is checked here, in one request. Every check that
+// has something to look at rides on it: the six switches that turned them off
+// one by one are gone (2026-10), since a check left off only ever meant a map
+// that did not match the story, and so is the mode in which each was a request
+// of its own.
 //
 // Nothing here decides what a check DOES. Each job is built from the input its
 // own native director would have sent (buildUnitDirectorInput and the rest), its
@@ -14695,8 +14855,8 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     //   - its report is AGENT_REPORT_EVERY_ROUNDS rounds old, and this is one of
     //     the rounds reports are collected on.
     // Every other skip it simply rides along when something else asks.
-    // The calendar is agentReports.js's, shared with the reports made with
-    // saving off.
+    // The calendar is agentReports.js's, which a folded skip's agents keep to
+    // as well (agentsReportingWithSkip).
     const filed = normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})));
     const { justPlaced, overdue } = agentsDueToReport({
       agents,
@@ -14855,69 +15015,6 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   return review;
 };
 
-// With request-saving OFF the legacy directors still make their own calls, so
-// there is no combined turn-review request to piggyback on. Outcome attribution
-// gets one bounded request of its own only when a current order lacks a citation
-// and there are retained candidate events that might answer it. Failure is
-// deliberately fail-open: settleOrders will keep the order overdue.
-const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state }) => {
-  if (normalizeString(state.generation?.source) === "fallback") return null;
-  const candidates = reviewCandidateEvents(merged, context.bundle, state.generation);
-  const plan = merged.clearActions === false
-    ? null
-    : buildActionOutcomeAssociationPlan({ actions: context.bundle.actions, events: candidates });
-  if (!plan) return null;
-  if (!state.requests?.budget?.take("review")) return { plan, answer: null };
-
-  const tool = {
-    name: ACTION_OUTCOME_ASSOCIATION_TOOL,
-    description: "Link current queued player orders to the retained candidate events that genuinely give them an outcome.",
-    schema: ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-  };
-  const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort(signal.reason);
-    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  }
-  const idleMs = taskIdleTimeoutMs();
-  const idle = createIdleDeadline(
-    { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
-    () => controller.abort(new Error("Queued-order outcome attribution timed out: the model stopped answering.")),
-  );
-  state.phases?.enter("checking", { label: "queued order outcomes" });
-  logDebugEvent("turn", `Queued-order outcome attribution: ${plan.pendingActions.length} order(s), ${plan.candidates.length} candidate event(s).`, undefined, { verbose: true });
-
-  try {
-    idle.start();
-    const response = await callAI(plan.prompt, [{
-      role: "user",
-      parts: [{ text: `Check the exact queued orders against the numbered candidate events and call ${tool.name} once.` }],
-    }], {
-      deadline: idle.deadline,
-      onActivity: idle.note,
-      signal: controller.signal,
-      tool,
-      logLabel: `task "${TURN_REVIEW_TASK}:actions"`,
-      taskKey: TURN_REVIEW_TASK,
-      __debug: { taskKey: TURN_REVIEW_TASK, attempt: 1, maxAttempts: 1, simulatedDays: null },
-      onRequest: jumpTaskOptions(state.requests, "review").onRequest,
-    });
-    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
-    const raw = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool.name);
-    const normalized = normalizeActionOutcomeAssociationAnswer(raw, plan);
-    if (normalized.removed) {
-      logDebugEvent("turn", `Queued-order outcome attribution ignored ${normalized.removed} invalid association(s).`, undefined, { verbose: true });
-    }
-    return { plan, answer: { associations: normalized.associations } };
-  } catch (error) {
-    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
-    logDebugEvent("turn", "Queued-order outcome attribution failed; unanswered orders remain queued.", error, { problem: true });
-    return { plan, answer: null };
-  } finally {
-    idle.cancel();
-  }
-};
-
 // The agents' reports the review carried, filed once the turn is written — and
 // only for agents who are still in place after it: one caught this turn did not
 // get a report out.
@@ -14956,14 +15053,14 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
 
-  // While requests are being saved the skip was ONE request and its events
-  // carried their own consequences (see "The folded time skip"): the review is
-  // read off the skip's own answer, with no request. Each director below then
-  // runs exactly as it always has, on a review that holds no part for it, which
-  // is its ordinary "nothing to add". Only a skip whose folded request the
-  // provider refused still asks for a review here (runTurnReview). `review` is
-  // null when saving is off, and each check makes its own request as before.
-  const folded = Boolean(state.folded && state.requests?.saving);
+  // The skip was ONE request and its events carried their own consequences
+  // (see "The folded time skip"): the review is read off the skip's own answer,
+  // with no request. Each director below then runs exactly as it always has, on
+  // a review that holds no part for it, which is its ordinary "nothing to add".
+  // Only a skip whose folded request the provider refused still asks for a
+  // review here, as one request (runTurnReview). There is always a review
+  // record: no check after a skip is a request of its own any more.
+  const folded = Boolean(state.folded);
   if (!folded) {
     // Not this skip's to write: the board is moved by its own pass, and an op
     // left on an event would be applied a second time by the event itself.
@@ -14975,18 +15072,17 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       noteReceipt(state.receipt, "dropped", "impacts.projectOps is not part of this answer: the Projects board is moved by its own pass after the events. The ops you wrote there were left out.");
     }
   }
-  const review = state.requests?.saving
-    ? (folded ? foldedTurnReview({ context, merged, state }) : await runTurnReview({ context, merged, signal, state }))
-    : null;
+  const review = folded
+    ? foldedTurnReview({ context, merged, state })
+    : await runTurnReview({ context, merged, signal, state });
 
   // A current order whose outcome event omitted actionIds gets one bounded
-  // semantic association pass. Saving mode piggybacks on the combined review;
-  // legacy/non-saving mode asks only when needed. Native application accepts
-  // exact ids/indexes only, then the normal curator sees the repaired actionIds
-  // and protects a genuine order outcome from filler removal.
-  const standaloneActionReview = review ? null : await runStandaloneActionOutcomeReview({ context, merged, signal, state });
-  const actionPlan = review?.actionOutcomePlan ?? standaloneActionReview?.plan ?? null;
-  const actionAnswer = review?.parts?.actions ?? standaloneActionReview?.answer ?? null;
+  // semantic association pass, as a job of the combined review when there is
+  // one (a folded skip's events cite their own orders). Native application
+  // accepts exact ids/indexes only, then the normal curator sees the repaired
+  // actionIds and protects a genuine order outcome from filler removal.
+  const actionPlan = review.actionOutcomePlan ?? null;
+  const actionAnswer = review.parts?.actions ?? null;
   if (actionPlan && actionAnswer) {
     const repaired = applyActionOutcomeAssociations({ events: merged.events, plan: actionPlan, answer: actionAnswer });
     merged.events = repaired.events;
@@ -15008,20 +15104,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       game: bundle.game,
       world: bundle.world,
       signal,
-      analyzeBatch: review
-        ? async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } })
-        : async (input) => {
-          const answer = await runJsonTask("unitDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: unitDirectorUnavailable,
-            signal,
-            userMessage: UNIT_DIRECTOR_INSTRUCTION,
-            variables: unitDirectorVariables(input, bundle.game, await regionTypeRulesFor(bundle.world)),
-            ...jumpTaskOptions(state.requests, "review"),
-          });
-          await placeDirectorOrders(answer?.payload, bundle.world, merged.events);
-          return answer;
-        },
+      // Never a request of the director's own: the review's part, or none.
+      analyzeBatch: async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } }),
     });
   } catch (error) {
     if (signal?.aborted) throw error;
@@ -15041,22 +15125,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     territoryEvents = await directGeneratedTerritoryOps({
       events: directedEvents,
       world: bundle.world,
-      // The places the events name, with who holds each (lookupTools.js
-      // placesNamedIn), so the director can fill in fromCode without asking.
-      // Not needed when the review already answered: the director never asks.
-      findPlaces: review ? null : placeReaderFor(bundle),
+      // No places to look up here: the director never asks (the review, when
+      // there was one, was handed them where it was built, runTurnReview).
+      findPlaces: null,
       signal,
-      analyzeBatch: review
-        ? async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } })
-        : async (input) =>
-          runJsonTask("territoryDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: territoryDirectorUnavailable,
-            signal,
-            userMessage: TERRITORY_DIRECTOR_INSTRUCTION,
-            variables: await territoryDirectorVariables(input, bundle.world),
-            ...jumpTaskOptions(state.requests, "review"),
-          }),
+      analyzeBatch: async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }),
     });
     const containers = territoryEvents.map((event, index) => ({
       event,
@@ -15081,19 +15154,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       world: bundle.world,
       playerCountry: normalizeString(bundle.game?.country),
       signal,
-      analyzeBatch: review
-        ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
-        : async (input) => {
-          const answer = await runJsonTask("structureDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: structureDirectorUnavailable,
-            signal,
-            userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
-            variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }, await regionTypeRulesFor(bundle.world)),
-            ...jumpTaskOptions(state.requests, "review"),
-          });
-          return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
-        },
+      analyzeBatch: async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) }),
     });
     builtEvents = built.events;
     structureLinks = built.links;
@@ -15135,8 +15196,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // The board runs inside applySimulationResult so that it sees the espionage
   // events too. All this side does is hold the turn when it fails, because this
   // is where the arguments a retry needs are held.
-  // `review` carries the turn review's answers (null when requests are not being
-  // saved) and `requests` the skip's budget, for everything the apply still asks.
+  // `review` carries what the skip's own answer gave for the board, the agents
+  // and the history (or the turn review's answers, for a skip a provider
+  // refused folded), and `requests` the skip's budget, for the little the apply
+  // may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests };
   applyArgs.phases = state.phases;
   // Held with the turn, so a retry of the board gets the curator's and the

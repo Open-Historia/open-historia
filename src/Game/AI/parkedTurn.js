@@ -31,16 +31,18 @@ const savedRequests = (requests) => (requests?.budget
     saving: requests.saving === true,
     used: Number(requests.used) || 0,
     refused: Number(requests.refused) || 0,
-    budget: { cap: requests.budget.cap, unlimited: requests.budget.unlimited === true, ...requests.budget.state },
+    // `only`: what a skip spends on at all (requestBudget.js SKIP_SPENDERS), so
+    // the turn written later asks for nothing the skip would not have.
+    budget: { cap: requests.budget.cap, unlimited: requests.budget.unlimited === true, only: requests.budget.only ?? null, ...requests.budget.state },
   }
   : null);
 
 export const restoreJumpRequests = (saved) => {
   if (!isObject(saved) || !isObject(saved.budget)) return null;
-  const { cap, unlimited, spends, reservations } = saved.budget;
+  const { cap, unlimited, only, spends, reservations } = saved.budget;
   return {
     saving: saved.saving === true,
-    budget: createJumpBudget({ cap, unlimited: unlimited === true, state: { spends, reservations } }),
+    budget: createJumpBudget({ cap, unlimited: unlimited === true, only: Array.isArray(only) ? only : null, state: { spends, reservations } }),
     used: Math.max(0, Number(saved.used) || 0),
     refused: Math.max(0, Number(saved.refused) || 0),
   };

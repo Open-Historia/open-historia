@@ -980,7 +980,12 @@ const RequestsTodayCaption = () => {
             clearInterval(timer);
         };
     }, []);
-    const cost = describeJumpCost({ saveRequests: savingRequests() });
+    // A skip is one request; function calling is what can add to it (Settings →
+    // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
+    // The switch is on unless turned off, so its value is read with that
+    // default; the hook is only what redraws this line when it is flipped.
+    useMapSetting(MAP_SETTING_KEYS.lookupFunctions);
+    const cost = describeJumpCost({ lookups: !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions) });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
     const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
@@ -991,9 +996,15 @@ const RequestsTodayCaption = () => {
         >
             <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today
             <br />
-            {cost.capped
-                ? <>a skip uses <span data-no-translate>{cost.min}</span>, at most <span data-no-translate>{cost.max}</span>{segmented ? ", plus one per extra segment" : ""}</>
-                : <>a skip can use twenty or more</>}
+            {/* A whole line, one string, in an element of its own, so a language
+                pack translates the sentence and not its pieces (docs/i18n.md). */}
+            <span>
+                {cost.lookups
+                    ? (segmented
+                        ? `a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment`
+                        : `a skip uses 1 request, at most ${cost.max} when the model looks things up`)
+                    : (segmented ? "a skip uses 1 request, plus one per extra segment" : "a skip uses 1 request")}
+            </span>
             {day.lastJump ? <> · the last used <span data-no-translate>{day.lastJump.used}</span></> : null}
         </div>
     );
