@@ -205,6 +205,17 @@ test("decodePuppetUpdates accepts objects as well as compact lines", () => {
   assert.equal(fromLine.kind, fromObject.kind);
 });
 
+// A heading or "No changes." where records go has no ~ in it, and is no record:
+// read as one, the whole sentence was the operation.
+test("a line with no separator is prose, not a puppet record", () => {
+  const prose = "### Марионеточные государства:\nНет изменений.";
+  assert.deepEqual(decodePuppetUpdates(prose), []);
+  assert.deepEqual(decodePuppetUpdates(prose.split("\n")), []);
+  const [kept] = decodePuppetUpdates(`${prose}\ninstall~USSR~Poland~satellite~40~open~1~Seated`);
+  assert.equal(kept.op, "install");
+  assert.equal(decodePuppetUpdates("obliterate~USSR~Poland").length, 1, "a line with the separator is still a record, whatever its verb");
+});
+
 test("an unknown verb is dropped rather than guessed at", () => {
   const held = apply(baseWorld, "install~USSR~Poland~satellite~40~open~1~Seated").world;
   const { world } = apply(held, "obliterate~USSR~Poland~~~~1~Not a verb");
@@ -299,6 +310,31 @@ test("the coup Storyline opens just under the threshold the Workshop warns at", 
   }, `loyalty~USSR~Poland~~${loyalty}~~1~Unrest`).storylineSeeds;
   assert.equal(at(PUPPET_COUP_LOYALTY - 1).length, 1);
   assert.deepEqual(at(PUPPET_COUP_LOYALTY), []);
+});
+
+test("a turn that wrote no puppet line still charges a refusal and opens the Storyline it brings on", () => {
+  // The turn's merge (applyDiplomaticUpdates) runs the puppet pass whatever the
+  // turn wrote: a demand refused in a chat is charged there, and the seeder
+  // reads every row already in the ledger, not only this pass's lines. The turn
+  // takes the seeds from the merge (gameplay.js applySimulationResult).
+  const world = {
+    ...baseWorld,
+    puppets: [{ id: "p1", overlord: "USSR", puppet: "Poland", kind: "satellite", loyalty: PUPPET_COUP_LOYALTY, secrecy: "open", status: "active" }],
+  };
+  const merge = applyDiplomaticUpdates({
+    world,
+    relationUpdates: [],
+    agreementUpdates: [],
+    puppetUpdates: [],
+    refusedDemands: [{ overlord: "USSR", puppet: "Poland" }],
+    events: [],
+    stopDate: "1950-01-01",
+    round: 4,
+  });
+  assert.equal(merge.refusedDemandCount, 1);
+  assert.ok(merge.world.puppets[0].loyalty < PUPPET_COUP_LOYALTY, "the refusal took it under the threshold");
+  assert.equal(merge.puppetStorylineSeeds.length, 1);
+  assert.match(merge.puppetStorylineSeeds[0], /^storyline-puppet-poland~active~/);
 });
 
 test("a revolt settles the Storyline that led to it", () => {

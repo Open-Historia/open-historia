@@ -349,6 +349,28 @@ test("citing an order does not authorize a sovereign act the order never asked f
   assert.equal(binding.unresolved[0]?.reason, "player-fresh-sovereign-choice-without-authority");
 });
 
+// The jump never writes event.actors: a treaty's signatories come from the
+// agreement record it starts, bound here by event number as in a whole payload.
+test("an agreement start bound by event number names every signatory, and nothing else does", () => {
+  const treaty = () => event(
+    "Ukraine Signs Border Treaty",
+    "Kyiv signs a treaty fixing the border in Minsk.",
+    { kind: "diplomacy" },
+  );
+  const record = (op) => ({ id: "border-treaty", op, type: "other", parties: ["Ukraine", "Russian Federation"], eventIndexes: [0], title: "Border Treaty" });
+  const signatories = (agreementUpdates, extra = {}) => {
+    const candidate = { events: [{ ...treaty(), ...extra }], agreementUpdates };
+    bindWorldEventAuthorityRefs(candidate, opts);
+    assert.equal(candidate.events[0].actors, extra.actors, "derived actors are never stored on the event");
+    return candidate.events[0].agency.sovereignActors.map((row) => row.polity);
+  };
+
+  assert.deepEqual(signatories([]), ["Ukraine"]);
+  assert.deepEqual(signatories([record("start")]), ["Ukraine", "Russian Federation"]);
+  assert.deepEqual(signatories([record("update")]), ["Ukraine"], "only a start names who chose the commitment");
+  assert.deepEqual(signatories([record("start")], { actors: ["Ukraine"] }), ["Ukraine"], "the model's own actors win");
+});
+
 test("a player domestic event with a proper subject keeps that subject as its principal", () => {
   const screened = screenQuietly({
     events: [event(

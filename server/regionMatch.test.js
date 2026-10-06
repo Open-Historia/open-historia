@@ -27,6 +27,25 @@ test("folding: case, diacritics, apostrophes and hyphens do not matter", () => {
   assert.equal(foldRegionKey("Zürich"), "zurich");
 });
 
+test("folding is remembered, and remembering changes no answer", () => {
+  // What is not text folds as it always did.
+  assert.deepEqual([null, undefined, "", "   ", 12, 0].map(foldRegionKey), ["", "", "", "", "12", "0"]);
+  assert.deepEqual([null, undefined, ""].map(stripRegionAffixes), ["", "", ""]);
+  // The same string, asked twice, is the same answer; a string that differs
+  // only in what folding removes is a different question with the same answer.
+  for (const name of ["Zaporízhzhya-Oblast", "ZAPORIZHZHYA OBLAST", " zaporizhzhya_oblast "]) {
+    assert.equal(foldRegionKey(name), "zaporizhzhya oblast");
+    assert.equal(foldRegionKey(name), "zaporizhzhya oblast");
+  }
+  // More made-up names than any map has: the memo empties itself rather than
+  // grow without end, and the names asked for before still fold right.
+  for (let index = 0; index < 130_000; index += 1) foldRegionKey(`Made-Up Place ${index}`);
+  assert.equal(foldRegionKey("Made-Up Place 7"), "made up place 7");
+  assert.equal(foldRegionKey("Donets’k"), "donetsk");
+  assert.equal(stripRegionAffixes("the kharkiv region"), "kharkiv");
+  assert.equal(matchRegionName("Kharkiv Oblast", ukraine)?.region.id, "2026");
+});
+
 test("affixes: administrative words the model appends are stripped, repeatedly", () => {
   assert.equal(stripRegionAffixes("kharkiv oblast"), "kharkiv");
   assert.equal(stripRegionAffixes("the kharkiv region"), "kharkiv");

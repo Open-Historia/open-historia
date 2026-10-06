@@ -43,9 +43,68 @@ const BOARD_ENTRY_NOT_STORYLINE =
   "These entries are recorded on this board, never as a storyline: write no storylineUpdates record for one. "
   + "A situation one causes - a rival's reaction, a standoff - can be a storyline; the entry itself is not.";
 
-export const buildJumpProjectsDirective = (projectsSummary) => {
+// ---- The folded skip: the jump keeps the board itself ---------------------------
+// While requests are being saved a skip is one request (requestBudget.js), so no
+// pass reads its events afterwards: each event carries the board ops it caused
+// in its own impacts.projectOps (gameplaySchemas.js foldJumpTool), and the
+// engine applies them through the board's own machinery (gameplay.js
+// foldedTurnReview). The rules are the board pass's (defaultPrompts.json
+// tasks.projects), said here because this is the only prompt such a skip has.
+//
+// The split this reverses was made because the board crowded the events out: a
+// run narrated stalled programmes for minutes and never reached the period. So
+// the board stays bookkeeping here too. An op rides on an event that happened
+// anyway, routine progress needs no event of its own, and the proportion rule
+// is the one the board pass always had.
+const FOLDED_BOARD_OPS = [
+  "YOU keep this board in step, in the same events: nothing reads them afterwards to do it for you. An event that starts, "
+    + "advances, sets back, completes or ends one of these efforts carries the op that records it in its own impacts.projectOps:",
+  "• {\"op\":\"update\",\"projectId\":\"<exact id>\",\"name\":\"<exact name>\",\"progress\":58,\"status\":\"active | stalled | paused\","
+    + "\"lastUpdate\":\"<one present-tense sentence on what just changed>\"} when progress moved or the status changed;",
+  "• {\"op\":\"milestone\",\"projectId\":\"\",\"name\":\"\",\"milestone\":{\"title\":\"<the checkpoint>\",\"date\":\"YYYY-MM-DD\","
+    + "\"status\":\"done | missed | slipped\"}} when a checkpoint was reached, missed or pushed back;",
+  "• {\"op\":\"complete | cancel | fail\",\"projectId\":\"\",\"name\":\"\",\"note\":\"<how it ended>\"} when it is over: it stays on the board, under Closed;",
+  "• {\"op\":\"create\",\"name\":\"<a new name>\",\"kind\":\"project | operation\",\"summary\":\"<what it is and what it is for>\","
+    + "\"status\":\"active\",\"targetDate\":\"YYYY-MM-DD\",\"milestones\":[{\"title\":\"\",\"date\":\"YYYY-MM-DD\"}],\"tags\":[\"\"]} "
+    + "when an event starts a new multi-round effort, with ownerCode (a country's full name) only for a foreign power's programme the player's services have learned of.",
+  "Copy ids and names exactly as the board writes them: an op naming something that is not there is dropped. A date you set is never earlier than this period's own dates, "
+    + "and a running entry with no checkpoints gets two or three dated milestones on its way to its target date; a standing effort with no end gets none.",
+].join("\n");
+
+const FOLDED_BOARD_PROPORTION =
+  "Be proportionate, which is the rule that matters most here. The period comes first: write its events as you would with no board at all, "
+  + "and put an op only on an event that really moved an effort. Most events carry none, and no ops at all is a correct answer for a quiet period. "
+  + "Routine progress needs no event of its own: its op rides on the event closest to it in subject, and an effort gets an event to itself only when "
+  + "what happened to it is news. A progress figure rises only by what the event itself justifies; inventing progress is worse than reporting none. "
+  + "Never open an entry for something a government simply decides and does (a rename, a proclamation, a reshuffle) or for a transfer the other side "
+  + "has already agreed to: the event enacts those outright.";
+
+// `folded`: the skip keeps the board itself (above). `doubted`: the entries a
+// fresh agent can now settle, as describeDoubtedForPrompt writes them.
+export const buildJumpProjectsDirective = (projectsSummary, { folded = false, doubted = "" } = {}) => {
   const board = String(projectsSummary ?? "").trim();
   if (!board || board.startsWith(EMPTY_BOARD_PREFIX)) return "";
+  if (folded) {
+    const settle = String(doubted ?? "").trim();
+    return [
+      JUMP_PROJECTS_DIRECTIVE_HEADER,
+      "The player keeps a board of long-running efforts - research and industrial programmes, construction projects, "
+        + "military and covert operations, sustained political campaigns. The board as it stands:",
+      board,
+      FOLDED_BOARD_OPS,
+      "What you decide is what HAPPENS to these efforts, in terms of what each one actually IS according to its summary: "
+        + "a recruitment drive is not a missile test, and a shipyard is not a treaty. An effort the player's orders name, "
+        + "and every entry on the \"Needs a decision this jump\" list, gets an op this jump saying which of four things happened: "
+        + "it advanced (update, with a real progress figure), it is stuck (update with status stalled and a lastUpdate NAMING the blocker), "
+        + "it reached or missed a checkpoint (milestone), or it is over (complete, cancel or fail). "
+        + HIGH_PRIORITY_ASSESSMENT_RULE + " For an assessment with no material change, use op update with a lastUpdate saying so, and leave progress where it is. "
+        + "Entries marked THEIRS belong to another power: they move because their owner moved them and the player's services observed as much, "
+        + "never because the player wished them stopped, and are reported from outside, never narrated from inside.",
+      FOLDED_BOARD_PROPORTION,
+      BOARD_ENTRY_NOT_STORYLINE,
+      ...(settle ? [`These doubted entries can now be settled, because a fresh agent is in place:\n${settle}`] : []),
+    ].join("\n");
+  }
   return [
     JUMP_PROJECTS_DIRECTIVE_HEADER,
     "The player keeps a board of long-running efforts - research and industrial programmes, construction projects, "

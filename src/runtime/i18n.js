@@ -76,7 +76,8 @@ const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 // never sent to the AI: the pack has it, and a string it lacks stays English
 // rather than costing the player a request. Only what a scenario or a player
 // made (scenario and game names and descriptions, custom polities, custom
-// stats, region names on a hand-drawn map, community posts) is translated live.
+// stats, the region names of a map that is not built in, community posts) is
+// translated live.
 // Every other language in the picker still translates the interface live.
 export const SHIPPED_PACK_LANGUAGES = Object.freeze([
   "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",

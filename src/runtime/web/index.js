@@ -10,7 +10,7 @@
 // the stores it pulls in — is bundled into the local download.
 
 import { installWebApiRouter } from "./router.js";
-import { ensureSeeded } from "./libraryStore.js";
+import { ensureSeeded, migrateStoreLayout } from "./libraryStore.js";
 import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
 import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
@@ -50,6 +50,7 @@ const requestPersistentStorage = async () => {
 // handles it once the game is up, as it does everywhere else. Bounded, so a
 // slow pack fetch only costs the first screen its translation.
 const BOOT_LANGUAGE_WAIT_MS = 1500;
+const STORE_LAYOUT_DELAY_MS = 15000;
 const loadBootLanguage = async () => {
   try {
     let code = getStoredLanguage();
@@ -82,6 +83,12 @@ export const installWebBackend = async () => {
   }
   installWebApiRouter();
   requestPersistentStorage();
+  // Saves written before covers and restore points had stores of their own are
+  // moved into them once (libraryStore.js migrateStoreLayout). Everything reads
+  // the old places meanwhile, so it waits until the game is up.
+  setTimeout(() => {
+    migrateStoreLayout().catch((error) => console.warn("Moving saves into the current storage layout failed:", error));
+  }, STORE_LAYOUT_DELAY_MS);
   forgetRetiredAccount();
 
   // Home page: connect to the best content node on entry.

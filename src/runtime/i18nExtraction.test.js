@@ -209,3 +209,18 @@ test("the Android saved notice's words reach the catalog", () => {
   const { exact } = extractFromSource(fs.readFileSync(path.join(root, rel), "utf8"), rel, { jsx: false, catchAll: false });
   for (const text of ["Saved to your Downloads folder", "Share", "Close"]) assert.ok(exact.has(text), text);
 });
+
+test("the bare \"Features\" is the editors' gameplay tab, and nothing on the map", () => {
+  // A pack has one translation for each English string. The Workshop's list of
+  // cities, bases and ports was titled "Features" as well, so a language could
+  // label only one of the two rightly: most put the map's word on the gameplay
+  // tab ("地物", "Objecten"), French and German the gameplay word on the list.
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const mapSide = interfaceFiles(root)
+    .map((file) => path.relative(root, file).split(path.sep).join("/"))
+    .filter((rel) => /^src\/(?:Editor|Game\/Map|Game\/Selection)\//.test(rel))
+    // Only a file that could hold the word by itself is worth parsing.
+    .filter((rel) => /["'`>]\s*Features\s*["'`<]/.test(fs.readFileSync(path.join(root, rel), "utf8")));
+  assert.deepEqual(mapSide.filter((rel) => catalogOf([rel]).has("Features")), []);
+  assert.ok(catalogOf(["src/Editor/FeatureManager.jsx"]).has("Map features"), "the Workshop's list has its own title");
+});

@@ -1,7 +1,8 @@
 /*! Open Historia — live skip event reader tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/streamedEvents.test.js
 //
-// Runs without node_modules: streamedEvents.js is import-free.
+// Runs without node_modules: streamedEvents.js imports only jsonSalvage.js,
+// which imports nothing.
 //
 // The reader fills the time panel while a skip is being written. A scanner bug
 // shows up there as a duplicated, phantom or missing event, and nothing else in
@@ -266,4 +267,52 @@ test("setAtJsonPath leaves a non-object root or an empty path alone", () => {
   const root = { a: 1 };
   assert.equal(setAtJsonPath(root, [], 2), root);
   assert.deepEqual(root, { a: 1 });
+});
+
+// ---------------------------------------------------------------------------
+// Text that is nearly JSON. A real Gemini skip wrote some of its keys without
+// quotes; the turn's own parser reads such an answer (jsonSalvage.js), so the
+// preview must show it too, or the event the player is waiting for is the one
+// that never appears.
+
+test("an event with unquoted keys inside it is still shown when it closes", () => {
+  const text = '{"events":[{"title":"Exercise begins","impacts":{"unitOps":[{op: "spawn", unit: {name: "Task Force", strength: 100}}]}},{"title":"A test"}],"stopDate":"2016-01-31"}';
+  const { reader, seen } = recordingReader();
+  pushEveryPrefix(reader, text, 7);
+  assert.deepEqual(seen.map((entry) => entry.index), [0, 1]);
+  assert.deepEqual(seen[0].event.impacts.unitOps, [{ op: "spawn", unit: { name: "Task Force", strength: 100 } }]);
+  assert.equal(seen[1].event.title, "A test");
+});
+
+test("an unquoted events key at the top is still the events array", () => {
+  const { reader, seen } = recordingReader();
+  pushEveryPrefix(reader, '{events: [{title: "A war"}, {title: "A peace"}], stopDate: "1914-08-01"}', 3);
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["A war", "A peace"]);
+});
+
+test("a word that is not the key before the array does not start it", () => {
+  const { reader, seen } = recordingReader();
+  reader.pushJson('{summary: "the events: [" , notevents: [{title: "No"}], events : [{title: "Yes"}]}');
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["Yes"]);
+});
+
+test("a comment left in the answer is skipped, braces and quotes and all", () => {
+  const text = '{\n  // the "events" of the period {in order}\n  "events": [\n    {"title": "A war"}, // the first } of several\n    {"title": "A peace"}\n  ]\n}';
+  const { reader, seen } = recordingReader();
+  pushEveryPrefix(reader, text, 5);
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["A war", "A peace"]);
+});
+
+test("a comment whose end has not arrived yet holds the scan, and nothing is read out of it", () => {
+  const { reader, seen } = recordingReader();
+  reader.pushJson('{"events": [{"title": "A war"}, // then {"title": "Not an event"}');
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["A war"]);
+  reader.pushJson('{"events": [{"title": "A war"}, // then {"title": "Not an event"}\n {"title": "A peace"}]}');
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["A war", "A peace"]);
+});
+
+test("a slash inside a string is text, not the start of a comment", () => {
+  const { reader, seen } = recordingReader();
+  pushEveryPrefix(reader, '{"events":[{"title":"See https://example.org/a // b","note":"1/2"},{"title":"Next"}]}', 4);
+  assert.deepEqual(seen.map((entry) => entry.event.title), ["See https://example.org/a // b", "Next"]);
 });

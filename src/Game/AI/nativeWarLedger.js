@@ -120,9 +120,30 @@ const parseEventNumbers = (value) =>
     .map((entry) => entry - 1)
     .slice(0, 16);
 
+// A record is fields joined by the separator, so a line with none is not one.
+// It is prose a model wrote where records go: a heading, or a sentence saying
+// nothing changed, where the prompt asks for an empty string. A player's local
+// model answered "### Обновления войн:" and "Нет изменений. В этом периоде ни
+// одна война не началась…". Read as a record such a line has an id and no
+// operation. A strict pass refuses the whole answer over it, which is a second
+// request for the same month; the last attempt's salvage dropped both by "id",
+// which put the model's own sentence into its next prompt. A line that has the
+// separator and a bad operation is still a record, and still refused.
+const isWarUpdateRecordLine = (text) => text.includes(WAR_UPDATE_SEPARATOR);
+
+// The lines of a warUpdates answer that are not records, as written: for the
+// caller's one log line saying they were ignored (the decoder runs many times
+// over one answer, and says nothing).
+export const warUpdateProseLines = (value) => {
+  const lines = Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string")
+    : String(value ?? "").split(/\r?\n/);
+  return lines.map(normalizeString).filter((line) => line && !isWarUpdateRecordLine(line));
+};
+
 const parseWarUpdateRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  if (!text || !isWarUpdateRecordLine(text)) return null;
 
   // id~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
   const fields = [];
@@ -1214,12 +1235,42 @@ export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", ro
   return { world: { ...nextWorld, wars }, wars, appliedIds };
 };
 
-export const buildCanonicalWarContext = (world) => {
-  const current = normalizedWars(world).filter((war) => war.status !== "ended");
+// A war that ended lately stays in view for two rounds, so the model knows the
+// fighting stopped and why a peace is holding: at most five, newest first, one
+// short line each. `updatedRound` is the round its end was written in.
+const RECENTLY_ENDED_ROUNDS = 2;
+const MAX_RECENTLY_ENDED = 5;
+
+const recentlyEndedWars = (wars, round) => {
+  const current = Math.trunc(Number(round) || 0);
+  if (current <= 0) return [];
+  return wars
+    .filter((war) => war.status === "ended" && war.updatedRound > current - RECENTLY_ENDED_ROUNDS)
+    .sort((a, b) =>
+      b.updatedRound - a.updatedRound ||
+      compareGameDates(b.endedDate || "", a.endedDate || "") ||
+      a.id.localeCompare(b.id))
+    .slice(0, MAX_RECENTLY_ENDED);
+};
+
+// `round` is the game's current round; without it no ended war is listed.
+export const buildCanonicalWarContext = (world, { round = 0 } = {}) => {
+  const wars = normalizedWars(world);
+  const current = wars.filter((war) => war.status !== "ended");
+  const ended = recentlyEndedWars(wars, round);
+  const endedLines = ended.length
+    ? [
+      "",
+      "Recently ended (no one is fighting these; a war that flares again needs a new start record):",
+      ...ended.map((war) =>
+        `- ${war.id} | ENDED ${war.endedDate || "unknown"} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")}`),
+    ]
+    : [];
   if (!current.length) {
     return [
       "No active or ceasefire canonical wars are recorded.",
       "Until a war is opened in this ledger, nobody is fighting a battlefield campaign.",
+      ...endedLines,
     ].join("\n");
   }
   return [
@@ -1227,6 +1278,7 @@ export const buildCanonicalWarContext = (world) => {
       `- ${war.id} | ${war.status.toUpperCase()} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")} | started ${war.startedDate || "unknown"}` +
       (war.note ? ` | latest: ${war.note}` : ""),
     ),
+    ...endedLines,
     "",
     "This ledger is authoritative belligerency. A storyline, alliance, mobilization, historical expectation, or tense relationship does NOT itself create a war.",
   ].join("\n");

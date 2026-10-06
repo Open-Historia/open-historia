@@ -64,6 +64,8 @@ export const advancePoliticalBackgroundSimulation = async ({
   round = 0,
   signal,
   backgroundAdvance = advancePoliticalBackgroundBatchInWorker,
+  // Groups switched off for the game (politicalStructuralPressure.js).
+  groups = true,
 } = {}) => {
   const inputWorld = world && typeof world === "object" && !Array.isArray(world) ? world : {};
   const currentClock = normalizePoliticalSimulationClock(inputWorld.politicalSimulation);
@@ -87,6 +89,7 @@ export const advancePoliticalBackgroundSimulation = async ({
   const signalsByPolity = derivePoliticalStructuralSignals({ ...inputWorld, politicalActors: actors }, {
     months: plan.elapsedMonths,
     updatedAt: plan.toDate,
+    groups,
   });
 
   let computed;

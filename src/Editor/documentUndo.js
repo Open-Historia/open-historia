@@ -31,6 +31,36 @@ export const removeRowStep = (list, setList, id) => {
   };
 };
 
+// Remove every row `shouldRemove` picks at once (the Features panel's Delete
+// All and Delete selected). Returns the undo step, or null when it picked none:
+// undo puts each removed row back where it was, except one whose id has come
+// back meanwhile, and redo removes those rows again, not whatever was added
+// since. A row without an id is matched by the row itself.
+export const removeRowsStep = (list, setList, shouldRemove) => {
+  const rows = Array.isArray(list) ? list : [];
+  const removed = [];
+  rows.forEach((row, index) => {
+    if (shouldRemove(row)) removed.push({ index, row });
+  });
+  const keyOf = (row) => row?.id ?? row;
+  const keys = new Set(removed.map(({ row }) => keyOf(row)));
+  const remove = () => setList((current) => (current || []).filter((row) => !keys.has(keyOf(row))));
+  remove();
+  if (!removed.length) return null;
+  return {
+    undo: () => setList((current) => {
+      const next = [...(current || [])];
+      const present = new Set(next.map(keyOf));
+      for (const { index, row } of removed) {
+        if (present.has(keyOf(row))) continue;
+        next.splice(Math.min(index, next.length), 0, row);
+      }
+      return next;
+    }),
+    redo: remove,
+  };
+};
+
 // A group renamed: its record moves from `from` to `to` (`fallback` is the
 // record a group named only on regions is given). Undo moves it back, with any
 // change made to it since.

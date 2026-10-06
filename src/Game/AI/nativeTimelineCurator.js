@@ -48,12 +48,17 @@ const cloneValue = (value) => {
 const eventText = (event) =>
   `${normalizeString(event?.title)}\n${normalizeString(event?.description)}`.trim();
 
+// The letters, marks and digits of every script are kept. Folded to a-z0-9, an
+// event written in Cyrillic, Arabic or Chinese was nothing but the digits in
+// it: two different events of one day that each named the year were "the same
+// text", a storyline's name was no key at all, and none of them had a word to
+// be matched by. ASCII text reads as it always did.
 const normalizeText = (text) =>
   normalizeString(text)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -222,7 +227,7 @@ const recurrenceCueIsNegated = (text, cueIndex) => {
   );
 };
 
-const hasMaterialRecurrenceCue = (event) => {
+export const hasMaterialRecurrenceCue = (event) => {
   const text = normalizeText(eventText(event));
   if (!text) return false;
 
@@ -473,6 +478,8 @@ const deterministicNearDuplicate = (
   for (const match of priorMatches) {
     if (
       candidateDate &&
+      // A text with no letter or digit in it has no key, and repeats nothing.
+      candidateText &&
       candidateDate === normalizeString(match.event?.date) &&
       normalizeText(eventText(match.event)) === candidateText
     ) {
@@ -1645,58 +1652,11 @@ droppedCount:
   return { events: keptEvents, hidden, dropped };
 };
 
-const runNativeCuratorSelfTests = () => {
-  const make = (description) => ({
-    title: "Test",
-    description,
-    impacts: {
-      createdChats: [],
-      polityChanges: [],
-      politicalActorOps: [],
-      regionTransfers: [],
-      regionClaims: [],
-      unitOps: [],
-      markerOps: [],
-    },
-  });
-
-  const cases = [
-    {
-      name: "real disruption counts as material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Repeated shortages and transport disruption spread across the district."),
-      ) === true,
-    },
-    {
-      name: "without disruption is not material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Spring sowing concludes without major domestic disruption."),
-      ) === false,
-    },
-    {
-      name: "no shortages is not material recurrence",
-      pass: hasMaterialRecurrenceCue(
-        make("Officials report no shortages or unrest during the distribution period."),
-      ) === false,
-    },
-  ];
-
-  const passed = cases.every((entry) => entry.pass);
-  console.table(cases);
-  console.info(
-    `[OH Native Timeline Curator self-test] ${passed ? "PASS" : "FAIL"} — ` +
-    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
-  );
-
-  return { passed, cases };
-};
-
 if (typeof window !== "undefined") {
   window.__OH_NATIVE_TIMELINE_CURATOR__ = {
     version: VERSION,
     mode: "live",
     config: CONFIG,
     last: () => lastAudit,
-    selfTest: () => runNativeCuratorSelfTests(),
   };
 }

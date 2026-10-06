@@ -23,13 +23,21 @@
 // player's among them — stays in the file, where the simulation and its holders
 // know it and the player does not.
 //
-// Import-free: gameplay.js plans and files, time.jsx shows the event's own,
-// and all of it is tested under bare node.
+// Who may read a document is the one audience rule (AI/audience.js
+// audienceSeesReport), asked here for the player's government. Its only import
+// is that import-free module: gameplay.js plans and files, time.jsx shows the
+// event's own, and all of it is tested under bare node.
+
+import { audienceSeesReport, viewerAudience } from "../Game/AI/audience.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const fold = (value) => asText(value).toLowerCase();
 const has = (names, name) => asArray(names).some((entry) => fold(entry) === fold(name));
+
+// Whether the player's government can read a report: it holds it, it was
+// published, or its agents took a copy.
+const readableBy = (report, player) => Boolean(report) && audienceSeesReport(viewerAudience([player]), report);
 
 export const DELIVERY_CHANNELS = Object.freeze(["diplomacy", "intelligence", "event"]);
 
@@ -92,7 +100,7 @@ export const planReportDeliveries = ({ before = [], after = [], player = "", age
       continue;
     }
     // Not the player's: stolen, if an agent sits in a government that holds it.
-    if (has(report.visibleTo, me) || has(report.interceptedBy, me)) continue;
+    if (readableBy(report, me)) continue;
     const agent = asArray(agents).find((entry) => has(report.visibleTo, entry?.target));
     if (!agent) continue;
     const target = asArray(report.visibleTo).find((name) => fold(name) === fold(agent.target));
@@ -175,11 +183,6 @@ export const documentNotices = (deliveries, { lastEventId = "", date = "" } = {}
     time: asText(date),
   }));
 
-// Whether the player's government can read a report: it holds it, it was
-// published, or its agents took a copy.
-const readableBy = (report, player) => Boolean(report) && (report.visibleTo === null
-  || has(report.visibleTo, player) || has(report.interceptedBy, player));
-
 // The advisor's conversation after a turn is undone or cut short: a notice stays
 // only while the paper it announced is still one the government can read.
 // Returns the same list when nothing had to go.
@@ -243,9 +246,8 @@ export const documentsForEvent = (reports, eventId, player) => {
 // Every document the player's government can read — held, published or
 // stolen — newest first. The advisor is the government's own staff.
 export const documentsReadableBy = (reports, player) => {
-  const me = asText(player);
   return asArray(reports)
-    .filter((report) => report.visibleTo === null || has(report.visibleTo, me) || has(report.interceptedBy, me))
+    .filter((report) => readableBy(report, player))
     .reverse();
 };
 

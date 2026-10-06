@@ -2,7 +2,6 @@
 
 import { getPoliticalProfileKey } from "./politicalActors.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays } from "./gameDates.js";
-import { puppetStatesEnabled } from "./puppets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -351,9 +350,8 @@ const unheldTerritorySignals = ({ world, months, updatedAt, signalsByPolity, pol
 
 // An open puppet feels its overlord's direction as a sovereignty question, the
 // more so the less loyal it is. A covert arrangement is not public, so it moves
-// no public opinion, and none of this runs while Puppet states is switched off.
+// no public opinion.
 const puppetSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
-  if (!puppetStatesEnabled()) return;
   for (const row of asArray(world?.puppets)) {
     if (clean(row?.status).toLowerCase() !== "active" || clean(row?.secrecy).toLowerCase() === "covert") continue;
     const polityKey = polityKeyFor(row?.puppet);
@@ -394,7 +392,9 @@ const territoryLossSignals = ({ world, months, updatedAt, signalsByPolity, held 
 // This is a DERIVATION boundary only. It reads canonical world ledgers/stats and
 // emits already-structured pressure signals for existing Political Actors. It
 // never creates actors, edits Stats/war/diplomatic state, or emits timeline news.
-export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt = "" } = {}) => {
+// `groups` false while groups are switched off for the game
+// (server/gameFeatures.js): their areas press on no one, as puppets do not.
+export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt = "", groups = true } = {}) => {
   const elapsed = Math.max(0, Number(months) || 0);
   const signalsByPolity = {};
   if (elapsed <= 0 || !world?.politicalActors?.byPolity) return signalsByPolity;
@@ -404,7 +404,7 @@ export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt 
   statsSignals(context);
   relationSignals(context);
   warSignals(context);
-  groupControlSignals(context);
+  if (groups) groupControlSignals(context);
   unheldTerritorySignals(context);
   puppetSignals(context);
   territoryLossSignals(context);

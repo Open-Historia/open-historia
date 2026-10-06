@@ -31,6 +31,8 @@ const CleanupCard = ({ state, onStop }) => {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   const searching = state.phase !== "save" && state.phase !== "done";
   const canStop = typeof onStop === "function" && searching && seconds * 1000 >= SAVE_NOW_AFTER_MS;
+  // The sweep's width as the text below gives it: 1.5 km.
+  const maxWidthKm = BORDER_CLEANUP.maxWidth / 1000;
   return (
     <div
       role="status"
@@ -94,7 +96,7 @@ const CleanupCard = ({ state, onStop }) => {
           {detail ? `${detail} · ` : ""}{seconds} s
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.5, color: "rgba(255,255,255,0.55)" }}>
-          The Workshop is not frozen. Before the map is saved it checks every region for hairline cracks and thin slivers between {BORDER_CLEANUP.minWidth} m and {BORDER_CLEANUP.maxWidth} m wide and repairs them — the same conservative pass as the Topology panel, kept as one undo step — and looks again around each repair until nothing is left. A whole world takes about ten seconds; a very detailed map stops after {Math.round(BORDER_CLEANUP.maxMillis / 1000)} s, keeps what it repaired, and says so.
+          The Workshop is not frozen. Before the map is saved it checks every region for cracks and slivers between {BORDER_CLEANUP.minWidth} m and {maxWidthKm} km wide and repairs them as one undo step, then looks again around each repair until nothing is left. A whole world takes about ten seconds; a very detailed map stops after {Math.round(BORDER_CLEANUP.maxMillis / 1000)} s, keeps what it repaired, and says so.
         </div>
         {canStop ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

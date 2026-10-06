@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import { normalizePoliticalActors } from "./politicalActors.js";
 import { derivePoliticalStructuralSignals, heldRegionCounts } from "./politicalStructuralPressure.js";
-import { setPuppetStatesEnabled } from "./puppets.js";
 
 const baseWorld = () => ({
   politicalActors: normalizePoliticalActors({
@@ -172,6 +171,15 @@ test("groups controlling a polity's regions raise regionalism and security, scal
   assert.ok(smaller.salience < regionalism.salience);
 });
 
+test("with groups switched off for the game, their areas press on no one", () => {
+  const world = territoryWorld();
+  world.groupAreas = { a1: "Cartel", a2: "Cartel", b1: "Rebels" };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22", groups: false });
+  const ids = Object.values(result).flat().map((entry) => entry.source.id);
+  assert.equal(ids.some((id) => id.startsWith("groups:")), false);
+  assert.deepEqual(world.groupAreas, { a1: "Cartel", a2: "Cartel", b1: "Rebels" }, "the world keeps them");
+});
+
 test("occupied ground presses sovereignty and national identity harder than a standing claim", () => {
   const world = territoryWorld();
   world.regionOwnershipOverrides.a1 = "B";
@@ -187,7 +195,7 @@ test("occupied ground presses sovereignty and national identity harder than a st
   assert.equal(signalFor(result, "B", "territory:B:claims"), undefined);
 });
 
-test("an open puppet feels sovereignty pressure; a covert one, a released one or a switched-off system does not", () => {
+test("an open puppet feels sovereignty pressure; a covert one or a released one does not", () => {
   const world = baseWorld();
   world.puppets = [{ id: "p1", overlord: "B", puppet: "A", kind: "satellite", secrecy: "open", status: "active", loyalty: 20 }];
   const open = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
@@ -199,14 +207,6 @@ test("an open puppet feels sovereignty pressure; a covert one, a released one or
   world.puppets[0].secrecy = "open";
   world.puppets[0].status = "released";
   assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
-
-  world.puppets[0].status = "active";
-  setPuppetStatesEnabled(false);
-  try {
-    assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
-  } finally {
-    setPuppetStatesEnabled(true);
-  }
 });
 
 test("a net loss of ground since the clock last advanced raises national identity pressure", () => {

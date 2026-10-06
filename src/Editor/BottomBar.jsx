@@ -64,7 +64,7 @@ const BottomBar = ({
   openPanel,
   onOpenPanel,
   search,
-  // On a phone the eleven chips, the basemap button, the name box and the
+  // On a phone the ten chips, the basemap button, the name box and the
   // status wrapped into several rows over the map. There the chips fold into
   // one Panels menu that opens upward, the basemap button and the status keep
   // only their icon and dot, and the map's name is edited in the Documents
@@ -87,7 +87,6 @@ const BottomBar = ({
       <Chip icon="list" label={`Regions: ${counts.regions}`} active={openPanel === "regions"} onClick={() => open("regions")} />
       <Chip icon="list" label={`Countries: ${polityCount}`} active={openPanel === "polities"} onClick={() => open("polities")} />
       <Chip icon="list" label={`Groups: ${groupCount}`} active={openPanel === "groups"} onClick={() => open("groups")} />
-      <Chip icon="layers" label="Topology" active={openPanel === "topology"} onClick={() => open("topology")} />
       <Chip icon="image" label="Import Map" active={openPanel === "province-import"} onClick={() => open("province-import")} />
       <Chip icon="pin" label={`Features: ${counts.features}`} active={openPanel === "features"} onClick={() => open("features")} />
       <Chip icon="unit" label={`Units: ${counts.units ?? 0}`} active={openPanel === "units"} onClick={() => open("units")} />

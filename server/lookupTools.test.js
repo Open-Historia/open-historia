@@ -16,7 +16,6 @@ import {
   isLookupToolName,
 } from "../src/Game/AI/lookupTools.js";
 import { viewerAudience } from "../src/Game/AI/audience.js";
-import { setPuppetStatesEnabled } from "../src/runtime/puppets.js";
 
 const square = (x, y) => ({ type: "Polygon", coordinates: [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]] });
 
@@ -493,7 +492,7 @@ test("power_info and relations_between: who directs whom, the truth for the narr
   assert.deepEqual(executeLookup(ctx, "relations_between", { a: "Belarus", b: "Moldova" }).subordinations, []);
 });
 
-test("subordinations as a viewer knows them, and none at all with puppet states off", () => {
+test("subordinations as a viewer knows them", () => {
   const as = (polity) => buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine", audience: viewerAudience([polity]) });
   // Ukraine's service uncovered the covert client; the open satellite is public. No loyalty for another's puppet.
   assert.deepEqual(executeLookup(as("Ukraine"), "power_info", { name: "Russian Federation" }).subordinations, [
@@ -505,15 +504,6 @@ test("subordinations as a viewer knows them, and none at all with puppet states 
   assert.deepEqual(executeLookup(as("Belarus"), "relations_between", { a: "Moldova", b: "Russian Federation" }).subordinations, []);
   // The overlord reads its puppet's loyalty as a band, never a number.
   assert.equal(executeLookup(as("Russian Federation"), "power_info", { name: "Moldova" }).subordinations[0].loyalty, "Restless");
-
-  setPuppetStatesEnabled(false);
-  try {
-    const ctx = buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine" });
-    assert.equal("subordinations" in executeLookup(ctx, "power_info", { name: "Russian Federation" }), false);
-    assert.equal("subordinations" in executeLookup(ctx, "relations_between", { a: "Belarus", b: "Russian Federation" }), false);
-  } finally {
-    setPuppetStatesEnabled(true);
-  }
 });
 
 test("list_regions with a group: its whole area with each region's owner, paged; map_around names the group", () => {

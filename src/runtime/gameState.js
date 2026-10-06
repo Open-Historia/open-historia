@@ -1,5 +1,5 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { JSON_URLS, getPrimedScenarioRegionCatalog, loadTurnRestorePoint, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueEventStrings } from "./translator.js";
@@ -175,7 +175,8 @@ export const WORLD_DEFAULTS = {
   // incoming world, so a field declared only here never survives a round trip.
   idlePulseTick: 0,
   // The round the Projects board was last checked against a turn's events (the
-  // board job of the turn review, or the board's own request). 0 = never. It is
+  // time skip's own board ops, the turn review's board job, or the board's own
+  // request). 0 = never. It is
   // what lets a skip decide, without asking anyone, whether the calendar is due
   // another look (projects.js boardPassReasons). Listed in the normalizeWorldState
   // return too, for the reason given above.
@@ -2626,6 +2627,34 @@ const describeUnitOpRejection = (entry) => {
   return `unknown op "${op}"`;
 };
 
+// Says once that a unit op was thrown away, and why.
+//
+// normalizeEvents runs over the same raw answer many times before it is
+// applied: every ledger validator normalizes the events it is handed, and the
+// later stages work on copies of them. Each pass said the same drop again, so
+// one fleet with no coordinates was eighteen warnings in a player's log, which
+// reads as eighteen lost units. A drop is remembered by the op and the event it
+// rode on (its date and title: an event's id, and an op's place in its list,
+// change between passes), so the same op written again in a later turn's event
+// is a new drop and is said again.
+const REPORTED_UNIT_OP_DROPS_LIMIT = 256;
+const reportedUnitOpDrops = new Set();
+const reportUnitOpDrop = (entry, index, event) => {
+  let signature = null;
+  try {
+    signature = JSON.stringify([event?.date ?? "", event?.title ?? "", entry]);
+  } catch {
+    // Not serializable: said every time rather than never.
+  }
+  if (signature !== null) {
+    if (reportedUnitOpDrops.has(signature)) return;
+    // Bounded: past the limit the memory starts again, and a drop may repeat.
+    if (reportedUnitOpDrops.size >= REPORTED_UNIT_OP_DROPS_LIMIT) reportedUnitOpDrops.clear();
+    reportedUnitOpDrops.add(signature);
+  }
+  console.warn(`[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`, entry);
+};
+
 const normalizeUnitOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -3281,7 +3310,9 @@ const politicalActorOperationFromImpact = (entry, resolveOwner = (value) => valu
   return { operation: { ...args, op: normalized.op, polityKey }, error: "" };
 };
 
-const normalizeEventImpacts = (value) => {
+// `event`: the entry these impacts ride on, for the one thing said about them
+// here (reportUnitOpDrop).
+const normalizeEventImpacts = (value, event = null) => {
   if (!value || typeof value !== "object") {
     return {
       actionIds: [],
@@ -3325,15 +3356,11 @@ const normalizeEventImpacts = (value) => {
     // and it used to vanish into .filter(Boolean) without a word — leaving no way
     // to tell "the model never emitted one" from "it emitted one we rejected".
     // Region transfers have logged their drops for a while; units now match.
+    // Once per op, however many times its event is read (reportUnitOpDrop).
     unitOps: normalizeArray(value.unitOps)
       .map((entry, index) => {
         const normalized = normalizeUnitOp(entry);
-        if (!normalized) {
-          console.warn(
-            `[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`,
-            entry,
-          );
-        }
+        if (!normalized) reportUnitOpDrop(entry, index, event);
         return normalized;
       })
       .filter(Boolean),
@@ -3431,7 +3458,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     date: normalizeOptionalString(entry.date),
     description: normalizeOptionalString(entry.description || entry.summary || entry.text),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
-    impacts: normalizeEventImpacts(entry.impacts),
+    impacts: normalizeEventImpacts(entry.impacts, entry),
     agency: normalizeEventAgency(entry.agency),
     importance: normalizeOptionalString(entry.importance) || "minor",
     kind: normalizeRenamedKind(entry.kind) || "world",
@@ -4784,12 +4811,9 @@ export const viewAsSeen = async ({ world, events, chats, game } = {}, { unseen =
     .filter(Boolean);
   let seenWorld = null;
   try {
-    // The shared archive, not a copy of all twelve turns: only the one world
-    // staged from is copied, since applying events to it may change it.
-    const snapshots = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: false, clone: false });
-    const toDate = turn.toDate || turn.date;
-    const snap = normalizeArray(snapshots).find((entry) => entry?.state?.world
-      && entry.fromDate === turn.fromDate && entry.toDate === toDate);
+    // The one restore point the turn started from, shared, not the archive of
+    // twelve: only its world is copied, since applying events to it may change it.
+    const snap = await loadTurnRestorePoint({ fromDate: turn.fromDate, toDate: turn.toDate || turn.date });
     if (snap) {
       const staged = applyEventImpactsToWorld({
         colors: {},

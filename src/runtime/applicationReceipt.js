@@ -19,14 +19,22 @@
 // newest turn keeps its notes (older entries keep the counts), so the polled
 // world file never grows by more than one receipt.
 //
-// Import-free on purpose (but for the import-free list of impact arrays):
-// gameState.js normalizes it on every read and write, gameplay.js fills and
-// renders it, and both are tested under bare node.
+// Import-free on purpose (but for the import-free list of impact arrays and
+// the player's sentences): gameState.js normalizes it on every read and write,
+// gameplay.js fills and renders it, and both are tested under bare node.
+//
+// Each note carries two voices. `text` is the model's, and only the model reads
+// it. `player` is the same fact in a sentence written for the player
+// (receiptPlayerNotes.js, which the language packs carry), with `event`, the
+// title of the event it concerns, beside it; the Events panel shows those. A
+// note saved before `player` existed has only `text`, and the panel shows that.
 import { EVENT_IMPACT_KEYS } from "./eventImpactKeys.js";
+import { countedNote, receiptPlayerNote } from "./receiptPlayerNotes.js";
 
 export const RECEIPT_VERSION = 1;
 export const RECEIPT_MAX_NOTES = 40;
 export const RECEIPT_NOTE_MAX_CHARS = 280;
+export const RECEIPT_EVENT_MAX_CHARS = 120;
 
 // What a note is about. The order is the order they are rendered in.
 //
@@ -82,9 +90,21 @@ export const createApplicationReceipt = () => ({
   omitted: 0,
 });
 
+// The player's side of a note, bounded: { player, event }, each only when it
+// has something in it. `player` is { text, event } (receiptPlayerNotes.js).
+const playerFields = (player) => {
+  const text = clip(player?.text);
+  if (!text) return {};
+  const event = clip(player.event, RECEIPT_EVENT_MAX_CHARS);
+  return event ? { player: text, event } : { player: text };
+};
+// A stored note's player side, in the shape noteReceipt takes.
+const storedPlayer = (note) => ({ text: note?.player, event: note?.event });
+
 // Null-safe everywhere: a caller that is not collecting passes null and every
 // call below is a no-op, so the validators need no branches of their own.
-export const noteReceipt = (receipt, kind, text) => {
+// `player` is the same fact told to the player (receiptPlayerNotes.js).
+export const noteReceipt = (receipt, kind, text, player = null) => {
   if (!receipt || !RECEIPT_NOTE_KINDS.includes(kind)) return;
   const line = clip(text);
   if (!line) return;
@@ -95,7 +115,19 @@ export const noteReceipt = (receipt, kind, text) => {
     receipt.omitted += 1;
     return;
   }
-  receipt.notes.push({ kind, text: line });
+  receipt.notes.push({ kind, text: line, ...playerFields(player) });
+};
+
+// The ids a note quotes back, each cut to a short token and a long list to its
+// first few. An "id" is whatever the model wrote in that field, and a malformed
+// record's can be a whole sentence, or an instruction of the model's own
+// ("Reply ONLY with a valid JSON object…"). A note is read next turn as the
+// engine's word, so it carries enough of an id to recognise it and no more.
+export const RECEIPT_ID_MAX_CHARS = 48;
+export const quoteReceiptIds = (ids, { limit = 6, maxChars = RECEIPT_ID_MAX_CHARS } = {}) => {
+  const list = array(ids).map((id) => clip(id, maxChars)).filter(Boolean);
+  const shown = list.slice(0, limit).join(", ");
+  return list.length > limit ? `${shown} and ${list.length - limit} more` : shown;
 };
 
 // Folds a finished draft into the turn's receipt. A segment's validator may run
@@ -103,7 +135,7 @@ export const noteReceipt = (receipt, kind, text) => {
 // merged, so a rejected attempt's drops never reach the record.
 export const mergeReceipts = (target, source) => {
   if (!target || !source) return target;
-  for (const note of array(source.notes)) noteReceipt(target, note?.kind, note?.text);
+  for (const note of array(source.notes)) noteReceipt(target, note?.kind, note?.text, storedPlayer(note));
   target.omitted += count(source.omitted);
   for (const key of APPLIED_KEYS) target.applied[key] += count(source.applied?.[key]);
   return target;
@@ -138,7 +170,7 @@ export const noteMalformedImpacts = (receipt, rawEvent, normalizedEvent) => {
   if (!receipt) return;
   const title = clean(normalizedEvent?.title || rawEvent?.title) || "(untitled)";
   if (!normalizedEvent) {
-    noteReceipt(receipt, "withheld", `"${title}" — discarded: an event needs at least a title or a description.`);
+    noteReceipt(receipt, "withheld", `"${title}" — discarded: an event needs at least a title or a description.`, receiptPlayerNote("eventDiscarded"));
     return;
   }
   for (const key of APPLIED_KEYS) {
@@ -150,6 +182,7 @@ export const noteMalformedImpacts = (receipt, rawEvent, normalizedEvent) => {
       receipt,
       "dropped",
       `Event "${title}": ${lost} of ${plural(key, before)} ${lost === 1 ? "was" : "were"} malformed and ignored — a required field was missing or blank.`,
+      countedNote(lost, "malformedOne", "malformedMany", {}, title === "(untitled)" ? "" : title),
     );
   }
 };
@@ -197,7 +230,7 @@ export const normalizeApplicationReceipt = (value, { keepNotes = true } = {}) =>
       const text = clip(note?.text);
       if (!RECEIPT_NOTE_KINDS.includes(kind) || !text) continue;
       if (notes.length >= RECEIPT_MAX_NOTES) break;
-      notes.push({ kind, text });
+      notes.push({ kind, text, ...playerFields(storedPlayer(note)) });
     }
   }
   const omitted = count(value.omitted) + (keepNotes ? Math.max(0, array(value.notes).length - notes.length) : 0);
@@ -291,8 +324,7 @@ export const renderApplicationReceipt = (receipt, {
 // The same record for the player, in the Events panel (time.jsx): a capture
 // the event narrated that never reached the map is explained here, and it costs
 // no request. KIND_HEADINGS are written to the model, in the second person, so
-// the player gets headings of their own. The notes are the engine's record as
-// written, in English.
+// the player gets headings of their own, and each note its player sentence.
 export const RECEIPT_KIND_PLAYER_TITLES = Object.freeze({
   redone: "Rejected and written again during the skip",
   withheld: "Events kept off the timeline",
@@ -301,17 +333,28 @@ export const RECEIPT_KIND_PLAYER_TITLES = Object.freeze({
   short: "Kept as written, though shorter than was asked",
 });
 
-// { groups: [{ kind, title, notes }], count, omitted } in RECEIPT_NOTE_KINDS
-// order, or null when the receipt has no notes.
+// { groups: [{ kind, title, notes: [{ text, event, engine }] }], count, omitted }
+// in RECEIPT_NOTE_KINDS order, or null when the receipt has no notes. A note is
+// its player sentence and the event it concerns; one saved before those
+// existed is the engine's own English (`engine: true`), which the panel leaves
+// untranslated. Two facts the model was told apart (two complaints, say) can
+// read the same to the player, and are shown once.
 export const describeReceiptForPlayer = (receipt) => {
   const normalized = normalizeApplicationReceipt(receipt);
   if (!normalized) return null;
   const groups = RECEIPT_NOTE_KINDS
-    .map((kind) => ({
-      kind,
-      title: RECEIPT_KIND_PLAYER_TITLES[kind],
-      notes: normalized.notes.filter((note) => note.kind === kind).map((note) => note.text),
-    }))
+    .map((kind) => {
+      const notes = [];
+      for (const note of normalized.notes) {
+        if (note.kind !== kind) continue;
+        const shown = note.player
+          ? { text: note.player, event: note.event || "", engine: false }
+          : { text: note.text, event: "", engine: true };
+        if (notes.some((other) => other.text === shown.text && other.event === shown.event)) continue;
+        notes.push(shown);
+      }
+      return { kind, title: RECEIPT_KIND_PLAYER_TITLES[kind], notes };
+    })
     .filter((group) => group.notes.length > 0);
   if (groups.length === 0) return null;
   return {

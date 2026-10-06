@@ -15,6 +15,7 @@ import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/pu
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
+import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -259,6 +260,13 @@ const parseEventNumbers = (value) => String(value ?? "")
   .map((number) => number - 1)
   .slice(0, 16);
 
+// A record is fields joined by the separator, so a line with none is not one.
+// It is prose a model wrote where records go, a heading or "No changes."
+// (nativeWarLedger.js has the report this comes from). Read as a record it was
+// a relation between that sentence and nobody, which a strict pass refuses the
+// whole answer over, and the salvage pass quoted it back in the next prompt.
+const isRecordLine = (line) => String(line ?? "").includes(SEP);
+
 const parseParties = (value) => unique(
   String(value ?? "")
     .split(",")
@@ -330,7 +338,7 @@ const decodeRelationLine = (line, index) => {
 export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodeRelationLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodeRelationLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       const score = Number(entry.score);
       const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
@@ -349,8 +357,8 @@ export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_
   }
   return String(value ?? "")
     .split(/\r?\n/)
-    .map((line, index) => decodeRelationLine(line, index))
-    .filter((entry) => entry.a || entry.b || entry.summary)
+    .map((line, index) => (isRecordLine(line) ? decodeRelationLine(line, index) : null))
+    .filter((entry) => entry && (entry.a || entry.b || entry.summary))
     .slice(0, limit);
 };
 
@@ -380,7 +388,7 @@ const decodeAgreementLine = (line, index) => {
 export const decodeAgreementUpdates = (value, { limit = MAX_AGREEMENT_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodeAgreementLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodeAgreementLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       return {
         id: clean(entry.id) || `agreement-${index}`,
@@ -456,11 +464,15 @@ const SEARCH_STOPWORDS = new Set([
   "states", "country", "countries", "event", "relation", "relations", "update",
 ]);
 
+// The letters, marks and digits of any script. Kept to a-z and 0-9, a summary
+// and an event written in Russian or Arabic had no words in common however
+// alike they were, and a record with no event number of its own was never tied
+// to the event that caused it. English text reads as it always did.
 const diplomaticSearchText = (value) => String(value ?? "")
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -833,7 +845,9 @@ const agreementTitleLooksCompatible = (left, right) => {
   const a = lower(left);
   const b = lower(right);
   if (!a || !b || a === b || a.includes(b) || b.includes(a)) return true;
-  const tokens = (value) => [...new Set(value.split(/[^a-z0-9]+/).filter((token) => token.length >= 4))];
+  // Words in any script: split on a-z and 0-9 alone, a title in Cyrillic or
+  // Greek had no words at all, and two wordings of one treaty never agreed.
+  const tokens = (value) => [...new Set(lower(value.normalize("NFKC")).split(/[^\p{L}\p{M}\p{N}]+/u).filter((token) => token.length >= 4))];
   const aTokens = tokens(a);
   const bTokens = new Set(tokens(b));
   if (!aTokens.length || !bTokens.size) return false;
@@ -1026,9 +1040,15 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
 // the top of the next turn. The strict pass, and the GM preview, still reject.
 //
 // Returns one line per dropped row, for the receipt. The candidate is rewritten
-// in place, in whichever form it arrived (compact lines or objects).
-export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
+// in place, in whichever form it arrived (compact lines or objects). A
+// `playerNotes` array, when given, gets the player's sentence for each line at
+// the same index (runtime/receiptPlayerNotes.js).
+export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes = null } = {}) => {
   const notes = [];
+  const drop = (text, key, params = {}) => {
+    notes.push(text);
+    playerNotes?.push(receiptPlayerNote(key, params));
+  };
   if (!candidate || typeof candidate !== "object") return notes;
 
   const relationsWereString = typeof candidate.relationUpdates === "string";
@@ -1038,11 +1058,17 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     const a = canonicalDiplomaticPolity(update.a, world);
     const b = canonicalDiplomaticPolity(update.b, world);
     let why = "";
-    if (!a || !b) why = `"${!a ? update.a : update.b}" is not a polity on this map`;
-    else if (lower(a) === lower(b)) why = "both sides are the same polity";
+    let key = "relationIncomplete";
+    if (!a || !b) { why = `"${!a ? update.a : update.b}" is not a polity on this map`; key = "relationUnknownCountry"; }
+    else if (lower(a) === lower(b)) { why = "both sides are the same polity"; key = "relationSameCountry"; }
     else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
     else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
-    if (why) { notes.push(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`); continue; }
+    // A side the model left blank has no name to show the player.
+    if (key === "relationUnknownCountry" && (!clean(update.a) || !clean(update.b))) key = "relationUnnamed";
+    if (why) {
+      drop(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`, key, { a: update.a, b: update.b, name: !a ? update.a : update.b });
+      continue;
+    }
     keptRelations.push(update);
   }
   if (keptRelations.length !== relations.length) {
@@ -1064,7 +1090,8 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     candidate.agreementUpdates = lifecycle.agreementUpdates;
   }
   for (const update of unknownIds.droppedUpdates) {
-    notes.push(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`);
+    drop(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`,
+      "agreementMissing", { name: clean(update.title) || clean(update.id) });
   }
 
   const agreementsWereString = typeof candidate.agreementUpdates === "string";
@@ -1075,15 +1102,19 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
     const id = clean(update?.id);
     const op = clean(update?.op);
     let why = "";
+    let key = "agreementIncomplete";
     if (!id) why = "it names no agreement";
     else if (!["start", "update", "suspend", "resume", "end", "expire"].includes(op)) why = `"${op}" is not an agreement operation`;
     else if (op === "start") {
       const prior = existing.get(id);
-      if (prior && !["ended", "expired"].includes(prior.status)) why = "it already exists - update, suspend, resume or end it instead";
-      else if (canonicalizeParties(update.parties, world).length < 2) why = "fewer than two of its parties are polities on this map";
-      else if (!clean(update.title)) why = "it has no title";
-    } else if (!existing.has(id)) why = `no agreement "${id}" exists to ${op}`;
-    if (why) { notes.push(`Agreement ${id || "(no id)"} ${op || ""} was dropped: ${why}.`.replace(/\s+/g, " ")); continue; }
+      if (prior && !["ended", "expired"].includes(prior.status)) { why = "it already exists - update, suspend, resume or end it instead"; key = "agreementAlreadyInForce"; }
+      else if (canonicalizeParties(update.parties, world).length < 2) { why = "fewer than two of its parties are polities on this map"; key = "agreementTooFewParties"; }
+      else if (!clean(update.title)) { why = "it has no title"; key = "agreementUntitled"; }
+    } else if (!existing.has(id)) { why = `no agreement "${id}" exists to ${op}`; key = "agreementMissing"; }
+    if (why) {
+      drop(`Agreement ${id || "(no id)"} ${op || ""} was dropped: ${why}.`.replace(/\s+/g, " "), key, { name: clean(update?.title) || id });
+      continue;
+    }
     keptAgreements.push(update);
   }
   if (keptAgreements.length !== agreements.length) {
@@ -1465,7 +1496,7 @@ const decodePuppetLine = (line, index) => {
 export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
-      if (typeof entry === "string") return decodePuppetLine(entry, index);
+      if (typeof entry === "string") return isRecordLine(entry) ? decodePuppetLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
       const loyalty = Number(entry.loyalty);
       return {
@@ -1484,8 +1515,8 @@ export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS
   }
   return String(value ?? "")
     .split(/\r?\n/)
-    .map((line, index) => decodePuppetLine(line, index))
-    .filter((entry) => entry.op || entry.overlord || entry.puppet)
+    .map((line, index) => (isRecordLine(line) ? decodePuppetLine(line, index) : null))
+    .filter((entry) => entry && (entry.op || entry.overlord || entry.puppet))
     .slice(0, limit);
 };
 
@@ -1892,10 +1923,6 @@ export const applyDiplomaticUpdates = ({
   round = 0,
   allowUnboundBaseline = false,
   regionCatalog = [],
-  // The scenario's "Puppet states" feature. Passed in rather than read from
-  // runtime/gameFeatures.js so this module stays testable without the browser
-  // runtime, exactly as the rest of the director is.
-  puppetStates = true,
   // How many records of each kind to read. A single model answer is held to
   // the per-answer caps (the default); a merged turn passes Infinity, since
   // every segment's answer was already held to them.
@@ -1921,32 +1948,17 @@ export const applyDiplomaticUpdates = ({
   });
   // Puppets merge LAST, so a revolt's fallout lands on the relation and the
   // agreements this same pass has already written rather than under them.
-  //
-  // With the system off the pass is SKIPPED WHOLE rather than handed no updates:
-  // applyPuppetUpdates also seeds a coup storyline off every row ALREADY in the
-  // ledger and charges refused demands, so a game that switched the system off
-  // with arrangements standing would otherwise go on brewing risings inside it.
-  // The rows themselves are left untouched, ready for a game that switches back.
-  const puppetMerge = puppetStates
-    ? applyPuppetUpdates({
-        world: agreementMerge.world,
-        updates: puppetUpdates,
-        refusedDemands,
-        regionCatalog,
-        events,
-        stopDate,
-        round,
-        allowUnboundBaseline,
-        limit,
-      })
-    : {
-        world: agreementMerge.world,
-        puppets: array(agreementMerge.world?.puppets),
-        appliedIds: [],
-        dropped: [],
-        refusedDemandCount: 0,
-        storylineSeeds: [],
-      };
+  const puppetMerge = applyPuppetUpdates({
+    world: agreementMerge.world,
+    updates: puppetUpdates,
+    refusedDemands,
+    regionCatalog,
+    events,
+    stopDate,
+    round,
+    allowUnboundBaseline,
+    limit,
+  });
   return {
     world: puppetMerge.world,
     relations: relationMerge.relations,
@@ -2010,7 +2022,6 @@ export const buildBoundedDiplomaticContext = (
     focusActors = [],
     selectedStorylines = [],
     maxActors = MAX_CONTEXT_ACTORS,
-    puppetStates = true,
   } = {},
 ) => {
   const world = normalizeWorldState(worldLike);
@@ -2042,19 +2053,17 @@ export const buildBoundedDiplomaticContext = (
   // the polity that currently directs it (or whose will it currently directs).
   // This is whole-world simulator context, so canonical truth is intentional;
   // actor-relative chat/Advisor surfaces continue to use runtime/puppets.js.
-  if (puppetStates) {
-    for (const row of array(world.puppets)) {
-      if (lower(row?.status || "active") !== "active") continue;
-      const overlord = canonicalDiplomaticPolity(row?.overlord, world);
-      const puppet = canonicalDiplomaticPolity(row?.puppet, world);
-      if (!overlord || !puppet) continue;
-      const overlordSeed = seedActorKeys.has(politySetKey(overlord));
-      const puppetSeed = seedActorKeys.has(politySetKey(puppet));
-      if (!overlordSeed && !puppetSeed) continue;
-      if (overlordSeed) pushActor(puppet);
-      if (puppetSeed) pushActor(overlord);
-      if (actors.length >= maxActors) break;
-    }
+  for (const row of array(world.puppets)) {
+    if (lower(row?.status || "active") !== "active") continue;
+    const overlord = canonicalDiplomaticPolity(row?.overlord, world);
+    const puppet = canonicalDiplomaticPolity(row?.puppet, world);
+    if (!overlord || !puppet) continue;
+    const overlordSeed = seedActorKeys.has(politySetKey(overlord));
+    const puppetSeed = seedActorKeys.has(politySetKey(puppet));
+    if (!overlordSeed && !puppetSeed) continue;
+    if (overlordSeed) pushActor(puppet);
+    if (puppetSeed) pushActor(overlord);
+    if (actors.length >= maxActors) break;
   }
 
   // Formal commitments and current wars can pull in a directly connected actor,
@@ -2100,7 +2109,7 @@ export const buildBoundedDiplomaticContext = (
   // task read this block; it never did, and believing so hid that a covert
   // Puppet in conversation did not know it was one.
   const inAttention = (row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet));
-  const puppets = (puppetStates ? array(world.puppets) : [])
+  const puppets = array(world.puppets)
     .filter((row) => row.status === "active")
     .sort((a, b) => Number(inAttention(b)) - Number(inAttention(a)))
     .slice(0, MAX_CONTEXT_PUPPETS);
@@ -2114,15 +2123,10 @@ export const buildBoundedDiplomaticContext = (
     "",
     "FORMAL AGREEMENTS / COMMITMENTS",
     agreements.length ? agreements.map((agreement) => agreementDisplay(agreement, world)).join("\n") : "No active/suspended formal agreement among these attention actors.",
-    // With the system off the section is left out ENTIRELY rather than saying
-    // nobody directs anybody: the simulator is never told the concept exists,
-    // so it cannot narrate a subordination the engine would refuse to record.
-    ...(puppetStates ? [
-      "",
-      "SUBORDINATIONS (who directs whom)",
-      puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
-      "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
-    ] : []),
+    "",
+    "SUBORDINATIONS (who directs whom)",
+    puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
+    "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
     "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
     "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
     "world.wars remains the sole authority for actual belligerency. A hostile relation or alliance does not itself start a war.",

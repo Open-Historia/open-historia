@@ -16,6 +16,7 @@ import { TextField, SelectField } from "./fields.jsx";
 import { estimateJsonBytes, importAllCities, importMajorCities } from "./citiesImport.js";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import { removeRowStep, removeRowsStep } from "./documentUndo.js";
 
 // "All cities…" asks first from this many new cities on.
 const LARGE_CITY_IMPORT = 1000;
@@ -48,7 +49,14 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   }, [features, query]);
 
   const update = (id, patch) => setFeatures((list) => list.map((f) => (f.id === id ? { ...f, ...patch } : f)));
-  const remove = (id) => setFeatures((list) => list.filter((f) => f.id !== id));
+  // Deleting is one step on the Workshop's undo stack (OlMap pushStep), so
+  // Ctrl+Z or Undo brings the rows back where they were (documentUndo.js).
+  // The rows go at once: a panel opened before the map handed over its API
+  // still deletes, only without the undo step.
+  const pushUndoStep = (step) => {
+    if (step) api?.pushStep?.(step);
+  };
+  const remove = (id) => pushUndoStep(removeRowStep(features, setFeatures, id));
 
   // Many at once: ticked rows and the map's box-select share one selection, and
   // the bar below tags or deletes everything in it together.
@@ -82,19 +90,20 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   const deleteSelected = () => {
     if (!selectedCount) return;
     if (!window.confirm(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`)) return;
-    setFeatures((list) => list.filter((f) => !selectedSet.has(String(f.id))));
+    pushUndoStep(removeRowsStep(features, setFeatures, (f) => selectedSet.has(String(f.id))));
     setSelection?.([]);
   };
-  // Every city, base, port and landmark at once. Ctrl+Z does not cover features
-  // and the autosave writes the empty list two seconds later, so it asks first.
+  // Every city, base, port and landmark at once. It still asks first, but it is
+  // one undo step now: the autosave writes the empty list two seconds later,
+  // and Ctrl+Z or Undo writes them all back.
   const deleteAll = () => {
     const n = features.length;
     if (!n) return;
     const question = n === 1
-      ? "Delete the one city or map feature on this map? This cannot be undone."
-      : `Delete all ${n} cities and map features on this map? This cannot be undone.`;
+      ? "Delete the one city or map feature on this map? Undo brings it back."
+      : `Delete all ${n} cities and map features on this map? Undo brings them back.`;
     if (!window.confirm(question)) return;
-    setFeatures([]);
+    pushUndoStep(removeRowsStep(features, setFeatures, () => true));
     setSelection?.([]);
   };
 
@@ -154,9 +163,11 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     }
   };
 
+  // Not the bare "Features": that string is the scenario and game editors' tab
+  // of gameplay features, and a language pack has one translation per string.
   return (
     <Panel
-      title="Features"
+      title="Map features"
       icon="pin"
       onClose={onClose}
       width={340}

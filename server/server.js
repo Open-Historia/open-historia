@@ -26,12 +26,18 @@ import {
   importGameBundle,
   importScenarioBundle,
   listTrash,
+  purgeOldTrash,
   restoreFromTrash,
+  restoreScenarioBasemap,
+  TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
+  readGameParkedTurn,
   readRuntimeJsonAsset,
   resolveRuntimeGeojsonAsset,
+  resolveRuntimeRestorePoint,
   removeGameAsset,
+  removeGameParkedTurn,
   removeScenarioAsset,
   resolveGameUploadAsset,
   resolveScenarioCoarseRegionsAsset,
@@ -44,6 +50,7 @@ import {
   uploadGameAsset,
   uploadScenarioAsset,
   writeGameSnapshots,
+  writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
 } from "./libraryStore.js";
@@ -258,6 +265,13 @@ ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
+// What was deleted more than TRASH_KEEP_DAYS ago goes for good.
+try {
+  const purged = purgeOldTrash();
+  if (purged.removed) console.log(`[trash] deleted ${purged.removed} item(s) older than ${TRASH_KEEP_DAYS} days for good`);
+} catch (error) {
+  console.warn(`[trash] purge failed: ${error.message}`);
+}
 
 // `extra`: fields to send beside the message, for a caller that has to tell
 // one failure from another without reading the words (the AI relay marks an
@@ -717,6 +731,16 @@ app.put("/api/scenarios/:scenarioId/import", largeJsonParser, (req, res) => {
   }
 });
 
+// The community basemap an import or Update could not download, downloaded
+// since: { payload: { dataUrl } | { geojson } }.
+app.put("/api/scenarios/:scenarioId/basemap", largeJsonParser, (req, res) => {
+  try {
+    res.json(restoreScenarioBasemap(req.params.scenarioId, req.body?.payload));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
 app.get("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
   try {
     // ?coarse=1 on the regions: the far tier's coarsening of the same file,
@@ -814,6 +838,33 @@ app.put("/api/games/:gameId/snapshots", largeJsonParser, (req, res) => {
   }
 });
 
+// A time skip that finished while another game was open, kept for this one
+// (src/Game/AI/parkedTurn.js). By game id: it is written while another game is
+// the active one. null when there is none.
+app.get("/api/games/:gameId/parked-turn", (req, res) => {
+  try {
+    res.json(readGameParkedTurn(req.params.gameId));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
+  try {
+    res.json(writeGameParkedTurn(req.params.gameId, req.body));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/games/:gameId/parked-turn", (req, res) => {
+  try {
+    res.json(removeGameParkedTurn(req.params.gameId));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
 app.post("/api/games", jsonParser, (req, res) => {
   try {
     res.status(201).json(createGame(req.body ?? {}));
@@ -885,7 +936,7 @@ const refuseRemoteTrash = (req, res) => {
 app.get("/api/trash", (req, res) => {
   if (refuseRemoteTrash(req, res)) return;
   try {
-    res.json({ entries: listTrash() });
+    res.json({ entries: listTrash(), keepDays: TRASH_KEEP_DAYS });
   } catch (error) {
     sendError(res, 500, error);
   }
@@ -903,7 +954,7 @@ app.post("/api/trash/:entry/restore", (req, res) => {
 app.delete("/api/trash", (req, res) => {
   if (refuseRemoteTrash(req, res)) return;
   try {
-    res.json(emptyTrash());
+    res.json(emptyTrash({ kind: ["game", "scenario"].includes(req.query.kind) ? req.query.kind : "" }));
   } catch (error) {
     sendError(res, 500, error);
   }
@@ -956,6 +1007,22 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.type("application/json");
     res.send(JSON.stringify(asset.data));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// One of the active game's restore points, by id: the staged reveal needs the
+// world one turn started from, not the whole archive of twelve. Sent from its
+// file as stored, never parsed here.
+app.get("/api/runtime/snapshots/:snapshotId", (req, res) => {
+  try {
+    const sourcePath = resolveRuntimeRestorePoint(req.params.snapshotId);
+    if (!sourcePath) {
+      sendError(res, 404, new Error(`Restore point not found: ${req.params.snapshotId}`));
+      return;
+    }
+    streamBinaryFile(req, res, sourcePath, "application/json; charset=utf-8");
   } catch (error) {
     sendError(res, 404, error);
   }

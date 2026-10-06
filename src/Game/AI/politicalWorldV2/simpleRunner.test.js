@@ -225,7 +225,7 @@ const scriptedExecutor = ({ result = {}, stage = () => {} } = {}) => () => ({
   },
   applyJobResult: async ({ checkpoint, job, result: given }) => {
     stage({ checkpoint, job, result: given });
-    return { stagedWorld: checkpoint.stagedWorld, newJobs: [] };
+    return { stagedWorld: checkpoint.stagedWorld };
   },
 });
 

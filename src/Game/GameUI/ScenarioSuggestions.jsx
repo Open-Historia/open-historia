@@ -2,8 +2,10 @@
 
 // Everything a player sees of suggestions outside the map editor:
 //  - ScenarioCommunityCard, at the top of a scenario's editor: where it came
-//    from on the community hub (with Suggest changes and Unlink), the post its
-//    player made of it (with the suggestions left there), or a way to link one.
+//    from on the community hub (with Suggest changes and Unlink), and the post
+//    its player made of it (with the suggestions left there, and Unlink). The
+//    game makes those links itself, on a download and on Publish; the card can
+//    only remove one, for good.
 //  - SuggestChangesDialog: the changes a player made to a downloaded scenario,
 //    saved as a small file and posted as a comment on the original post.
 //  - SuggestionReviewDialog: the author's changelog of a suggestion's changes
@@ -27,7 +29,7 @@ import {
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
-import { downloadHubBundle, downloadHubFile, hubPostUrl, postIdFromInput } from "../../runtime/hubPosts.js";
+import { downloadHubBundle, downloadHubFile, hubPostUrl } from "../../runtime/hubPosts.js";
 import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
@@ -860,11 +862,8 @@ const ContributorSuggestions = ({ login, refs, reviews, busy, touch, onReview, o
   </div>
 );
 
-export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onReview, onOpenFile, onRefresh, onLinkPost, onForgetPost, onRejectContributor, onUnblockContributor, refreshNote }) => {
+export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onReview, onOpenFile, onRefresh, onForgetPost, onRejectContributor, onUnblockContributor, refreshNote }) => {
   const touch = useTouchPrimary();
-  const [postInput, setPostInput] = useState("");
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkError, setLinkError] = useState("");
   const [showReviewed, setShowReviewed] = useState(false);
   const fileRef = useRef(null);
   if (!scenario) return null;
@@ -881,17 +880,6 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
     return groups;
   }, new Map())].sort((a, b) => b[1].length - a[1].length);
   const blocked = published?.blocked ?? [];
-  const linkPost = () => {
-    const postId = postIdFromInput(postInput);
-    if (!postId) {
-      setLinkError("That is not a post's address or number.");
-      return;
-    }
-    onLinkPost?.(postId);
-    setPostInput("");
-    setLinkError("");
-    setLinkOpen(false);
-  };
   return (
     <div style={{ ...cardStyle, display: "grid", gap: "0.8rem" }}>
       {origin && (
@@ -913,7 +901,7 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
               className="oh-tap-row"
               disabled={busy}
               onClick={onUnlink}
-              title="Make this your own scenario: it stops following the post, and you can no longer suggest changes to it."
+              title="Make this your own scenario, for good: it stops following the post, you can no longer suggest changes to it, and it cannot be linked to a post again."
               style={tapFit(buttonStyle, touch)}
             >
               Unlink from the community post
@@ -989,7 +977,7 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
               className="oh-tap-row"
               disabled={busy}
               onClick={onForgetPost}
-              title="Stop looking for suggestions on this post. The post itself stays on the hub."
+              title="Stop looking for suggestions on this post, for good. The post itself stays on the hub, and it cannot be linked to this scenario again."
               style={tapFit(buttonStyle, touch)}
             >
               Unlink the post
@@ -997,29 +985,15 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
           </div>
         </div>
       )}
+      {/* No post of the player's own: one comes only from Publish, which the
+          game then finds by itself. There is nothing here to link one with. */}
       {!published && (
         <div style={{ display: "grid", gap: "0.45rem" }}>
           {!origin && <span style={labelStyle}>Community</span>}
-          {linkOpen ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-              <input
-                style={{ ...inputStyle, flex: "1 1 14rem", width: "auto" }}
-                value={postInput}
-                onChange={(event) => { setPostInput(event.target.value); setLinkError(""); }}
-                onKeyDown={(event) => { if (event.key === "Enter") linkPost(); }}
-                placeholder="The post's address, or its number"
-              />
-              <button type="button" className="oh-tap-row" onClick={linkPost} style={tapFit(primaryButtonStyle, touch)}>Link</button>
-              <button type="button" className="oh-tap-row" onClick={() => { setLinkOpen(false); setLinkError(""); }} style={tapFit(buttonStyle, touch)}>Cancel</button>
-              {linkError ? <div style={{ ...quietTextStyle, color: "#fecaca", flexBasis: "100%" }}>{linkError}</div> : null}
-            </div>
-          ) : (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-              <span style={quietTextStyle}>Posted this scenario on the hub? Link your post to see the changes people suggest.</span>
-              <button type="button" className="oh-tap-row" onClick={() => setLinkOpen(true)} style={tapFit(buttonStyle, touch)}>Link my post</button>
-              <button type="button" className="oh-tap-row" disabled={busy} onClick={() => fileRef.current?.click()} style={tapFit(buttonStyle, touch)}>Open a suggestion file</button>
-            </div>
-          )}
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+            <span style={quietTextStyle}>If you publish this scenario to the hub from the Community tab, the changes people suggest on your post show here.</span>
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={() => fileRef.current?.click()} style={tapFit(buttonStyle, touch)}>Open a suggestion file</button>
+          </div>
         </div>
       )}
       <input
