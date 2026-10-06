@@ -18,9 +18,9 @@ import TypeManager from "./TypeManager.jsx";
 import RegionsPanel from "./RegionsPanel.jsx";
 import PolitiesPanel from "./PolitiesPanel.jsx";
 import GroupsPanel from "./GroupsPanel.jsx";
-import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
+import BorderCleanupOverlay, { BorderCleanupChoice, BorderCleanupNote, lastCleanMode, rememberCleanMode } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
-import { BORDER_CLEANUP, describeCleanupLeftAlone, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
+import { cleanupWidthOf, describeCleanupLeftAlone, describeCleanupResult, yieldToBrowser } from "./topologySweep.js";
 import ProvinceImportPanel from "./ProvinceImportPanel.jsx";
 import LayersPanel from "./LayersPanel.jsx";
 import ReferencePanel from "./ReferencePanel.jsx";
@@ -114,6 +114,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [cleanupNote, setCleanupNote] = useState([]);
   // Set by the screen's "Save now" button; the sweep reads it between steps.
   const cleanupStopRef = useRef(false);
+  // The question a save asks first (BorderCleanupChoice): quick clean or deep
+  // clean. Up while `cleanChoice` is set; the ref holds what its answer goes to.
+  const [cleanChoice, setCleanChoice] = useState(null);
+  const cleanAnswerRef = useRef(null);
   useEffect(() => {
     if (!cleanupNote.length) return undefined;
     // Nine seconds for the result, and five more to read each line under it.
@@ -379,8 +383,25 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
-  // Every save first runs the border repair over the WHOLE map at
-  // BORDER_CLEANUP.maxWidth (1.5 km) — enclosed cracks filled, thin overlaps
+  // Which clean a save is to run, asked of the author each time: "quick"
+  // (cracks and slivers up to BORDER_CLEANUP.quickWidth, 500 m), "deep" (up
+  // to BORDER_CLEANUP.maxWidth, 1.5 km), or null when the author backs out,
+  // and then nothing is cleaned and nothing is saved. The question opens on
+  // the answer given last time.
+  const chooseClean = () => new Promise((resolve) => {
+    cleanAnswerRef.current = resolve;
+    setCleanChoice({ last: lastCleanMode() });
+  });
+  const answerClean = (mode) => {
+    const resolve = cleanAnswerRef.current;
+    cleanAnswerRef.current = null;
+    setCleanChoice(null);
+    if (mode) rememberCleanMode(mode);
+    resolve?.(mode || null);
+  };
+
+  // Every save first runs the border repair over the WHOLE map, at the width
+  // of the clean the author chose — enclosed cracks filled, thin overlaps
   // trimmed, one undo step — behind the "Cleaning up the borders" screen,
   // which is painted before the work starts and updated between its chunks.
   // Nothing else in the Workshop repairs borders, so this is also where a
@@ -392,15 +413,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // after the save, as its lines: what was repaired, then what the two guards
   // passed over (topologySweep.js describeCleanupLeftAlone). `exporting`: the
   // map goes to a file, not into a scenario, and the screen says so.
-  const cleanBorders = async ({ exporting = false } = {}) => {
+  const cleanBorders = async ({ exporting = false, mode = "deep" } = {}) => {
+    const maxWidth = cleanupWidthOf(mode);
     let cleanup = null;
     let cleanupError = "";
     cleanupStopRef.current = false;
-    setBorderCleanup({ phase: "gaps", regionCount: 0, chunkIndex: 0, chunkCount: 0, startedAt: Date.now() });
+    setBorderCleanup({ phase: "gaps", maxWidth, regionCount: 0, chunkIndex: 0, chunkCount: 0, startedAt: Date.now() });
     await yieldToBrowser();
     try {
       cleanup = (await api.repairTopologyEverywhere?.({
-        maxWidth: BORDER_CLEANUP.maxWidth,
+        maxWidth,
         onProgress: setBorderCleanup,
         stopRequested: () => cleanupStopRef.current,
       })) ?? null;
@@ -416,7 +438,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // Persist the Workshop map into the scenario without forcing a new game.
   // Playing is now an explicit third action instead of the only way to save.
   const persistScenario = async ({ play = false, closeAfter = false } = {}) => {
-    if (!api || !onApplyToScenario || scenarioAction) return false;
+    if (!api || !onApplyToScenario || scenarioAction || cleanAnswerRef.current) return false;
     // Before the scenario's map has loaded the document is empty, and a save
     // then wrote an empty map over the scenario. That was the "save twice" bug:
     // the first click, made while the map was still downloading, wiped it, and
@@ -426,9 +448,12 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       console.warn("[editor] scenario save requested before its map loaded — ignored.");
       return false;
     }
+    // Quick or deep, before anything is read. Backed out of, the save is off.
+    const mode = await chooseClean();
+    if (!mode) return false;
     const action = play ? "play" : closeAfter ? "save-exit" : "save";
     setScenarioAction(action);
-    const note = await cleanBorders();
+    const note = await cleanBorders({ mode });
     try {
       const seed = buildGameSeed(
         d.doc,
@@ -570,9 +595,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       await write();
       return;
     }
-    if (!api || borderCleanup) return;
+    if (!api || borderCleanup || cleanAnswerRef.current) return;
+    const mode = await chooseClean();
+    if (!mode) return;
     try {
-      const note = await cleanBorders({ exporting: true });
+      const note = await cleanBorders({ exporting: true, mode });
       await write();
       setCleanupNote(note);
     } catch (e) {
@@ -1535,6 +1562,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       />
 
       <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />
+      <BorderCleanupChoice choice={cleanChoice} onChoose={answerClean} />
       <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
       {fmgAvailable && (

@@ -20,9 +20,11 @@ import { enclosedGapGeoms, enclosedGapsOfUnion, overlapGeoms, planarGeometryArea
 import {
   BORDER_CLEANUP,
   CLEANUP_LEFT_ALONE_TEXTS,
+  CLEANUP_MODES,
   CLEANUP_REFUSED_TEXTS,
   bucketRegions,
   chunkIndexFor,
+  cleanupWidthOf,
   cracksAmong,
   describeCleanupLeftAlone,
   describeCleanupProgress,
@@ -674,7 +676,7 @@ test("the Workshop's save runs this search, with the budget on overlaps and gap 
   assert.ok(sweep.includes("stopped = \"error\";") && sweep.includes("finishTopologyEdit(edit)"), "an error ends the search but keeps and finishes the edit");
   const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
   assert.ok(mapEditor.includes("stopRequested: () => cleanupStopRef.current") && mapEditor.includes("<BorderCleanupOverlay state={borderCleanup} onStop="), "the loading screen's Save now reaches the sweep");
-  assert.ok(mapEditor.includes("maxWidth: BORDER_CLEANUP.maxWidth,"), "at the sweep's own width");
+  assert.ok(mapEditor.includes("const maxWidth = cleanupWidthOf(mode);") && /repairTopologyEverywhere\?\.\(\{\r?\n\s+maxWidth,/.test(mapEditor), "at the width of the clean the author chose");
 });
 
 // The save is the only thing that repairs borders. The Topology panel, which
@@ -713,11 +715,11 @@ test("an export from the standalone editor cleans the borders first; a scenario'
   assert.ok(mapEditor.includes("onExportGame={() => exportFromMenu(exportGameSeed)}"), "Export for game");
   const fromMenu = mapEditor.slice(mapEditor.indexOf("const exportFromMenu = async (write) => {"), mapEditor.indexOf("// The ✕, and on a phone Back"));
   assert.match(fromMenu, /if \(scenarioMode\) \{\n\s+await write\(\);\n\s+return;\n\s+\}/, "in a scenario's Workshop the file is written at once, as it was");
-  const cleaned = fromMenu.indexOf("await cleanBorders({ exporting: true })");
+  const cleaned = fromMenu.indexOf("await cleanBorders({ exporting: true, mode })");
   const written = fromMenu.indexOf("await write();", cleaned);
   assert.ok(cleaned > 0 && written > cleaned, "the cleanup comes before the file is written");
   assert.ok(fromMenu.indexOf("setCleanupNote(note);") > written, "and the note after it");
-  assert.ok(fromMenu.includes("if (!api || borderCleanup) return;"), "one at a time");
+  assert.ok(fromMenu.includes("if (!api || borderCleanup || cleanAnswerRef.current) return;"), "one at a time");
   assert.ok(fromMenu.includes("setBorderCleanup(null);"), "the screen comes down whether or not the file was written");
   // The file is built after the cleanup, from the map as it then is.
   assert.ok(mapEditor.includes("const exportDocument = () => downloadJson({ ...buildPayload(), id: docIdRef.current, version: 1 });"));
@@ -725,16 +727,97 @@ test("an export from the standalone editor cleans the borders first; a scenario'
 
   // One cleanup for both: the same sweep, width, screen, Save now and note.
   const clean = mapEditor.slice(mapEditor.indexOf("const cleanBorders = async"), mapEditor.indexOf("const persistScenario = async"));
-  assert.ok(clean.includes("api.repairTopologyEverywhere?.({") && clean.includes("maxWidth: BORDER_CLEANUP.maxWidth,") && clean.includes("stopRequested: () => cleanupStopRef.current"));
+  assert.ok(clean.includes("api.repairTopologyEverywhere?.({") && clean.includes("const maxWidth = cleanupWidthOf(mode);") && clean.includes("stopRequested: () => cleanupStopRef.current"));
   assert.ok(clean.includes("return [describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean);"));
   const scenario = mapEditor.slice(mapEditor.indexOf("const persistScenario = async"), mapEditor.indexOf("const docIdRef = useRef(null);"));
-  assert.ok(scenario.includes("const note = await cleanBorders();") && scenario.includes("setCleanupNote(note);"));
+  assert.ok(scenario.includes("const note = await cleanBorders({ mode });") && scenario.includes("setCleanupNote(note);"));
   assert.equal(mapEditor.split("api.repairTopologyEverywhere").length - 1, 1, "nothing else in the editor runs the sweep");
 
   // Save now is the store's own write, the one the autosave makes every two
   // seconds: no cleanup in front of it.
   assert.ok(mapEditor.includes("onSave={saveNow}"));
   assert.ok(mapEditor.includes("const saveNow = () => runSaveRef.current();"));
+});
+
+// A save asks which clean to run. Both read every region; the quick one
+// repairs up to the width every save had before 1.5 km, the deep one up to
+// 1.5 km.
+test("a save offers two cleans: quick at 500 m, deep at 1.5 km, and deep when nothing says", () => {
+  assert.deepEqual(CLEANUP_MODES, { quick: 500, deep: 1500 });
+  assert.equal(CLEANUP_MODES.quick, BORDER_CLEANUP.quickWidth);
+  assert.equal(CLEANUP_MODES.deep, BORDER_CLEANUP.maxWidth);
+  assert.equal(cleanupWidthOf("quick"), 500);
+  assert.equal(cleanupWidthOf("deep"), 1500);
+  for (const other of [undefined, null, "", "thorough"]) assert.equal(cleanupWidthOf(other), 1500);
+  // The quick clean's width is the one a hole inside a single region keeps
+  // at any width, so at 500 m that guard changes nothing.
+  assert.equal(BORDER_CLEANUP.quickWidth, BORDER_CLEANUP.maxWidthInsideOneRegion);
+});
+
+test("the width decides what is repaired: the same crack is filled by a deep clean and left by a quick one", async () => {
+  // Two squares 100 km a side, the right one with a notch 900 m deep on the
+  // shared side: a crack between two regions, 900 m wide.
+  const KM = 1000;
+  const left = new Polygon([[[0, 0], [100 * KM, 0], [100 * KM, 100 * KM], [0, 100 * KM], [0, 0]]]);
+  const right = new Polygon([[[100 * KM, 0], [200 * KM, 0], [200 * KM, 100 * KM], [100 * KM, 100 * KM], [100 * KM, 60 * KM], [100 * KM + 900, 60 * KM], [100 * KM + 900, 40 * KM], [100 * KM, 40 * KM], [100 * KM, 0]]]);
+  const unioned = unionAllGeoms([left, right]);
+  const found = (mode) => enclosedGapsOfUnion(unioned, { maxWidth: cleanupWidthOf(mode), minWidth: BORDER_CLEANUP.minWidth });
+  assert.equal(found("deep").length, 1);
+  assert.equal(found("quick").length, 0, "wider than 500 m: a quick clean leaves it");
+  assert.ok(found("deep")[0].width > 800 && found("deep")[0].width < 1000);
+});
+
+test("the note and the screen say the width the sweep ran at", () => {
+  const clean = { changed: false, regionCount: 4848, parts: 1 };
+  assert.equal(describeCleanupResult({ ...clean, maxWidth: 500 }), "Borders checked: no cracks or slivers between 2 m and 0.5 km across 4,848 regions.");
+  assert.equal(describeCleanupResult({ ...clean, maxWidth: 1500 }), "Borders checked: no cracks or slivers between 2 m and 1.5 km across 4,848 regions.");
+  assert.equal(describeCleanupResult(clean), "Borders checked: no cracks or slivers between 2 m and 1.5 km across 4,848 regions.", "a result with no width was the deep clean");
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const sweep = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
+  assert.ok(sweep.includes("const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);"));
+  // The one width goes to everything that judges or reports: the gap search,
+  // the progress the screen reads and the result the note reads; which holes
+  // are cracks; which overlaps are slivers; and how far a follow-up pass looks.
+  assert.equal(sweep.split("maxWidth: width,").length - 1, 3);
+  assert.ok(sweep.includes("assignGapTargets(holes, width, context,") && sweep.includes("findNarrowOverlaps(passFeats, width, context, {") && sweep.includes("hotspotsOf(applied, width * BORDER_CLEANUP.hotspotPad)"));
+  const overlay = fs.readFileSync(new URL("./BorderCleanupOverlay.jsx", import.meta.url), "utf8");
+  assert.ok(overlay.includes("const maxWidthKm = (Number(state.maxWidth) || BORDER_CLEANUP.maxWidth) / 1000;"));
+});
+
+test("every cleaning save asks first, and backing out saves nothing", () => {
+  const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  // The scenario's three saves.
+  const scenario = mapEditor.slice(mapEditor.indexOf("const persistScenario = async"), mapEditor.indexOf("const docIdRef = useRef(null);"));
+  assert.match(scenario, /const mode = await chooseClean\(\);\n\s+if \(!mode\) return false;\n\s+const action = /, "asked before anything is marked as saving");
+  assert.ok(scenario.indexOf("await chooseClean()") < scenario.indexOf("setScenarioAction(action);"));
+  assert.ok(scenario.indexOf("await chooseClean()") < scenario.indexOf("await cleanBorders({ mode })"));
+  assert.ok(scenario.includes("if (!api || !onApplyToScenario || scenarioAction || cleanAnswerRef.current) return false;"), "one question at a time");
+  // The standalone editor's two exports.
+  const fromMenu = mapEditor.slice(mapEditor.indexOf("const exportFromMenu = async (write) => {"), mapEditor.indexOf("// The ✕, and on a phone Back"));
+  assert.match(fromMenu, /const mode = await chooseClean\(\);\n\s+if \(!mode\) return;\n\s+try \{\n\s+const note = await cleanBorders\(\{ exporting: true, mode \}\);/);
+  assert.ok(fromMenu.indexOf("if (scenarioMode) {") < fromMenu.indexOf("await chooseClean()"), "a scenario's own exports clean nothing, and ask nothing");
+  // The question, its answer, and what is remembered of it.
+  assert.match(mapEditor, /const chooseClean = \(\) => new Promise\(\(resolve\) => \{\n\s+cleanAnswerRef\.current = resolve;\n\s+setCleanChoice\(\{ last: lastCleanMode\(\) \}\);\n\s+\}\);/);
+  assert.match(mapEditor, /if \(mode\) rememberCleanMode\(mode\);\n\s+resolve\?\.\(mode \|\| null\);/);
+  assert.ok(mapEditor.includes("<BorderCleanupChoice choice={cleanChoice} onChoose={answerClean} />"));
+  assert.equal(mapEditor.split("chooseClean()").length - 1, 2, "nothing else cleans, so nothing else asks");
+  const overlay = fs.readFileSync(new URL("./BorderCleanupOverlay.jsx", import.meta.url), "utf8");
+  assert.ok(overlay.includes("onClick={() => onChoose(\"quick\")}") && overlay.includes("onClick={() => onChoose(\"deep\")}") && overlay.includes("onClick={() => onChoose(null)}"));
+});
+
+test("the question's sentences are in the language packs' catalog as whole sentences", () => {
+  const overlay = fs.readFileSync(new URL("./BorderCleanupOverlay.jsx", import.meta.url), "utf8");
+  const { exact, patterns, errors } = extractFromSource(overlay, "src/Editor/BorderCleanupOverlay.jsx");
+  assert.deepEqual(errors ?? [], []);
+  const strings = new Set([...exact.keys(), ...patterns.keys()].map((entry) => String(entry)));
+  for (const sentence of [
+    "Clean up the borders",
+    "Every region is checked for cracks and slivers first, and the ones narrow enough are repaired. Choose how wide one may be and still be repaired.",
+    "Quick clean",
+    "Deep clean",
+  ]) assert.ok(strings.has(sentence), sentence);
+  assert.ok([...strings].some((entry) => /^Up to .+ m wide\. Leaves the wider gaps as they are\.$/.test(entry)), "the quick clean's line, with its width as a slot");
+  assert.ok([...strings].some((entry) => /^Up to .+ km wide\. Closes the wider gaps too, so there is more to repair\.$/.test(entry)), "the deep clean's line");
 });
 
 // Time. A map with one 41,000-vertex sea zone held the old sweep for tens of

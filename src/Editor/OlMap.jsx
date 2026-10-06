@@ -1562,6 +1562,11 @@ const OlMap = ({
     // uncompared, a crack unfilled, a sliver untrimmed, and the note says how
     // many of each. Welding only finds: every repair is made from the regions
     // as they are, so no welded region is written into the map.
+    //
+    // `maxWidth` is the save's choice: the quick clean stops at
+    // BORDER_CLEANUP.quickWidth and the deep one at BORDER_CLEANUP.maxWidth
+    // (MapEditor.jsx asks which). Either reads every region; the width is
+    // what is repaired.
     const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress, stopRequested } = {}) => {
       const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const floor = Math.min(width, BORDER_CLEANUP.minWidth);
@@ -1582,6 +1587,8 @@ const OlMap = ({
         phase: "gaps",
         pass: 1,
         maxPasses: BORDER_CLEANUP.maxPasses,
+        // The width this sweep repairs up to, for the screen's own wording.
+        maxWidth: width,
         regionCount,
         passRegions: regionCount,
         chunkIndex: 0,
@@ -1631,6 +1638,9 @@ const OlMap = ({
         overlaps: totals.overlaps,
         affectedRegions,
         regionCount,
+        // The widest crack or sliver this sweep repaired: the quick clean's
+        // limit or the deep one's (topologySweep.js CLEANUP_MODES).
+        maxWidth: width,
         gapsFound: totals.gapsFound,
         overlapsFound: totals.overlapsFound,
         passes,

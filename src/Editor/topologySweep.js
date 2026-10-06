@@ -4,11 +4,13 @@
  */
 
 // Every scenario save (Save, Save & Exit, Apply & Play) first runs a
-// conservative border repair over EVERY region — enclosed cracks narrower than
-// 1.5 km filled, thin overlaps trimmed — before the map is written
-// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere). The
-// standalone editor has no scenario to save into: a map leaves it as a file,
-// so there Export JSON and Export for game run it first instead (MapEditor.jsx
+// conservative border repair over EVERY region, every time — enclosed cracks
+// filled, thin overlaps trimmed — before the map is written (MapEditor.jsx
+// persistScenario → OlMap.jsx repairTopologyEverywhere). How wide a crack or
+// a sliver it repairs is the author's choice at each save: a quick clean
+// stops at 500 m, a deep one at 1.5 km (CLEANUP_MODES below). The standalone
+// editor has no scenario to save into: a map leaves it as a file, so there
+// Export JSON and Export for game ask and run it first instead (MapEditor.jsx
 // exportFromMenu). Nothing else in the Workshop repairs borders. This module
 // is the pure part: how regions are grouped for the staged union, and what
 // the loading screen and the note after the save say.
@@ -129,7 +131,16 @@ export const BORDER_CLEANUP = Object.freeze({
   // The scenario diff's tolerance follows this number
   // (runtime/scenarioChanges.js CLEANUP_WIDTH), or a save's own repairs
   // would read as suggested changes.
+  //
+  // This is the DEEP clean. A save asks which of the two the author wants
+  // (CLEANUP_MODES below), and the other, the quick one, stops at quickWidth.
   maxWidth: 1500,
+  // The quick clean's width: the limit every save had before 1.5 km. On the
+  // built-in map it fills 98 cracks and trims 58 slivers across 143 regions,
+  // where the deep clean's 106, 59 and 152 include the eight cracks 501 to
+  // 977 m wide described above. Both read every region; the width decides
+  // what is repaired, not what is looked at, so the search costs the same.
+  quickWidth: 500,
   // A hole with ONE region on its rim is not a crack between regions: it is
   // water, or a void, that the region was drawn around, and it keeps the
   // limit the sweep had before. At 1,500 m a map cut from the stock world
@@ -185,6 +196,16 @@ export const BORDER_CLEANUP = Object.freeze({
   // rounds to, so nothing it welds was ever meant to be two points.
   weldReach: 1e-6,
 });
+
+// The two cleans a save offers, by the widest crack or sliver each repairs
+// (MapEditor.jsx asks; BorderCleanupOverlay.jsx BorderCleanupChoice is the
+// question). Deep is the one a save ran before there was a choice, and what
+// anything that does not say runs.
+export const CLEANUP_MODES = Object.freeze({
+  quick: BORDER_CLEANUP.quickWidth,
+  deep: BORDER_CLEANUP.maxWidth,
+});
+export const cleanupWidthOf = (mode) => CLEANUP_MODES[mode] ?? CLEANUP_MODES.deep;
 
 const count = (value) => Number(value) || 0;
 const formatCount = (value) => count(value).toLocaleString("en-US");
@@ -966,7 +987,9 @@ export const describeCleanupResult = (result, error = "") => {
     : "";
   if (!result.changed) {
     if (stop) return `Border cleanup ${stop}; nothing was changed.${left}${limits}`;
-    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth / 1000} km across ${plural(result.regionCount, "region")}.${limits}`;
+    // Up to the width this sweep ran at: the quick clean's or the deep one's
+    // (a result from before a save asked has none, and was the deep one).
+    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${(count(result.maxWidth) || BORDER_CLEANUP.maxWidth) / 1000} km across ${plural(result.regionCount, "region")}.${limits}`;
   }
   const passes = count(result.passes) > 1 ? ` in ${plural(result.passes, "pass")}` : "";
   const repairs = `${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}`;
