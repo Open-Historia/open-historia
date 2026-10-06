@@ -130,14 +130,14 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   // each ran and which events it wrote, in the order they are shown, with the
   // viewer's own orders. The narrator's summary of the turn, the model's raw
   // answer, the engine's receipt and everyone else's orders stay with the host.
-  simulationHistory: (world, viewer, { host }) => list(world.simulationHistory).filter(isRecord).map((entry) => ({
+  simulationHistory: (world, viewer, { host, hiddenEventIds = new Set() }) => list(world.simulationHistory).filter(isRecord).map((entry) => ({
     date: clean(entry.date),
     fromDate: clean(entry.fromDate),
     toDate: clean(entry.toDate),
     round: Number(entry.round) || 0,
     mode: clean(entry.mode),
     source: clean(entry.source) || "ai",
-    eventIds: list(entry.eventIds).map(clean).filter(Boolean),
+    eventIds: list(entry.eventIds).map(clean).filter((id) => id && !hiddenEventIds.has(id)),
     plannedActions: list(entry.plannedActions).filter((action) => (clean(action?.ownerCode)
       ? same(action.ownerCode, viewer)
       : same(host, viewer))),
@@ -228,11 +228,13 @@ const FILTERED_WORLD_KEYS = Object.freeze({
 
 export const FILTERED_WORLD_KEY_NAMES = Object.freeze([...Object.keys(FILTERED_WORLD_KEYS), ...HOST_SEAT_WORLD_KEYS]);
 
-export const projectWorld = (world, viewer, { host = "" } = {}) => {
+// `hiddenEventIds`: the events this viewer is not shown (eventsHiddenFrom), so
+// a turn's record does not count them either.
+export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Set() } = {}) => {
   const full = normalizeWorldState(world);
   const out = {};
   for (const key of PUBLIC_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
-  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host });
+  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds });
   if (same(host, viewer)) for (const key of HOST_SEAT_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
   return copy(out);
 };
@@ -252,13 +254,26 @@ const mentions = (event, viewer) => {
   return text.includes(name) || list(event?.combatants).some((entry) => same(entry, viewer));
 };
 
+// What one government alone found out is marked for it (event.audience, set by
+// runtime/spycraft.js resolveEspionage when several people play): its own
+// counter-intelligence catching an agent, its own doubts about one of its
+// agents. Nobody else is shown the event at all.
+const readableBy = (event, viewer) => {
+  const audience = list(event?.audience).map(clean).filter(Boolean);
+  return !audience.length || audience.some((polity) => same(polity, viewer));
+};
+export const eventsHiddenFrom = (events, viewer) => new Set(list(events)
+  .filter((event) => isRecord(event) && !readableBy(event, viewer))
+  .map((event) => clean(event.id))
+  .filter(Boolean));
+
 // `unitOwner(unitId)` names a unit's owner (from the host's world); a move is a
 // march order, and only its owner reads where it is going.
-export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "" } = {}) => list(events).map((event) => {
+export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "" } = {}) => list(events).filter((event) => !isRecord(event) || readableBy(event, viewer)).map((event) => {
   if (!isRecord(event)) return event;
   // The narrator's provenance, NPC-reaction bookkeeping and storyline links stay
-  // with the host.
-  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, ...rest } = event;
+  // with the host, and so does who else an event was for.
+  const { impacts, agency: _agency, npcReaction: _npc, storylineIds: _storylines, audience: _audience, ...rest } = event;
   const own = list(impacts?.actionIds).filter((id) => ownOrderIds.has(clean(id)));
   const unitOps = list(impacts?.unitOps).filter((op) => isRecord(op)
     && (op.op !== "move" || same(unitOwner(op.unitId), viewer)));
@@ -405,7 +420,7 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   const ownOrderIds = new Set(ownActions.map((action) => clean(action?.id)).filter(Boolean));
   const owners = new Map(list(world?.units).map((unit) => [clean(unit?.id), clean(unit?.ownerCode)]));
   return {
-    world: projectWorld(world ?? {}, seat, { host }),
+    world: projectWorld(world ?? {}, seat, { host, hiddenEventIds: eventsHiddenFrom(events, seat) }),
     game: copy({ ...(isRecord(game) ? game : {}), country: seat }),
     events: copy(projectEvents(events, seat, { ownOrderIds, host, unitOwner: (id) => owners.get(clean(id)) || "" })),
     chat: copy(projectChats(chat, seat, { host })),

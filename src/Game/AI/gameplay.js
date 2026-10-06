@@ -20,7 +20,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
-import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -8032,8 +8032,9 @@ const applySimulationResult = async ({
   // independent of the relationship - they are about the two services.
   const espionageIdentityIndex = buildPolityIdentityIndex(worldWithImpacts);
   const canonicalEspionagePolity = (name) => canonicalCampaignPolity(name, worldWithImpacts, espionageIdentityIndex);
-  const playerLedgerPolity = canonicalEspionagePolity(baseGame.country);
-  const espionageCandidates = [...new Set([
+  // Worked out against one polity: the player's, and in a shared game each
+  // other person's in turn (resolveEspionage's candidatesFor).
+  const espionageCandidatesAgainst = (playerLedgerPolity) => [...new Set([
     ...Object.keys(worldWithImpacts.polityOverrides ?? {}),
     ...Object.keys(worldWithImpacts.intelligence ?? {}),
     ...Object.values(worldWithImpacts.regionOwnershipOverrides ?? {}),
@@ -8063,6 +8064,8 @@ const applySimulationResult = async ({
     }
     return { polity, hostility, hostile: hostility >= 0.75 };
   });
+  const espionageCandidatesFor = (person) => espionageCandidatesAgainst(canonicalEspionagePolity(person));
+  const espionageCandidates = espionageCandidatesFor(baseGame.country);
   // With espionage switched off for this game nothing is rolled: the agents
   // already in the world stay where they are, silent, and no new one arrives.
   const espionage = isActiveFeatureEnabled("espionage")
@@ -8071,6 +8074,11 @@ const applySimulationResult = async ({
       date: nextGame.gameDate,
       playerPolity: normalizeString(baseGame.country),
       candidates: espionageCandidates,
+      // Several people play: an agent caught in any of their countries waits
+      // for that person, and others plant agents in each (spycraft.js). With
+      // one player the list is the player alone, and nothing changes.
+      playerPolities: humanCountriesOf(baseGame),
+      candidatesFor: espionageCandidatesFor,
     })
     : { spies: normalizeArray(worldWithImpacts.spies), events: [], notices: [] };
   worldWithImpacts.spies = espionage.spies;
@@ -16178,6 +16186,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // but one that fails lands the turn as written rather than holding a turn the
   // player has no reason to retry.
   if (normalizeString(state.generation?.source) === "fallback") checks.accept();
+  // The engine hosting a shared game has no Timeline and nobody to press Retry:
+  // a held turn there would only fail the round for every player and be asked
+  // again whole. A check that fails lands the turn as written.
+  if (hostingSharedGame()) checks.accept();
   // A folded skip's review makes no request, so it is not one of the checks:
   // nothing in it can fail, hold the turn or be asked again. The review a
   // refused folded skip still asks for is one, like every other request here.
@@ -16432,7 +16444,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     variables,
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
-    stopOnPlayerFailures: !evaluationMode && getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // The host's own setting, read from the host's device, is not the other
+    // players': a shared game's round never stops on it (and nobody could answer).
+    stopOnPlayerFailures: !evaluationMode && getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures) && !hostingSharedGame(),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };

@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { WORLD_DEFAULTS, normalizeChats, normalizeWorldState } from "../../runtime/gameState.js";
+import { WORLD_DEFAULTS, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
 import { newSeal } from "../../runtime/spySeal.js";
 import {
@@ -390,4 +390,38 @@ test("a thread a person opened with another reads, for each, as a thread with th
   const lv = seenBy(LATVIA);
   assert.deepEqual(lv.countries.map((entry) => entry.name), [RUSSIA]);
   assert.deepEqual(lv.messages.map((message) => [message.role, message.speaker]), [["user", LATVIA], ["leader", RUSSIA]]);
+});
+
+test("what one government alone found out is shown to that government's player alone", () => {
+  // Russia's counter-intelligence catches an agent: an event marked for Russia
+  // (runtime/spycraft.js resolveEspionage, with several people playing).
+  const docs = state();
+  docs.events = [...docs.events, {
+    id: "e-caught", date: "2014-03-30", title: "Counter-intelligence uncovers a CANARY-CAUGHT agent",
+    description: "The agent is in custody.", importance: "minor", kind: "world", source: "espionage", audience: [RUSSIA],
+  }];
+  docs.world.simulationHistory[0].eventIds = ["e1", "e-caught"];
+
+  const ru = projectForViewer(docs, RUSSIA);
+  assert.deepEqual(ru.events.map((event) => event.id), ["e1", "e-caught"]);
+  assert.equal("audience" in ru.events[1], false, "who else an event was for is not sent");
+  assert.deepEqual(ru.world.simulationHistory[0].eventIds, ["e1", "e-caught"]);
+
+  for (const seat of [LATVIA, ESTONIA]) {
+    const view = projectForViewer(docs, seat);
+    assert.deepEqual(view.events.map((event) => event.id), ["e1"], `${seat} is not shown it`);
+    assert.deepEqual(view.world.simulationHistory[0].eventIds, ["e1"], "nor does the turn's record count it");
+    assert.equal(JSON.stringify(view).includes("CANARY-CAUGHT"), false);
+  }
+  // An event marked for nobody in particular is everybody's, as in a one-player game.
+  assert.equal(projectForViewer(state(), ESTONIA).events.length, state().events.length);
+});
+
+test("the game keeps who an event is for across a save, and adds nothing to an event for everybody", () => {
+  const [marked, open] = normalizeEvents([
+    { id: "a", title: "Marked", audience: [RUSSIA, RUSSIA, "", " "] },
+    { id: "b", title: "Open" },
+  ]);
+  assert.deepEqual(marked.audience, [RUSSIA]);
+  assert.equal("audience" in open, false);
 });

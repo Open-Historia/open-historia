@@ -26,6 +26,7 @@ import { withPlayerGoal } from "../../runtime/playerGoal.js";
 import { normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { agentOrderFor } from "./agents.js";
+import { acceptStructure, canSettleStructure, moveStructure } from "../../runtime/structurePlacement.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // Stat sheets a player may ask the host to write in one round: each is a
@@ -309,6 +310,24 @@ export const createGameHost = ({
           return null;
         }
         return { world: result.world, actions: result.actions };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // A structure the map could only place approximately, settled by the player
+    // it belongs to (runtime/structurePlacement.js): Accept keeps it where it
+    // stands, Move puts it at a point. A correction of the map, not an order, so
+    // it is taken whenever a round is not being resolved.
+    settle: async (connection, { marker, move, lng, lat }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: settle it once it has landed.";
+      let refusal = "";
+      await store.updateWorld((world) => {
+        const found = list(world?.markers).find((entry) => clean(entry?.id) === clean(marker));
+        if (!found) refusal = "That structure is not on the map.";
+        else if (!canSettleStructure(found, { playerCountry: seat.country, world })) refusal = "That structure is not yours to settle.";
+        if (refusal) return null;
+        const markers = move ? moveStructure(world.markers, found.id, { lng, lat }) : acceptStructure(world.markers, found.id);
+        return { ...world, markers };
       });
       round.touch(seat.country);
       return refusal;

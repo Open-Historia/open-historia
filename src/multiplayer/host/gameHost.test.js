@@ -423,6 +423,38 @@ test("a stat sheet is written by the host when a player's Stats pane has none, a
   assert.equal(s.ack(s.hostPlayer, id(40)).ok, true);
 });
 
+test("a structure the map placed approximately is settled by the player it belongs to, and by nobody else", async () => {
+  const s = setup();
+  // Russia's base, placed near a capital because the map did not know its town.
+  s.store.docs.world.markers = [
+    { id: "base-ru", name: "Forward base", kind: "base", ownerCode: RUSSIA, lng: 30, lat: 59, approximate: { asked: "Novaya Gavan", country: RUSSIA, near: "capital" } },
+    { id: "port-lv", name: "Harbour", kind: "port", ownerCode: LATVIA, lng: 24, lat: 57 },
+  ];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const marker = (markerId) => s.store.docs.world.markers.find((entry) => entry.id === markerId);
+
+  // Not another player's to settle, and not a structure that was placed exactly.
+  await s.request(s.hostPlayer, { t: "settle", id: id(2), marker: "base-ru", move: true, lng: 10, lat: 10 });
+  assert.match(s.ack(s.hostPlayer, id(2)).error, /not yours to settle/);
+  await s.request(s.hostPlayer, { t: "settle", id: id(3), marker: "port-lv", move: true, lng: 10, lat: 10 });
+  assert.match(s.ack(s.hostPlayer, id(3)).error, /not yours to settle/);
+  await s.request(s.guest, { t: "settle", id: id(4), marker: "no-such", move: false, lng: 0, lat: 0 });
+  assert.match(s.ack(s.guest, id(4)).error, /not on the map/);
+  assert.deepEqual([marker("base-ru").lng, marker("base-ru").lat, Boolean(marker("base-ru").approximate)], [30, 59, true]);
+
+  // Its owner moves it: it stands at the point, the mark is gone, and everyone's map shows it there.
+  await s.request(s.guest, { t: "settle", id: id(5), marker: "base-ru", move: true, lng: 31.25, lat: 60.5 });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  assert.deepEqual([marker("base-ru").lng, marker("base-ru").lat, "approximate" in marker("base-ru")], [31.25, 60.5, false]);
+  for (const player of [s.hostPlayer, s.guest]) {
+    const seen = s.shown(player).world.markers.find((entry) => entry.id === "base-ru");
+    assert.deepEqual([seen.lng, seen.lat], [31.25, 60.5]);
+  }
+});
+
 test("when the game stops being shared the save is single player again", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);

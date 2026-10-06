@@ -12,8 +12,9 @@
 //                         buttons changed. The host keeps one for each country.
 //
 // Everything else in the document stays as the host's view has it. What a
-// player does with forces and agents never comes this way: those screens ask
-// the host themselves (requests "deploy", "disband", "order" and "agent").
+// player does with forces, agents and their own approximately placed
+// structures never comes this way: those screens ask the host themselves
+// (requests "deploy", "disband", "order", "agent" and "settle").
 //
 // Import-free: plain data in, a plan out, tested under bare node.
 

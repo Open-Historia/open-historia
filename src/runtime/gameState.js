@@ -3502,6 +3502,10 @@ export const normalizeEventEntry = (entry, index = 0) => {
     quote: entry.quote,
   });
   const npcReaction = normalizeEventNpcReaction(entry.npcReaction);
+  // In a shared game, what one government alone found out (runtime/spycraft.js
+  // resolveEspionage): the polities whose players may read the event. Absent,
+  // as on every event of a one-player game, it is everybody's.
+  const audience = [...new Set(normalizeActionParticipants(entry.audience))].slice(0, 12);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3510,6 +3514,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
+    ...(audience.length ? { audience } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts),
     agency: normalizeEventAgency(entry.agency),

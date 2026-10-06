@@ -21,7 +21,7 @@ import { SETTINGS_SCHEMA } from "../host/settings.js";
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
 // screen would misread. The session refuses a player on another version.
-export const SHARED_GAME_VERSION = "2";
+export const SHARED_GAME_VERSION = "3";
 
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
@@ -52,6 +52,10 @@ export const PLAYER_REQUESTS = Object.freeze({
     name: str(80), composition: str(200), lng: num(-540, 540), lat: num(-90, 90),
   }),
   disband: obj({ t: literal("disband"), id: REQUEST_ID, unit: str(160, { min: 1 }) }),
+  // A structure of the player's own, or of its puppet's, that the map placed
+  // approximately (runtime/structurePlacement.js): kept where it stands, or,
+  // with `move`, put at `lng`, `lat`.
+  settle: obj({ t: literal("settle"), id: REQUEST_ID, marker: str(160, { min: 1 }), move: bool(), lng: num(-180, 180), lat: num(-90, 90) }),
   // The player's agents: place one in `target`, call `spy` home, send a
   // caught one home or turn it, and say what a turned one reports.
   agent: obj({

@@ -24,6 +24,7 @@ let hosting = false;
 export const setHostingSharedGame = (value) => {
   hosting = Boolean(value);
 };
+export const hostingSharedGame = () => hosting;
 
 export const humanCountriesOf = (game) => {
   const names = [];

@@ -27,6 +27,7 @@ import {
 } from "../../runtime/gameState.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
+import { discardHeldTurns } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
 import { generateCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump } from "../../Game/AI/gameplay.js";
@@ -271,6 +272,13 @@ const boot = async () => {
         });
         try {
           await simulateTimelineJump({ days: daysPerRound });
+        } catch (error) {
+          // A skip that failed part-way may have held its turn for a Retry (a
+          // segment that did not come back, the Projects board). Nobody can
+          // press it here: the turn is let go, so the game is not left busy,
+          // and the round goes back to planning with its orders (host/round.js).
+          discardHeldTurns();
+          throw error;
         } finally {
           await mutateWorldState((world) => {
             const home = returnBoards(world, { ...people, hostHad });
