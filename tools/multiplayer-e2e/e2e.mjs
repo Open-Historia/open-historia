@@ -58,8 +58,45 @@ const RELAY_SETTING = RELAY
   : `localStorage.removeItem("oh:mp:relays");`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "oh-mp-e2e-"));
 const serverLogs = [];
+
+// The map, copied in from a desktop install (MAP_FROM, by default the official
+// app's or the multiplayer app's own folder): a game without its tiles does not
+// finish loading. One copy of the tiles serves both servers; each gets its own
+// stock world. Without a local copy the run goes on, and says so.
+const MAP_ASSETS = path.join(scratch, "assets");
+const mapSource = [
+  process.env.MAP_FROM,
+  path.join(process.env.APPDATA || "", "open-historia"),
+  path.join(process.env.APPDATA || "", "Open Historia Multiplayer"),
+].filter(Boolean).find((root) => fs.existsSync(path.join(root, "public", "assets", "regions.pmtiles")));
+const seedMap = (dataDirs) => {
+  if (!mapSource) {
+    console.log("NOTE  no local map files (set MAP_FROM to a desktop install's data folder): the screens load without a map");
+    return;
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(REPO, "scripts", "map-assets.json"), "utf8"));
+  for (const asset of manifest.assets ?? []) {
+    const source = path.join(mapSource, asset.path);
+    if (!fs.existsSync(source)) continue;
+    const targets = asset.path.startsWith("public/assets/")
+      ? [path.join(MAP_ASSETS, asset.path.slice("public/assets/".length))]
+      : asset.path.startsWith("server/data/")
+        ? dataDirs.map((dataDir) => path.join(dataDir, asset.path.slice("server/data/".length)))
+        : [];
+    for (const target of targets) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(source, target);
+    }
+  }
+};
+seedMap([path.join(scratch, "host"), path.join(scratch, "guest")]);
+
 const startApp = (name, port, role) => {
-  const child = spawn(process.execPath, [path.join(HERE, "app-server.mjs"), path.join(scratch, name), String(port), role], { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(HERE, "app-server.mjs"), path.join(scratch, name), String(port), role], {
+    cwd: REPO,
+    env: { ...process.env, ...(mapSource ? { OH_E2E_ASSETS: MAP_ASSETS } : {}) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child.stdout.on("data", (data) => serverLogs.push(`[${name}] ${data}`));
   child.stderr.on("data", (data) => serverLogs.push(`[${name}!] ${data}`));
   return child;
@@ -152,8 +189,11 @@ const openTab = async (url) => {
   const target = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/new?${encodeURIComponent(url)}`, { method: "PUT" })).json();
   return instrument(await cdp(target.webSocketDebuggerUrl));
 };
+// PATIENCE=4 waits four times as long for everything: for a machine that is
+// busy with something else, where a page can take a minute to do a second's work.
+const PATIENCE = Math.max(1, Number(process.env.PATIENCE) || 1);
 const until = async (tab, expression, ms = 30000) => {
-  const deadline = Date.now() + ms;
+  const deadline = Date.now() + ms * PATIENCE;
   while (Date.now() < deadline) {
     try {
       if (await tab.eval(expression)) return true;
@@ -192,12 +232,20 @@ try {
   const TARGET = jumpTargetDate(ORIGIN, 30);
   const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
   let GUEST_COUNTRY = "";
+  // A country nobody plays, for a table with an AI government at it.
+  let AI_COUNTRY = "";
   let lastJumpBody = "";
+  const chatBodies = [];
+  const LINE_FROM_AI = "Paris will host the conference, if both powers attend.";
+  const SUGGESTED_TOPIC = "Steady the budget before the summer";
   // Each order's id, as the prompt lists it under its owner: "[id] (Country) text".
   const orderIdIn = (body, country) => {
     const escaped = country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`\\[([^\\]\\s]+)\\] \\(${escaped}\\) `).exec(body)?.[1] ?? "";
   };
+  // The round the stand-in model writes, titled the way a model titles events:
+  // the guard reads who is choosing from the country a title opens with.
+  const STAGED_TITLES = ["Oil prices slide further", "declares war on Ukraine", "snap drills near the Estonian border", "Storms batter the North Sea coast", "arrives in Hanoi", "central bank raises rates"];
   const jumpAnswer = (body) => {
     const guestOrder = orderIdIn(body, GUEST_COUNTRY);
     const hostOrder = orderIdIn(body, HOST_COUNTRY);
@@ -205,12 +253,12 @@ try {
       stopDate: TARGET,
       summary: "Tension in the east; markets wobble.",
       events: [
-        { date: addDays(ORIGIN, 3), title: "E2E: Oil prices slide further as the supply glut persists", description: "Brent falls again as producers keep pumping.", importance: "moderate", kind: "world", playerRelated: false },
-        { date: addDays(ORIGIN, 7), title: `E2E: ${GUEST_COUNTRY} declares war on Ukraine`, description: `The government of ${GUEST_COUNTRY} declares war on Ukraine.`, importance: "critical", kind: "world", playerRelated: true },
-        { date: addDays(ORIGIN, 9), title: `E2E: ${GUEST_COUNTRY} holds snap drills near the Estonian border`, description: `Units of ${GUEST_COUNTRY} run the snap drills near the Estonian border that Moscow ordered.`, importance: "major", kind: "world", playerRelated: true, impacts: { actionIds: guestOrder ? [guestOrder] : [] } },
-        { date: addDays(ORIGIN, 11), title: "E2E: Storms batter the North Sea coast", description: "A winter storm floods ports along the North Sea.", importance: "minor", kind: "world", playerRelated: false },
-        { date: addDays(ORIGIN, 14), title: `E2E: A trade mission from ${HOST_COUNTRY} arrives in Hanoi`, description: `The trade mission ${HOST_COUNTRY} sent to Vietnam opens talks on expanding exports.`, importance: "moderate", kind: "world", playerRelated: true, impacts: { actionIds: hostOrder ? [hostOrder] : [] } },
-        { date: addDays(ORIGIN, 24), title: "E2E: Brazil's central bank raises rates", description: "The central bank of Brazil raises its benchmark rate to fight inflation.", importance: "minor", kind: "world", playerRelated: false },
+        { date: addDays(ORIGIN, 3), title: "Oil prices slide further as the supply glut persists", description: "Brent falls again as producers keep pumping.", importance: "moderate", kind: "world", playerRelated: false },
+        { date: addDays(ORIGIN, 7), title: `${GUEST_COUNTRY} declares war on Ukraine`, description: `The government of ${GUEST_COUNTRY} declares war on Ukraine.`, importance: "critical", kind: "world", playerRelated: true },
+        { date: addDays(ORIGIN, 9), title: `${GUEST_COUNTRY} holds snap drills near the Estonian border`, description: `Units of ${GUEST_COUNTRY} run the snap drills near the Estonian border that Moscow ordered.`, importance: "major", kind: "world", playerRelated: true, impacts: { actionIds: guestOrder ? [guestOrder] : [] } },
+        { date: addDays(ORIGIN, 11), title: "Storms batter the North Sea coast", description: "A winter storm floods ports along the North Sea.", importance: "minor", kind: "world", playerRelated: false },
+        { date: addDays(ORIGIN, 14), title: `A trade mission from ${HOST_COUNTRY} arrives in Hanoi`, description: `The trade mission ${HOST_COUNTRY} sent to Vietnam opens talks on expanding exports.`, importance: "moderate", kind: "world", playerRelated: true, impacts: { actionIds: hostOrder ? [hostOrder] : [] } },
+        { date: addDays(ORIGIN, 24), title: "Brazil's central bank raises rates", description: "The central bank of Brazil raises its benchmark rate to fight inflation.", importance: "minor", kind: "world", playerRelated: false },
       ],
     };
   };
@@ -251,15 +299,31 @@ try {
       // no body
     }
     sentTools.push(tool);
+    // A round for the time skip, a line for an AI government at a table, a
+    // list for the suggestions button; anything else is refused.
+    let args = null;
     if (tool === "submit_jump_result") {
       answeredJumps += 1;
       lastJumpBody = text;
-      const frames = [{ candidates: [{ content: { role: "model", parts: [{ functionCall: { name: tool, args: jumpAnswer(text) } }] }, finishReason: "STOP" }] }];
-      const sse = frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("");
-      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 200, responseHeaders: [...cors, { name: "content-type", value: "text/event-stream" }], body: Buffer.from(sse).toString("base64") });
-    } else {
-      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 400, responseHeaders: [...cors, { name: "content-type", value: "application/json" }], body: Buffer.from(JSON.stringify({ error: { code: 400, message: "stand-in" } })).toString("base64") });
+      args = jumpAnswer(text);
+    } else if (tool === "submit_chat_actions") {
+      chatBodies.push(text);
+      args = { actions: [{ type: "send_message", actorName: AI_COUNTRY, content: LINE_FROM_AI }] };
+    } else if (tool === "submit_actions") {
+      args = { topics: [{ title: SUGGESTED_TOPIC, description: "Shore up the position at home.", actions: [{ title: "Convene the cabinet", text: "Convene the cabinet on the budget." }] }] };
     }
+    if (!args) {
+      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 400, responseHeaders: [...cors, { name: "content-type", value: "application/json" }], body: Buffer.from(JSON.stringify({ error: { code: 400, message: "stand-in" } })).toString("base64") });
+      return;
+    }
+    const frame = { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: tool, args } }] }, finishReason: "STOP" }] };
+    const streamed = String(request.url).includes("streamGenerateContent");
+    await page.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [...cors, { name: "content-type", value: streamed ? "text/event-stream" : "application/json" }],
+      body: Buffer.from(streamed ? `data: ${JSON.stringify(frame)}\n\n` : JSON.stringify(frame)).toString("base64"),
+    });
   };
 
   const shots = path.join(HERE, "shots");
@@ -280,6 +344,13 @@ try {
   const host = await openTab(`${HOST}/`);
   await standInModel(host);
   await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  // What the engine says to the host's screen, kept for a failed run's report:
+  // a second listener on the two windows' channel, there from the page's start.
+  await host.send("Page.enable");
+  await host.send("Page.addScriptToEvaluateOnNewDocument", { source: `window.__loopback = []; try { const channel = new BroadcastChannel("oh-mp-host"); channel.onmessage = (event) => { const data = event.data || {}; window.__loopback.push(data.type === "status" ? "status open=" + Boolean(data.status && data.status.open) + (data.status && data.status.error ? " error=" + data.status.error : "") : data.type === "message" ? "message " + (data.message && data.message.t) : String(data.type)); if (window.__loopback.length > 400) window.__loopback.shift(); }; } catch (error) { window.__loopback.push("no channel: " + error); }` });
+  await host.send("Page.reload");
+  await sleep(500);
+  await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await withHelpers(host);
   check("the host's game loads with the Lobbies tab", await until(host, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000));
   await host.eval("window.__e2e.click('Lobbies')");
@@ -291,7 +362,10 @@ try {
   await host.eval("window.__e2e.click('Open the lobby')");
   const hosting = await until(host, "Boolean(document.querySelector('code') && document.querySelector('code').textContent.startsWith('oh1-'))", 45000);
   const token = hosting ? await host.eval("document.querySelector('code').textContent") : "";
-  check("hosting shows an invite token", hosting, token ? `${token.slice(0, 24)}…` : host.logs.slice(-6).join(" | "));
+  // What the screen itself says when hosting fails, beside its console.
+  const hostSays = hosting ? "" : await host.eval(`document.body.innerText.split("\\n").map((line) => line.trim()).filter((line) => /engine|could not|did not|error|failed|needs/i.test(line)).slice(0, 6).join(" / ")`);
+  const heardFromEngine = hosting ? "" : await host.eval(`(() => { const counts = {}; for (const entry of window.__loopback || []) counts[entry] = (counts[entry] || 0) + 1; return JSON.stringify(counts); })()`);
+  check("hosting shows an invite token", hosting, token ? `${token.slice(0, 24)}…` : `${hostSays} || heard on the loopback: ${heardFromEngine} || ${host.logs.slice(-6).join(" | ")} || engine: ${engine.logs.slice(-6).join(" | ")}`);
   const relaysUp = await until(host, "/Relays: [1-9]/.test(document.body.textContent)", 30000);
   const relayLine = await host.eval("(document.body.textContent.match(/Relays: [^A-Z]*?connected/) || [''])[0]");
   check("the host reaches its signaling relays", relaysUp, `${PUBLIC_RELAYS ? "public" : "local"}: ${relayLine}`);
@@ -330,7 +404,10 @@ try {
   const lobby = await until(guest, "[...document.querySelectorAll('select')].some((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country'))", 90000);
   check("the guest finds the host through the relay and reaches the lobby", lobby, lobby ? `in ${((Date.now() - joinedAt) / 1000).toFixed(1)} s` : guest.logs.slice(-8).join(" | "));
   await withHelpers(guest);
-  GUEST_COUNTRY = await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); const names = [...select.options].map((o) => o.value).filter(Boolean); return names.find((n) => /^Russia/.test(n)) || names.find((n) => n !== ${JSON.stringify(HOST_COUNTRY)}); })()`);
+  const offered = await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); return select ? [...select.options].map((o) => o.value).filter(Boolean) : []; })()`);
+  if (!offered.length) throw new Error("the guest was offered no country: the lobby never opened");
+  GUEST_COUNTRY = offered.find((n) => /^Russia/.test(n)) || offered.find((n) => n !== HOST_COUNTRY);
+  AI_COUNTRY = offered.find((n) => /^France$/.test(n)) || offered.find((n) => /^(France|Germany|Japan|Brazil)/.test(n) && n !== HOST_COUNTRY && n !== GUEST_COUNTRY) || offered.find((n) => n !== HOST_COUNTRY && n !== GUEST_COUNTRY);
   await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); window.__e2e.choose(select, ${JSON.stringify(GUEST_COUNTRY)}); return true; })()`);
   await sleep(300);
   await guest.eval("window.__e2e.click('Take it')");
@@ -358,6 +435,120 @@ try {
   await withHelpers(host);
   await withHelpers(guest);
 
+  // Two people talk. The host opens a thread with the guest's country and
+  // writes; nobody answers for the guest but the guest.
+  const LINE_FROM_HOST = "Washington proposes talks on arms limits.";
+  const LINE_FROM_GUEST = "Moscow is willing to talk, in Geneva.";
+  const toggleChats = (tab) => tab.eval(`(() => { const b = document.querySelector('button[title^="Chat"]'); if (!b) return false; b.click(); return true; })()`);
+  const SEND = `document.querySelector('button[aria-label="Send message"]')`;
+  const sayInOpenThread = async (tab, line) => {
+    await until(tab, `Boolean(${SEND})`, 15000);
+    await tab.eval(`(() => { window.__e2e.type(${SEND}.parentElement.querySelector('textarea'), ${JSON.stringify(line)}); return true; })()`);
+    await sleep(300);
+    await tab.eval(`${SEND}.click(); true`);
+  };
+  const threadRows = (tab) => tab.eval("[...document.querySelectorAll('[data-diplomacy-thread-row]')].map((row) => row.textContent.replace(/\\s+/g, ' ').trim())");
+  const toolsBeforeTalk = sentTools.length;
+  await toggleChats(host);
+  await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
+  await host.eval("window.__e2e.click('Start New Chat')");
+  await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
+  await host.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(GUEST_COUNTRY)}); return true; })()`);
+  await sleep(500);
+  await host.eval(`(() => { const tile = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(GUEST_COUNTRY)}); if (tile) tile.click(); return Boolean(tile); })()`);
+  await sleep(300);
+  await host.eval("window.__e2e.click('Chat with 1 country')");
+  await sayInOpenThread(host, LINE_FROM_HOST);
+  const holds = (line) => `window.__e2e.view('chat').then((chats) => JSON.stringify(chats).includes(${JSON.stringify(line)}))`;
+  const lineReached = await until(guest, holds(LINE_FROM_HOST), 20000);
+  await toggleChats(guest);
+  await until(guest, "document.querySelectorAll('[data-diplomacy-thread-row]').length > 0", 15000);
+  const guestRows = await threadRows(guest);
+  check("a line the host writes to the guest's country reaches the guest as a thread with the host",
+    lineReached && guestRows.some((row) => row.includes(HOST_COUNTRY) && !row.startsWith(GUEST_COUNTRY)),
+    JSON.stringify({ guestRows }));
+  await sleep(4000);
+  check("nobody answers for a country a person plays: the model is not asked", sentTools.length === toolsBeforeTalk,
+    `asked: ${sentTools.slice(toolsBeforeTalk).join(", ") || "nothing"}`);
+  // The guest answers in the same thread.
+  await guest.eval("document.querySelector('[data-diplomacy-thread-row]').click(); true");
+  await sayInOpenThread(guest, LINE_FROM_GUEST);
+  const answerReached = await until(host, holds(LINE_FROM_GUEST), 20000);
+  const guestPanel = await guest.eval("document.body.textContent");
+  const lineOf = (chats, line) => chats.flatMap((chat) => chat.messages ?? []).find((message) => message.text === line);
+  const hostChats = await host.eval("window.__e2e.view('chat')");
+  const guestChats = await guest.eval("window.__e2e.view('chat')");
+  check("the guest answers in that thread, and each reads the other's line as the other's",
+    answerReached && !guestPanel.includes("You are not in that conversation")
+      && lineOf(hostChats, LINE_FROM_GUEST)?.speaker === GUEST_COUNTRY && lineOf(hostChats, LINE_FROM_GUEST)?.role !== "user"
+      && lineOf(guestChats, LINE_FROM_GUEST)?.role === "user"
+      && lineOf(guestChats, LINE_FROM_HOST)?.speaker === HOST_COUNTRY && lineOf(guestChats, LINE_FROM_HOST)?.role !== "user"
+      && lineOf(hostChats, LINE_FROM_HOST)?.role === "user",
+    JSON.stringify({
+      refused: guestPanel.includes("You are not in that conversation"),
+      host: hostChats.map((chat) => ({ with: (chat.countries ?? []).map((c) => c.name), lines: (chat.messages ?? []).map((m) => `${m.role}/${m.speaker}: ${m.text}`) })),
+      guest: guestChats.map((chat) => ({ with: (chat.countries ?? []).map((c) => c.name), lines: (chat.messages ?? []).map((m) => `${m.role}/${m.speaker}: ${m.text}`) })),
+    }));
+  await shoot(guest, "1-guest-thread-with-host");
+
+  // A table with an AI government at it: the host opens a thread with the
+  // guest's country and one nobody plays. That government answers for itself,
+  // and the model is told who at the table is a person, whoever is writing.
+  const LINE_TO_TABLE = "Washington proposes a conference on the arms talks.";
+  const LINE_AT_TABLE = "Moscow will attend the conference.";
+  const backToList = (tab) => tab.eval(`(() => { const b = document.querySelector('button[aria-label="Back to diplomacy"]'); if (b) b.click(); return Boolean(b); })()`);
+  const pickCountry = async (tab, name) => {
+    await tab.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(name)}); return true; })()`);
+    await sleep(500);
+    await tab.eval(`(() => { const tile = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(name)}); if (tile) tile.click(); return Boolean(tile); })()`);
+    await sleep(300);
+  };
+  const rosterOf = (body) => body.split("\n").filter((line) => line.includes("-controlled")).map((line) => line.trim());
+  await backToList(host);
+  await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
+  await host.eval("window.__e2e.click('Start New Chat')");
+  await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
+  await pickCountry(host, GUEST_COUNTRY);
+  await pickCountry(host, AI_COUNTRY);
+  await host.eval("window.__e2e.click('Chat with 2 countries')");
+  const askedBeforeTable = chatBodies.length;
+  await sayInOpenThread(host, LINE_TO_TABLE);
+  const aiAnswered = await until(guest, holds(LINE_FROM_AI), 45000);
+  const tableOf = (chats) => chats.find((chat) => (chat.messages ?? []).some((message) => message.text === LINE_TO_TABLE));
+  const guestTable = tableOf(await guest.eval("window.__e2e.view('chat')"));
+  const hostTable = tableOf(await host.eval("window.__e2e.view('chat')"));
+  const namesOf = (chat) => (chat?.countries ?? []).map((country) => country.name).sort();
+  const firstRoster = rosterOf(chatBodies[askedBeforeTable] ?? "");
+  check("an AI government at a table of people answers for itself, and the model is told who the people are",
+    aiAnswered && chatBodies.length === askedBeforeTable + 1
+      && JSON.stringify(namesOf(guestTable)) === JSON.stringify([AI_COUNTRY, HOST_COUNTRY].sort())
+      && JSON.stringify(namesOf(hostTable)) === JSON.stringify([AI_COUNTRY, GUEST_COUNTRY].sort())
+      && (guestTable?.messages ?? []).find((message) => message.text === LINE_FROM_AI)?.speaker === AI_COUNTRY
+      && firstRoster.some((line) => line.startsWith(`- ${AI_COUNTRY} — AI-controlled`))
+      && firstRoster.some((line) => line.startsWith(`- ${HOST_COUNTRY} — HUMAN-controlled (the player)`))
+      && firstRoster.some((line) => line.startsWith(`- ${GUEST_COUNTRY} — HUMAN-controlled (another player)`)),
+    JSON.stringify({ ai: AI_COUNTRY, asked: chatBodies.length - askedBeforeTable, guestSees: namesOf(guestTable), hostSees: namesOf(hostTable), roster: firstRoster }));
+  // The guest speaks at the same table, which is the host's thread.
+  await backToList(guest);
+  await until(guest, "document.querySelectorAll('[data-diplomacy-thread-row]').length > 1", 15000);
+  await guest.eval(`(() => { const row = [...document.querySelectorAll('[data-diplomacy-thread-row]')].find((entry) => entry.textContent.includes(${JSON.stringify(AI_COUNTRY)})); if (row) row.click(); return Boolean(row); })()`);
+  await sayInOpenThread(guest, LINE_AT_TABLE);
+  const guestHeard = await until(host, holds(LINE_AT_TABLE), 20000);
+  for (const deadline = Date.now() + 45000 * PATIENCE; Date.now() < deadline && chatBodies.length < askedBeforeTable + 2;) await sleep(300);
+  const askedAgain = chatBodies.length >= askedBeforeTable + 2;
+  const secondBody = chatBodies[askedBeforeTable + 1] ?? "";
+  const secondRoster = rosterOf(secondBody);
+  check("a guest's line at the host's table is the guest's own, and the model still answers for nobody but the AI",
+    guestHeard && askedAgain
+      && secondRoster.some((line) => line.startsWith(`- ${GUEST_COUNTRY} — HUMAN-controlled (the player)`))
+      && secondRoster.some((line) => line.startsWith(`- ${HOST_COUNTRY} — HUMAN-controlled (another player)`))
+      && secondBody.includes(`${HOST_COUNTRY}: ${LINE_TO_TABLE}`) && secondBody.includes(`${GUEST_COUNTRY} has just said: ${LINE_AT_TABLE}`),
+    JSON.stringify({ guestHeard, asked: chatBodies.length - askedBeforeTable, roster: secondRoster, hostLineNamed: secondBody.includes(`${HOST_COUNTRY}: ${LINE_TO_TABLE}`) }));
+  await shoot(guest, "1-guest-conference");
+  await toggleChats(host);
+  await toggleChats(guest);
+  await sleep(400);
+
   // Each queues an order through the game's own Actions panel.
   const queueOrder = async (tab, text) => {
     await tab.eval("(() => { const launcher = document.querySelector('[title=\"Actions\"]'); if (launcher) launcher.click(); return Boolean(launcher); })()");
@@ -378,12 +569,51 @@ try {
     guestQueued && hostQueued
       && guestActions.every((a) => a.ownerCode === GUEST_COUNTRY) && hostActions.every((a) => a.ownerCode === HOST_COUNTRY),
     JSON.stringify({ guest: guestActions.map((a) => `${a.ownerCode}: ${a.text}`), host: hostActions.map((a) => `${a.ownerCode}: ${a.text}`) }));
+  // The suggestions button: asked with the asker's own key, shown on its own
+  // screen and kept on that device. (Only the host has a key in this run.)
+  const suggestionsAsked = await host.eval("(() => { const button = [...document.querySelectorAll('button')].find((b) => /Get AI suggestions/.test(b.textContent)); if (button) button.click(); return Boolean(button); })()");
+  const suggested = await until(host, `window.__e2e.view('world').then((world) => (world.actionSuggestions || []).some((topic) => topic.title === ${JSON.stringify(SUGGESTED_TOPIC)}))`, 45000);
+  const suggestionShown = await until(host, `document.body.textContent.includes(${JSON.stringify(SUGGESTED_TOPIC)})`, 10000);
+  const guestSuggestions = ((await guest.eval("window.__e2e.view('world')")).actionSuggestions || []).length;
+  const hostFileAfterSuggestions = await (await fetch(`${HOST}/api/runtime/json/world?v=e2e`)).json();
+  check("AI suggestions asked in a shared game are shown, and stay on the device that asked",
+    suggestionsAsked && suggested && suggestionShown && guestSuggestions === 0 && !(hostFileAfterSuggestions.actionSuggestions || []).length,
+    JSON.stringify({ asked: suggestionsAsked, kept: suggested, shown: suggestionShown, guestSuggestions, inTheHostsGame: (hostFileAfterSuggestions.actionSuggestions || []).length, tools: [...new Set(sentTools)].join(", ") }));
+  await shoot(host, "1-host-suggestions");
+
+  // A Projects board of one's own. The guest's screen saves one the way its
+  // advisor's reply or the board's own buttons do (the whole world document,
+  // through the game's own save path), and the host keeps it for that country
+  // alone: not on the game's own board, and in nobody else's view.
+  const PROJECT = "Arctic rail link to Murmansk";
+  await guest.eval(`(async () => {
+    const world = await window.__e2e.view('world');
+    const saved = await fetch('/api/runtime/json/world?v=e2e', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...world, projects: [...(world.projects || []), { name: ${JSON.stringify(PROJECT)}, kind: 'project', status: 'active', summary: 'A second track north.' }] }) });
+    window.__boardSave = saved.status;
+    return true;
+  })()`);
+  const onGuestBoard = await until(guest, `window.__e2e.view('world').then((world) => (world.projects || []).some((project) => project.name === ${JSON.stringify(PROJECT)}))`, 15000);
+  let hostFile = {};
+  for (const deadline = Date.now() + 15000 * PATIENCE; Date.now() < deadline;) {
+    hostFile = await (await fetch(`${HOST}/api/runtime/json/world?v=e2e`)).json();
+    if ((hostFile.seatBoards?.[GUEST_COUNTRY] ?? []).length) break;
+    await sleep(300);
+  }
+  const hostScreenWorld = await host.eval("window.__e2e.view('world')");
+  check("a guest's Projects board is saved without an error, and kept by the host for that country alone",
+    onGuestBoard && (await guest.eval("window.__boardSave")) === 200
+      && (hostFile.seatBoards?.[GUEST_COUNTRY] ?? []).some((project) => project.name === PROJECT)
+      && !(hostFile.projects ?? []).some((project) => project.name === PROJECT)
+      && !JSON.stringify(hostScreenWorld).includes(PROJECT),
+    JSON.stringify({ status: await guest.eval("window.__boardSave"), onGuestBoard, kept: (hostFile.seatBoards?.[GUEST_COUNTRY] ?? []).map((project) => project.name), onTheGamesOwn: (hostFile.projects ?? []).length, onTheHostsScreen: JSON.stringify(hostScreenWorld).includes(PROJECT) }));
   await shoot(guest, "1-guest-planning");
   await shoot(host, "1-host-planning");
 
+  // The host's screen hears of the AI calls its engine makes.
+  await host.eval(`(() => { window.__aiDone = []; window.addEventListener('oh:ai-generation-complete', (event) => window.__aiDone.push(event.detail || {})); return true; })()`);
   await host.eval("window.__e2e.click('Ready')");
   await guest.eval("window.__e2e.click('Ready')");
-  const resolved = await until(guest, "window.__e2e.view('events').then((events) => events.some((e) => String(e.title).startsWith('E2E: Oil prices')))", 240000);
+  const resolved = await until(guest, "window.__e2e.view('events').then((events) => events.some((e) => String(e.title).startsWith('Oil prices slide further')))", 240000);
   check("everyone ready: the host runs the round and its events reach the guest", resolved, `jump answers: ${answeredJumps}; tools asked: ${[...new Set(sentTools)].join(", ")}`);
   check("the model is told who plays what, and whose each order is",
     lastJumpBody.includes("[Shared Game") && lastJumpBody.includes(`(action, ${GUEST_COUNTRY})`) && lastJumpBody.includes(`(action, ${HOST_COUNTRY})`),
@@ -392,7 +622,7 @@ try {
   const hostEvents = resolved ? await host.eval("window.__e2e.view('events')") : [];
   const war = (events) => events.some((event) => String(event.title).includes("declares war on Ukraine"));
   check("the world never chose for the guest: its unordered declaration of war was withheld", resolved && !war(guestEvents) && !war(hostEvents),
-    `guest ${guestEvents.filter((e) => String(e.title).startsWith("E2E")).map((e) => e.title).join(" / ")}`);
+    `guest ${guestEvents.filter((e) => STAGED_TITLES.some((part) => String(e.title).includes(part))).map((e) => e.title).join(" / ")}`);
   const drills = (events) => events.find((event) => String(event.title).includes("snap drills"));
   const mission = (events) => events.find((event) => String(event.title).includes("trade mission"));
   const guestOrderId = guestActions.find((a) => a.text === GUEST_ORDER)?.id;
@@ -411,10 +641,61 @@ try {
     && (await Promise.all([host, guest].map((tab) => until(tab, `document.body.textContent.includes(${JSON.stringify(`/ ${newDate}`)})`, 10000)))).every(Boolean);
   check("both menu bars move on to the round's new date", datesMoved, `${ORIGIN} → ${newDate}`);
   const guestWorld = await guest.eval("window.__e2e.view('world')");
-  check("the guest's view holds none of the narrator's own", !guestWorld.lastJumpSummary && !(guestWorld.storylines ?? []).length && !(guestWorld.simulationHistory ?? []).length,
-    JSON.stringify({ summary: Boolean(guestWorld.lastJumpSummary), storylines: (guestWorld.storylines ?? []).length, history: (guestWorld.simulationHistory ?? []).length }));
+  const guestTurn = (guestWorld.simulationHistory ?? [])[0] ?? {};
+  check("the guest's view holds none of the narrator's own: the turn is its dates and its events, nothing more",
+    !guestWorld.lastJumpSummary && !(guestWorld.storylines ?? []).length
+      && (guestTurn.eventIds ?? []).length >= 4 && !guestTurn.summary && !guestTurn.rawResponse && !guestTurn.receipt
+      && (guestTurn.plannedActions ?? []).every((action) => action.ownerCode === GUEST_COUNTRY),
+    JSON.stringify({ summary: Boolean(guestWorld.lastJumpSummary), storylines: (guestWorld.storylines ?? []).length, turn: Object.keys(guestTurn), events: (guestTurn.eventIds ?? []).length, orders: (guestTurn.plannedActions ?? []).map((action) => action.ownerCode) }));
   const phase = await guest.eval("document.body.textContent.includes('What happened') || document.body.textContent.includes('Round 2')");
   check("the round moves on to its reveal", phase);
+
+  // The round is shown on every screen the way a time skip is: the Events
+  // panel opens on it, its first event on screen and the rest to come.
+  const panelOpen = (tab) => until(tab, "document.body.textContent.includes('Oil prices slide further') && window.__e2e.buttons('Next event').length > 0", 20000);
+  const panels = await Promise.all([panelOpen(host), panelOpen(guest)]);
+  const lastTitle = "Brazil's central bank raises rates";
+  const hiddenYet = await Promise.all([host, guest].map((tab) => tab.eval(`!document.body.textContent.includes(${JSON.stringify(lastTitle)})`)));
+  check("the round opens in the Events panel on every screen, its first event shown and the rest still to come",
+    panels.every(Boolean) && hiddenYet.every(Boolean), JSON.stringify({ host: panels[0], guest: panels[1], restHidden: hiddenYet }));
+  await shoot(guest, "2-guest-events-panel");
+  await shoot(host, "2-host-events-panel");
+  // Each reads it through; once everyone has, the next round plans at once,
+  // well inside the reveal's own limit.
+  const readThrough = async (tab) => {
+    for (let step = 0; step < 12 && await tab.eval("window.__e2e.click('Next event')"); step += 1) await sleep(400);
+    return tab.eval(`document.body.textContent.includes(${JSON.stringify(lastTitle)})`);
+  };
+  const readAll = await Promise.all([readThrough(host), readThrough(guest)]);
+  const planningAgain = (await Promise.all([host, guest].map((tab) => until(tab, "document.body.textContent.includes('Round 2') && !document.body.textContent.includes('What happened')", 30000)))).every(Boolean);
+  check("everyone reads the round through, and the next round's planning begins without waiting out the timer",
+    readAll.every(Boolean) && planningAgain, JSON.stringify({ readAll, planningAgain }));
+
+  // The host's own screen knows of the AI calls its engine made: the AI debug
+  // console reads the stored record, and the diagnostics log has the engine's lines.
+  const announced = await until(host, "(window.__aiDone || []).some((detail) => /jump/i.test(String(detail.taskKey)))", 10000);
+  const storedCalls = await host.eval(`new Promise((resolve) => {
+    const request = indexedDB.open('oh-debug-telemetry');
+    request.onerror = () => resolve([]);
+    request.onsuccess = () => {
+      try {
+        const all = request.result.transaction('generations', 'readonly').objectStore('generations').getAll();
+        all.onsuccess = () => resolve((all.result || []).map((record) => record.taskKey));
+        all.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    };
+  })`);
+  await sleep(1200);
+  const engineLines = await host.eval(`(() => { try { return (JSON.parse(localStorage.getItem('oh_debug_log_v1') || '{}').entries || []).filter((entry) => String(entry.message).startsWith("(host's engine)")).length; } catch { return 0; } })()`);
+  check("the host's AI debug console and diagnostics log cover the calls its engine made",
+    announced && storedCalls.some((task) => /jump/i.test(String(task))) && engineLines > 0,
+    JSON.stringify({ announced, stored: [...new Set(storedCalls)], engineLines, heard: await host.eval("(window.__aiDone || []).map((detail) => detail.taskKey)") }));
+
+  // Nothing a player's screen saved came back as an error, and nothing was
+  // refused out loud for something nobody asked for.
+  const complaints = (tab) => tab.logs.filter((line) => /HTTP 409|Failed to save|SharedGameRefusal|not fully updated/i.test(line));
+  check("no save was turned away with an error on either screen", complaints(host).length === 0 && complaints(guest).length === 0,
+    JSON.stringify({ host: complaints(host).slice(0, 3), guest: complaints(guest).slice(0, 3) }));
 
   await host.eval("window.__e2e.click('Stop')");
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);

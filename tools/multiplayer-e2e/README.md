@@ -28,7 +28,9 @@ node e2e.mjs
 - Chrome must be installed. Set `CHROME=<path>` if it is not in a usual place.
 - Ports 3811 and 3812 (the host's and the guest's app servers) and 9461
   (Chrome's DevTools) must be free.
-- A run takes two to three minutes. It exits 0 when every check passes, and
+- A run takes about five minutes. On a machine busy with something else,
+  `PATIENCE=4 node e2e.mjs` waits four times as long for every step.
+  It exits 0 when every check passes, and
   writes screenshots of both screens to `shots/`.
 
 ## What it sets up
@@ -56,8 +58,20 @@ The real desktop app's hidden engine window is not part of this run.
   country, and its view says it plays that country.
   - Its loading screen never names the stand-in game's placeholder country.
   - Its menu bar names the country it took.
+- **Diplomacy:**
+  - Between two people: the host opens a thread with the guest's country. The
+    guest reads it as a thread with the host, answers in it, and the model is
+    asked nothing.
+  - With an AI government at the table: that government answers for itself, to
+    everyone at the table. The model is told who the people are, whichever of
+    them is writing.
 - **Orders:** the game starts, and each player queues an order through the
   game's own Actions panel, seeing only its own.
+- **A player's own saves:**
+  - AI suggestions asked in a shared game are shown, and stay on the device
+    that asked.
+  - A guest's Projects board is saved without an error, and the host keeps it
+    for that country alone.
 - **The round:** everyone readies, the host runs the round, and its events
   reach the guest.
   - The model is told who plays what, and whose each order is.
@@ -68,9 +82,15 @@ The real desktop app's hidden engine window is not part of this run.
 - **After the round:**
   - The guest is never asked for an AI key.
   - Both menu bars move on to the round's new date.
-  - The guest's view holds none of the narrator's own documents (summary,
-    storylines, simulation history).
-  - The round moves on to its reveal.
+  - The guest's view holds none of the narrator's own (summary, storylines);
+    of the turn it holds the dates, the events and its own orders.
+  - The round moves on to its reveal: the Events panel opens on every screen,
+    its first event shown and the rest still to come.
+  - Everyone reads the round through, and the next round's planning begins
+    without waiting out the reveal's timer.
+  - The host's AI debug console and diagnostics log cover the calls its engine
+    made.
+  - No save was turned away with an error on either screen.
 - **Stopping:** when the host stops, the guest is told.
 
 The map's stock tiles are not in the fresh data folders, so a screen's loading

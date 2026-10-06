@@ -2,6 +2,8 @@
 // One of the end-to-end run's app servers: the game's own server
 // (server/server.js, serving the built dist/) on a data folder of its own.
 //   node app-server.mjs <dataDir> <port> [host]
+// The map's tiles are read from OH_E2E_ASSETS when the run gives one (shared by
+// both servers, read only), and the server leaves the player's Discord alone.
 // "host" stands in for the desktop app's engine-window handle
 // (electron/main.cjs): open() only says yes, and the run opens engine.html in
 // a browser tab itself.
@@ -14,7 +16,9 @@ const REPO = path.join(HERE, "..", "..");
 const [dataDir, port, role] = process.argv.slice(2);
 fs.mkdirSync(dataDir, { recursive: true });
 process.env.OH_DATA_DIR = dataDir;
-process.env.OH_ASSETS_DIR = path.join(dataDir, "assets");
+process.env.OH_ASSETS_DIR = process.env.OH_E2E_ASSETS || path.join(dataDir, "assets");
+// A test server is not the player at play: no "Playing Open Historia".
+process.env.OH_DISCORD_PRESENCE = "0";
 process.env.PORT = String(port);
 if (role === "host") {
   let open = false;
