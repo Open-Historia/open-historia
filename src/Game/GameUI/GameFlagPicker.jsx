@@ -117,8 +117,10 @@ const PackCard = ({ post, onClick }) => {
             }}
         >
             <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "rgba(38,38,42,0.9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {post?.imageUrl ? (
-                    <img src={post.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.78 }} />
+                {/* The scenario's cover, from its checked copy in the hub's
+                    releases (communityFlags.js pictureUrl). */}
+                {post?.pictureUrl ? (
+                    <img src={post.pictureUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.78 }} />
                 ) : (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.2rem", color: "rgba(255,255,255,0.68)" }}>
                         <span style={{ fontSize: "1.6rem", lineHeight: 1 }}>▦</span>
@@ -461,7 +463,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
                                 ) : (
                                     <FlagCard
                                         key={post.id || post.url || post.title}
-                                        imageUrl={post.imageUrl}
+                                        imageUrl={post.pictureUrl}
                                         label={post.title || "Community flag"}
                                         meta={post.author ? `by ${post.author}` : "Community"}
                                         onClick={() => applyCommunity(post)}

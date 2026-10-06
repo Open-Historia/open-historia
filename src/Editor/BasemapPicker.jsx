@@ -371,8 +371,10 @@ const BasemapPicker = ({
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.7rem" }}>
                 <div style={{ ...rowTitle, margin: 0 }}>Community basemaps</div>
                 <div style={{ flex: 1 }} />
+                {/* Open and closed alike: the hub closes a post once it has
+                    released its file. */}
                 <a
-                  href="https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+is%3Aopen+label%3Abasemap"
+                  href="https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+label%3Abasemap"
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ ...tabBtn(false), textDecoration: "none" }}
@@ -394,9 +396,11 @@ const BasemapPicker = ({
                     return (
                     <div key={post.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
                       <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
-                        {post.coverImageUrl ? (
+                        {/* The image's checked copy in the hub's releases, never
+                            the post's own attachment (communityBasemaps.js). */}
+                        {post.pictureUrl ? (
                           <img
-                            src={post.coverImageUrl}
+                            src={post.pictureUrl}
                             alt=""
                             loading="lazy"
                             onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}

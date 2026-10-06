@@ -153,8 +153,10 @@ const route = async (request, url) => {
 
   // Community hub: forward /api/hub/* to the registry Worker's SSRF-guarded
   // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
-  // browser can't download bundles directly). Listing still hits api.github.com
-  // directly (it sends CORS) and passes through the interceptor untouched.
+  // browser can't download bundles directly). The hub's index (its list of
+  // posts and of checked files, runtime/hubFiles.js) is read straight from
+  // raw.githubusercontent.com, and a post's comments from api.github.com: both
+  // send CORS and pass through the interceptor untouched.
   // The Android app is this same web build packaged with Capacitor (with the map
   // inside the APK), so it has no on-device server to answer /api/app-update —
   // but it is the ONE build that can actually self-update (it ships as an APK).
@@ -182,8 +184,10 @@ const route = async (request, url) => {
     // there is: prefer the connected content node — it fetches the GitHub-hosted
     // bundle server-side and returns it with CORS, offloading the central hub
     // proxy — and fall back to the Worker if there's no node or it can't serve
-    // it. Import counts are read from the hub's own index (runtime/hubFiles.js),
-    // straight from GitHub; the Worker's import counter is no longer called.
+    // it. What is asked for is a checked copy in the hub's releases, or a
+    // suggestion's .zip the hub has checked (runtime/hubFiles.js decides, from
+    // the hub's own index, where the import counts are read from too); the
+    // Worker's import counter is no longer called.
     if (segments[0] !== "file" || method !== "GET") return errorResponse(`Unknown hub endpoint: ${url.pathname}`, 404);
     const node = getConnected();
     if (node && node.url && !node.origin) {

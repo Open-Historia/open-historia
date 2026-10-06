@@ -1,12 +1,15 @@
 /*! Open Historia — community basemaps client tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/communityBasemaps.test.js
 //
-// The basemap browser reads GitHub issue bodies, and a scenario that reuses a
+// The basemap browser reads the hub's posts, and a scenario that reuses a
 // community basemap carries only a pointer to one of those posts' files. What
 // has to hold, against a stubbed hub:
 //   - every body shape a post can have (inline image, .svg attachment, zipped
 //     vector, old .basemap.json, a scenario's .zip) is read as the right kind,
 //     with the right file behind it;
+//   - what is shown and what is downloaded is the file's checked copy in the
+//     hub's releases, never the post's own attachment, and a post whose file
+//     has no copy is not offered;
 //   - install and publish-time dedupe point a reference at the same file, read
 //     the same way;
 //   - a reference resolves back into the basemap it was made from — including a
@@ -24,18 +27,36 @@ import {
   unresolvedBundleBackground,
 } from "./communityBasemaps.js";
 import { sha256Hex } from "./basemapLibrary.js";
+import { HUB_FILE_TEXTS, HUB_INDEX_URL } from "./hubFiles.js";
 
-const ISSUES_BASEMAPS = /issues\?state=open&labels=basemap/;
-const ISSUES_SCENARIOS = /issues\?state=open&labels=scenario/;
 const PNG_BYTES = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("base64")}`;
 const VECTOR = { type: "FeatureCollection", features: [{ type: "Feature", properties: { fill: "#123456" }, geometry: { type: "Point", coordinates: [1, 2] } }] };
 
+const RELEASES = "https://github.com/Open-Historia/Open-historia-scenarios/releases/download";
+// Each file as its post names it...
 const INLINE_URL = "https://github.com/user-attachments/assets/aaaa-inline.png";
 const SVG_URL = "https://github.com/user-attachments/files/101/coast.svg";
 const ZIP_URL = "https://github.com/user-attachments/files/102/vector-world.zip";
-const OLD_JSON_URL = "https://github.com/Open-Historia/Open-historia-scenarios/releases/download/b1/old.basemap.json";
+const OLD_JSON_URL = `${RELEASES}/b1/old.basemap.json`;
 const SCENARIO_ZIP_URL = "https://github.com/user-attachments/files/103/rome-scenario.zip";
+const AGAIN_ZIP_URL = "https://github.com/user-attachments/files/104/again.zip";
+const EMPTY_JSON_URL = "https://github.com/user-attachments/files/9/empty.json";
+const LOST_URL = "https://github.com/user-attachments/assets/lost.png";
+const UNCHECKED_URL = "https://github.com/user-attachments/assets/unchecked.png";
+// ...and its checked copy in the hub's releases. An .svg's copy is a PNG: the
+// hub draws one of every SVG it is given.
+const COPIES = {
+  [INLINE_URL]: `${RELEASES}/basemaps-1/p1-aaaa-0a0a0a0a.png`,
+  [SVG_URL]: `${RELEASES}/basemaps-1/p2-101-coast-1b1b1b1b.png`,
+  [ZIP_URL]: `${RELEASES}/basemaps-1/p3-102-vector-world-2c2c2c2c.zip`,
+  [OLD_JSON_URL]: `${RELEASES}/basemaps-1/p4-old-3d3d3d3d.basemap.json`,
+  [SCENARIO_ZIP_URL]: `${RELEASES}/scenarios-1/p10-103-rome-scenario-4e4e4e4e.zip`,
+  [AGAIN_ZIP_URL]: `${RELEASES}/scenarios-1/p11-104-again-5f5f5f5f.zip`,
+  [EMPTY_JSON_URL]: `${RELEASES}/basemaps-1/p6-9-empty-6a6a6a6a.json`,
+  // Listed, and no longer there to download.
+  [LOST_URL]: `${RELEASES}/basemaps-1/p7-lost-7b7b7b7b.png`,
+};
 
 const issue = (number, title, body, extra = {}) => ({
   number,
@@ -49,19 +70,27 @@ const issue = (number, title, body, extra = {}) => ({
   ...extra,
 });
 
-// Every file the stubbed hub serves, by the URL the post links.
+// Every file the stubbed hub serves, by its address; every download is recorded.
 const files = new Map();
+const downloads = [];
+const fetched = [];
 let basemapIssues = [];
 let scenarioIssues = [];
 let localBasemaps = [];
 const saved = [];
 
-const hubFile = (url) => files.get(url);
-
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
-  if (ISSUES_BASEMAPS.test(url)) return Response.json(basemapIssues);
-  if (ISSUES_SCENARIOS.test(url)) return Response.json(scenarioIssues);
+  if (url === HUB_INDEX_URL) {
+    fetched.push(url);
+    return Response.json({
+      version: 2,
+      files: COPIES,
+      imports: {},
+      posts: [...basemapIssues.map((entry) => ({ ...entry, kind: "basemap" })), ...scenarioIssues.map((entry) => ({ ...entry, kind: "scenario" }))],
+      suggestions: {},
+    });
+  }
   if (url === "/api/basemaps" && (init.method ?? "GET") === "GET") return Response.json(localBasemaps);
   if (url === "/api/basemaps" && init.method === "POST") {
     const body = JSON.parse(init.body);
@@ -70,7 +99,8 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url.startsWith("/api/hub/file?url=")) {
     const target = decodeURIComponent(url.slice("/api/hub/file?url=".length));
-    const file = hubFile(target);
+    downloads.push(target);
+    const file = files.get(target);
     if (!file) return Response.json({ error: "Not found on the hub." }, { status: 404 });
     return new Response(file.bytes, { headers: { "content-type": file.type } });
   }
@@ -78,29 +108,36 @@ globalThis.fetch = async (input, init = {}) => {
 };
 
 const zipBytes = async (entries) => new Uint8Array(await (await zipBundle(entries)).arrayBuffer());
+// As GitHub serves a release file, whatever it is.
+const RELEASE_TYPE = "application/octet-stream";
 
 const setUpHub = async () => {
-  files.set(INLINE_URL, { bytes: PNG_BYTES, type: "image/png" });
-  files.set(SVG_URL, { bytes: new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>"), type: "application/octet-stream" });
-  files.set(ZIP_URL, { bytes: await zipBytes({ "basemap.geojson": JSON.stringify(VECTOR) }), type: "application/zip" });
-  files.set(OLD_JSON_URL, {
+  files.set(COPIES[INLINE_URL], { bytes: PNG_BYTES, type: RELEASE_TYPE });
+  files.set(COPIES[SVG_URL], { bytes: PNG_BYTES, type: RELEASE_TYPE });
+  files.set(COPIES[ZIP_URL], { bytes: await zipBytes({ "basemap.geojson": JSON.stringify(VECTOR) }), type: RELEASE_TYPE });
+  files.set(COPIES[OLD_JSON_URL], {
     bytes: new TextEncoder().encode(JSON.stringify({ basemap: { name: "Old Map", kind: "image" }, payload: { dataUrl: PNG_DATA_URL } })),
-    type: "application/json",
+    type: RELEASE_TYPE,
   });
-  files.set(SCENARIO_ZIP_URL, { bytes: await zipBytes({ "scenario.json": "{}", "basemap.png": PNG_BYTES, "preview.jpg": PNG_BYTES }), type: "application/zip" });
+  files.set(COPIES[SCENARIO_ZIP_URL], { bytes: await zipBytes({ "scenario.json": "{}", "basemap.png": PNG_BYTES, "preview.jpg": PNG_BYTES }), type: RELEASE_TYPE });
+  // The attachments themselves, so a test can see that nothing asks for one.
+  files.set(INLINE_URL, { bytes: PNG_BYTES, type: "image/png" });
+  files.set(UNCHECKED_URL, { bytes: PNG_BYTES, type: "image/png" });
 
   basemapIssues = [
     issue(1, "[Basemap] Inline Relief", `### Image\n![relief](${INLINE_URL})\n\n### Basemap info\nBasemap-Hash: ${"a".repeat(64)}\nBasemap-Kind: image`),
-    issue(2, "[Basemap] Coast Lines", `### Image\n[coast.svg](${SVG_URL})\n\nBasemap-Hash: ${"b".repeat(64)}\nBasemap-Kind: image`),
+    // Closed by the hub once its file was released: still a post.
+    issue(2, "[Basemap] Coast Lines", `### Image\n[coast.svg](${SVG_URL})\n\nBasemap-Hash: ${"b".repeat(64)}\nBasemap-Kind: image`, { state: "closed" }),
     issue(3, "[Basemap] Vector World", `### File\n[vector-world.zip](${ZIP_URL})\n\nBasemap-Hash: ${"c".repeat(64)}\nBasemap-Kind: vector`),
     issue(4, "Old Map", `Bundle file: ${OLD_JSON_URL}\nBasemap-Hash: ${"d".repeat(64)}`),
-    issue(5, "[Basemap] A pull request", "", { pull_request: {} }),
+    issue(5, "[Basemap] Not among the checked files", `### Image\n![x](${UNCHECKED_URL})\nBasemap-Kind: image`),
   ];
   scenarioIssues = [
     issue(10, "[Scenario] Rome", `### Scenario file\n[rome-scenario.zip](${SCENARIO_ZIP_URL})\n\nBasemap-Hash: ${"e".repeat(64)}\nBasemap-Kind: image`),
     // Carries the same basemap as post 1, so it is listed once, as post 1.
-    issue(11, "[Scenario] Relief Again", `[again.zip](https://github.com/user-attachments/files/104/again.zip)\nBasemap-Hash: ${"a".repeat(64)}`),
+    issue(11, "[Scenario] Relief Again", `[again.zip](${AGAIN_ZIP_URL})\nBasemap-Hash: ${"a".repeat(64)}`),
     issue(12, "[Scenario] Plain JSON", "https://github.com/user-attachments/files/105/plain.json"),
+    issue(13, "[Scenario] Not among the checked files", "[later.zip](https://github.com/user-attachments/files/106/later.zip)"),
   ];
   return fetchCommunityBasemaps({ force: true });
 };
@@ -108,23 +145,28 @@ const setUpHub = async () => {
 const byId = (posts, id) => posts.find((post) => post.id === id);
 
 test("every body shape is read as the right kind of post, with the right file", async () => {
+  fetched.length = 0;
   const posts = await setUpHub();
-  assert.deepEqual(posts.map((post) => post.id), [1, 2, 3, 4, "scenario-10"]);
+  assert.deepEqual(fetched, [HUB_INDEX_URL], "one read of the hub's index, and no request to GitHub's API");
+  assert.deepEqual(posts.map((post) => post.id), [1, 2, 3, 4, "scenario-10"], "a post whose file the hub has not released is not offered");
 
   const inline = byId(posts, 1);
   assert.equal(inline.title, "Inline Relief");
   assert.equal(inline.kind, "image");
   assert.equal(inline.coverImageUrl, INLINE_URL);
+  assert.equal(inline.pictureUrl, COPIES[INLINE_URL], "the card shows the image's checked copy");
   assert.equal(inline.bundleUrl, null);
   assert.equal(inline.contentHash, "a".repeat(64));
 
   const svg = byId(posts, 2);
   assert.equal(svg.bundleUrl, SVG_URL);
   assert.equal(svg.kind, "image");
+  assert.equal(svg.pictureUrl, null, "an attached .svg was never the card's picture");
 
   const vector = byId(posts, 3);
   assert.equal(vector.kind, "vector");
   assert.equal(vector.bundleUrl, ZIP_URL);
+  assert.equal(vector.pictureUrl, null);
 
   const old = byId(posts, 4);
   assert.equal(old.title, "Old Map");
@@ -139,9 +181,10 @@ test("every body shape is read as the right kind of post, with the right file", 
   assert.equal(basemapPostInstallable({ kind: "vector", coverImageUrl: INLINE_URL }), false, "a vector needs its data file");
 });
 
-test("install reads each post's payload and records the file a reference should point at", async () => {
+test("install reads each post's payload from its checked copy, and records the file a reference should point at", async () => {
   const posts = await setUpHub();
   saved.length = 0;
+  downloads.length = 0;
   const cases = [
     { id: 1, kind: "image", payloadUrl: INLINE_URL, payloadVia: "image" },
     { id: 2, kind: "image", payloadUrl: SVG_URL, payloadVia: "image" },
@@ -157,10 +200,16 @@ test("install reads each post's payload and records the file a reference should 
   }
   assert.deepEqual(saved[2].payload, { geojson: VECTOR }, "the zipped vector unpacks to its geometry");
   assert.equal(saved[3].name, "Old Map", "an old bundle's own name wins");
-  assert.equal(saved[0].payload.dataUrl, PNG_DATA_URL);
+  assert.equal(saved[0].payload.dataUrl, PNG_DATA_URL, "a PNG by its bytes, though GitHub serves a release file as a plain download");
+  assert.equal(saved[1].payload.dataUrl, PNG_DATA_URL, "the .svg's copy is the PNG the hub drew of it, and is saved as one");
 
   await installCommunityBasemap(byId(posts, "scenario-10"));
   assert.equal(saved.at(-1).payload.dataUrl, PNG_DATA_URL, "a scenario's basemap.png, not its preview");
+  assert.deepEqual(
+    downloads,
+    [COPIES[INLINE_URL], COPIES[SVG_URL], COPIES[ZIP_URL], COPIES[OLD_JSON_URL], COPIES[SCENARIO_ZIP_URL]],
+    "every download is a checked copy; no post's own attachment is fetched",
+  );
 });
 
 // A scenario bundle whose background is embedded the way the exporter writes it.
@@ -220,18 +269,31 @@ test("a reference resolves back into the basemap it was made from", async () => 
   // Written before `via` existed: the kind decides.
   const legacy = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", kind: "image", url: INLINE_URL } } });
   assert.deepEqual(embeddedPayload(legacy), { dataUrl: PNG_DATA_URL });
+
+  // A reference that names the checked copy itself is fetched from it too.
+  const byCopy = await resolveScenarioBundleBackground(ref("image", COPIES[INLINE_URL]));
+  assert.deepEqual(embeddedPayload(byCopy), { dataUrl: PNG_DATA_URL });
 });
 
 test("a reference that cannot be fetched is kept, with the reason, instead of deleted", async () => {
   await setUpHub();
-  const gone = { mode: "communityRef", hash: "x", via: "image", url: "https://github.com/user-attachments/assets/moved.png", fileName: "background.json" };
+  // The hub does not offer the file: not among its checked files.
+  downloads.length = 0;
+  const unchecked = { mode: "communityRef", hash: "x", via: "image", url: UNCHECKED_URL, fileName: "background.json" };
+  const refused = await resolveScenarioBundleBackground({ assets: { backgroundData: { ...unchecked } } });
+  assert.deepEqual(refused.assets.backgroundData, { ...unchecked, missingReason: HUB_FILE_TEXTS.notReleased });
+  assert.equal(unresolvedBundleBackground(refused), HUB_FILE_TEXTS.notReleased, "a whole sentence with its full stop, so a language pack can match it");
+  assert.deepEqual(downloads, [], "and it is not fetched from the post instead");
+
+  // The hub lists a copy that will not download: the download's own failure.
+  const gone = { mode: "communityRef", hash: "x", via: "image", url: LOST_URL, fileName: "background.json" };
   const bundle = await resolveScenarioBundleBackground({ assets: { backgroundData: { ...gone } } });
   assert.deepEqual(bundle.assets.backgroundData, { ...gone, missingReason: "Not found on the hub." });
-  assert.equal(unresolvedBundleBackground(bundle), "Not found on the hub.", "a whole sentence with its full stop, so a language pack can match it");
+  assert.equal(unresolvedBundleBackground(bundle), "Not found on the hub.");
 
   // A file that downloads but carries no basemap is missing too.
-  files.set("https://github.com/user-attachments/files/9/empty.json", { bytes: new TextEncoder().encode(JSON.stringify({ payload: {} })), type: "application/json" });
-  const empty = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "dataFile", url: "https://github.com/user-attachments/files/9/empty.json" } } });
+  files.set(COPIES[EMPTY_JSON_URL], { bytes: new TextEncoder().encode(JSON.stringify({ payload: {} })), type: RELEASE_TYPE });
+  const empty = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "dataFile", url: EMPTY_JSON_URL } } });
   assert.equal(empty.assets.backgroundData.mode, "communityRef");
   assert.equal(unresolvedBundleBackground(empty), "The shared basemap has no image or map in it.");
 

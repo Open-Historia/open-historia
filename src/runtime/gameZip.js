@@ -133,6 +133,10 @@ export const readGameZip = async (buffer) => {
   let scenarioBundle = null;
   if (scenarioText) {
     scenarioBundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
+    // A carried map is its sender's own, never a copy of a hub post: only a
+    // download of the game's own stamps that link (hubPosts.js
+    // downloadHubScenario), so one written into the file is not kept.
+    if (scenarioBundle && typeof scenarioBundle === "object") delete scenarioBundle.hubOrigin;
     const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
     if (imageName) {
       embedScenarioBundleImage(scenarioBundle, await zip.bytes(imageName), imageName);

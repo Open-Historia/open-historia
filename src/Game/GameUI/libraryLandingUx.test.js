@@ -78,6 +78,16 @@ test("a scenario's Update shows that it is working, and takes no second press", 
   );
 });
 
+test("Import & play says in its own prompt why the map could not be fetched", () => {
+  // No editor is open behind the missing-map prompt, and the editor's error
+  // was the only place the reason went: a press that failed showed nothing.
+  const importPlay = source.slice(source.indexOf("const handleMissingScenarioImport = "), source.indexOf("const handleCreateScenario = "));
+  assert.match(importPlay, /setMissingScenarioError\(""\);\s+setIsBusy\(true\);/, "a new try starts clean");
+  assert.match(importPlay, /\} catch \(nextError\) \{\s+setMenuOpen\(true\);\s+setEditorError\(nextError\.message\);\s+setMissingScenarioError\(nextError\.message\);/);
+  assert.match(source, /\{missingScenarioError && \(\s+<div role="alert"[^>]*>\s+\{missingScenarioError\}\s+<\/div>\s+\)\}/);
+  assert.match(source, /setMissingScenarioError\(""\);\s+setMissingScenarioGame\(game\);/, "and so does the prompt, opened for another game");
+});
+
 test("a scenario can be unlinked from a community post, never linked to one", () => {
   const card = fs.readFileSync(new URL("./ScenarioSuggestions.jsx", import.meta.url), "utf8");
   for (const [name, text] of [["libraryBar.jsx", source], ["ScenarioSuggestions.jsx", card]]) {
