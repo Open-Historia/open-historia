@@ -20,6 +20,7 @@ import {
   normalizeParsedSummary,
   requestCount,
   setGenerationRating,
+  setTelemetryEnabled,
   startAiRecord,
 } from "./telemetry.js";
 
@@ -28,6 +29,32 @@ test.beforeEach(async () => { await clearAiRecords(); });
 test("recording defaults to on and rating to off when nothing is stored", () => {
   assert.equal(isTelemetryEnabled(), true);
   assert.equal(isRatingEnabled(), false);
+});
+
+test("in the Android app recording is off until the player turns it on", (t) => {
+  const saved = { window: globalThis.window, localStorage: globalThis.localStorage };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  });
+  const local = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => (local.has(key) ? local.get(key) : null),
+    setItem: (key, value) => { local.set(key, String(value)); },
+  };
+  globalThis.window = Object.assign(new EventTarget(), { Capacitor: {} });
+  assert.equal(isTelemetryEnabled(), false, "nothing stored: off on Android");
+  setTelemetryEnabled(true);
+  assert.equal(isTelemetryEnabled(), true, "the player's choice stands");
+  setTelemetryEnabled(false);
+  assert.equal(isTelemetryEnabled(), false);
+
+  // The same stored nothing everywhere else is on.
+  local.clear();
+  delete globalThis.window.Capacitor;
+  assert.equal(isTelemetryEnabled(), true);
 });
 
 test("a direct call's record is complete when it finishes", async () => {

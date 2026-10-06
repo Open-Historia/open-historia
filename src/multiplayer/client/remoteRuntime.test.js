@@ -82,6 +82,8 @@ test("a write never reaches the host's game or this device's store: a hook reads
   assert.equal((await target.fetch("/api/runtime/turn-commit", { method: "PUT", body: "{}" })).status, 409);
   assert.equal((await target.fetch("/api/runtime/json/snapshots?v=token", { method: "PUT", body: "[]" })).status, 409);
   assert.deepEqual((await body(await target.fetch("/api/runtime/json/snapshots?v=token"))).json, []);
+  // One restore point read on its own holds the whole world as it was: there is none here.
+  assert.equal((await target.fetch("/api/runtime/snapshots/turn-12?v=token")).status, 404);
   // A document the host has not sent cannot be written either.
   assert.equal((await target.fetch("/api/runtime/json/flags?v=token", { method: "PUT", body: "{}" })).status, 409);
   assert.equal(network.length, 0);

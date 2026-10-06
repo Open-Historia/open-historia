@@ -58,12 +58,15 @@ export const simulateAutoJump = hostOnly(async (...args) => (await gameplay()).s
 export const retryPendingJumpSegment = hostOnly(async (...args) => (await gameplay()).retryPendingJumpSegment(...args));
 export const retryPendingProjectsJump = hostOnly(async (...args) => (await gameplay()).retryPendingProjectsJump(...args));
 export const applyParkedTurn = hostOnly(async (...args) => (await gameplay()).applyParkedTurn(...args));
+// A kept skip is the host's, in the host's own store: a page playing a shared
+// game is told there is none, and never takes one in or throws one away.
+export const loadParkedTurn = hostQuietly(async (...args) => (await gameplay()).loadParkedTurn(...args));
+export const discardKeptTurn = hostOnly(async (...args) => (await gameplay()).discardKeptTurn(...args));
 export const maybeGeneratePregameHistory = hostQuietly(async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args));
 // A scenario's own pre-history, written in the Workshop: not the game being played.
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
-export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
 export const rollBackToSnapshot = hostOnly(async (...args) => (await gameplay()).rollBackToSnapshot(...args));
 // Intervene: stop the last turn after the events revealed so far (intervene.js).
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);

@@ -18,6 +18,7 @@ import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/g
 import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -387,6 +388,11 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     markers: buildMarkersForGame(doc.features),
     // The puppet states the scenario starts with (Countries panel).
     puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
+    // The map's region types (Region Types panel). Each region names its type
+    // by typeId in the regions file; the game draws a type's colour, opacity,
+    // border and zoom range, and tells the AI its movement rules
+    // (runtime/regionTypes.js). The Workshop opens with them again.
+    regionTypes: normalizeRegionTypes(doc.types),
     // A custom background replaces Earth, so it must also hide the stock modern
     // political overlay (country fills, borders, "Russia"/"France" labels) — those
     // are gated on customRegions in the game, so force it on whenever there's a

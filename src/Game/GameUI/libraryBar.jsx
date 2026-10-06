@@ -20,16 +20,19 @@ import {
   createGame,
   createScenario,
   downloadScenarioJsonAsset,
+  emptyTrash,
   ensureLibraryCatalog,
   exportScenarioBundle,
   importGameBundle,
   importScenarioBundle,
   updateScenarioFromBundle,
+  listTrash,
   loadGameDetails,
   loadScenarioDetails,
   refreshLibraryCatalog,
   removeGame,
   removeScenario,
+  restoreFromTrash,
   saveGame,
   saveScenario,
   selectScenario,
@@ -48,7 +51,7 @@ import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
-import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
+import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -57,6 +60,7 @@ import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runt
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runtime/communityBasemaps.js";
+import { noteMissingBasemapTried, retryMissingBasemap } from "../../runtime/missingBasemap.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
@@ -69,7 +73,7 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, hubUpdateAvailable, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
-import { isBlockedContributor, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { isBlockedContributor, missingBasemapOfBundle, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
   ScenarioCommunityCard,
@@ -1225,7 +1229,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
 // A responsive shelf on the main menu. Desktop fills the available width with a
 // clean grid; phones keep the original swipeable row. Rows that can be
 // legitimately empty pass emptyText.
-const MenuRow = ({ children, description, emptyText, icon, title }) => {
+const MenuRow = ({ action, children, description, emptyText, icon, title }) => {
   const isMobile = useIsMobile();
   const hasChildren = React.Children.count(children) > 0;
 
@@ -1240,6 +1244,7 @@ const MenuRow = ({ children, description, emptyText, icon, title }) => {
             </div>
           </div>
           <div style={{ background: "linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02))", flex: 1, height: 1 }} />
+          {action}
         </div>
         {description && (
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.88rem", marginLeft: icon ? "1.55rem" : 0, marginTop: "0.32rem" }}>
@@ -1259,6 +1264,115 @@ const MenuRow = ({ children, description, emptyText, icon, title }) => {
         </div>
       )}
     </section>
+  );
+};
+
+// When a trash entry was deleted, in calendar days on this device.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const deletedWhen = (deletedAt) => {
+  const startOfDay = (time) => new Date(time).setHours(0, 0, 0, 0);
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(Date.parse(deletedAt))) / DAY_MS);
+  if (!Number.isFinite(days) || days <= 0) return "Deleted today";
+  return days === 1 ? "Deleted yesterday" : `Deleted ${days} days ago`;
+};
+
+const DeletedCard = ({ busy, entry, onRestore, touch }) => (
+  <div
+    style={{
+      ...surfaceStyle,
+      borderRadius: "24px",
+      display: "flex",
+      flex: `0 0 ${SHELF_CARD_WIDTH}`,
+      flexDirection: "column",
+      gap: "0.8rem",
+      justifyContent: "space-between",
+      padding: "1.1rem 1.2rem",
+    }}
+  >
+    <div style={{ minWidth: 0 }}>
+      <div data-no-translate style={{ fontSize: "1.02rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.name}>
+        {entry.name}
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.64)", display: "flex", flexWrap: "wrap", fontSize: "0.82rem", gap: "0.6rem", marginTop: "0.3rem" }}>
+        <span>{deletedWhen(entry.deletedAt)}</span>
+        {Number.isFinite(entry.bytes) && entry.bytes > 0 && <span data-no-translate>{formatZipSize(entry.bytes)}</span>}
+      </div>
+    </div>
+    <button
+      className="oh-tap-row"
+      disabled={busy}
+      onClick={() => onRestore(entry)}
+      style={touchFit({ ...actionButtonStyle, alignSelf: "flex-start", cursor: busy ? "progress" : "pointer" }, touch)}
+      type="button"
+    >
+      <ButtonIcon kind="refresh" /> Restore
+    </button>
+  </div>
+);
+
+// The Recently deleted shelf of one tab: the games or the scenarios that delete
+// moved to the trash (GET /api/trash), each with Restore, and Empty for the
+// shelf. The desktop keeps an entry trash.keepDays (30) and deletes it for
+// good at startup after that; the web and Android store keeps a week and only
+// the last trash.keepCount (5), since a phone's storage is small. Hidden while
+// empty, and where the store will not serve the trash (the desktop serves it
+// only to the machine it runs on).
+const RecentlyDeletedRow = ({ kind, onChanged, trash }) => {
+  const touch = useTouchPrimary();
+  const [busy, setBusy] = useState(false);
+  const [rowError, setRowError] = useState(null);
+  const entries = (trash?.entries ?? []).filter((entry) => entry.kind === kind);
+  if (!entries.length) return null;
+
+  const run = async (work) => {
+    setBusy(true);
+    setRowError(null);
+    try {
+      await work();
+    } catch (nextError) {
+      setRowError(nextError.message);
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  };
+  const handleEmpty = () => {
+    const count = entries.length;
+    const question = kind === "game"
+      ? (count === 1 ? "Delete the game in Recently deleted for good? This cannot be undone." : `Delete the ${count} games in Recently deleted for good? This cannot be undone.`)
+      : (count === 1 ? "Delete the scenario in Recently deleted for good? This cannot be undone." : `Delete the ${count} scenarios in Recently deleted for good? This cannot be undone.`);
+    if (window.confirm(question)) run(() => emptyTrash(kind));
+  };
+  const description = trash.keepCount
+    ? (kind === "game"
+      ? `Deleted games can be restored for ${trash.keepDays} days, while they are among the last ${trash.keepCount} things you deleted.`
+      : `Deleted scenarios can be restored for ${trash.keepDays} days, while they are among the last ${trash.keepCount} things you deleted.`)
+    : (kind === "game"
+      ? `Deleted games can be restored for ${trash.keepDays} days, then they are deleted for good.`
+      : `Deleted scenarios can be restored for ${trash.keepDays} days, then they are deleted for good.`);
+
+  return (
+    <>
+      {rowError && (
+        <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "14px", color: "#fecaca", marginBottom: "0.9rem", padding: "0.8rem 0.9rem" }}>
+          {rowError}
+        </div>
+      )}
+      <MenuRow
+        action={(
+          <button className="oh-tap-row" disabled={busy} onClick={handleEmpty} style={touchFit({ ...actionButtonStyle, flexShrink: 0 }, touch)} type="button">
+            Empty
+          </button>
+        )}
+        description={description}
+        icon="🗑️"
+        title="Recently deleted"
+      >
+        {entries.map((entry) => (
+          <DeletedCard key={entry.entry} busy={busy} entry={entry} onRestore={(target) => run(() => restoreFromTrash(target.entry))} touch={touch} />
+        ))}
+      </MenuRow>
+    </>
   );
 };
 
@@ -1793,6 +1907,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     games,
     loaded,
     loading,
+    runtimeScenario,
     scenarios,
     selectedScenarioId,
   } = useLibraryState();
@@ -1851,6 +1966,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The open scenario's Stats sheet failed to download: Save leaves it alone.
   const [editorStatsFailed, setEditorStatsFailed] = useState(false);
   const [editorError, setEditorError] = useState(null);
+  // What delete moved to the trash (GET /api/trash), for the Recently deleted
+  // shelves and the delete confirmation. null until it loads, and where the
+  // store will not serve it: the shelves then stay hidden.
+  const [trash, setTrash] = useState(null);
+  const refreshTrash = () => listTrash().then(setTrash, () => setTrash(null));
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
@@ -1865,6 +1985,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       ensureLibraryCatalog().catch(() => {});
     }
   }, [loaded]);
+
+  // Read each time the menu opens: a delete, a restore and the startup purge
+  // all change it.
+  useEffect(() => {
+    if (menuOpen) refreshTrash();
+  }, [menuOpen]);
+
+  // A game played on a scenario whose community basemap could not be
+  // downloaded tries it again too (runtime/missingBasemap.js), once a session.
+  useEffect(() => {
+    if (runtimeScenario?.missingBasemap) retryMissingBasemap(runtimeScenario);
+  }, [runtimeScenario]);
 
   const resetEditor = () => {
     setEditorKind(null);
@@ -1909,6 +2041,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       setEditorKind("scenario");
       setEditorDetails(details);
       setEditorState(buildScenarioEditorState(details));
+      // Its community basemap, if the import could not download it: tried again
+      // once a session (runtime/missingBasemap.js). The details only when it
+      // lands, as for an uploaded asset: the form holds none.
+      retryMissingBasemap(details.scenario).then((retry) => {
+        if (!retry) return;
+        if (retry.restored) {
+          setEditorDetails((current) => (current?.scenario?.id === scenarioId ? retry.details : current));
+        } else {
+          setEditorError(`This scenario's community basemap could not be downloaded. ${retry.reason} The game tries again the next time you start it and open the scenario.`);
+        }
+      });
       adoptSavedStats(normalizeStatsEditorValue(statsAsset));
       setEditorStatsFailed(statsFailed);
       if (statsFailed) setEditorError("This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.");
@@ -2127,6 +2270,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPickerTab("country");
     setPickerGroups([]);
     setCountryPicker(scenario);
+    // A community basemap the import could not download is tried again (once a
+    // session), and shown in the picker when it lands.
+    retryMissingBasemap(scenario).then((retry) => {
+      if (retry?.restored && isCurrent()) loadPickerBackground(scenario.id, retry.details?.data?.world?.background, isCurrent);
+    });
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
@@ -2196,12 +2344,16 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const { downloadHubBundle } = await import("./communityHub.jsx");
       const bundle = await downloadHubBundle(post.bundleUrl);
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // Noted before the Update: it refreshes the library, and when a game on
+      // this scenario is running its effect would otherwise download the
+      // basemap that just failed again at once.
+      noteMissingBasemapTried({ id: scenario.id, missingBasemap: missingBasemapOfBundle(bundle) });
       await updateScenarioFromBundle(scenario.id, bundle);
       // The stores keep the basemap the scenario had when the new one could not
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was updated, but its community basemap could not be downloaded (${missingBasemap}), so it keeps the basemap it had.`);
+        setEditorError(`The scenario was updated, but its new community basemap could not be downloaded, so it keeps the basemap it had. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
@@ -2800,7 +2952,16 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       return;
     }
 
-    if (!window.confirm(`Delete ${editorKind} "${record.name}"?`)) {
+    // Where the trash can be listed, the question says how long the item can
+    // be restored from the Recently deleted shelf.
+    const question = editorKind === "scenario"
+      ? (!trash ? `Delete the scenario "${record.name}"?`
+        : trash.keepCount ? `Delete the scenario "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days, while it is among the last ${trash.keepCount} things you deleted.`
+          : `Delete the scenario "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days.`)
+      : (!trash ? `Delete the game "${record.name}"?`
+        : trash.keepCount ? `Delete the game "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days, while it is among the last ${trash.keepCount} things you deleted.`
+          : `Delete the game "${record.name}"? You can restore it from Recently deleted for ${trash.keepDays} days.`);
+    if (!window.confirm(question)) {
       return;
     }
 
@@ -2814,6 +2975,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         await removeGame(record.id);
       }
       resetEditor();
+      refreshTrash();
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2927,13 +3089,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // here still fetches the community basemap it references.
       const bundle = await readScenarioBundleBytes(await file.arrayBuffer());
       const details = await importScenarioBundle(bundle);
+      // Not tried again straight away by the editor opening on it.
+      noteMissingBasemapTried(details.scenario);
       setActiveTab("scenarios");
       setMenuOpen(true);
       await openScenarioEditor(details.scenario.id);
       // Shown in the drawer that just opened on it.
       const missingBasemap = unresolvedBundleBackground(bundle);
       if (missingBasemap) {
-        setEditorError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+        setEditorError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
       }
     } catch (nextError) {
       setEditorError(nextError.message);
@@ -3034,6 +3198,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
+        // Its region types, for the Region Types panel; null for a scenario
+        // saved before they were, which opens with the default Land and Coastal.
+        regionTypes: Array.isArray(world.regionTypes) && world.regionTypes.length ? world.regionTypes : null,
       });
     }).catch((error) => {
       if (!isCurrent()) return;
@@ -3065,6 +3232,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Which tab of the new-game dialog: pick an existing country, or invent one.
   const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction" | "group"
   const [pickerGroups, setPickerGroups] = useState([]);
+  // "Play as a group" only for a scenario with groups switched on
+  // (server/gameFeatures.js): a game made from one with them off has none.
+  const pickerOffersGroups = isFeatureEnabled(normalizeFeatureSettings(countryPicker?.features), "groups");
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
@@ -3179,6 +3349,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         ...(Array.isArray(seed.world?.markers) ? { markers: seed.world.markers } : {}),
         // The puppet states, likewise opened with the scenario's own rows.
         ...(Array.isArray(seed.world?.puppets) ? { puppets: seed.world.puppets } : {}),
+        // The region types, which the game draws and the AI's placement reads.
+        ...(Array.isArray(seed.world?.regionTypes) ? { regionTypes: seed.world.regionTypes } : {}),
       },
       game: {
         ...currentGame,
@@ -3492,7 +3664,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const tabActions = activeTab === "community" ? [] : activeTab === "lobbies" ? [
     { icon: "host", label: "Host a lobby", run: () => setLobbyHosting(true) },
   ] : [
-    { icon: "refresh", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
+    { icon: "refresh", label: "Refresh", run: () => { refreshTrash(); refreshLibraryCatalog({ force: true }).catch(() => {}); } },
     activeTab === "scenarios"
       ? { icon: "import", label: "Import Scenario", phoneLabel: "Import Scenario", run: () => importScenarioInputRef.current?.click() }
       : { icon: "import", label: "Import Game", phoneLabel: "Import Game", run: () => importGameInputRef.current?.click() },
@@ -3691,7 +3863,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ) : (
               <>
                 <div style={{ fontWeight: 800, fontSize: "1rem" }}>
-                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" ? "Play as a group" : "Choose your country"}
+                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" && pickerOffersGroups ? "Play as a group" : "Choose your country"}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.6rem" }}>
                   Starting “{countryPicker.name}”
@@ -3729,6 +3901,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Create a faction
                     </button>
+                    {pickerOffersGroups && (
                     <button
                       type="button"
                       className="oh-tap-row"
@@ -3743,9 +3916,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Play as a group
                     </button>
+                    )}
                   </div>
                 )}
-                {pickerTab === "group" && !playGameId ? (
+                {pickerTab === "group" && pickerOffersGroups && !playGameId ? (
                   <>
                     {/* A group controls an area without owning it (runtime/groups.js):
                         lead one of the scenario's, or make one. */}
@@ -4051,7 +4225,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 <CommunityPanel fullPage onPlay={handleScenarioPlay} />
               </Suspense>
             ) : activeTab === "games" ? (
-              loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
+              <>
+              {loaded && visibleGames.length === 0 && archivedGames.length === 0 ? (
                 <div style={{ alignItems: "center", display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "60vh", textAlign: "center" }}>
                   <img alt="" src="/logo.png" style={{ height: "5rem", marginBottom: "1.2rem", opacity: 0.9, width: "5rem" }} />
                   <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.02em" }}>No games yet</div>
@@ -4125,7 +4300,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     </MenuRow>
                   )}
                 </>
-              )
+              )}
+              <RecentlyDeletedRow kind="game" onChanged={refreshTrash} trash={trash} />
+              </>
             ) : (
               <>
                 <MenuRow description="Your most active scenarios." emptyText="No scenarios yet." icon="🔥" title="Most Played">
@@ -4174,6 +4351,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     />
                   ))}
                 </MenuRow>
+                <RecentlyDeletedRow kind="scenario" onChanged={refreshTrash} trash={trash} />
               </>
             )}
             </div>

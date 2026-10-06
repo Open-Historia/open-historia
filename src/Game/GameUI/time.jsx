@@ -10,11 +10,12 @@ import {
     getPrimedScenarioRegionCatalog,
     loadCountryNames,
     loadRegionCatalog,
+    loadRollbackSnapshot,
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { PARKED_TURN_STALE_NOTE, discardParkedTurn, discardPendingJumpSegment,discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -55,15 +56,18 @@ import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../run
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import {
     MAP_CHANGE_KIND_LABELS,
+    SHOW_EVENT_ON_TIMELINE,
     buildLiveTurnRecord,
     captureRevealCarry,
     describeEventMapChanges,
     eventDisclosureKey,
+    findTurnIndexOfEvent,
     findTurnSnapshot,
     resolvePolityName,
     resolveRegionName,
     resolveRevealCarry,
     revealNeedsStaging,
+    shownTurnIndex,
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
@@ -453,7 +457,8 @@ const focusMapOnBounds = (mapRef, bounds) => {
 const filterPlannedActions = (actions) =>
 normalizeActions(actions).filter((action) => action.status === "planned");
 
-// Built for the newest turn only: that is the one the Events panel shows.
+// Built only for a turn the Events panel shows: the newest, or an older one
+// the player turned back to with the header's ‹ ›.
 const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
     if (!entry) {
         return null;
@@ -799,7 +804,10 @@ const InteractiveOfferStrip = () => {
 // (runtime/applicationReceipt.js): a capture an event narrated that never
 // reached the map, an event kept off the timeline. The next skip's prompt reads
 // the same record; here it is folded away under the turn, and costs nothing.
-// The notes are the engine's own, in English, so the translator leaves them be.
+// Each note is its player sentence (runtime/receiptPlayerNotes.js), which the
+// language packs translate, under the name of the event it concerns, which
+// they leave be. A note saved before those sentences existed is the engine's
+// own English, and is left untranslated too.
 const EngineChangesNote = ({ receipt }) => {
     const [open, setOpen] = useState(false);
     const summary = useMemo(() => describeReceiptForPlayer(receipt), [receipt]);
@@ -818,12 +826,17 @@ const EngineChangesNote = ({ receipt }) => {
         </button>
         {open && (
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "grid", gap: "0.55rem", padding: "0.6rem 0.8rem 0.75rem" }}>
-            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"The engine's own notes on this time skip, as it recorded them for the next one."}</div>
+            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"What the engine left out of this time skip's answer, or changed, before it reached the map and the timeline."}</div>
             {summary.groups.map((group) => (
                 <div key={group.kind} style={{ display: "grid", gap: "0.25rem" }}>
                 <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.7rem", fontWeight: 700 }}>{group.title}</div>
-                <ul data-no-translate style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
-                {group.notes.map((note, index) => <li key={`${group.kind}-${index}`}>{note}</li>)}
+                <ul style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
+                {group.notes.map((note, index) => (
+                    <li key={`${group.kind}-${index}`}>
+                    {note.event && <div data-no-translate style={{ color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>{note.event}</div>}
+                    {note.engine ? <div data-no-translate>{note.text}</div> : <div>{note.text}</div>}
+                    </li>
+                ))}
                 </ul>
                 </div>
             ))}
@@ -1084,6 +1097,10 @@ const TimelineSkipPanel = ({
     onDeclineModeSuggestion,
     onDiscardProjects,
     onDiscardSegment,
+    isApplyingParked = false,
+    onApplyParked,
+    onDiscardParked,
+    parkedHeld = false,
     onJump,
     onRetryProjects,
     onRetrySegment,
@@ -1340,7 +1357,7 @@ const TimelineSkipPanel = ({
             is its only Cancel when the skip is not watched live. */}
         {isLoading && (
             <SkipProgressRow
-            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : "")}
+            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : isApplyingParked ? "Applying the time skip…" : "")}
             onCancel={onCancel}
             />
         )}
@@ -1358,6 +1375,71 @@ const TimelineSkipPanel = ({
             }}
             >
             {error}
+            </div>
+        )}
+
+        {/* A KEPT skip: it finished while another campaign was open, so it was
+            not written there, and it was kept for this one with everything it
+            cost. Amber like the held turns below, because nothing is lost and
+            nothing is written yet; Apply writes it without asking the model
+            again, Discard throws it away. */}
+        {parkedHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>A time skip finished while another campaign was open, so nothing from it has been saved yet.</div>
+            <div>Apply it to write it into this campaign without asking the model again, or discard it.</div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onApplyParked}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isApplyingParked ? "Applying the time skip…" : "Apply the time skip"}
+                </button>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onDiscardParked}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the time skip
+                </button>
+            </div>
             </div>
         )}
 
@@ -1581,6 +1663,58 @@ const TimelineSkipPanel = ({
     );
 };
 
+// The Events panel's header line with the ‹ › between the kept turns: the
+// round, then the dates it spans, each its own string. The newest turn is on
+// the right, as on a timeline.
+const turnPickerButtonStyle = (enabled) => ({
+    alignItems: "center",
+    background: "none",
+    border: "none",
+    borderRadius: "6px",
+    color: enabled ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.2)",
+    cursor: enabled ? "pointer" : "default",
+    display: "inline-flex",
+    font: "inherit",
+    fontSize: "0.95rem",
+    justifyContent: "center",
+    lineHeight: 1,
+    padding: "0.1rem 0.35rem",
+});
+
+const TurnPicker = ({ index, count, onOlder, onNewer, round, rangeLabel }) => {
+    const canOlder = index < count - 1;
+    const canNewer = index > 0;
+    return (
+        <span style={{ alignItems: "center", display: "inline-flex", flexWrap: "wrap", gap: "0.2rem", maxWidth: "100%" }}>
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canOlder ? onOlder : undefined}
+        disabled={!canOlder}
+        aria-label="Show the previous turn"
+        title="Show the previous turn"
+        style={turnPickerButtonStyle(canOlder)}
+        >
+        {"‹"}
+        </button>
+        {round > 0 && <span>{`Round ${round}`}</span>}
+        {round > 0 && rangeLabel && <span aria-hidden="true">{"·"}</span>}
+        {rangeLabel && <span>{rangeLabel}</span>}
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canNewer ? onNewer : undefined}
+        disabled={!canNewer}
+        aria-label="Show the next turn"
+        title="Show the next turn"
+        style={turnPickerButtonStyle(canNewer)}
+        >
+        {"›"}
+        </button>
+        </span>
+    );
+};
+
 const TimelineHistoryPanel = ({
     isOpen,
     onRevealNextEvent,
@@ -1607,8 +1741,15 @@ const TimelineHistoryPanel = ({
     // validated self (eventDisclosureKey).
     openMapChanges = null,
     onToggleMapChanges = null,
+    // { index, count, onOlder, onNewer }: the header's ‹ › between the kept
+    // turns, index 0 the newest; null hides it.
+    turnPicker = null,
+    // { eventId, seq }: a card another panel asked to be shown.
+    focusRequest = null,
     warning,
 }) => {
+    // An older turn, reread whole: it opens at its first event, not its last.
+    const pastTurn = Boolean(turnPicker && turnPicker.index > 0);
     // Category filter chips (ported from the abdulrahman-2005 fork): only the
     // categories present on this turn's events appear; null = no filter. Older
     // events without tags are always shown. The choice is keyed by the record,
@@ -1634,7 +1775,8 @@ const TimelineHistoryPanel = ({
     ? filteredEvents.slice(0, Math.min(visibleEventCount, totalEvents))
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
-    const lastVisibleEventRef = React.useRef(null);
+    const scrollAnchorRef = React.useRef(null);
+    const scrollAnchorIndex = pastTurn ? 0 : visibleEvents.length - 1;
     // The reveal buttons pin a compact minHeight inline, which the finger-sized
     // .oh-tap-row cannot beat; on a touch screen it is left to the class.
     const isTouch = useTouchPrimary();
@@ -1676,27 +1818,69 @@ const TimelineHistoryPanel = ({
     };
 
     useEffect(() => {
-        if (!isOpen || !lastVisibleEventRef.current) {
+        if (!isOpen || !scrollAnchorRef.current) {
             return;
         }
 
-        lastVisibleEventRef.current.scrollIntoView({
+        scrollAnchorRef.current.scrollIntoView({
             behavior: "smooth",
             block: "start",
         });
     }, [isOpen, record?.id, visibleEvents.length]);
+
+    // A card another panel asked for (focusRequest): scrolled to and marked
+    // for a moment once it is on screen, once per request. Declared after the
+    // scroll above so its scroll is the one that lands.
+    const listRef = React.useRef(null);
+    const handledFocusRef = React.useRef(0);
+    const [markedEventId, setMarkedEventId] = useState("");
+    const focusId = focusRequest?.eventId || "";
+    const focusInRecord = Boolean(focusId) && (record?.events ?? []).some((event) => event?.id === focusId);
+    const focusOnScreen = focusInRecord && visibleEvents.some((event) => event.id === focusId);
+    useEffect(() => {
+        if (!isOpen || !focusInRecord || handledFocusRef.current === focusRequest.seq) return;
+        if (!focusOnScreen) {
+            // Hidden by a category filter: lift it, and come back once it shows.
+            if (categoryFilter) setCategoryChoice({ recordId: record.id, tag: null });
+            return;
+        }
+        handledFocusRef.current = focusRequest.seq;
+        const card = Array.from(listRef.current?.querySelectorAll("[data-event-id]") ?? [])
+            .find((node) => node.dataset.eventId === focusId);
+        card?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setMarkedEventId(focusId);
+    }, [categoryFilter, focusId, focusInRecord, focusOnScreen, focusRequest?.seq, isOpen, record?.id]);
+    useEffect(() => {
+        if (!markedEventId) return undefined;
+        const timer = setTimeout(() => setMarkedEventId(""), 2600);
+        return () => clearTimeout(timer);
+    }, [markedEventId]);
 
     return (
         <PanelChrome
         eyebrow=""
         isOpen={isOpen}
         onClose={onClose}
-        subtitle={record?.rangeLabel || ""}
+        subtitle={turnPicker && record ? (
+            <TurnPicker
+            index={turnPicker.index}
+            count={turnPicker.count}
+            onOlder={turnPicker.onOlder}
+            onNewer={turnPicker.onNewer}
+            round={record.round}
+            rangeLabel={record.rangeLabel || ""}
+            />
+        ) : (record?.rangeLabel || "")}
         title="Events"
         topOffset={topOffset}
         >
         {/* The shared markdown sheet: tables in an event body or a document. */}
         <MarkdownStyleInjector />
+        {pastTurn && (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.75rem" }}>
+            This is an earlier turn, shown in full. The map shows the world as it is now.
+            </div>
+        )}
         {warning && (
             <div
             style={{
@@ -1780,7 +1964,7 @@ const TimelineHistoryPanel = ({
             // Mid-skip an empty list just means the first event has not arrived.
             live ? null : <EmptyPanelState text="No world events were recorded for this time skip." />
         ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {categoryChips.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
                 {categoryChips.map((tag) => {
@@ -1809,12 +1993,21 @@ const TimelineHistoryPanel = ({
                 </div>
             )}
             {visibleEvents.map((event, index) => {
-                const isLastVisible = index === visibleEvents.length - 1;
+                const isScrollAnchor = index === scrollAnchorIndex;
 
                 const openKey = eventDisclosureKey(event);
 
                 return (
-                    <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
+                    <div
+                    key={event.id}
+                    ref={isScrollAnchor ? scrollAnchorRef : null}
+                    data-event-id={event.id}
+                    style={{
+                        borderRadius: "16px",
+                        boxShadow: markedEventId === event.id ? "0 0 0 2px rgba(43,193,243,0.75)" : "0 0 0 2px rgba(43,193,243,0)",
+                        transition: "box-shadow 0.4s ease",
+                    }}
+                    >
                     {/* No "Show on map" footer: the camera already flies to
                         every event as it is revealed. The offered interactive
                         event carries its offer instead. */}
@@ -2032,6 +2225,11 @@ const DateWidget = ({
     // How many times the failed segment has been retried for the jump currently
     // held — same reason as projectsRetries.
     const [segmentRetries, setSegmentRetries] = useState(0);
+    // A time skip that finished while another campaign was open, kept for this
+    // one (AI/gameplay.js loadParkedTurn): set means it waits for the player to
+    // apply or discard it. Nothing of it has been written.
+    const [parkedHeld, setParkedHeld] = useState(() => Boolean(getParkedTurn()));
+    const [isApplyingParked, setIsApplyingParked] = useState(false);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
@@ -2044,7 +2242,7 @@ const DateWidget = ({
     // offer comes at once when no turn is running, else when the running one
     // ends — never in the middle of one.
     const [modeEvidence, setModeEvidence] = useState(0);
-    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment;
+    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment || isApplyingParked;
     useEffect(() => {
         const noted = () => setModeEvidence((count) => count + 1);
         window.addEventListener("ai:structured-mode-suggestion", noted);
@@ -2255,6 +2453,7 @@ const DateWidget = ({
         setSegmentRetries(0);
         setProjectsHeld("");
         setProjectsRetries(0);
+        setParkedHeld(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2388,40 +2587,95 @@ const DateWidget = ({
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
     };
 
-    // A skip that finished while another campaign was open was kept for this one
-    // (AI/gameplay.js applyParkedTurn) and is written as soon as this campaign is
-    // open again, then shown like any turn that has just landed.
+    // A skip that finished while another campaign was open was kept for this one,
+    // in memory and in the campaign's store (AI/gameplay.js loadParkedTurn), and
+    // is offered here when this campaign's widget comes up, after a restart too:
+    // the player applies or discards it. One this campaign has moved on from is
+    // dropped, and said so.
     useEffect(() => {
-        if (!getParkedTurn()) return;
-        const finishParkedTurn = async () => {
-            setIsLoading(true);
-            try {
-                const result = await applyParkedTurn();
-                if (!result) return;
-                setFallbackWarning("This skip finished while another campaign was open, and was saved when you came back to this one.");
-                warnIfNoRestorePoint(result);
-                setGameData(result.game);
-                setEvents(result.events);
-                setWorldState(result.world);
-                setVisibleEventCount(1);
-                setPanel("history");
-            } catch (parkedError) {
+        let current = true;
+        void loadParkedTurn().then((kept) => {
+            if (!current) return;
+            if (kept?.discarded) {
+                setParkedHeld(false);
+                setError(PARKED_TURN_STALE_NOTE);
                 setPanel("skip");
-                if (parkedError?.projectsHeld) {
-                    setProjectsHeld(parkedError.message);
-                    setProjectsRetries(0);
-                } else {
-                    setError(parkedError.message || "Failed to save the skip that finished while another campaign was open.");
-                }
-            } finally {
-                setIsLoading(false);
+            } else if (kept) {
+                setParkedHeld(true);
+                setPanel("skip");
+            } else {
+                setParkedHeld(false);
             }
+        }).catch((loadError) => {
+            console.warn("[timeline] the kept skip could not be loaded.", loadError);
+        });
+        return () => {
+            current = false;
         };
-        void finishParkedTurn();
-    // Once, when this campaign's widget comes up: the parked turn is taken off
-    // the shelf by the first attempt.
+    // Once, when this campaign's widget comes up: it is mounted afresh for each.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Write the kept skip. Nothing is generated or asked again (AI/gameplay.js
+    // applyParkedTurn), and it lands like any skip. Busy like a skip, for the
+    // same reasons as the board retry below.
+    const applyHeldParked = async () => {
+        if (isApplyingParked || isLoading || jumpAbortRef.current) return;
+        setIsApplyingParked(true);
+        setIsLoading(true);
+        setError("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await applyParkedTurn({ signal: controller.signal });
+            setParkedHeld(false);
+            if (!result) return;
+            warnIfNoRestorePoint(result);
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            logDebugEvent("turn", `Kept skip applied in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (parkedError) {
+            if (controller.signal.aborted || parkedError?.name === "AbortError") {
+                // Cancelled. Still kept when nothing was written (applyParkedTurn
+                // puts it back), so the notice stays while it is.
+                setParkedHeld(Boolean(getParkedTurn()));
+                logDebugEvent("turn", "Applying the kept skip was cancelled.");
+            } else if (parkedError?.projectsHeld) {
+                // Held at the board now, like any skip: one notice at a time.
+                setParkedHeld(false);
+                setProjectsHeld(parkedError.message);
+                setProjectsRetries(0);
+            } else {
+                setParkedHeld(Boolean(getParkedTurn()));
+                setError(parkedError.message || "Failed to apply the time skip that finished while another campaign was open.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsApplyingParked(false);
+            setIsLoading(false);
+            setModeSuggestion(getStructuredModeSuggestion());
+        }
+    };
+
+    // Throw the kept skip away. Nothing of it was ever written.
+    const discardHeldParked = async () => {
+        setParkedHeld(false);
+        // Released at once, as the other discards are, so the campaign is not
+        // busy for a tick while the lazy module loads; the stored copy follows.
+        discardParkedTurn();
+        try {
+            await discardKeptTurn();
+        } catch (discardError) {
+            console.warn("[timeline] the kept skip could not be discarded.", discardError);
+        }
+    };
 
     // Finish a held turn by re-running ONLY the board call. The events are not
     // regenerated: they are already valid, and on a slow model regenerating them
@@ -2698,8 +2952,8 @@ const DateWidget = ({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
-    // The newest turn alone: it is all the panel shows, and this runs on every
-    // world write, so the other eleven were built and thrown away each time.
+    // The newest turn alone: this runs on every world write, and an older turn
+    // is built only while the player has turned back to it (below).
     const latestTurnRecord = useMemo(() => {
         const rawHistory = worldState?.simulationHistory ?? [];
         return buildTurnRecord({
@@ -2710,8 +2964,63 @@ const DateWidget = ({
             game: gameData,
         });
     }, [eventLookup, gameData, worldState]);
-    const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
-    ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
+    // The turn picker in the panel's header: which of the kept turns is shown,
+    // 0 for the newest (turnReveal.js shownTurnIndex). An older turn is shown
+    // whole and read only: no reveal, no staging, no camera, no undo.
+    const [turnChoice, setTurnChoice] = useState({ latestId: null, index: 0 });
+    const keptTurnCount = worldState?.simulationHistory?.length ?? 0;
+    const turnIndex = skipInFlight ? 0 : shownTurnIndex(turnChoice, latestTurnRecord?.id ?? null, keptTurnCount);
+    const olderTurnRecord = useMemo(() => {
+        if (turnIndex <= 0) return null;
+        const rawHistory = worldState?.simulationHistory ?? [];
+        return buildTurnRecord({
+            entry: rawHistory[turnIndex],
+            index: turnIndex,
+            history: rawHistory,
+            eventLookup,
+            game: gameData,
+        });
+    }, [eventLookup, gameData, turnIndex, worldState]);
+    const showTurn = (index) => setTurnChoice({ latestId: latestTurnRecord?.id ?? null, index });
+    // Closing the panel puts it back on the newest turn for next time.
+    useEffect(() => {
+        if (openPanel !== "history") setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
+    }, [openPanel]);
+    // Another panel asking for one event (SHOW_EVENT_ON_TIMELINE, turnReveal.js;
+    // the Stats panel's war cards): open on the kept turn that holds it, with
+    // the newest turn's reveal carried through it, and let the panel scroll to
+    // it and mark it. `seq` makes a second ask for the same event a new one.
+    const [focusRequest, setFocusRequest] = useState({ eventId: "", seq: 0 });
+    const showEventRef = React.useRef(null);
+    useEffect(() => {
+        showEventRef.current = (eventId) => {
+            // As « does: while something runs, only a skip being watched opens it.
+            if (isLoading && !skipInFlight) return;
+            const index = findTurnIndexOfEvent(worldState?.simulationHistory, eventId);
+            if (index < 0) return;
+            setPanel("history");
+            // Mid-skip the panel is the turn being written; it only opens.
+            if (skipInFlight) return;
+            showTurn(index);
+            if (index === 0) {
+                const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+                const through = ids.indexOf(eventId) + 1;
+                if (through > visibleEventCount) {
+                    setVisibleEventCount(through);
+                    unseenEvents.markSeenThrough(ids, through);
+                }
+            }
+            setFocusRequest((previous) => ({ eventId, seq: previous.seq + 1 }));
+        };
+    });
+    useEffect(() => {
+        const onShowEvent = (event) => showEventRef.current?.(String(event?.detail?.eventId ?? "").trim());
+        window.addEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+        return () => window.removeEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+    }, []);
+    const shownWrittenRecord = olderTurnRecord ?? latestTurnRecord;
+    const persistedFallbackWarning = shownWrittenRecord?.source === "fallback"
+    ? `Turn generated by fallback: ${shownWrittenRecord.fallbackReason || "structured AI output was unavailable"}`
     : "";
     // Built even with no events yet, so a skip that has not produced its first
     // does not leave the previous turn on screen as if it were this one.
@@ -2724,12 +3033,13 @@ const DateWidget = ({
             rangeLabel: formatRange(liveRange.from, liveRange.to),
         })
         : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round]);
-    const displayRecord = liveTurnRecord ?? latestTurnRecord;
+    const displayRecord = liveTurnRecord ?? shownWrittenRecord;
     const totalVisibleEvents = displayRecord?.events?.length || 0;
     // The newest revealed event, written turn or not: the camera follows the
-    // live reveal for the same reason the map stages along with it.
+    // live reveal for the same reason the map stages along with it. Not on an
+    // older turn being reread: the map shows the world as it is now.
     const activeVisibleEvent =
-    openPanel === "history" && totalVisibleEvents > 0
+    openPanel === "history" && totalVisibleEvents > 0 && !olderTurnRecord
     ? displayRecord.events[Math.min(Math.max(visibleEventCount, 1), totalVisibleEvents) - 1]
     : null;
 
@@ -3045,17 +3355,20 @@ const DateWidget = ({
     // engaged for that turn.
     //
     // Only while there is something left to reveal, and only once the snapshot
-    // index says the archive holds this turn: the archive is up to twelve whole
-    // worlds, and it was read (and on a miss read again on every open) for a
+    // index says the archive holds this turn; then only that one restore point
+    // is read (loadRollbackSnapshot), not the archive of up to twelve whole
+    // worlds, which was read (and on a miss read again on every open) for a
     // turn already seen whole, after a reload, or one no restore point spans.
     // The index is a few hundred bytes, so an index miss is simply asked again
-    // next time (it can read empty at boot); an archive miss is remembered.
+    // next time (it can read empty at boot); a restore point that turns out
+    // not to hold the turn's world is remembered.
     const needsStaging = revealNeedsStaging(latestTurnRecord, visibleEventCount);
     const stagingMissRef = React.useRef("");
     useEffect(() => {
         const record = latestTurnRecord;
         // Not mid-skip: the snapshot that would load belongs to the turn before.
-        if (skipInFlight || openPanel !== "history" || !record || !needsStaging) {
+        // Nor while an older turn is reread: it is not staged.
+        if (skipInFlight || openPanel !== "history" || !record || !needsStaging || turnIndex > 0) {
             return undefined;
         }
         if (stagedBase.recordId === record.id && stagedBase.world) {
@@ -3066,16 +3379,16 @@ const DateWidget = ({
         }
         let cancelled = false;
         (async () => {
-            if (!findTurnSnapshot(await loadRollbackSnapshotIndex(), record) || cancelled) return;
-            const snapshots = await loadRollbackSnapshots();
+            const entry = findTurnSnapshot(await loadRollbackSnapshotIndex(), record);
+            if (!entry || cancelled) return;
+            const match = await loadRollbackSnapshot(entry.id);
             if (cancelled) return;
-            const match = findTurnSnapshot(snapshots.filter((snap) => snap?.state?.world), record);
-            if (!match) {
+            if (!match?.state?.world || !findTurnSnapshot([match], record)) {
                 stagingMissRef.current = record.id;
                 return;
             }
-            // A copy of the one world staged: the list is the shared archive
-            // (gameplay.js loadRollbackSnapshots), never to be written into.
+            // A copy of the one world staged: the restore point may be the
+            // shared archive's (loadRollbackSnapshot), never to be written into.
             setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
         })().catch(() => {
             /* no snapshot — reveal without staging */
@@ -3083,7 +3396,7 @@ const DateWidget = ({
         return () => {
             cancelled = true;
         };
-    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId]);
+    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId, turnIndex]);
 
     useEffect(() => {
         // No snapshot needed while the skip writes: the world has not moved, so
@@ -3118,6 +3431,7 @@ const DateWidget = ({
         const stagingActive =
             !skipInFlight &&
             openPanel === "history" &&
+            !olderTurnRecord &&
             record &&
             stagedBase.recordId === record.id &&
             stagedBase.world &&
@@ -3149,7 +3463,7 @@ const DateWidget = ({
         });
         setWorldStateOverride(stagedWorld);
         setUnitsOverride(stagedWorld.units ?? [], stagedWorld.pendingUnitOrders ?? []);
-    }, [latestTurnRecord, liveStageBase, liveTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
+    }, [latestTurnRecord, liveStageBase, liveTurnRecord, olderTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
 
     // Never leave a stale override behind when this widget unmounts.
     useEffect(
@@ -3178,6 +3492,10 @@ const DateWidget = ({
         onDeclineModeSuggestion={declineModeSuggestion}
         onDiscardProjects={discardHeldProjects}
         onDiscardSegment={discardHeldSegment}
+        isApplyingParked={isApplyingParked}
+        onApplyParked={applyHeldParked}
+        onDiscardParked={discardHeldParked}
+        parkedHeld={parkedHeld}
         onJump={(days) => runJump(days, "jump")}
         onRetryProjects={retryHeldProjects}
         onRetrySegment={retryHeldSegment}
@@ -3198,26 +3516,36 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={cardLookups}
         onClose={() => setPanel(null)}
-        buildDebugIncident={buildFallbackIncident}
+        // Everything that acts on a turn acts on the newest one, so none of it
+        // is offered over an older turn being reread.
+        buildDebugIncident={olderTurnRecord ? null : buildFallbackIncident}
         // A fallback turn is usually a turn the player wants gone; the undo it
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.
         // Nothing is written mid-skip, so there is no turn to roll back and no round to stop.
-        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight}
+        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight}
+        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
-        offeredInteractiveId={!skipInFlight && shownOffer ? shownOffer.id : ""}
+        offeredInteractiveId={!skipInFlight && !olderTurnRecord && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
         progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
         record={displayRecord}
         topOffset={topOffset}
-        visibleEventCount={visibleEventCount}
+        visibleEventCount={olderTurnRecord ? totalVisibleEvents : visibleEventCount}
+        // Not while a skip is written, and only once there is a turn to go back to.
+        turnPicker={!liveTurnRecord && keptTurnCount > 1 ? {
+            index: turnIndex,
+            count: keptTurnCount,
+            onOlder: () => showTurn(Math.min(keptTurnCount - 1, turnIndex + 1)),
+            onNewer: () => showTurn(Math.max(0, turnIndex - 1)),
+        } : null}
+        focusRequest={liveTurnRecord ? null : focusRequest}
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
-        warning={fallbackWarning || persistedFallbackWarning}
+        warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}
         />
 
         <div

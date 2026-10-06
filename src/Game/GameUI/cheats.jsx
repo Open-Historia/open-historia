@@ -373,6 +373,8 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     const isMobile = useIsMobile();
     // The Puppet States tool exists only while the game has the ledger switched on.
     const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
+    // The Groups tool likewise, while the game has groups switched on.
+    const groupsOn = useActiveFeatures().groups?.enabled !== false;
 
     const refresh = async () => {
         try {
@@ -547,6 +549,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
                         const entry = TOOLS.find((candidate) => candidate.id === toolId);
                         if (!entry) return null;
                         if (toolId === "puppets" && !puppetStatesOn) return null;
+                        if (toolId === "groups" && !groupsOn) return null;
                         return (
                             <button
                             key={entry.id}
@@ -3235,6 +3238,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const [editingId, setEditingId] = useState(null);
     const isMobile = useIsMobile();
     const touch = useTouchPrimary();
+    // Groups switched off for this game (server/gameFeatures.js): no hand
+    // edits to them here, as for puppet states; the world keeps them.
+    const groupsOn = useActiveFeatures().groups?.enabled !== false;
 
     const loadMapFeatureData = async () => {
         const [world, geojson] = await Promise.all([
@@ -3378,6 +3384,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const nameOf = (code) => politiesByCode.get(code)?.name || code || "unclaimed land";
 
     // ----- individual tools -----
+
+    if (tool === "groups" && !groupsOn) {
+        return (
+            <>
+            {header(meta.title, meta.subtitle)}
+            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+                Groups are switched off for this game. Turn them back on in the scenario or game editor (Features) to edit them here.
+            </div>
+            </>
+        );
+    }
 
     if (tool === "groups") {
         return (
@@ -5010,6 +5027,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         )}
                     </div>
 
+                    {groupsOn && (
                     <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
                         <div style={editorSectionLabelStyle}>Group control</div>
                         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
@@ -5062,6 +5080,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             </div>
                         )}
                     </div>
+                    )}
 
                     <details style={{ ...editorFieldStyle, marginTop: "0.55rem", padding: "0.5rem 0.6rem" }}>
                         <summary style={{ cursor: "pointer", fontSize: "0.69rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>Advanced · region identity</summary>

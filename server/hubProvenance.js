@@ -1,6 +1,6 @@
 /*! Open Historia — where a scenario came from on the community hub © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// Three records a scenario keeps about the community hub (the GitHub repo whose
+// Four records a scenario keeps about the community hub (the GitHub repo whose
 // issues are the Community tab's posts). Pure and dependency-free: the desktop
 // store (server/libraryStore.js) and the web store (src/runtime/web/models.js)
 // both read and write them through these functions, so the two never disagree.
@@ -24,6 +24,14 @@
 //
 // hubReviews — how the author got on reviewing each suggestion:
 //   { [suggestionId]: { status, accepted[], rejected[], updatedAt } }
+//
+// missingBasemap — a community basemap the scenario uses by reference but that
+// could not be downloaded when it was imported or updated:
+//   { reference: { mode: "communityRef", url, via?, hash?, kind?, fileName? }, background?, reason? }
+//   reference is the bundle's own descriptor, so the game can try the download
+//   again when the scenario is opened and an export still carries it;
+//   background is the world.background of the version that referenced it, put
+//   in place once the download lands; reason is why it failed last time.
 
 const MAX_POST_IDS = 10;
 export const MAX_HUB_SUGGESTIONS = 50;
@@ -266,4 +274,30 @@ export const openHubSuggestions = (published, reviews) => {
   if (!normalized) return [];
   const status = normalizeHubReviews(reviews);
   return normalized.suggestions.filter((ref) => !["done", "dismissed"].includes(status[ref.id]?.status));
+};
+
+const REFERENCE_FIELDS = ["via", "hash", "kind", "fileName"];
+
+export const normalizeMissingBasemap = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw.reference && typeof raw.reference === "object" ? raw.reference : null;
+  const url = String(source?.url ?? "").trim();
+  if (source?.mode !== "communityRef" || !/^https:\/\//i.test(url) || url.length > 1000) return null;
+  const reference = { mode: "communityRef", url };
+  for (const key of REFERENCE_FIELDS) {
+    const value = text(source[key], 200);
+    if (value) reference[key] = value;
+  }
+  const background = raw.background && typeof raw.background === "object" && !Array.isArray(raw.background) ? raw.background : null;
+  const reason = text(raw.reason, 300);
+  return { reference, ...(background ? { background } : {}), ...(reason ? { reason } : {}) };
+};
+
+// The missingBasemap record for a bundle whose community basemap is still only
+// a reference after the game tried to download it (resolveScenarioBundleBackground
+// in src/runtime/communityBasemaps.js), or null when its basemap is in it.
+export const missingBasemapOfBundle = (bundle) => {
+  const asset = bundle?.assets?.backgroundData;
+  if (asset?.mode !== "communityRef") return null;
+  return normalizeMissingBasemap({ reference: asset, background: bundle?.data?.world?.background, reason: asset.missingReason });
 };

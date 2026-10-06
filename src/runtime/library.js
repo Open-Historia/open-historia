@@ -14,6 +14,7 @@ import { enqueueContentStrings } from "./translator.js";
 const LIBRARY_API_ROOT = "/api/library";
 const SCENARIOS_API_ROOT = "/api/scenarios";
 const GAMES_API_ROOT = "/api/games";
+const TRASH_API_ROOT = "/api/trash";
 
 const INITIAL_LIBRARY_STATE = {
   activeGame: null,
@@ -503,6 +504,18 @@ export const writeGameSnapshotsText = async (gameId, snapshotsText) => {
   if (!response.ok) throw new Error(`Could not restore this game's restore points (HTTP ${response.status}).`);
 };
 
+// A time skip that finished while another game was open, kept for its own game
+// until the player applies or discards it there (src/Game/AI/parkedTurn.js).
+// By id: it is written while another game is the active one. null when none.
+export const readGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`);
+
+export const writeGameParkedTurn = async (gameId, parkedTurn) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { body: parkedTurn, method: "PUT" });
+
+export const removeGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { method: "DELETE" });
+
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
@@ -553,6 +566,34 @@ export const removeGame = async (gameId) => {
     method: "DELETE",
   });
   return applyLibraryCatalog(catalog);
+};
+
+// What delete moved to the trash, for the library's Recently deleted shelves:
+// { entries: [{ entry, kind, id, name, deletedAt, bytes? }], keepDays, keepCount? }.
+// The desktop serves it to the machine it runs on only; anywhere else this
+// throws and the shelves stay hidden.
+export const listTrash = async () => requestJson(TRASH_API_ROOT);
+
+export const restoreFromTrash = async (entry) => {
+  const result = await requestJson(`${TRASH_API_ROOT}/${encodeURIComponent(entry)}/restore`, { method: "POST" });
+  applyLibraryCatalog(result.library);
+  return result;
+};
+
+// kind "game" or "scenario" empties that shelf only.
+export const emptyTrash = async (kind) =>
+  requestJson(`${TRASH_API_ROOT}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`, { method: "DELETE" });
+
+// A scenario's community basemap that could not be downloaded when it was
+// imported or updated, downloaded since (src/runtime/missingBasemap.js):
+// payload is { dataUrl } or { geojson }.
+export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
+    body: { payload },
+    method: "PUT",
+  });
+  await refreshLibraryCatalog({ force: true });
+  return details;
 };
 
 syncLibraryRuntime();

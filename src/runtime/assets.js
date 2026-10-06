@@ -946,7 +946,9 @@ export const writeJson = async (
     echo = true,
     // The caller normalized `data` before writing it (gameState.js
     // writeWorldState). Carried on oh:runtime-json-updated so the runtime store
-    // does not normalize the whole document a second time.
+    // does not normalize the whole document a second time, with the text the
+    // saved value was parsed from, so the store can tell a no-op write by
+    // comparing texts rather than deep-comparing the whole document.
     normalized = false,
   } = {},
 ) => {
@@ -1030,7 +1032,13 @@ export const writeJson = async (
   }
   if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
     window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-      detail: { key: runtimeAssetLabel(url), url, value: saved, normalized: Boolean(normalized) },
+      detail: {
+        key: runtimeAssetLabel(url),
+        url,
+        value: saved,
+        normalized: Boolean(normalized),
+        ...(normalized ? { text: savedPayload } : {}),
+      },
     }));
   }
 
@@ -1512,6 +1520,7 @@ const customRegionRawEntries = (geojson) => {
       lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
       tags: Array.isArray(props?.tags) ? props.tags : [],
       type: props?.type ?? "",
+      typeId: props?.typeId ?? "",
       adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
       bounds: geometryBounds(feature?.geometry),
       claimants: Array.isArray(props?.claimants) ? props.claimants : [],
@@ -1543,6 +1552,9 @@ const compactCustomRegionEntries = (rawEntries) => {
       lat: Number.isFinite(lat) ? lat : null,
       tags: Array.isArray(raw?.tags) ? raw.tags.map((value) => String(value)) : [],
       type: raw?.type ? String(raw.type) : "",
+      // Its Workshop region type (runtime/regionTypes.js): the AI's placement
+      // rules name the regions of a type the scenario gives rules to.
+      ...(raw?.typeId ? { typeId: String(raw.typeId) } : {}),
       adjacencies: Array.isArray(raw?.adjacencies)
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
@@ -1697,6 +1709,38 @@ export const loadRollbackSnapshotIndex = async () => {
     clone: false,
   }).catch(() => null);
   return Array.isArray(data?.entries) ? data.entries : [];
+};
+
+// One restore point by id, or null when the game has none by that id. From the
+// archive when this tab already holds it (a turn's capture primes it), else just
+// that one from the store (/api/runtime/snapshots/:id): the staged reveal and
+// viewAsSeen want one world, and the archive is up to twelve. Shared, not a
+// copy: a caller that changes any of it copies that part first.
+export const loadRollbackSnapshot = async (snapshotId) => {
+  const id = String(snapshotId ?? "").trim();
+  if (!id) return null;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.id === id) ?? null;
+  try {
+    const { response } = await fetchWithPersistence(withRuntimeToken(`/api/runtime/snapshots/${encodeURIComponent(id)}`), {
+      bypassPersistentCache: true,
+    });
+    return await response.json();
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
+};
+
+// The restore point a turn started from, found by its dates (fromDate, toDate)
+// in the index and read alone, or null. Only one that holds a world counts.
+export const loadTurnRestorePoint = async ({ fromDate, toDate } = {}) => {
+  const spans = (entry) => entry?.fromDate === fromDate && entry?.toDate === toDate;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.state?.world && spans(snap)) ?? null;
+  const entry = (await loadRollbackSnapshotIndex()).find(spans);
+  const snap = entry?.id ? await loadRollbackSnapshot(entry.id) : null;
+  return snap?.state?.world && spans(snap) ? snap : null;
 };
 
 // The stock world's regions into `seen` (id -> { country, countryCode, id,

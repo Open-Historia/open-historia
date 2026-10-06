@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { groupEraseSteps, groupRenameSteps, removeRowStep } from "./documentUndo.js";
+import { groupEraseSteps, groupRenameSteps, removeRowStep, removeRowsStep } from "./documentUndo.js";
 
 // A document setter as useMapDocument has them: a value or an updater.
 const store = (initial) => {
@@ -50,6 +50,44 @@ test("removing a row that is not there has no undo step", () => {
   const cities = store([{ id: "a" }]);
   assert.equal(removeRowStep(cities.value, cities.set, "zzz"), null);
   assert.deepEqual(cities.value, [{ id: "a" }]);
+});
+
+test("Delete All can be undone: every city and map feature comes back in its order, and redo clears them again", () => {
+  const cities = [{ id: "a", name: "Rome" }, { id: "b", kind: "port" }, { id: "c", name: "Carthage" }];
+  const features = store(cities);
+  const step = removeRowsStep(features.value, features.set, () => true);
+  assert.deepEqual(features.value, []);
+
+  step.undo();
+  assert.deepEqual(features.value, cities);
+
+  step.redo();
+  assert.deepEqual(features.value, []);
+});
+
+test("deleting a selection puts the rows back where they were, around what was added since", () => {
+  const features = store([{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }]);
+  const selected = new Set(["b", "d"]);
+  const step = removeRowsStep(features.value, features.set, (row) => selected.has(row.id));
+  assert.deepEqual(features.value.map((f) => f.id), ["a", "c"]);
+
+  features.set((list) => [...list, { id: "new" }]);
+  step.undo();
+  assert.deepEqual(features.value.map((f) => f.id), ["a", "b", "c", "d", "new"]);
+
+  step.redo();
+  assert.deepEqual(features.value.map((f) => f.id), ["a", "c", "new"], "redo removes the same rows, not the one added since");
+});
+
+test("an undone bulk delete keeps an edit made to a row that came back meanwhile, and removing nothing has no step", () => {
+  const features = store([{ id: "a", name: "Old" }, { id: "b" }]);
+  const step = removeRowsStep(features.value, features.set, (row) => row.id === "a");
+  features.set((list) => [{ id: "a", name: "New" }, ...list]);
+  step.undo();
+  assert.deepEqual(features.value, [{ id: "a", name: "New" }, { id: "b" }]);
+
+  assert.equal(removeRowsStep(features.value, features.set, () => false), null);
+  assert.equal(features.value.length, 2);
 });
 
 test("a group rename moves the record, and undo moves it back with its description and colour", () => {

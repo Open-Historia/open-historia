@@ -125,6 +125,12 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     if (url.pathname === "/api/runtime/turn-commit") {
       return refusal("In a shared game, the host resolves every round.");
     }
+    // One restore point, read on its own (runtime/assets.js loadRollbackSnapshot):
+    // the host's, like the archive it comes from. It holds the whole world as it
+    // was, which no player's screen is sent; a player has none.
+    if (url.pathname.startsWith("/api/runtime/snapshots/")) {
+      return jsonResponse({ error: "In a shared game, the restore points are the host's." }, 404);
+    }
     const match = /^\/api\/runtime\/json\/([A-Za-z]+)$/.exec(url.pathname);
     if (!match) return originalFetch(input, init);
     const key = match[1];

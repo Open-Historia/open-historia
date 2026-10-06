@@ -22,7 +22,7 @@ import { activateGame, createGame, getLibraryState, refreshLibraryCatalog, setSh
 import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
+import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/telemetry.js";
 import { UNSENT_NOTICES, planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
@@ -240,11 +240,19 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
       }
     },
     // The engine makes the game's AI calls. Each one it finishes is announced
-    // here as this window's own are, a moment later (its record is stored just
-    // after the call ends), so the AI debug console shows it; and what the
-    // engine logs goes in this window's diagnostics log.
+    // here as this window's own are, so the AI debug console shows it: an open
+    // console takes the record the engine stored into its own copy first. The
+    // record is stored just after the call ends, so it is looked for a moment
+    // later, and once more if it was not there yet. What the engine logs goes
+    // in this window's diagnostics log.
     onAi: (detail) => {
-      setTimeout(() => window.dispatchEvent(new CustomEvent(GENERATION_COMPLETE_EVENT, { detail })), 600);
+      const announce = () => window.dispatchEvent(new CustomEvent(GENERATION_COMPLETE_EVENT, { detail }));
+      setTimeout(() => {
+        void adoptStoredAiRecord(detail.recordId).then((taken) => {
+          announce();
+          if (!taken) setTimeout(() => void adoptStoredAiRecord(detail.recordId).then((late) => { if (late) announce(); }), 3000);
+        });
+      }, 600);
     },
     onLog: (entries) => {
       for (const entry of entries) logDebugEvent(entry.category, `(host's engine) ${entry.message}`, entry.detail || undefined, { problem: entry.problem });

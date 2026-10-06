@@ -3427,7 +3427,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return () => { cancelled = true; };
     }, [hasLoadedInitialData, isOpen]);
 
-    const worldSnapshot = useRuntimeState("world", (world) => world || {});
+    // The whole world, so no selector: a selector's output is deep-compared on
+    // every world write, and for the whole document that is a full walk.
+    const worldDocument = useRuntimeState("world");
+    const worldSnapshot = useMemo(() => worldDocument || {}, [worldDocument]);
     const identity = useRuntimeState("game", selectGameIdentity);
     // Who is the player's Overlord or Puppet, for the list's markers and a
     // thread's demands: from the world this panel already holds, so it moves

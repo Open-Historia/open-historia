@@ -13,6 +13,7 @@ import {
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeMissingBasemap,
 } from "../../../server/hubProvenance.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
@@ -238,11 +239,19 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
     id: scenarioId,
+    ...missingBasemapField(raw?.missingBasemap),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
     updatedAt: raw?.updatedAt ?? nowIso(),
   };
+};
+
+// Only there while a community basemap is missing (server/hubProvenance.js);
+// mirrors server/libraryStore.js.
+export const missingBasemapField = (raw) => {
+  const missingBasemap = normalizeMissingBasemap(raw);
+  return missingBasemap ? { missingBasemap } : {};
 };
 
 export const readGameMeta = (gameId, raw = {}) => {
