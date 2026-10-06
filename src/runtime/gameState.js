@@ -2668,6 +2668,22 @@ const describeUnitOpRejection = (entry) => {
   return `unknown op "${op}"`;
 };
 
+// A dropped op is said once. A turn's validators normalize the same raw events
+// over and over on the way to applying them (the ledgers alone read them a
+// dozen times), and every pass met the same op and said the same thing: a
+// player's log had one spawn reported eighteen times in two seconds. Told by
+// the op itself, so the same mistake in a later answer is a new op and is said
+// again; an entry that is not an object cannot be told apart and is said each
+// time, as before.
+const reportedUnitOpDrops = new WeakSet();
+const reportUnitOpDrop = (entry, index) => {
+  if (entry && typeof entry === "object") {
+    if (reportedUnitOpDrops.has(entry)) return;
+    reportedUnitOpDrops.add(entry);
+  }
+  console.warn(`[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`, entry);
+};
+
 const normalizeUnitOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -3375,12 +3391,7 @@ const normalizeEventImpacts = (value) => {
     unitOps: normalizeArray(value.unitOps)
       .map((entry, index) => {
         const normalized = normalizeUnitOp(entry);
-        if (!normalized) {
-          console.warn(
-            `[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`,
-            entry,
-          );
-        }
+        if (!normalized) reportUnitOpDrop(entry, index);
         return normalized;
       })
       .filter(Boolean),
