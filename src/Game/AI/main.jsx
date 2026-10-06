@@ -31,7 +31,7 @@ import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRec
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
-import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
+import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   buildDiplomaticTurnInstruction,
@@ -3234,10 +3234,6 @@ export const PLANNED_ACTIONS_IN_ACTION_PLANNING = "(listed once, with their ids,
 // context). A player's-eye view reaching the simulator would have it resolving
 // the world from a picture it knows to be incomplete.
 const buildAdvisorPuppetsDirective = (world, playerCountry) => {
-    // With the system off the whole section goes, rather than saying nobody
-    // directs anybody: the directives list is filtered, and an advisor told the
-    // concept exists will reach for it when a player asks about their "puppets".
-    if (!puppetStatesEnabled()) return "";
     const rows = livePuppetsFor(world, playerCountry);
     const lines = rows.slice(0, 40).map((row) => {
         const who = describeRole(row, {

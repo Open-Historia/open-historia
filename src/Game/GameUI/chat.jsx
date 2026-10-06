@@ -1237,7 +1237,6 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // DEMANDS, in the one-on-one thread between the player and their own
     // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
     // player, from the same shared rule as the list's markers.
-    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     // A Council or accession table takes the group path even with one AI member
     // (submitPlayerText), where no demand is read, so none is offered there.
     const oneOnOne = !isGroup && !isInstitutional && !isLifecycleConversation;
@@ -1944,13 +1943,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
 
         // DEMANDS, placed in the conversation rather than under it
         // (runtime/demandCheck.js placeDemandCards).
-        // A demand belongs to an overlord and its puppet, so a game with the
-        // system switched off shows none — including ones a thread was already
-        // carrying when it was switched off. They are not deleted: the thread
-        // keeps its log, and switching back on brings the open ones back.
         const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
             messages: visibleEntries.map(({ msg }) => msg),
-            demands: puppetStatesOn ? chat.demands : [],
+            demands: chat.demands,
             isGroup,
         });
         const renderDemandCard = (demand) => (
@@ -3173,7 +3168,6 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
     const currentView = view === "spy" && !espionageOn ? "chats" : view;
-    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -3419,10 +3413,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const identity = useRuntimeState("game", selectGameIdentity);
     // Who is the player's Overlord or Puppet, for the list's markers and a
     // thread's demands: from the world this panel already holds, so it moves
-    // when the world is written, and nothing at all while the system is off.
+    // when the world is written.
     const puppetMarkers = useMemo(
-        () => (puppetStatesOn ? puppetMarkersFor(worldSnapshot, identity.country) : {}),
-        [puppetStatesOn, worldSnapshot, identity.country],
+        () => puppetMarkersFor(worldSnapshot, identity.country),
+        [worldSnapshot, identity.country],
     );
     useEffect(() => {
         if (!isOpen) return;

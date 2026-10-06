@@ -5,7 +5,7 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
-import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
@@ -13,6 +13,7 @@ import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
+import { openListenIn } from "../GameUI/ListenInPhone.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -226,6 +227,32 @@ const IconBtn = ({ children, title, onClick, expanded }) => {
     );
 };
 
+// The card's one worded button: Listen in (GameUI/ListenInPhone.jsx).
+const listenInButtonStyle = {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.07)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: "8px",
+    color: "rgba(255,255,255,0.88)",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: "12px",
+    fontWeight: 600,
+    gap: "6px",
+    justifyContent: "center",
+    marginTop: "8px",
+    padding: "6px 8px",
+    width: "100%",
+};
+
+const PhoneGlyph = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="6" y="2" width="12" height="20" rx="2.5" />
+    <path d="M11 18h2" />
+    </svg>
+);
+
 // Copies a name through the shared helper, which falls back where
 // navigator.clipboard is missing (LAN play over http, the Android app), and
 // says for a moment whether it worked: a tick, or a cross and "Copy failed".
@@ -302,6 +329,8 @@ const RegionPopup = () => {
     const shortTouch = useShortTouchScreen();
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
+    // Listen in can be switched off for a game (server/gameFeatures.js).
+    const listenInOn = useActiveFeatures().listenIn?.enabled !== false;
     const [selection, setSelection] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
@@ -842,6 +871,25 @@ const RegionPopup = () => {
                 </div>
             )}
             </>
+        )}
+
+        {/* What people here are posting. The card stays where it is, under
+            the phone, for when the phone is put away. */}
+        {listenInOn && (regionId || controllerKey) && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={() => openListenIn({
+                regionId,
+                regionName: NAME_1,
+                polity: isUnclaimed ? "" : displayCountry,
+                polityKey: controllerKey,
+            })}
+            style={listenInButtonStyle}
+            >
+            <PhoneGlyph />
+            Listen in
+            </button>
         )}
 
         </div>

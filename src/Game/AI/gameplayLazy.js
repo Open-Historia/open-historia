@@ -80,3 +80,5 @@ export const generateCountryStatSheet = async (...args) => (await gameplay()).ge
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
+// Listen in: one request for what people in a place are posting (runtime/listenIn.js).
+export const generateListenInFeed = async (...args) => (await gameplay()).generateListenInFeed(...args);

@@ -33,7 +33,6 @@ const listOf = (names, max = 6) => (names.length > max ? `${names.slice(0, max).
 export const buildTargetLedgerLines = (world, target, {
     playerPolity = "",
     ownerOf = null,
-    puppetStates = true,
     espionage = true,
     groups = true,
     statSheet = true,
@@ -111,13 +110,11 @@ export const buildTargetLedgerLines = (world, target, {
     }
 
     // Who directs it, and whom it directs — as far as the player can see.
-    if (puppetStates) {
-        const rows = visiblePuppetsFor(world, player || name).filter((row) => row.status === "active");
-        const overlords = rows.filter((row) => same(row.puppet)).map((row) => `${shown(row.overlord)} (${row.kind}, ${row.secrecy})`);
-        const puppets = rows.filter((row) => same(row.overlord)).map((row) => `${shown(row.puppet)} (${row.kind}, ${row.secrecy})`);
-        if (overlords.length) lines.push(`Directed by: ${overlords.join("; ")}.`);
-        if (puppets.length) lines.push(`Directs: ${puppets.join("; ")}.`);
-    }
+    const rows = visiblePuppetsFor(world, player || name).filter((row) => row.status === "active");
+    const overlords = rows.filter((row) => same(row.puppet)).map((row) => `${shown(row.overlord)} (${row.kind}, ${row.secrecy})`);
+    const puppets = rows.filter((row) => same(row.overlord)).map((row) => `${shown(row.puppet)} (${row.kind}, ${row.secrecy})`);
+    if (overlords.length) lines.push(`Directed by: ${overlords.join("; ")}.`);
+    if (puppets.length) lines.push(`Directs: ${puppets.join("; ")}.`);
 
     // The groups holding ground inside its borders, while the game has groups
     // (server/gameFeatures.js).
