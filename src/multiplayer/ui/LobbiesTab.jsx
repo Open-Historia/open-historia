@@ -84,7 +84,7 @@ const InviteBar = ({ onEnterGame }) => {
       <p style={lead}>Enter the invite code the host sent you. You will need the lobby&apos;s scenario in your library.</p>
       <div style={{ alignItems: "flex-end", display: "flex", flexWrap: "wrap", gap: "0.7rem" }}>
         <Field title="Invite code" style={{ flex: "3 1 16rem" }}>
-          <input style={input} value={code} onChange={(event) => setCode(event.target.value)} placeholder="oh1-…" spellCheck={false} autoComplete="off" />
+          <input data-no-translate style={input} value={code} onChange={(event) => setCode(event.target.value)} placeholder="oh1-…" spellCheck={false} autoComplete="off" />
         </Field>
         <Field title="Your name" style={{ flex: "1 1 9rem" }}>
           <input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Player" />

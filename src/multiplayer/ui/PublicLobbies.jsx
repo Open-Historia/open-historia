@@ -20,6 +20,8 @@ const input = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(25
 const cell = { borderTop: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", padding: "0.55rem 0.5rem", textAlign: "left" };
 // Anyone's text, kept from reordering the text around it.
 const isolate = { unicodeBidi: "isolate" };
+// The list while it is still "Coming soon": there, out of focus, not for use.
+const VEILED = { filter: "blur(2px) saturate(0.6)", opacity: 0.5, pointerEvents: "none" };
 
 const SAMPLE = [
   { roomId: "sample-1", name: "The Baltic Question", scenario: { name: "Fault Lines" }, players: 4, seats: 8, round: { minutes: 20 }, language: "en", cheats: "off", payment: "host", password: false },
@@ -57,7 +59,7 @@ export default function PublicLobbies({ comingSoon = true }) {
 
   return (
     <section style={card} aria-label="Public lobbies">
-      <div aria-hidden={comingSoon} style={{ filter: comingSoon ? "blur(2px) saturate(0.6)" : "none", opacity: comingSoon ? 0.5 : 1, pointerEvents: comingSoon ? "none" : "auto" }}>
+      <div aria-hidden={comingSoon} style={comingSoon ? VEILED : null}>
         <h3 style={{ color: "#fff", fontSize: "1.1rem", fontWeight: 800, margin: "0 0 0.8rem" }}>Public lobbies</h3>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.8rem" }}>
           <input style={{ ...input, flex: "1 1 12rem" }} placeholder="Search names and scenarios" value={filters.q} onChange={set("q")} maxLength={60} />
