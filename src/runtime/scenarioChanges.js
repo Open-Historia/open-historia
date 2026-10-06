@@ -138,14 +138,21 @@ const polygonArea = (rings) => (Array.isArray(rings)
   : 0);
 
 // The border cleanup a Workshop save runs (topologySweep.js) repairs defects up
-// to 500 m wide in the map's projection, 0.0045° at most. On a region the
-// player never touched it fills a crack, trims a sliver, and makes or removes
-// geometry of next to no area: a spike (a vertex the ring runs out to and
-// straight back from), a sliver tip (out and back within the cleanup's width)
-// and a speck (a stray part of a few metres), or a whole stray part that is
-// only a sliver. A spike or a tip moves a bounding box a long way (0.5° on one
-// region), so a region's box is measured without them.
-const CLEANUP_WIDTH = 0.005; // degrees
+// to 1.5 km wide in the map's projection (BORDER_CLEANUP.maxWidth), 0.0135° at
+// most. On a region the player never touched it fills a crack, trims a sliver,
+// and makes or removes geometry of next to no area: a spike (a vertex the ring
+// runs out to and straight back from), a sliver tip (out and back within the
+// cleanup's width) and a speck (a stray part of a few metres), or a whole
+// stray part that is only a sliver. A spike or a tip moves a bounding box a
+// long way (0.5° on one region), so a region's box is measured without them.
+//
+// This follows the cleanup's width and has to: it was 0.005° while the cleanup
+// stopped at 500 m, and at 1.5 km a save of the untouched built-in map then
+// read as two reshaped regions (a triangle filled into Freiburg moved its
+// outline 0.0099°; a crack filled along 358 km of Gillette's border added
+// 0.28% to its area). The price is that a border moved by less than this, a
+// kilometre or so, no longer reads as a change either.
+const CLEANUP_WIDTH = 0.015; // degrees
 const SPECK_AREA = 1e-5; // square degrees, about a tenth of a square kilometre
 const SPIKE_SINE = 0.1; // a turn back within about 6°
 // The ring without its spikes and tips; `collapsed` when nothing but them was

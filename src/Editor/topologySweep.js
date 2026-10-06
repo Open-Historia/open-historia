@@ -3,19 +3,20 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-// Every scenario save (Save, Save & Exit, Apply & Play) first runs the Topology
-// panel's conservative repair over EVERY region — enclosed cracks narrower than
-// 500 m filled, thin overlaps trimmed — before the map is written
-// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere). This
-// module is the pure part: how regions are grouped for the staged union, and
-// what the loading screen says.
+// Every scenario save (Save, Save & Exit, Apply & Play) first runs a
+// conservative border repair over EVERY region — enclosed cracks narrower than
+// 1.5 km filled, thin overlaps trimmed — before the map is written
+// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere).
+// Nothing else in the Workshop repairs borders. This module is the pure part:
+// how regions are grouped for the staged union, and what the loading screen
+// says.
 //
 // The pass is not all-pairs. Overlap discovery asks the map's spatial index for
 // extent neighbours only (the stock 4,848-region world: 14,011 pairs, ~3 s),
 // and the gap search reads the holes of ONE union of every region on the map.
 // That union is built in stages — each chunk of regions unioned, then the chunk
 // results unioned — which is the same polygon set as a single call (union is
-// associative; the stock world yields the identical 324 cracks crack by crack)
+// associative; the stock world yields the identical 332 cracks crack by crack)
 // with bounded memory (414 MB → ~200 MB of heap on the stock world) and a
 // repaint between chunks. Searching each chunk on its own was rejected: a crack
 // longer than a chunk, such as a double-traced border between two large
@@ -23,8 +24,8 @@
 //
 // Two more measured facts shape the pass. Trimming a sliver can expose a
 // hairline between the winner and a third region the trimmed region used to
-// cover, so the pass repeats until it finds nothing (the stock world: 98
-// cracks and 57 slivers, then nothing). And the save writes coordinates at
+// cover, so the pass repeats until it finds nothing (the stock world: 106
+// cracks and 59 slivers, then nothing). And the save writes coordinates at
 // five decimals, about a metre, which leaves centimetre slivers along every
 // repaired border on reload — without a floor those would be "repaired" again
 // on every save, moving hundreds of regions by centimetres each time.
@@ -45,8 +46,36 @@
 // elsewhere) is not a crack, and is dropped.
 
 export const BORDER_CLEANUP = Object.freeze({
-  // Metres in the map projection: the Topology panel's default tolerance.
-  maxWidth: 500,
+  // The widest crack or sliver that is repaired, in metres of the map
+  // projection (Web Mercator: 1,500 m on the ground at the equator, half that
+  // at 60°). A defect's width is twice its area over its perimeter: its real
+  // width when it is long and thin, half its diameter when it is round, so
+  // this also fills any enclosed hole up to about 3 km across.
+  //
+  // It was 500 m. That left eight cracks on the built-in map, 501 to 977 m,
+  // each a triangle where two or three regions of one country had their
+  // shared border simplified differently (the longest: 358 km of the
+  // Wyoming–Montana line, nowhere wider than 900 m). 1,500 m takes them and
+  // nothing else: the map has no hole between 977 m and 4,402 m, the
+  // narrowest water left as a hole (the lower Uruguay river) measures
+  // 7,031 m, and no two regions overlap by more than 930 m.
+  //
+  // A map cut from the stock world pays for the wider limit. Its regions were
+  // each simplified on their own, so neighbours disagree by up to 2.5 km
+  // along most borders and the sweep rewrites such a map wholesale at either
+  // width: the 940 regions of a European cut had 2,105 cracks filled and
+  // 2,856 slivers trimmed at 500 m, 4,103 and 5,263 at 1,500 m. That closes
+  // the borders 500 m left open, and takes what else is that narrow: water
+  // left as a hole inside one region (65 holes where 500 m took 33), and
+  // most of a region of a few square kilometres that lies over a neighbour
+  // (nine regions lose over half their area where three did). Nothing guards
+  // against either yet. (The whole stock world is untouched at any width:
+  // polygon-clipping refuses its first union.)
+  //
+  // The scenario diff's tolerance follows this number
+  // (runtime/scenarioChanges.js CLEANUP_WIDTH), or a save's own repairs
+  // would read as suggested changes.
+  maxWidth: 1500,
   // Defects narrower than this are coordinate-rounding noise, invisible at any
   // zoom, and left alone.
   minWidth: 2,
@@ -341,7 +370,7 @@ export const describeCleanupResult = (result, error = "") => {
     : "";
   if (!result.changed) {
     if (stop) return `Border cleanup ${stop}; nothing was changed.${left}${limits}`;
-    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across ${plural(result.regionCount, "region")}.${limits}`;
+    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth / 1000} km across ${plural(result.regionCount, "region")}.${limits}`;
   }
   const passes = count(result.passes) > 1 ? ` in ${plural(result.passes, "pass")}` : "";
   const repairs = `${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}`;
