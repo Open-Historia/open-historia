@@ -56,6 +56,7 @@ import {
     isBusyErrorPayload,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
+    isCutOffJsonBody,
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
@@ -63,11 +64,13 @@ import {
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
+    stoppedAtOutputLimit,
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
     unreachableServerError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
+import { holdsWholeAnswer } from "./toolResponsePayload.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
@@ -220,6 +223,9 @@ async function readErrorPayload(response) {
 // The body of a reply that claimed success. A 200 carrying a web page (a gateway
 // landing page, a proxy's error screen) used to surface as JSON.parse's
 // "Unexpected token '<', "<!doctype "... is not valid JSON" — true, and no help.
+// And a body that stops partway, or never starts, is the connection closing
+// before the answer was all there: said as that, not as "Unexpected end of
+// JSON input", and marked like the same thing seen in a stream.
 async function readJsonAnswer(response, providerLabel) {
     const text = await response.text();
     try {
@@ -227,9 +233,24 @@ async function readJsonAnswer(response, providerLabel) {
     } catch (error) {
         const page = describeHtmlErrorPage(text, `${providerLabel} request failed (${response.status})`);
         if (page) throw new Error(page);
+        if (isCutOffJsonBody(text)) throw connectionClosedError(error);
         throw error;
     }
 }
+
+// A stream that stopped before the provider said it had finished
+// (streamAssembly.js marks the rebuilt envelope `closedEarly`): no finish
+// reason, no [DONE], no error frame. That is a connection that closed, and it
+// used to be read as a whole answer: half a tool call failed to parse, the task
+// told the model its JSON was invalid and paid for a second request. It fails
+// here instead, as the transport failure it is and marked like one.
+//
+// Unless what did arrive is a whole answer (toolResponsePayload.js
+// holdsWholeAnswer: the output function's call, or text holding one complete
+// JSON payload), which is then used as it always was.
+const failIfClosedEarly = (data, answerText = "", toolInput = null) => {
+    if (data?.closedEarly && !holdsWholeAnswer(answerText, toolInput)) throw connectionClosedError();
+};
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
 // UI doesn't expose (e.g. reasoning budget/effort limits). Shallow-merged last
@@ -689,6 +710,19 @@ async function retryOrFailByStatus(response, { attempt, retries, retryDelay, dea
     await sleep(wait, signal);
 }
 
+// A frame that says the reply is over, in each provider's words: a finish
+// reason (OpenAI-style, Gemini), Anthropic's stop reason or message_stop, or
+// the provider saying why there is none (an error, a prompt Gemini refused).
+const frameEndsReply = (json) => Boolean(
+    json?.choices?.[0]?.finish_reason
+    || json?.candidates?.[0]?.finishReason
+    || json?.promptFeedback?.blockReason
+    || json?.delta?.stop_reason
+    || json?.type === "message_stop"
+    || json?.type === "error"
+    || json?.error,
+);
+
 async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -703,21 +737,26 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
     let finishReason = "";
     let frames = 0;
     let streamError = null;
+    // The provider said the reply was over (frameEndsReply, or the [DONE] line).
+    let finished = false;
     const sample = [];
     try {
         for (;;) {
             const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
+            // The last line is read even when no newline follows it: it can be
+            // the frame with the finish reason, or the [DONE] itself.
+            buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop() ?? "";
+            buffer = done ? "" : (lines.pop() ?? "");
             for (const line of lines) {
                 if (!line.startsWith("data:")) continue;
                 const payload = line.slice(5).trim();
+                if (payload === "[DONE]") finished = true;
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
                 frames += 1;
+                if (frameEndsReply(json)) finished = true;
                 // A chat that may call a lookup function (chatLookupsFor) hands
                 // every frame to the reducer assembling those calls as well.
                 if (onFrame) { try { onFrame(json); } catch { /* a collector must not break the stream */ } }
@@ -737,10 +776,16 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
                 if (reasoningDelta) reasoning += reasoningDelta;
                 if (contentDelta) { full += contentDelta; try { onChunk(contentDelta, full); } catch { /* UI callback must not break the stream */ } }
             }
+            if (done) break;
         }
     } finally {
         try { reader.releaseLock(); } catch { /* already closed */ }
     }
+
+    // The stream just stopped: the provider never said the reply was over, nor
+    // why it was not. That is a connection that closed, and what arrived used
+    // to be kept as the whole reply. It is the failure a broken read is.
+    if (!finished) throw connectionClosedError();
 
     // Inline <think> blocks arrive as ordinary content, so the streamed preview
     // shows them; strip them from what is RETURNED, which is what gets persisted
@@ -1208,6 +1253,7 @@ async function callGemini(systemPrompt, history, {
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
+            failIfClosedEarly(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
             // Not the answer but a question: the model called lookup functions.
             // Handed back to callAI, which answers them and asks again.
             if (lookupDeclarations.length) {
@@ -1244,6 +1290,7 @@ async function callGemini(systemPrompt, history, {
             return { rawText: streamedText, toolInput: null };
         }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
+        failIfClosedEarly(data, text);
 
         if (!text) {
             throw new Error("Gemini response did not contain text.");
@@ -1639,6 +1686,7 @@ async function callOpenAIStyleChatCompletions({
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
             if (toolInput) return { rawText: text, toolInput };
+            failIfClosedEarly(data, (structuredMode === "tool" && extractOpenAIToolRaw(data, tool)) || text);
             // Not the answer but a question: the model called lookup functions.
             if (structuredMode === "tool" && lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromOpenAI(data, tool.name);
@@ -1718,6 +1766,7 @@ async function callOpenAIStyleChatCompletions({
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
         }
+        failIfClosedEarly(data, text);
 
         // The advisor's lookup functions, from a gateway that answered buffered.
         if (!tool && chatTools.length) {
@@ -2077,6 +2126,7 @@ async function callAnthropic(systemPrompt, history, {
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            failIfClosedEarly(data, extractAnthropicText(data));
             // Not the answer but a question: the model called lookup functions.
             if (lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
@@ -2107,6 +2157,7 @@ async function callAnthropic(systemPrompt, history, {
             return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
+        failIfClosedEarly(data, text);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2352,6 +2403,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            failIfClosedEarly(data, extractAnthropicText(data));
             // Not the answer but a question: the model called lookup functions.
             if (lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
@@ -2398,6 +2450,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             return { rawText: anthropicText, toolInput: null };
         }
         const text = extractAnthropicText(data);
+        failIfClosedEarly(data, text);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2713,6 +2766,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     let roundUsage = null;
     let lookupRounds = 0;
     let lookupCalls = 0;
+    // The answer handed back was cut at the model's output limit
+    // (providerErrors.js stoppedAtOutputLimit), read off the same envelope the
+    // usage is: the last one read is the one whose answer is returned.
+    let answerCutAtLimit = false;
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2780,6 +2837,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         onReceived: live?.received,
                         onRequest: noteRequest,
                         onUsage: (data) => {
+                            answerCutAtLimit = stoppedAtOutputLimit(data);
                             const reported = normalizeUsage(data);
                             if (!reported) return;
                             roundUsage = reported;
@@ -2816,6 +2874,20 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
             ...(usage ?? {}),
         }, { verbose: true });
+        // The model ran into its output limit, so the answer may stop partway.
+        // It is handed back all the same: text holding a whole JSON payload is
+        // still used. The task runner is told through its sink, and when it
+        // finds nothing usable it stops there instead of asking the same
+        // question under the same limit (gameplay.js runJsonTask). Always
+        // logged: it is the first thing to look for when a turn comes up short.
+        if (answerCutAtLimit) {
+            if (debugSink && typeof debugSink === "object") debugSink.stoppedAtOutputLimit = true;
+            logDebugEvent("ai-call", `${label}: ${answeredBy.label} stopped at its output limit; the answer may be cut short.`, {
+                replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
+                maxTokens: providerOpts.maxTokens ?? "(not set by the task)",
+                ...(usage?.outputTokens ? { outputTokens: usage.outputTokens } : {}),
+            });
+        }
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, {
             ok: true,

@@ -370,6 +370,39 @@ export const connectionClosedError = (cause) => {
     return error;
 };
 
+// A body that should be one JSON object and is not, because it stops partway
+// or never starts: the buffered form of the same closed connection. Anything
+// else that fails to parse (a complete object a gateway got wrong, plain text)
+// is left to say what it always said.
+export const isCutOffJsonBody = (text) => {
+    const body = String(text ?? "").trim();
+    return !body || (/^[{[]/.test(body) && !/[}\]]$/.test(body));
+};
+
+// ---------------------------------------------------------------------------
+// The model ran into its output limit
+// ---------------------------------------------------------------------------
+//
+// Every provider says so on the answer itself: finish_reason "length" (OpenAI
+// and everything shaped like it), finishReason "MAX_TOKENS" (Gemini),
+// stop_reason "max_tokens" (Anthropic). Nothing read it. A structured answer
+// cut there does not parse, the task runner told the model its JSON was invalid
+// and asked for it again under the same limit, and it was cut at the same
+// place: the same log has a local server's replies stopping mid-sentence at
+// about 4,100 characters time after time, two requests spent on each.
+//
+// `data` is the envelope as the provider sent it or as streamAssembly.js
+// rebuilt it. The answer is still handed back: text that holds a whole JSON
+// payload is used as it always was, and what to do with one that does not is
+// the caller's to decide (gameplay.js runJsonTask stops instead of asking again).
+export const stoppedAtOutputLimit = (data) =>
+    data?.choices?.[0]?.finish_reason === "length"
+    || data?.candidates?.[0]?.finishReason === "MAX_TOKENS"
+    || data?.stop_reason === "max_tokens";
+
+// What the player reads when such an answer could not be used.
+export const OUTPUT_LIMIT_MESSAGE = "The model stopped at its output limit before it finished its answer.";
+
 // The server never answered: nothing is listening at the address, the name
 // does not resolve, the connection was refused or reset. `server` is its
 // address as the player entered it and `reason` what the connection reported

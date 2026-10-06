@@ -65,34 +65,62 @@ const observe = (hook, payload) => {
 //
 // `onChunkRead` fires once per network chunk too, but after its frames have
 // been applied: it is how a reader reports what the chunk carried.
+//
+// Resolves with whether the stream said it was over, with the `[DONE]` line
+// OpenAI-style servers end on (see streamEndedEarly below).
 async function readSSE(response, onFrame, onActivity, onChunkRead) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let done = false;
+    const readLine = (line) => {
+        if (!line.startsWith("data:")) return;
+        const data = line.slice(5).trim();
+        if (!data) return;
+        if (data === "[DONE]") {
+            done = true;
+            return;
+        }
+        let chunk;
+        try { chunk = JSON.parse(data); } catch { return; }
+        onFrame(chunk);
+    };
     try {
         for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const { done: ended, value } = await reader.read();
+            if (ended) break;
             if (onActivity) {
                 try { onActivity(); } catch { /* a watchdog callback must not break the stream */ }
             }
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
             buffer = lines.pop() ?? "";
-            for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-                const data = line.slice(5).trim();
-                if (!data || data === "[DONE]") continue;
-                let chunk;
-                try { chunk = JSON.parse(data); } catch { continue; }
-                onFrame(chunk);
-            }
+            lines.forEach(readLine);
             if (onChunkRead) onChunkRead();
         }
+        // A last line the server never ended with a newline. It used to be
+        // dropped; it can be the frame that carries the finish reason, or the
+        // [DONE] itself, and without it a whole answer would read as cut off.
+        // Half a frame still fails to parse and is skipped, as before.
+        buffer += decoder.decode();
+        if (buffer) readLine(buffer);
     } finally {
         try { reader.releaseLock(); } catch { /* stream already closed */ }
     }
+    return { done };
 }
+
+// A stream that just stops is not one that finished. Every provider says when
+// an answer is over — a finish reason on the last frame, Anthropic's
+// message_stop, the [DONE] line — or says why it is not (an error frame). One
+// with none of those is a connection that closed early: a proxy that gave up,
+// a server that went down, a relay's upstream ending without a word. The
+// envelope was rebuilt and handed back as if whole all the same, so half a tool
+// call failed to parse downstream and the task asked for it again, and a chat
+// reply was kept cut short. Each finish* below marks such an envelope
+// `closedEarly`, and main.jsx fails the call on it as the transport failure it
+// is (failIfClosedEarly) unless what did arrive is a whole answer.
+const streamEndedEarly = (state, finished) => !finished && !state.done && !state.streamError;
 
 // What each network chunk carried, told to `onReceived` (see the top of this
 // file). The frame reducers keep two running counts on the stream state,
@@ -129,6 +157,8 @@ export const createOpenAIStreamState = () => ({
     // each arriving under its own `index` in the tool_calls deltas.
     toolCalls: [],
     finishReason: null,
+    // The [DONE] line was read (set by the reader, which sees it; no frame does).
+    done: false,
     streamError: null,
     usage: null,
     // How much has arrived so far, for onReceived: characters of reasoning, and
@@ -226,12 +256,14 @@ export function finishOpenAIStream(state) {
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
+        ...(streamEndedEarly(state, state.finishReason) ? { closedEarly: true } : {}),
     };
 }
 
 export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createOpenAIStreamState();
-    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    const { done } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishOpenAIStream(state);
 }
 
@@ -244,6 +276,10 @@ export const createAnthropicStreamState = () => ({
     // then calls the tool is three blocks whose deltas arrive under one stream.
     blocks: new Map(),
     stopReason: null,
+    // message_stop was read: the message is over, whatever its stop reason.
+    stopped: false,
+    // A [DONE] line was read (a proxy's; Anthropic sends none).
+    done: false,
     streamError: null,
     // Anthropic splits the accounting across two events: message_start carries
     // the input side (including the cache_read figure that proves a prefix cache
@@ -330,6 +366,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         if (chunk.usage) state.usage = { ...state.usage, ...chunk.usage };
     }
 
+    if (type === "message_stop") state.stopped = true;
+
     return state;
 }
 
@@ -379,12 +417,14 @@ export function finishAnthropicStream(state) {
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
+        ...(streamEndedEarly(state, state.stopReason || state.stopped) ? { closedEarly: true } : {}),
     };
 }
 
 export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createAnthropicStreamState();
-    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    const { done } = await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishAnthropicStream(state);
 }
 
@@ -423,6 +463,8 @@ export const createGeminiStreamState = () => ({
     // run at once and their fragments arrive interleaved.
     partial: new Map(),
     finishReason: null,
+    // A [DONE] line was read (a proxy's; Gemini sends none).
+    done: false,
     streamError: null,
     // Gemini repeats usageMetadata on frames as the answer grows, each one
     // cumulative, so the last is the total. Kept unconditionally rather than
@@ -556,11 +598,13 @@ export function finishGeminiStream(state) {
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
         ...(state.usage ? { usageMetadata: state.usage } : {}),
+        ...(streamEndedEarly(state, state.finishReason) ? { closedEarly: true } : {}),
     };
 }
 
 export async function readGeminiStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createGeminiStreamState();
-    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    const { done } = await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishGeminiStream(state);
 }

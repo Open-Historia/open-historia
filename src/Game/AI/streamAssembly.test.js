@@ -511,3 +511,111 @@ test("a throwing receiver never breaks the stream", async () => {
   );
   assert.equal(data.choices[0].message.content, "survived");
 });
+
+// ---------------------------------------------------------------------------
+// A stream that just stops is not one that finished.
+//
+// Every provider says when an answer is over, or why it is not. A stream with
+// neither is a connection that closed early, and its envelope used to be handed
+// on as a whole answer: half a tool call failed to parse downstream and the
+// task paid for a second request. The envelope is marked, and main.jsx fails
+// the call on it.
+
+const rawSse = (text) => {
+  const encoder = new TextEncoder();
+  return {
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    }),
+  };
+};
+
+test("openai: a stream with no finish reason and no [DONE] is marked as closed early", async () => {
+  const cut = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[{"title":"A wa' } }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+
+  // Either sign of an ending is enough: servers send one, the other, or both.
+  const finished = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "ok" } }] },
+    { choices: [{ finish_reason: "stop", delta: {} }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in finished, false);
+  const doneOnly = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+  assert.equal("closedEarly" in doneOnly, false);
+  // Cut at the output limit is an ending the provider reported, not a closed connection.
+  const atLimit = await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: '{"events":[' }, finish_reason: "length" }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in atLimit, false);
+  assert.equal(atLimit.choices[0].finish_reason, "length");
+  // Nor is a stream the provider ended with an error: it said why.
+  const refused = await readOpenAIStreamedResponse(sseResponse([{ error: { message: "overloaded" } }], { done: false }));
+  assert.equal("closedEarly" in refused, false);
+  // Nothing at all came back.
+  assert.equal((await readOpenAIStreamedResponse(sseResponse([], { done: false }))).closedEarly, true);
+});
+
+test("anthropic: a message with no stop reason and no message_stop is marked as closed early", async () => {
+  const cut = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"events":[{"title":"A wa' } },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+  assert.equal(cut.partialToolJson, '{"events":[{"title":"A wa');
+
+  const stopped = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+  ], { done: false }));
+  assert.equal("closedEarly" in stopped, false);
+  const messageStop = await readAnthropicStreamedResponse(sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "Done." } },
+    { type: "message_stop" },
+  ], { done: false }));
+  assert.equal("closedEarly" in messageStop, false);
+  const overloaded = await readAnthropicStreamedResponse(sseResponse([
+    { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+  ], { done: false }));
+  assert.equal("closedEarly" in overloaded, false);
+});
+
+test("gemini: a stream with no finish reason is marked as closed early", async () => {
+  const cut = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "The year opens" }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+
+  const finished = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "The year opens." }] }, finishReason: "STOP" }] },
+  ], { done: false }));
+  assert.equal("closedEarly" in finished, false);
+  const blocked = await readGeminiStreamedResponse(sseResponse([{ promptFeedback: { blockReason: "SAFETY" } }], { done: false }));
+  assert.equal("closedEarly" in blocked, false, "the provider said why there is no answer");
+});
+
+// The last line of a body is not always followed by a newline. It used to be
+// dropped, which lost a final frame; now that an ending is looked for, losing
+// the frame that carries it would fail a whole answer.
+test("a last line with no newline after it is still read", async () => {
+  const finishOnLastLine = await readOpenAIStreamedResponse(rawSse(
+    'data: {"choices":[{"delta":{"content":"whole"}}]}\n\n'
+    + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+  ));
+  assert.equal(finishOnLastLine.choices[0].message.content, "whole");
+  assert.equal(finishOnLastLine.choices[0].finish_reason, "stop");
+  assert.equal("closedEarly" in finishOnLastLine, false);
+
+  const doneOnLastLine = await readOpenAIStreamedResponse(rawSse('data: {"choices":[{"delta":{"content":"whole"}}]}\n\ndata: [DONE]'));
+  assert.equal("closedEarly" in doneOnLastLine, false);
+
+  // Half a frame is still nothing: the text before it stands, and the stream reads as cut.
+  const halfFrame = await readOpenAIStreamedResponse(rawSse('data: {"choices":[{"delta":{"content":"half"}}]}\n\ndata: {"choices":[{"delta":{"con'));
+  assert.equal(halfFrame.choices[0].message.content, "half");
+  assert.equal(halfFrame.closedEarly, true);
+});

@@ -25,11 +25,14 @@ import {
 } from "./providerErrors.js";
 import {
   CONNECTION_CLOSED_MESSAGE,
+  OUTPUT_LIMIT_MESSAGE,
   connectionClosedError,
   couldNotBeReached,
   extractErrorMessage,
   isBrokenBodyError,
+  isCutOffJsonBody,
   isUnreachableError,
+  stoppedAtOutputLimit,
   unreachableServerError,
   unreachableServerMessage,
 } from "./providerErrors.js";
@@ -558,4 +561,32 @@ test("a failed response's own words are read, a plain string included", () => {
   assert.equal(extractErrorMessage({}, fallback), fallback);
   assert.equal(extractErrorMessage(null, fallback), fallback);
   assert.match(extractErrorMessage({ rawText: MISSING_SCHEME_PAGE }, "request failed (404)"), /answered with a web page/);
+});
+
+test("a buffered body that stops partway, or never starts, is the connection closing", () => {
+  assert.equal(isCutOffJsonBody(""), true);
+  assert.equal(isCutOffJsonBody("  \n"), true);
+  assert.equal(isCutOffJsonBody('{"choices":[{"message":{"content":"The year op'), true);
+  assert.equal(isCutOffJsonBody('[{"candidates":'), true);
+  // Whole but wrong is a gateway's mistake, and keeps its own parse error.
+  assert.equal(isCutOffJsonBody('{"choices": [,]}'), false);
+  assert.equal(isCutOffJsonBody("upstream said no"), false);
+  assert.equal(isCutOffJsonBody('{"ok":true}'), false);
+});
+
+// The same log: a local server's answers stopping mid-sentence at about 4,100
+// characters, each parsed as invalid JSON and asked for again under the same limit.
+test("an answer cut at the model's output limit is recognised in each provider's words", () => {
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "length", message: { content: "{\"topics\":[" } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [] } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ stop_reason: "max_tokens", content: [] }), true);
+  // Finished, or stopped for another reason.
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "stop" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "tool_calls" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ candidates: [{ finishReason: "STOP" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ stop_reason: "tool_use" }), false);
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: null }] }), false);
+  assert.equal(stoppedAtOutputLimit(null), false);
+  assert.equal(stoppedAtOutputLimit("text"), false);
+  assert.equal(OUTPUT_LIMIT_MESSAGE, "The model stopped at its output limit before it finished its answer.");
 });

@@ -121,6 +121,7 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { OUTPUT_LIMIT_MESSAGE } from "./providerErrors.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -3010,6 +3011,10 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // The model stopped at its output limit (main.jsx callAI says so through
+      // the sink) and nothing in what arrived parses. Whatever does parse is
+      // judged below like any other answer.
+      const cutAtLimitUnusable = !parsed && attemptSink.stoppedAtOutputLimit === true;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.
@@ -3228,7 +3233,7 @@ const runJsonTask = async (taskKey, {
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
           : validateGameplayPayload(taskKey, parsed))
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+        : { valid: false, error: cutAtLimitUnusable ? OUTPUT_LIMIT_MESSAGE : "Response did not contain parseable JSON or tool arguments." };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
         const contractError = validateStatContract(taskKey, parsed, statContract);
@@ -3343,6 +3348,13 @@ const runJsonTask = async (taskKey, {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
       }
+      // Cut at the output limit with nothing to keep: the same request under
+      // the same limit would be cut at the same place, and asking costs the
+      // player a second request to find that out. A player's log has a local
+      // server's answers stopping mid-sentence at 4,171 and then 4,173
+      // characters, one request each. The task ends here with that reason, and
+      // its fallback (or the caller's hold) takes it from there.
+      if (cutAtLimitUnusable) break;
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
