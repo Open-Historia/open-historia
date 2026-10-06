@@ -1048,9 +1048,12 @@ const relayTransport = (target) => (target.protocol === "https:" ? https : http)
 // that with a 502 of its own, and the page could not tell it from a provider's
 // 502 that was relayed as it came, so a model server that was simply not
 // running read as "busy": three attempts fifteen seconds apart, then "is busy
-// right now". Marked at the source, on the error, and said in the body
-// (`unreachable` and the socket's own `code`) so the page reports it at once
-// for what it is.
+// right now". Marked at the source, on the error, and said twice so the page
+// reports it at once for what it is: in a header only the relay sets
+// (`X-OH-Relay: unreachable`; an endpoint's own headers are not passed on, so
+// a provider's 502 relayed as it came never carries it), and in the body
+// (`unreachable`, and the socket's own `code`).
+const RELAY_HEADER = "X-OH-Relay";
 const UPSTREAM_UNREACHABLE = Symbol("relay upstream unreachable");
 const upstreamUnreachable = (error) => {
   const failure = error instanceof Error ? error : new Error(String(error));
@@ -1206,7 +1209,9 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     if (!controller.signal.aborted && !res.headersSent) {
       // Still a 502, so nothing that reads the status changes; the mark is what
       // tells the page this was the connection and not the provider.
-      sendError(res, 502, error, error?.[UPSTREAM_UNREACHABLE]
+      const unreachable = Boolean(error?.[UPSTREAM_UNREACHABLE]);
+      if (unreachable) res.setHeader(RELAY_HEADER, "unreachable");
+      sendError(res, 502, error, unreachable
         ? { code: connectionFailureCode(error), unreachable: true }
         : undefined);
     } else if (res.headersSent) {

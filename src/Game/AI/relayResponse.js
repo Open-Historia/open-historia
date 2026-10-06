@@ -11,6 +11,34 @@ import { RELAY_CUT_OFF_MESSAGE } from "./providerErrors.js";
 
 export { RELAY_CUT_OFF_MESSAGE };
 
+// Before any of that, the relay may not have reached the endpoint at all:
+// nothing listening, a name that does not resolve, a connection dropped before
+// a byte of an answer. It answers with a 502 of its own, and a 502 is also what
+// a busy provider sends, so it marks its own with a header no endpoint can set
+// (an endpoint's headers are not passed on) and says the socket's own code in
+// the body. main.jsx reads the header first and turns the response into the
+// error for a server that could not be reached, before anything can take the
+// status for a busy provider's and wait on it.
+export const RELAY_HEADER = "X-OH-Relay";
+
+export const isRelayUnreachable = (response) => {
+    try {
+        return String(response?.headers?.get?.(RELAY_HEADER) ?? "").trim().toLowerCase() === "unreachable";
+    } catch {
+        return false;
+    }
+};
+
+// Why, in the fewest words there are: the socket's code for it (ECONNREFUSED,
+// ENOTFOUND, ETIMEDOUT), which reads the same in every language, and failing
+// that whatever the relay said.
+export const relayUnreachableReason = (payload) => {
+    const code = typeof payload?.code === "string" ? payload.code.trim() : "";
+    if (code) return code;
+    const said = typeof payload?.error === "string" ? payload.error.trim() : "";
+    return said || "no answer";
+};
+
 // Statuses a Response cannot be built with a body for.
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 

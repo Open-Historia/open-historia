@@ -244,6 +244,22 @@ export const asUnreachable = (error, signal) => {
     return error;
 };
 
+// The error for a server the game's own relay could not reach (relayResponse.js
+// reads the relay's mark). The relay says it in the socket's words, "connect
+// ECONNREFUSED ::1:5001; connect ECONNREFUSED 127.0.0.1:5001", and those words
+// were going to the player as the reason their turn failed. This says where
+// (`server`: the address that was tried), why (`reason`: the socket's code) and
+// what to look at. Marked for the Fallback list like every other way a server
+// cannot be reached.
+export const unreachableServerError = (server, reason, cause = null) => {
+    const error = new Error(
+        `${server} could not be reached (${reason}). Check that the AI server is running and that its address in Settings → AI is right.`,
+        cause ? { cause } : undefined,
+    );
+    error.providerFailure = { ...UNREACHABLE_FAILURE };
+    return error;
+};
+
 // The message of an error response, whatever shape it came in. A bare string
 // under `error` is how the game server's own routes say it, the AI relay among
 // them, and some local servers too; it used to be skipped, so a relayed

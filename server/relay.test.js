@@ -273,6 +273,9 @@ describe("AI relay", () => {
     const port = await startServer();
     const refused = await relay(port, `http://127.0.0.1:${deadPort}/v1/chat/completions`);
     assert.equal(refused.status, 502, "the status is unchanged");
+    // The header is the relay's alone: what the page reads before it reads
+    // anything else of the response (src/Game/AI/relayResponse.js).
+    assert.equal(refused.headers.get("x-oh-relay"), "unreachable");
     const body = await refused.json();
     assert.equal(body.unreachable, true);
     assert.equal(body.code, "ECONNREFUSED");
@@ -292,18 +295,22 @@ describe("AI relay", () => {
     });
     const dropped = await relay(port, hangsUp);
     assert.equal(dropped.status, 502);
+    assert.equal(dropped.headers.get("x-oh-relay"), "unreachable");
     assert.equal((await dropped.json()).unreachable, true);
   });
 
   test("a provider's own 502 is relayed as it came, with no mark", async () => {
     const upstream = await startUpstream((req, res) => {
       req.resume();
-      res.writeHead(502, { "Content-Type": "application/json" });
+      // An endpoint cannot put the relay's mark on its own answer: its headers
+      // are not passed on.
+      res.writeHead(502, { "Content-Type": "application/json", "X-OH-Relay": "unreachable" });
       res.end(JSON.stringify({ error: { message: "Bad gateway", type: "server_error" } }));
     });
     const port = await startServer();
     const response = await relay(port, upstream);
     assert.equal(response.status, 502);
+    assert.equal(response.headers.get("x-oh-relay"), null);
     const body = await response.json();
     assert.deepEqual(body, { error: { message: "Bad gateway", type: "server_error" } });
     assert.equal("unreachable" in body, false);

@@ -29,7 +29,7 @@ import {
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { createKoboldCppMemory, describeOutputLimit, isKoboldCppModel } from "./outputLimit.js";
-import { withRelayCutoffHint } from "./relayResponse.js";
+import { isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { requestActivity } from "./requestActivity.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -71,6 +71,7 @@ import {
     toolStreamRefusalError,
     UNMARKED_END,
     UNREACHABLE_FAILURE,
+    unreachableServerError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE, extractJsonPayload } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
@@ -521,15 +522,29 @@ function isLocalEndpoint(url) {
     }
 }
 
-// A stream the relay has to cut off partway reads as a bare network error;
-// withRelayCutoffHint makes it say what happened (relayResponse.js).
-const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) =>
-    withRelayCutoffHint(await fetch("/api/ai/relay", {
+// Two things the relay can say that no endpoint does (relayResponse.js).
+//
+// It could not reach the endpoint at all: a 502 of its own, marked. There is no
+// answer from a provider in it to read a status off, so it is thrown here, for
+// every caller alike, as the server that could not be reached. Left to the
+// callers it was one more 502, which is a busy provider: a model server that
+// was simply not running was asked three times, fifteen seconds apart, and
+// then reported as busy.
+//
+// And a stream it has to cut off partway reads as a bare network error;
+// withRelayCutoffHint makes it say what happened.
+const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) => {
+    const response = await fetch("/api/ai/relay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, method, headers, payload }),
         signal,
-    }), signal);
+    });
+    if (isRelayUnreachable(response)) {
+        throw unreachableServerError(endpointOrigin(url), relayUnreachableReason(await readErrorPayload(response)));
+    }
+    return withRelayCutoffHint(response, signal);
+};
 
 const directFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch(url, {
@@ -925,9 +940,14 @@ async function resolveConfiguredModel(provider, { entrySettings, endpoint = "", 
         // that was only down used to read as the second, and its entry was
         // marked Unusable "until it is edited" (a player's log, in the minute
         // their local model server was not answering).
+        //
+        // When it is the relay that could not reach it, its error already says
+        // so and where (relayFetch): that is the thing to fix, and typing a
+        // model in would not help.
+        if (isUnreachableFailure(error?.providerFailure)) throw error;
         throw providerFailureError(
             `Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`,
-            isUnreachableError(error) || isUnreachableFailure(error?.providerFailure)
+            isUnreachableError(error)
                 ? { ...UNREACHABLE_FAILURE }
                 : { kind: "unusable", reason: "no model found on the server" },
         );

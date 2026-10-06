@@ -11,8 +11,9 @@
 //   [ai] Task "projects" failed: OpenAI Compatible is busy right now. Try again in a moment.
 //
 // Nothing there was busy and nothing was misconfigured. What each failure is
-// (a wording, a relay's mark) is pinned in providerErrors.test.js and
-// server/relay.test.js; this pins what the game then DOES with it. The Fallback
+// (a wording, a relay's mark) is pinned in providerErrors.test.js,
+// relayResponse.test.js and server/relay.test.js; this pins what the game then
+// DOES with it. The Fallback
 // list is driven for real (fallbackRunner.js is import-free); main.jsx,
 // gameplay.js and time.jsx are read as source, since they cannot be imported
 // without the whole app.
@@ -28,6 +29,7 @@ import {
     classifyProviderFailure,
     isUnreachableFailure,
     shouldRetryProviderFailure,
+    unreachableServerError,
 } from "./providerErrors.js";
 import { CONNECTION_CLOSED_RESPONSE, NO_RESPONSE_BODY_NOTE, isNoResponseNote } from "./simulationStatus.js";
 
@@ -86,7 +88,40 @@ test("with nothing to fall back to, it fails once, at once, with the sentence th
     assert.equal(outcome.error.providerFailure.midAnswer, true);
 });
 
-test("the relay's 502 for a server that is not running is reported at once, with no busy waits", () => {
+test("the relay's 502 for a server that is not running is thrown as that before anything reads its status", () => {
+    // Where the relay's answer comes back, for every caller alike: the chat
+    // request of either compatible provider, and the model list.
+    const from = main.indexOf("const relayFetch = async (");
+    const relayed = main.slice(from, main.indexOf("const directFetch = ", from));
+    const marked = relayed.indexOf("if (isRelayUnreachable(response)) {");
+    const handedBack = relayed.indexOf("return withRelayCutoffHint(response, signal);");
+    assert.ok(marked > -1 && handedBack > marked, "checked before the response is handed to a caller");
+    assert.match(relayed.slice(marked, handedBack),
+        /throw unreachableServerError\(endpointOrigin\(url\), relayUnreachableReason\(await readErrorPayload\(response\)\)\);/,
+        "named by the address that was tried, with the socket's code for why");
+    assert.equal(main.split('fetch("/api/ai/relay"').length - 1, 1, "the one place the relay is asked");
+});
+
+test("a server the relay could not reach moves the call to the next entry, or fails once with the sentence that names it", async () => {
+    const down = () => { throw unreachableServerError("http://localhost:5001", "ECONNREFUSED"); };
+
+    const store = createMemoryStateStore();
+    const moved = await callDownTheList([entry("koboldcpp"), entry("backup")], store, { koboldcpp: down, backup: async () => "a real turn" });
+    assert.equal(moved.answer, "a real turn");
+    assert.deepEqual(moved.marks, [["koboldcpp", "could not be reached"]]);
+    assert.equal(entryStatus(store.get("koboldcpp"), 1000).status, "busy", "skipped for a minute, then tried again");
+
+    const alone = await callDownTheList([entry("koboldcpp")], createMemoryStateStore(), { koboldcpp: down });
+    assert.deepEqual(alone.tried, ["koboldcpp"], "asked once: no waiting, no second request");
+    assert.equal(alone.error.message,
+        "http://localhost:5001 could not be reached (ECONNREFUSED). Check that the AI server is running and that its address in Settings → AI is right.");
+    assert.equal(isUnreachableFailure(alone.error.providerFailure), true);
+    assert.equal(alone.error.providerFailure.midAnswer, undefined, "it never answered at all: the report does not say it broke mid-answer");
+});
+
+test("a relayed 502 that is read by its body is still not a busy provider", () => {
+    // The second line: anything that reads the relay's JSON without its header
+    // (classifyProviderFailure) comes to the same failure, and is not waited on.
     const payload = { error: "connect ECONNREFUSED 127.0.0.1:5001", code: "ECONNREFUSED", unreachable: true };
     const failure = classifyProviderFailure({ status: 502, payload });
     assert.equal(isUnreachableFailure(failure), true);
@@ -101,8 +136,6 @@ test("the relay's 502 for a server that is not running is reported at once, with
     const slept = retry.indexOf("await sleep(wait, signal);");
     assert.ok(decided > -1 && slept > decided, "thrown before any wait");
     assert.match(retry, /const failure = classifyProviderFailure\(\{ status: response\.status, payload \}\);/);
-    assert.match(retry, /extractErrorMessage\(payload, `\$\{providerLabel\} is busy right now\. Try again in a moment\.`\)/,
-        "the relay's own words are the message; the busy sentence is only the fallback");
 });
 
 test("every provider call's failure goes through asUnreachable on its way to the Fallback list", () => {
@@ -115,7 +148,14 @@ test("a model server that is down when its models are listed is not marked Unusa
     const from = main.indexOf("async function resolveConfiguredModel(");
     const resolve = main.slice(from, main.indexOf("async function listServedModelIds(", from));
     assert.match(resolve, /classifyProviderFailure\(\{ status: response\.status, payload \}\)/);
-    assert.match(resolve, /isUnreachableError\(error\) \|\| isUnreachableFailure\(error\?\.providerFailure\)\s*\? \{ \.\.\.UNREACHABLE_FAILURE \}\s*: \{ kind: "unusable", reason: "no model found on the server" \}/);
+    // The relay's own error (relayFetch) is handed on as it is: it says the
+    // server could not be reached and where, and "enter a model manually"
+    // would send the player to the wrong setting.
+    const handedOn = resolve.indexOf("if (isUnreachableFailure(error?.providerFailure)) throw error;");
+    const reworded = resolve.indexOf("`Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`");
+    assert.ok(handedOn > -1 && reworded > handedOn);
+    // A browser that could not connect at all is the same failure, never Unusable.
+    assert.match(resolve, /isUnreachableError\(error\)\s*\? \{ \.\.\.UNREACHABLE_FAILURE \}\s*: \{ kind: "unusable", reason: "no model found on the server" \}/);
 });
 
 test("a fallback's report blames the connection when it was the connection", () => {

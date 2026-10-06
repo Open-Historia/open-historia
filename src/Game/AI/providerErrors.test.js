@@ -19,6 +19,7 @@ import {
   judgeUnmarkedEnd,
   UNMARKED_END,
   UNREACHABLE_FAILURE,
+  unreachableServerError,
   isQuotaExhaustedPayload,
   isStreamingRefusal,
   TOOL_CALL_INSISTENCE,
@@ -627,6 +628,24 @@ test("the relay's 'could not reach the endpoint' is not a busy provider, and is 
   }
   assert.equal(extractErrorMessage(refused, "OpenAI Compatible is busy right now. Try again in a moment."), "connect ECONNREFUSED 127.0.0.1:5001",
     "and the message is what failed, not the busy wording");
+});
+
+test("a server the relay could not reach is an error that names it, says why, and says what to check", () => {
+  const error = unreachableServerError("http://localhost:5001", "ECONNREFUSED");
+  // The sentence the language packs carry, as a pattern with the address and
+  // the reason as its two slots.
+  assert.equal(error.message,
+    "http://localhost:5001 could not be reached (ECONNREFUSED). Check that the AI server is running and that its address in Settings → AI is right.");
+  // For the Fallback list: skipped for a minute, never waited on, and not a
+  // connection that broke mid-answer (it never answered at all).
+  assert.deepEqual(error.providerFailure, { kind: "busy", reason: "could not be reached" });
+  assert.equal(isUnreachableFailure(error.providerFailure), true);
+  assert.equal(shouldRetryProviderFailure({ failure: error.providerFailure, attempt: 1, retries: 3, canFallBack: false }), false);
+  // Already marked, so its way to the list leaves it as it is.
+  assert.equal(asUnreachable(error), error);
+  assert.equal(error.cause, undefined);
+  const socket = new Error("connect ECONNREFUSED 127.0.0.1:5001");
+  assert.equal(unreachableServerError("http://localhost:5001", "ECONNREFUSED", socket).cause, socket);
 });
 
 test("a provider's own 502, 503 or 529 stays busy, and is retried as before", () => {
