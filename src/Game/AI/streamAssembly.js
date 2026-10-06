@@ -29,6 +29,13 @@
 // object partialArgs fragments build. Purely an observer: what it does or throws
 // can never change the envelope returned here.
 //
+// And an `onContent` hook, which is how the skip's progress row can say what an
+// open request is doing (requestActivity.js): it fires after each frame that
+// added to the answer, with how many characters of reasoning and of answer (text
+// or tool-call arguments) the frame carried. Unlike `onActivity` it says nothing
+// for a keep-alive or an empty frame: "something is arriving" and "the model has
+// begun to answer" are different facts, and the row shows the second.
+//
 // Separate from main.jsx (which pulls in the whole browser runtime and so cannot
 // be unit-tested) for the same reason as jsonSalvage.js, providerErrors.js and
 // geminiSchema.js. Its one import, streamedEvents.js, imports nothing, so this
@@ -41,6 +48,47 @@ import { parseJsonPathSteps, partialArgValue, setAtJsonPath } from "./streamedEv
 const observe = (hook, payload) => {
     if (typeof hook !== "function") return;
     try { hook(payload); } catch { /* a progress listener must not break the stream */ }
+};
+
+// ---------------------------------------------------------------------------
+// What each frame carried (the `onContent` hook)
+
+// Calls `onContent({ reasoning, answer })` with what has been added since the
+// last call, as `measure()` counts it, and says nothing when nothing was. Run
+// after every frame; each reader hands in how its own state is counted.
+const contentMeter = (onContent, measure) => {
+    if (typeof onContent !== "function") return () => {};
+    let seen = measure();
+    return () => {
+        const now = measure();
+        const reasoning = Math.max(0, now.reasoning - seen.reasoning);
+        const answer = Math.max(0, now.answer - seen.answer);
+        seen = now;
+        if (reasoning || answer) observe(onContent, { reasoning, answer });
+    };
+};
+
+// Reasoning written inline. Qwen, DeepSeek and their kin, served by something
+// that does not separate it, put their chain of thought into the answer text
+// between <think> tags (main.jsx stripThinking takes it back out). Counted as
+// thinking, or the row would say the model was writing its answer for the
+// minutes it spent deciding what to write.
+//
+// Fed each new piece of content in order; returns whether the text now stands
+// inside a think block. A tag split across two pieces is still seen: the last
+// few characters are carried over.
+export const createThinkTagScanner = () => {
+    let inside = false;
+    let carried = "";
+    return (piece) => {
+        const text = (carried + String(piece ?? "")).toLowerCase();
+        const opened = text.lastIndexOf("<think>");
+        const closed = text.lastIndexOf("</think>");
+        if (opened > closed) inside = true;
+        else if (closed > opened) inside = false;
+        carried = text.slice(-8);
+        return inside;
+    };
 };
 
 // ---------------------------------------------------------------------------
@@ -257,9 +305,34 @@ export function finishOpenAIStream(state) {
     };
 }
 
-export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress) {
+// How much reasoning and how much answer an OpenAI-style stream has delivered
+// so far. Reasoning is its own delta field, or text inside <think> tags; the
+// answer is the rest of the text plus every tool call's arguments.
+const openAIContentMeasure = (state) => {
+    const insideThinkTags = createThinkTagScanner();
+    let scanned = 0;
+    let inlineThinking = 0;
+    return () => {
+        if (state.content.length > scanned) {
+            const piece = state.content.slice(scanned);
+            if (insideThinkTags(piece)) inlineThinking += piece.length;
+            scanned = state.content.length;
+        }
+        const toolArguments = state.toolCalls.reduce((total, call) => total + call.arguments.length, 0);
+        return {
+            reasoning: state.reasoning.length + inlineThinking,
+            answer: state.content.length - inlineThinking + toolArguments,
+        };
+    };
+};
+
+export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createOpenAIStreamState();
-    const { sawDone } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, openAIContentMeasure(state));
+    const { sawDone } = await readSSE(response, (chunk) => {
+        applyOpenAIFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
     state.done = sawDone;
     return finishOpenAIStream(state);
 }
@@ -275,6 +348,10 @@ export const createAnthropicStreamState = () => ({
     stopReason: null,
     // The closing message_stop event has been seen.
     stopped: false,
+    // How much extended thinking has arrived. Counted, never kept: the text
+    // itself must not reach the answer (see the thinking_delta note below), but
+    // "the model is thinking" is worth knowing while it does (onContent).
+    thinkingChars: 0,
     streamError: null,
     // Anthropic splits the accounting across two events: message_start carries
     // the input side (including the cache_read figure that proves a prefix cache
@@ -326,7 +403,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         }
         // Extended thinking. Deliberately not accumulated into text: extractAnthropicText
         // has always filtered thinking out, and a chain of thought must never be
-        // handed back as if it were the answer.
+        // handed back as if it were the answer. Only its length is kept.
+        else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") state.thinkingChars += delta.thinking.length;
         return state;
     }
 
@@ -390,9 +468,21 @@ export function finishAnthropicStream(state) {
     };
 }
 
-export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress) {
+// The same count for a Messages stream: thinking deltas, and every block's text
+// or tool arguments.
+const anthropicContentMeasure = (state) => () => {
+    let answer = 0;
+    for (const block of state.blocks.values()) answer += block.text.length + block.json.length;
+    return { reasoning: state.thinkingChars, answer };
+};
+
+export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createAnthropicStreamState();
-    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, anthropicContentMeasure(state));
+    await readSSE(response, (chunk) => {
+        applyAnthropicFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
     return finishAnthropicStream(state);
 }
 
@@ -561,8 +651,27 @@ export function finishGeminiStream(state) {
     };
 }
 
-export async function readGeminiStreamedResponse(response, onActivity, onToolProgress) {
+// The same count for Gemini: its text, and each function call once it has
+// arrived (whole, on this API, so a skip goes from nothing to the whole answer
+// in one frame). Its thinking is not streamed unless asked for, and the game
+// does not ask, so there is no reasoning to count.
+const geminiContentMeasure = (state) => {
+    let counted = 0;
+    let callChars = 0;
+    return () => {
+        for (; counted < state.calls.length; counted += 1) {
+            try { callChars += JSON.stringify(state.calls[counted]?.functionCall?.args ?? {}).length; } catch { callChars += 1; }
+        }
+        return { reasoning: 0, answer: state.text.length + callChars };
+    };
+};
+
+export async function readGeminiStreamedResponse(response, onActivity, onToolProgress, onContent) {
     const state = createGeminiStreamState();
-    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity);
+    const reportContent = contentMeter(onContent, geminiContentMeasure(state));
+    await readSSE(response, (chunk) => {
+        applyGeminiFrame(state, chunk, onToolProgress);
+        reportContent();
+    }, onActivity);
     return finishGeminiStream(state);
 }

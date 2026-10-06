@@ -322,6 +322,14 @@ While an interactive event is in progress (`isSceneInProgress(world.activeIntera
 
 While a skip runs the spinner says what it is doing, in the skip's own words as each phase starts (`showSkipPhase`, fed by `onProgress` from `skipPhases.js`): *Reading the world…*, *Writing 1 month of events… (part 2 of 3)*, *Moving the armies, redrawing the fronts and hearing from 2 agents…*, *Placing the armies and the fronts…*, *Updating the Projects board…*, *Folding older history into the history document…*, *Writing it into the record…*. Auto-jump and a held segment's retry report the same way.
 
+The row (`SkipProgressRow`, the same one in both panels) also shows that the skip is alive. After the phase comes the time since the skip started, `m:ss`, counted from a start time `DateWidget` keeps (`progressStartedAt`), so it does not start over when the player moves between the two panels. Under it, a second line says what the open request is doing (`RequestStatus`, from `src/Game/AI/requestActivity.js`): *Waiting for the model to answer…*, *The model is thinking…* or *The model is writing its answer…*, and once that request has been open a minute, *Still working: a slow model can take several minutes. The request is still open.* While no request is open the skip is doing its own work and the line is absent. A held turn's retry shows the same clock and line under its buttons (`HeldRetryStatus`). Three things about how it is built:
+
+- **The ticking state is the row's own** (`useSkipProgress`): a second passing re-renders the row, not the panel around it.
+- **The clock is drawn, not written.** It is a `data-no-translate` element whose figure is a `data-clock` attribute shown through the stylesheet (`.oh-skip-clock::after`). The translator re-reads the page whenever text on it changes, and a figure written as text would have it do that every second of a skip. The four sentences are fixed strings, each in an element of its own, so the language packs carry them.
+- **On a phone the label gives way.** It wraps, with the clock running on after it; the spinner and Cancel keep their size and Cancel stays at the end of the row.
+
+A turn or a retry the player cancels says in the log how far in the cancel came and what the request open at that moment had received (`describeCancelPoint`), read as Cancel is pressed.
+
 ### 6.2-ter Group chats: one request, said a line at a time, and binding votes
 
 A group turn no longer rotates one leader at a time. `runGroupTurn` (`chat.jsx`) calls `runChatActionBatch` once for the whole table (see [group diplomacy](ai-overview.md#group-diplomacy-one-request-for-the-whole-table)); the answer is applied to the thread's event log and the panel re-renders from its projection. A failed group request is surfaced and leaves the canonical thread unchanged; there is no legacy sequential speaker fallback.

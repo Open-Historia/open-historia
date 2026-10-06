@@ -12,6 +12,7 @@ import {
   createAnthropicStreamState,
   createGeminiStreamState,
   createOpenAIStreamState,
+  createThinkTagScanner,
   finishAnthropicStream,
   finishGeminiStream,
   finishOpenAIStream,
@@ -387,6 +388,107 @@ test("gemini: a signed function call keeps its thoughtSignature on the rebuilt p
     { functionCall: { name: "list_powers", args: {} }, thoughtSignature: "sig-one" },
     { functionCall: { name: "find_region", args: { name: "Kharkiv" } } },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// What each frame carried — what the skip's progress row shows of an open
+// request (requestActivity.js): nothing yet, thinking, or writing its answer.
+
+const collect = () => {
+  const heard = [];
+  return { heard, onContent: (delta) => heard.push(delta) };
+};
+
+test("openai: reasoning and answer are reported apart, in characters, as each frame adds them", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { role: "assistant", content: "" } }] },
+    { choices: [{ delta: { reasoning_content: "The player holds Crimea, so" } }] },
+    { choices: [{ delta: { reasoning: " the Black Sea Fleet matters." } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { name: "submit_jump_result", arguments: '{"events":[' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { arguments: "]}" } }] } }] },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    { choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard, [
+    { reasoning: 27, answer: 0 },
+    { reasoning: 29, answer: 0 },
+    { reasoning: 0, answer: 11 },
+    { reasoning: 0, answer: 2 },
+  ], "the opening frame, the finish frame, the usage frame and [DONE] carried nothing, and say nothing");
+});
+
+test("openai: answer text counts as the answer, on the rungs that write the payload as content", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: '{"events":' } }] },
+    { choices: [{ delta: { content: "[]}" } }] },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 0, answer: 10 }, { reasoning: 0, answer: 3 }]);
+});
+
+test("openai: thinking written inline between <think> tags is thinking, not the answer", async () => {
+  const { heard, onContent } = collect();
+  await readOpenAIStreamedResponse(sseResponse([
+    { choices: [{ delta: { content: "<think>The fleet" } }] },
+    { choices: [{ delta: { content: " cannot sail before spring." } }] },
+    // The closing tag split across two frames.
+    { choices: [{ delta: { content: " So: </thi" } }] },
+    { choices: [{ delta: { content: 'nk>{"events":[]}' } }] },
+  ]), undefined, undefined, onContent);
+  assert.deepEqual(heard.map((delta) => (delta.answer ? "writing" : "thinking")), ["thinking", "thinking", "thinking", "writing"]);
+  assert.equal(heard.reduce((total, delta) => total + delta.reasoning + delta.answer, 0), 16 + 27 + 10 + 16, "every character is counted once");
+});
+
+test("the think-tag scanner follows a block opened, closed and opened again, whatever the case", () => {
+  const inside = createThinkTagScanner();
+  assert.equal(inside("plain text"), false);
+  assert.equal(inside("<THINK>hmm"), true);
+  assert.equal(inside("more"), true);
+  assert.equal(inside("done</Think> answer"), false);
+  assert.equal(inside(" <thi"), false);
+  assert.equal(inside("nk> again"), true, "a tag split across pieces");
+  assert.equal(inside("</think>"), false);
+  assert.equal(inside(""), false);
+  assert.equal(createThinkTagScanner()("<think>a</think>b"), false, "a whole block in one piece ends outside it");
+});
+
+test("anthropic: thinking deltas, text and tool arguments are each reported, and thinking still never reaches the answer", async () => {
+  const { heard, onContent } = collect();
+  const data = await readAnthropicStreamedResponse(sseResponse([
+    { type: "message_start", message: { usage: { input_tokens: 12 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "let me consider" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Simulating." } },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", name: "submit_jump_result" } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"summary":"x"}' } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } },
+    { type: "message_stop" },
+  ], { done: false }), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 15, answer: 0 }, { reasoning: 0, answer: 11 }, { reasoning: 0, answer: 15 }]);
+  assert.deepEqual(data.content.map((block) => block.type), ["text", "tool_use"], "the thinking is counted, never kept");
+});
+
+test("gemini: text as it arrives, and a function call once, when it lands whole", async () => {
+  const { heard, onContent } = collect();
+  await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: "Simulating " }] } }] },
+    { usageMetadata: { promptTokenCount: 90 } },
+    { candidates: [{ content: { parts: [{ functionCall: { name: "submit_jump_result", args: { events: [] } } }] }, finishReason: "STOP" }] },
+  ], { done: false }), undefined, undefined, onContent);
+  assert.deepEqual(heard, [{ reasoning: 0, answer: 11 }, { reasoning: 0, answer: 13 }]);
+});
+
+test("a content listener that throws never breaks the stream, and none at all costs nothing", async () => {
+  const data = await readOpenAIStreamedResponse(
+    sseResponse([{ choices: [{ delta: { content: "survived" } }] }]),
+    undefined, undefined, () => { throw new Error("the row exploded"); },
+  );
+  assert.equal(data.choices[0].message.content, "survived");
+  const quiet = await readOpenAIStreamedResponse(sseResponse([{ choices: [{ delta: { content: "fine" } }] }]));
+  assert.equal(quiet.choices[0].message.content, "fine");
 });
 
 // ---------------------------------------------------------------------------

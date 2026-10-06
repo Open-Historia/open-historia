@@ -27,6 +27,7 @@ import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { describeOutputLimit, localOutputLimit } from "./outputLimit.js";
 import { withRelayCutoffHint } from "./relayResponse.js";
+import { requestActivity } from "./requestActivity.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
@@ -962,6 +963,8 @@ async function callGemini(systemPrompt, history, {
     onActivity,
     onChunk,
     onRequest,
+    onRequestStart,
+    onStreamContent,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -1038,6 +1041,7 @@ async function callGemini(systemPrompt, history, {
         // reaches that check, and gets its own single retry.
         let retriedInStream = false;
         for (let pass = 1; ; pass += 1) {
+            onRequestStart?.();
             const response = await fetch(streamUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1098,6 +1102,10 @@ async function callGemini(systemPrompt, history, {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
         };
+        // A request is going out: said to whoever is showing the player what
+        // the call is doing (requestActivity.js, through callAI). Every provider
+        // caller says it before each request it makes.
+        onRequestStart?.();
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1154,7 +1162,7 @@ async function callGemini(systemPrompt, history, {
         // or proxy that ignored alt=sse still answers plain JSON, and that must
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream)
+            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         refuseCutShortAnswer(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
@@ -1231,6 +1239,8 @@ async function callOpenAIStyleChatCompletions({
     onActivity,
     onChunk,
     onRequest,
+    onRequestStart,
+    onStreamContent,
     onToolStream,
     onUsage,
     allowJsonSchemaFallback = false,
@@ -1321,6 +1331,7 @@ async function callOpenAIStyleChatCompletions({
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
+        onRequestStart?.();
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
@@ -1540,7 +1551,7 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream)
+            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
         const text = extractOpenAIMessageText(data);
@@ -1786,6 +1797,8 @@ async function callAnthropic(systemPrompt, history, {
     onActivity,
     onChunk,
     onRequest,
+    onRequestStart,
+    onStreamContent,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -1876,6 +1889,7 @@ async function callAnthropic(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        onRequestStart?.();
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
             headers,
@@ -1950,7 +1964,7 @@ async function callAnthropic(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
         refuseCutShortAnswer(data, extractAnthropicText(data));
@@ -2004,6 +2018,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onActivity,
     onChunk,
     onRequest,
+    onRequestStart,
+    onStreamContent,
     onToolStream,
     onUsage,
     rateLimitPolicy = "next",
@@ -2119,6 +2135,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        onRequestStart?.();
         const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
         onRequest?.(response.status);
 
@@ -2185,7 +2202,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
         refuseCutShortAnswer(data, extractAnthropicText(data));
@@ -2454,6 +2471,12 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // (streamAssembly.js). The last one read is the one the answer came from: a
     // lookup round, a retry or the next Fallback entry each read another.
     let stoppedAtLimit = false;
+    // What the skip's progress row is shown of this call as it goes
+    // (requestActivity.js): when each request goes out, what its stream is
+    // carrying, when it is over. Gameplay calls only. An advisor reply or a
+    // translation running beside a skip is not what that row is waiting for, and
+    // those are the calls that ask in the chat language or in none.
+    const live = languageMode === "ui" ? requestActivity.track({ label: logLabel, taskKey: providerOpts.taskKey }) : null;
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2512,10 +2535,21 @@ export async function callAI(systemPrompt, history, opts = {}) {
                     canFallBack,
                     rateLimitPolicy: getRateLimitPolicy(),
                     onActivity: timer.note,
-                    onRequest: noteRequest,
+                    // The life of each request, for the progress row: it goes
+                    // out, its stream carries reasoning or answer, and it is
+                    // over when it is refused (a wait for a retry follows, and
+                    // must not read as a request still open), when its answer
+                    // has been read, or when the call ends (the finally below).
+                    onRequestStart: () => live?.sent(),
+                    onStreamContent: (delta) => live?.received(delta),
+                    onRequest: (status) => {
+                        noteRequest(status);
+                        if (!(status >= 200 && status < 300)) live?.done();
+                    },
                     // Hears the whole envelope once it has been read: how the
                     // answer ended, and what it cost.
                     onUsage: (data) => {
+                        live?.done();
                         stoppedAtLimit = stoppedAtOutputLimit(data);
                         const reported = normalizeUsage(data);
                         if (!reported) return;
@@ -2587,6 +2621,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
         finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
         throw error;
     } finally {
+        live?.done();
         requestScope.finish();
     }
 }

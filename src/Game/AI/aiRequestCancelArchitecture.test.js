@@ -11,7 +11,9 @@ test("callAI composes the global emergency-stop signal before provider routing a
   assert.match(main, /import \{ beginAiRequestScope \} from "\.\/aiRequestControl\.js";/);
   assert.match(main, /const requestScope = beginAiRequestScope\(providerOpts\.signal\);/);
   assert.match(main, /providerOpts\.signal = requestScope\.signal;/);
-  assert.match(main, /finally \{\s*requestScope\.finish\(\);\s*\}/);
+  // The last thing the finally does (the call's open request is closed for the
+  // progress row first).
+  assert.match(main, /finally \{[^{}]*requestScope\.finish\(\);\s*\}/);
 });
 
 // "Cancel all AI requests" during a time skip. The stop reached the request and
@@ -40,8 +42,9 @@ test("the Timeline cancels its skip, or its held turn's retry, on every press of
   assert.match(time, /if \(event\?\.detail && "cancelled" in event\.detail\) cancelJump\(\);/);
   assert.match(time, /window\.addEventListener\(AI_REQUEST_CONTROL_EVENT, stopWithTheRest\);/);
   assert.match(time, /window\.removeEventListener\(AI_REQUEST_CONTROL_EVENT, stopWithTheRest\);/);
-  // The same abort the Cancel button raises, on the controller a retry holds too.
-  assert.match(time, /const cancelJump = useCallback\(\(\) => \{[\s\S]{0,400}?jumpAbortRef\.current\?\.abort\(new DOMException\("Timeline jump cancelled\.", "AbortError"\)\);/);
+  // The same abort the Cancel button raises, on the controller a retry holds too
+  // (and nothing at all when neither is running).
+  assert.match(time, /const cancelJump = useCallback\(\(\) => \{\s*if \(!jumpAbortRef\.current\) return;[\s\S]{0,500}?jumpAbortRef\.current\.abort\(new DOMException\("Timeline jump cancelled\.", "AbortError"\)\);/);
 });
 
 test("Settings exposes one emergency stop in the canonical AI requests section", () => {

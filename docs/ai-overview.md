@@ -43,6 +43,7 @@ This page documents the plumbing. For the prompt templates and how they are asse
 | `src/runtime/gmChanges.js` | **The Game Master's hand.** One line per change made outside the simulation (`world.gmChanges`, by round, grouped when made in steps), the block the next skip opens with, and the GM's standing reminders (`world.simulationReminders`) every AI is shown. See [the Game Master's hand](#the-game-masters-hand-changes-made-outside-the-simulation-and-standing-reminders). |
 | `src/Game/AI/conversationCatchUp.js` | **What a conversation missed.** The note the advisor's next question carries when the world moved on: what became of its last reply, the time and the newest events since, the GM's changes; and the note a leader is sent with the player's next line — the time, the events, the borders moved and the polities changed since the thread last spoke, the votes cast in it. See [conversations](#conversations-one-copy-a-stable-prefix-and-a-catch-up-note). |
 | `src/Game/AI/skipPhases.js` | **What a skip is doing, and where its time went.** The phases a skip enters by name, told to the panel as each starts and summed into one log line when it lands. See [the phases of a skip](#the-phases-of-a-skip). |
+| `src/Game/AI/requestActivity.js` | **What the open request is doing.** Each gameplay request as it goes out, what its stream carries (reasoning or answer, in characters) and when it is over, so the skip's progress row can say the model is being waited for, is thinking or is writing, and a cancelled turn's log line can say what had come back. See [whether the open request is alive](#whether-the-open-request-is-alive). |
 | `src/Game/AI/interactiveRewind.js` | **Taking back a beat of an interactive event.** Each beat keeps what the player was shown when they chose it, so the scene can return to any beat; and which scene is one in progress (`isSceneInProgress`). See [Interactive events](#interactive-events-a-moment-a-time-skip-offers-to-play-out). |
 | `src/runtime/playerGoal.js` | **The player's standing goal.** Kept per polity in `world.playerGoals`; told to the advisor, the time skip and the suggestions in their own terms, never to a leader. See [the standing goal](#the-players-standing-goal). |
 | `src/runtime/reports.js` | **Documents, and the governments that hold them.** The stored shape, the `create`/`share` ops an event carries, the audience-scoped read, the list a prompt is shown, and the Report Voice directive. See [reports](#reports-what-only-some-governments-know). |
@@ -476,6 +477,22 @@ Time skip phases: 25.8 s — reading the world 1.1 s · writing 1 month of event
 ```
 
 The summary also rides on the result (`result.phases`). A retry of a held segment is timed on its own and tells the panel that asked for it.
+
+### Whether the open request is alive
+
+A phase can be one request that runs for ten minutes, and for all of it the panel showed a spinner and one unchanging line. A player on a thinking model behind a slow provider started nine skips in fourteen minutes and cancelled seven of them between 11 and 215 seconds in; each was still being answered, and the one left alone landed after eleven minutes. `src/Game/AI/requestActivity.js` (14 tests, import-free, clock injected) is how the request path says what it is doing:
+
+- `callAI` tracks each gameplay call (the ones asked in the interface language; an advisor reply or a translation beside a skip is not what the row is waiting for). Every provider caller says when a request goes out (`onRequestStart`, before each `fetch`/`providerFetch`, so a relayed or a native request is covered with the direct one), and the three stream readers say what each frame carried (`onContent` in `streamAssembly.js`: characters of reasoning, characters of answer text or tool-call arguments; a `<think>` block inside the answer text counts as reasoning). A request is over when it is refused (the wait before a retry is not an open request), when its answer has been read, or when the call ends.
+- A request is **waiting** (sent, nothing back: the prompt is being evaluated, or the endpoint answers all at once), **thinking** (reasoning arrived last) or **writing** (answer arrived last). With several open at once, the one shown is the one that last received something. `stillWorking` turns true once that request has been open 60 seconds.
+- Listeners hear a change in what would be shown, never each chunk: a few renders a request.
+
+The time panel's progress row reads it (see [the Timeline skip panel](game-ui.md#62-timeline-skip-panel-)): the skip's own clock, and one of four fixed sentences. And the log: a turn cancelled by the player used to leave `Turn cancelled by the player.` and nothing else; it now ends with how far in the cancel came and what the request open at that moment had received (`describeCancelPoint`):
+
+```
+Turn cancelled by the player after 215 s; the open request (task "jumpForward") had run 213 s and had received no answer text yet (the model was thinking: 18,240 characters of reasoning).
+```
+
+None of it adds a request or changes one.
 
 ## Interactive events: a moment a time skip offers to play out
 
