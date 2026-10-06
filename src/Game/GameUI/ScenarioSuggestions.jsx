@@ -29,7 +29,8 @@ import {
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
-import { downloadHubBundle, downloadHubFile, hubPostUrl } from "../../runtime/hubPosts.js";
+import { fetchHubIndex, hubIndexProblem } from "../../runtime/hubFiles.js";
+import { downloadHubBundle, downloadHubFile, fetchHubPosts, hubOriginalGone, hubPostUrl } from "../../runtime/hubPosts.js";
 import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
@@ -401,21 +402,41 @@ const postTitleOf = (origin) => origin?.title || `#${origin?.postId}`;
 
 // ---- Suggest changes (the player who downloaded the scenario) -------------------
 
-export const SuggestChangesDialog = ({ scenario, onClose }) => {
+// A suggestion is the copy measured against the file it came from, so that
+// file has to be had again: its checked copy in the hub's releases. When the
+// hub no longer offers it (the copy has an old link, or the post has moved on
+// to a newer file) there is nothing to measure against, and the dialog says
+// so in words rather than with a failed download: the copy has to take the
+// post's file first. `onUpdate(post)` does that, for the post found on the hub.
+export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => {
   const touch = useTouchPrimary();
   const origin = scenario?.hubOrigin;
-  const [phase, setPhase] = useState("loading"); // loading | ready | empty | error | sent
+  const [phase, setPhase] = useState("loading"); // loading | ready | empty | outdated | error | sent
   const [error, setError] = useState("");
   const [changes, setChanges] = useState([]);
   const [by, setBy] = useState("");
   const [note, setNote] = useState("");
   const [sent, setSent] = useState(null); // { fileName, comment, copied }
+  // The copy's post as the hub lists it now, when the file the copy came from
+  // is gone (phase "outdated"); null when the hub no longer offers the post.
+  const [hubPost, setHubPost] = useState(null);
+  const { bundleUrl, postId, release } = origin ?? {};
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [base, current] = await Promise.all([downloadHubBundle(origin.bundleUrl), exportScenarioBundle(scenario.id)]);
+        const hubIndex = await fetchHubIndex();
+        const problem = hubIndexProblem(hubIndex);
+        if (problem) throw new Error(problem);
+        if (hubOriginalGone({ bundleUrl, release }, hubIndex)) {
+          const posts = await fetchHubPosts();
+          if (!alive) return;
+          setHubPost(posts.find((post) => Number(post.id) === Number(postId)) ?? null);
+          setPhase("outdated");
+          return;
+        }
+        const [base, current] = await Promise.all([downloadHubBundle(bundleUrl), exportScenarioBundle(scenario.id)]);
         const found = diffScenarioBundles(base, current);
         if (!alive) return;
         setChanges(found);
@@ -427,12 +448,14 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
       }
     })();
     return () => { alive = false; };
-  }, [origin?.bundleUrl, scenario?.id]);
+  }, [bundleUrl, postId, release, scenario?.id]);
 
   const counts = useMemo(() => countChanges(changes), [changes]);
   const detailChanges = changes.filter((change) => change.area === "details");
   const mapChanges = changes.filter((change) => change.area === "map");
   const postUrl = hubPostUrl(origin?.postId);
+  // The file the copy came from is gone, and its post is still on the hub.
+  const canUpdate = phase === "outdated" && Boolean(hubPost && onUpdate);
 
   const send = async ({ openPost }) => {
     try {
@@ -460,7 +483,15 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
       <button type="button" className="oh-tap-row" onClick={onClose} style={tapFit(buttonStyle, touch)}>Cancel</button>
     </>
   ) : (
-    <button type="button" className="oh-tap-row" onClick={onClose} style={tapFit(buttonStyle, touch)}>{phase === "sent" ? "Done" : "Close"}</button>
+    <>
+      {/* The post's checked file can still be had: the Update the dialog asks
+          for, here. One of a copy the player has edited asks first, since it
+          replaces their changes (libraryBar.jsx handleScenarioUpdate). */}
+      {canUpdate && (
+        <button type="button" className="oh-tap-row" onClick={() => onUpdate(hubPost)} style={tapFit(primaryButtonStyle, touch)}>Update</button>
+      )}
+      <button type="button" className="oh-tap-row" onClick={onClose} style={tapFit(buttonStyle, touch)}>{phase === "sent" ? "Done" : "Close"}</button>
+    </>
   );
 
   return (
@@ -478,6 +509,13 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
       )}
       {phase === "empty" && (
         <div style={quietTextStyle}>Your copy is the same as the post. Change something first — in this editor or on the map — and save it, then suggest it.</div>
+      )}
+      {phase === "outdated" && (
+        <div style={{ ...quietTextStyle, color: "#fde68a" }}>
+          {canUpdate
+            ? "The file this copy came from is not one the community hub offers any more, so your changes cannot be compared with it. Update the scenario first, then make your changes and suggest them."
+            : "The community hub no longer offers this scenario, so changes to it cannot be suggested."}
+        </div>
       )}
       {phase === "ready" && (
         <>

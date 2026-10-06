@@ -179,16 +179,20 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
 );
 
 // What the library already holds of a post (hubCopyStatus), as a small pill.
+// "unchecked" is a copy downloaded the old way, from the post's attachment
+// before the hub checked its files: it reads as an update too, with its own
+// reason, because that is what its card in the Scenarios tab asks for.
 const LIBRARY_BADGES = {
   current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
   update: { label: "Update available", title: "Your copy is older than this post, or its basemap could not be downloaded. Update it from the Scenarios tab." },
+  unchecked: { label: "Update available", title: "Your copy was downloaded before the hub started checking its files. Update it from the Scenarios tab." },
   edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
 };
 
 const LibraryBadge = ({ status }) => {
   const badge = LIBRARY_BADGES[status];
   if (!badge) return null;
-  const update = status === "update";
+  const update = status === "update" || status === "unchecked";
   return (
     <span
       title={badge.title}

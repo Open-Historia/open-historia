@@ -73,7 +73,7 @@ import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWith
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
-import { downloadHubScenario, fetchHubPosts, fetchPostComments, hubUpdateAvailable, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { downloadHubScenario, fetchHubPosts, fetchPostComments, hubUpdateReason, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, missingBasemapOfBundle, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
@@ -736,7 +736,22 @@ const PromptSectionEditor = ({
   );
 };
 
-const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateAvailable, updateNote = "", updating = false }) => {
+// Why a card asks for an Update, in words (runtime/hubPosts.js hubUpdateReason).
+// A copy with an old link was downloaded from its post's own attachment, before
+// the hub checked the files it gives out; the game no longer downloads those,
+// so its card says so in the open, not only in a tooltip.
+const UPDATE_NEWER_TITLE = "A newer version of this scenario is on the community hub. Updating replaces this copy (existing games keep working).";
+const UPDATE_UNCHECKED_NOTE = "This copy was downloaded before the community hub started checking its files. Update it to get the checked copy.";
+
+// `updateReason` is why the copy should take its post's file again, or null.
+// For a copy as it was downloaded, Update takes New Game's place, as it always
+// has: nothing of the player's is lost by it. A copy the player has edited is
+// only ever asked for the old link, and keeps New Game: its Update is a button
+// of its own beside the reason, and asks before it replaces their changes
+// (handleScenarioUpdate).
+const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, selected, updateReason = null, updateNote = "", updating = false }) => {
+  const updateAvailable = Boolean(updateReason);
+  const updateIsPrimary = updateAvailable && !scenario.hubOrigin?.editedAt;
   const isBuiltIn = scenario.id === "default";
   const assetBadges = Object.entries(scenarioBadgeLabels)
     .filter(([key]) => scenario.assetStatus?.[key])
@@ -892,7 +907,8 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
           <AssetBadgeRow badges={assetBadges} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
             {/* A hub-imported, unmodified scenario whose post has a newer bundle
-                swaps its primary action for Update; everyone else starts games.
+                (or whose own file was never checked by the hub) swaps its
+                primary action for Update; everyone else starts games.
                 Updating downloads the post's file and replaces the copy, which
                 takes a few seconds and showed nothing: the button now turns a
                 ring and says so until it is done, and takes no second press
@@ -901,23 +917,23 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
               aria-busy={updating || undefined}
               className="oh-tap-row"
               disabled={updating}
-              onClick={() => (updateAvailable ? onUpdate(scenario) : onPlay(scenario))}
+              onClick={() => (updateIsPrimary ? onUpdate(scenario) : onPlay(scenario))}
               style={touchFit({
                 ...actionButtonStyle,
-                background: updating || updateAvailable ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
-                borderColor: updating || updateAvailable ? "#27a663dd" : `${scenario.accentColor}dd`,
+                background: updating || updateIsPrimary ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
+                borderColor: updating || updateIsPrimary ? "#27a663dd" : `${scenario.accentColor}dd`,
                 color: "#fff",
                 cursor: updating ? "progress" : "pointer",
                 flex: 1,
               }, touch)}
-              title={updating || updateAvailable
-                ? "A newer version of this scenario is on the community hub. Updating replaces this copy (existing games keep working)."
+              title={updating || updateIsPrimary
+                ? (updateReason === "unchecked" ? UPDATE_UNCHECKED_NOTE : UPDATE_NEWER_TITLE)
                 : undefined}
               type="button"
             >
               {updating
                 ? <><ButtonIcon kind="working" /> Updating…</>
-                : updateAvailable ? <><ButtonIcon kind="update" /> Update</> : <><ButtonIcon kind="play" /> New Game</>}
+                : updateIsPrimary ? <><ButtonIcon kind="update" /> Update</> : <><ButtonIcon kind="play" /> New Game</>}
             </button>
             <button className="oh-tap-row" onClick={() => onEdit(scenario.id)} style={touchFit({ ...actionButtonStyle, flex: 1 }, touch)} type="button">
               <ButtonIcon kind="edit" /> Edit
@@ -926,6 +942,38 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
               <ButtonIcon kind="clone" /> Clone Scenario
             </button>
           </div>
+          {/* An old link, said in the open: why the copy should be updated,
+              and for a copy the player has edited the Update itself (New Game
+              stays above it: this Update replaces their changes, so it is
+              never the button a hurried press lands on, and it asks first). */}
+          {updateReason === "unchecked" && !updating && (
+            <div
+              role="note"
+              style={{
+                alignItems: "center",
+                color: "#fde68a",
+                display: "flex",
+                flexWrap: "wrap",
+                fontSize: "0.72rem",
+                gap: "0.5rem",
+                lineHeight: 1.4,
+                marginTop: "0.55rem",
+                textShadow: SCENARIO_CARD_TEXT_SHADOW,
+              }}
+            >
+              <span style={{ flex: "1 1 10rem" }}>{UPDATE_UNCHECKED_NOTE}</span>
+              {!updateIsPrimary && (
+                <button
+                  className="oh-tap-row"
+                  onClick={() => onUpdate(scenario)}
+                  style={touchFit({ ...actionButtonStyle, background: "#1d7f4ccc", borderColor: "#27a663dd", color: "#fff", minHeight: "2rem", padding: "0 0.8rem" }, touch)}
+                  type="button"
+                >
+                  <ButtonIcon kind="update" /> Update
+                </button>
+              )}
+            </div>
+          )}
           {/* What came of the last Update when it did not simply work: it
               failed, or it went through without its new basemap. The ring
               going back to a plain button says neither, and the only other
@@ -1992,6 +2040,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorKind, setEditorKind] = useState(null);
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
+  // The scenario the drawer is open on, for work that ends later and has to
+  // know whether the drawer still shows what it replaced (handleScenarioUpdate:
+  // a download takes seconds, and the drawer can be closed or moved meanwhile).
+  const editorScenarioIdRef = useRef(null);
+  useEffect(() => {
+    editorScenarioIdRef.current = editorKind === "scenario" ? editorDetails?.scenario?.id ?? null : null;
+  }, [editorKind, editorDetails]);
   const [editorStats, setEditorStats] = useState(() => normalizeStatsEditorValue(null));
   // The Stats sheet as last loaded or saved, to tell an unsaved edit from none.
   const editorStatsSavedRef = useRef(editorStats);
@@ -2340,13 +2395,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Hub update detection: scenarios imported straight from the community tab
   // carry hubOrigin, and those not modified since (no editedAt) can take the
-  // post's newer file. When the Scenarios tab shows any, fetch the hub posts
+  // post's newer file. One downloaded the old way, from an attachment the hub
+  // had not checked (no hubOrigin.release), is asked to take the checked file
+  // whether it was modified or not, and a modified one can be updated from
+  // Suggest changes when the file it came from is gone. So when the Scenarios
+  // tab shows any scenario from the hub, fetch the hub posts
   // (runtime/hubPosts.js; its 5-minute cache dedupes) and compare each post's
   // CURRENT bundle file against the one imported. A silent failure just means
-  // no Update buttons — offline behaves exactly as before.
+  // no Update buttons — offline behaves exactly as before, and a post that is
+  // no longer on the hub leaves its copies as they are.
   const [hubPostById, setHubPostById] = useState(null);
   useEffect(() => {
-    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin && !entry.hubOrigin.editedAt)) return undefined;
+    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
     let cancelled = false;
     fetchHubPosts()
       .then((posts) => {
@@ -2361,25 +2421,40 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     };
   }, [menuOpen, activeTab, scenarios]);
 
-  // An edited copy is never overwritten: its player suggests their changes to
-  // the post instead, and keeps their copy. The Community tab's cards ask the
-  // same question (runtime/hubPosts.js).
-  const scenarioUpdateAvailable = (scenario) =>
-    hubUpdateAvailable(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
+  // Why a scenario's card asks for an Update, or null. An edited copy is never
+  // overwritten for a newer file: its player suggests their changes to the
+  // post instead, and keeps their copy. Only an old link reaches one. The
+  // Community tab's cards ask the same question (runtime/hubPosts.js).
+  const scenarioUpdateReason = (scenario) =>
+    hubUpdateReason(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
 
   // The scenarios being updated now: each one's cards (it can sit on all three
   // shelves) show it and cannot be pressed again until it lands or fails.
   const updatingScenarioIds = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.running, scenarioUpdates.running);
   // And what each one's last Update left to say, when it did not simply work.
   const scenarioUpdateNotes = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.notes, scenarioUpdates.notes);
+  // The Update waiting for the player's yes, { scenario, post }: one of a
+  // scenario they have edited, which the Update would replace (the question
+  // is drawn below, beside the missing-map prompt).
+  const [replaceEditsTarget, setReplaceEditsTarget] = useState(null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
   // fresh hubOrigin stamp flips the card back to New Game on refresh. A failed
   // update leaves the card on Update, with the reason under its buttons and in
   // the editor's error; so does one that went through without its new basemap.
-  const handleScenarioUpdate = async (scenario) => {
-    const post = scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null;
+  //
+  // A copy the player has edited is replaced like any other, changes and all,
+  // so its Update asks first: the press only opens the question, and its yes
+  // comes back here with `replaceEdits`. `post` is for a caller that has
+  // already looked the post up (Suggest changes, which can be open while the
+  // Scenarios tab, and so hubPostById, is not).
+  const handleScenarioUpdate = async (scenario, { replaceEdits = false, post: knownPost = null } = {}) => {
+    const post = knownPost ?? (scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
+    if (post?.bundleUrl && scenario.hubOrigin?.editedAt && !replaceEdits) {
+      setReplaceEditsTarget({ scenario, post });
+      return;
+    }
     // A press that got in before the button redrew starts nothing either.
     if (!post?.bundleUrl || !scenarioUpdates.begin(scenario.id)) return;
     setEditorError(null);
@@ -2401,6 +2476,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // basemap that just failed again at once.
       noteMissingBasemapTried({ id: scenario.id, missingBasemap: missingBasemapOfBundle(bundle) });
       await updateScenarioFromBundle(scenario.id, bundle);
+      // A drawer open on this scenario still holds what was replaced. It is
+      // loaded again, so its Save cannot write the old form over the new file.
+      if (editorScenarioIdRef.current === scenario.id) await openScenarioEditor(scenario.id);
       // The stores keep the basemap the scenario had when the new one could not
       // be downloaded (updateScenarioFromBundle).
       const missingBasemap = unresolvedBundleBackground(bundle);
@@ -3324,6 +3402,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // The difficulty step goes back to the country step, as its own Back does.
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
   useBackToClose(Boolean(missingScenarioGame), () => setMissingScenarioGame(null));
+  useBackToClose(Boolean(replaceEditsTarget), () => setReplaceEditsTarget(null));
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -3839,7 +3918,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           (the author). The review steps aside while its map changes are open
           in the Workshop, and comes back when the Workshop closes. */}
       {suggestTarget && scenarioById(suggestTarget) && (
-        <SuggestChangesDialog scenario={scenarioById(suggestTarget)} onClose={() => setSuggestTarget(null)} />
+        <SuggestChangesDialog
+          scenario={scenarioById(suggestTarget)}
+          onClose={() => setSuggestTarget(null)}
+          // The file the copy came from is gone from the hub: the dialog says
+          // to update first, and hands over the post it found to update from.
+          onUpdate={(post) => {
+            const scenario = scenarioById(suggestTarget);
+            setSuggestTarget(null);
+            handleScenarioUpdate(scenario, { post });
+          }}
+        />
       )}
       {reviewTarget && !isMapEditorOpen && scenarioById(reviewTarget.scenarioId) && (
         <SuggestionReviewDialog
@@ -4130,6 +4219,55 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         )}
       </Presence>
 
+      {/* Update pressed on a scenario the player has edited. An Update puts the
+          hub's file in the scenario's place, so their changes go with it: it is
+          asked here first, in the prompt above's own dress, and nothing happens
+          on any answer but the first button's. */}
+      <Presence open={Boolean(replaceEditsTarget)} value={replaceEditsTarget}>
+        {(pending) => (
+          <div
+            onClick={() => setReplaceEditsTarget(null)}
+            style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", position: "fixed", zIndex: 10060 }}
+          >
+            <div
+              aria-modal="true"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              style={{ ...surfaceStyle, borderRadius: 16, color: "#fff", fontFamily: "sans-serif", padding: "1.1rem", width: "min(430px, 92vw)" }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800 }}>Replace your changes?</div>
+              <div data-no-translate style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.86rem", fontWeight: 700, marginTop: "0.35rem", overflowWrap: "anywhere" }}>
+                {pending.scenario.name}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.82rem", lineHeight: 1.5, margin: "0.5rem 0 1rem" }}>
+                You have changed this scenario since you downloaded it. Updating replaces it with the community hub's checked file, so your changes to it will be lost. To keep them, clone the scenario first. Games already started on it keep working.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                <button
+                  className="oh-tap-row"
+                  onClick={() => {
+                    setReplaceEditsTarget(null);
+                    handleScenarioUpdate(pending.scenario, { post: pending.post, replaceEdits: true });
+                  }}
+                  style={touchFit({ ...actionButtonStyle, background: "rgba(127,29,29,0.34)", borderColor: "rgba(248,113,113,0.28)", color: "#fecaca", minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Update and replace my changes
+                </button>
+                <button
+                  className="oh-tap-row"
+                  onClick={() => setReplaceEditsTarget(null)}
+                  style={touchFit({ ...actionButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Presence>
+
       <input
         ref={importScenarioInputRef}
         accept={acceptFor(".json,application/json,.zip,application/zip")}
@@ -4370,7 +4508,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       onUpdate={handleScenarioUpdate}
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
-                      updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateReason={scenarioUpdateReason(scenario)}
                       updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
@@ -4387,7 +4525,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       onUpdate={handleScenarioUpdate}
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
-                      updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateReason={scenarioUpdateReason(scenario)}
                       updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
@@ -4405,7 +4543,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       onUpdate={handleScenarioUpdate}
                       scenario={scenario}
                       selected={scenario.id === selectedScenarioId}
-                      updateAvailable={scenarioUpdateAvailable(scenario)}
+                      updateReason={scenarioUpdateReason(scenario)}
                       updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
