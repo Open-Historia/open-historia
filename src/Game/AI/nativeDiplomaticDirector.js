@@ -105,11 +105,18 @@ const stableHash = (value) => {
   return (hash >>> 0).toString(36);
 };
 
+// A title as it is compared: case, accents and punctuation folded away. The
+// letters, marks and digits of every script are kept. Folded to a-z0-9, a
+// title written in Cyrillic, Arabic or Chinese had no key at all, so every
+// such title was the same title ("Договор о дружбе…" and "Договор о создании
+// Союзного государства" were both ""), and one with a year in it was that
+// year. A title in ASCII has the key it always had, and so does one whose
+// accents this fold takes off ("Traité de Paris").
 const pregameTitleKey = (value) => clean(value)
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -718,11 +725,14 @@ const SEARCH_STOPWORDS = new Set([
   "states", "country", "countries", "event", "relation", "relations", "update",
 ]);
 
+// Words of any script (see pregameTitleKey): an event written in Russian or
+// Chinese used to fold to nothing, so no record could be tied to it by what
+// it says.
 const diplomaticSearchText = (value) => String(value ?? "")
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -1136,7 +1146,9 @@ const agreementTitleLooksCompatible = (left, right) => {
   const a = lower(left);
   const b = lower(right);
   if (!a || !b || a === b || a.includes(b) || b.includes(a)) return true;
-  const tokens = (value) => [...new Set(value.split(/[^a-z0-9]+/).filter((token) => token.length >= 4))];
+  // Words of any script: split on a-z0-9, two Cyrillic titles a word apart
+  // had no words left to share and were never compatible.
+  const tokens = (value) => [...new Set(value.normalize("NFKC").split(/[^\p{L}\p{M}\p{N}]+/u).filter((token) => token.length >= 4))];
   const aTokens = tokens(a);
   const bTokens = new Set(tokens(b));
   if (!aTokens.length || !bTokens.size) return false;

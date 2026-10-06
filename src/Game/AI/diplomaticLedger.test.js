@@ -271,6 +271,37 @@ test("prose beside a real relation record costs only itself", () => {
   assert.match(validateDiplomaticLedgerPayload(wrong, { world, allowNativeBinding: true }), /could not resolve both polities: "France" \/ "Atlantis"/);
 });
 
+// A model restating a pact it already recorded writes `start` again, often with
+// the title a word different. That is repaired when the titles share most of
+// their words, and the words were split on a-z0-9: two titles in Cyrillic,
+// Greek or Arabic had none, were never compatible, and the answer was refused.
+// (Words are still what a space or a mark of punctuation sets apart, four
+// letters or more: a Chinese title, written without spaces, is one word.)
+test("a pact started again under nearly its own title is repaired in other scripts too", () => {
+  for (const [recorded, restated, another] of [
+    ["Франко-русский союз", "Франко-русский военный союз", "Торговое соглашение о зерне"],
+    ["Γαλλορωσική συμμαχία", "Γαλλορωσική στρατιωτική συμμαχία", "Εμπορική συμφωνία σιτηρών"],
+  ]) {
+    const allied = {
+      ...world,
+      agreements: [{
+        id: "franco-russian-alliance", title: recorded, type: "alliance", status: "active", parties: ["France", "Russia"],
+        startedDate: "1894-01-04", terms: "Mutual military assistance against Germany", sourceEventIds: ["e0"],
+      }],
+    };
+    const again = (title) => ({
+      events: alliance(),
+      relationUpdates: "",
+      agreementUpdates: `franco-russian-alliance~start~alliance~France,Russia~1~${title}~Mutual military assistance against Germany`,
+    });
+    const repaired = again(restated);
+    assert.equal(validateDiplomaticLedgerPayload(repaired, { world: allied, allowNativeBinding: true }), "", restated);
+    assert.deepEqual(agreementIds(repaired), [], "the redundant start is dropped; the pact stands as it was");
+    // Another instrument under the same id is still a collision.
+    assert.match(validateDiplomaticLedgerPayload(again(another), { world: allied, allowNativeBinding: true }), /franco-russian-alliance/, another);
+  }
+});
+
 test("a later record on the same pair replaces the score; an unbound record is dropped on apply", () => {
   const events = alliance();
   const seeded = applyDiplomaticUpdates({

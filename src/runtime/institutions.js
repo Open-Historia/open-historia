@@ -1102,7 +1102,9 @@ export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
 };
 
 const institutionEventText = (event = {}) => clean(`${event?.title || ""} ${event?.description || ""}`);
-const textToken = (value) => clean(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+// The words of any script: an institution named in Cyrillic, Arabic or Chinese
+// used to be no token at all, and no event could be found to name it.
+const textToken = (value) => clean(value).toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 const containsSemanticToken = (text, value) => {
   const token = textToken(value);
   if (!token) return false;

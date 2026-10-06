@@ -66,6 +66,19 @@ test("the player's name is matched as whole words, never inside another", () => 
     assert.equal(eventConcernsPlayer(event("Ob river floods"), ["Ob"]), false);
 });
 
+test("the player's name is found in any script, as whole words there too", () => {
+    // Folded to a-z0-9 a name in Cyrillic was no name, and no event ever named it.
+    assert.equal(eventConcernsPlayer(event("Польша направила ноту", "Российская Федерация отвечает зеркально."), ["Российская Федерация"]), true);
+    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал", "Экспортёры кофе довольны."), ["Российская Федерация"]), false);
+    assert.equal(eventConcernsPlayer(event("Переговоры открылись", "Оман принимает делегации."), ["Оман"]), true);
+    assert.equal(eventConcernsPlayer(event("Романовы возвращаются"), ["Оман"]), false, "never inside another word");
+    // Chinese: found where punctuation sets the name apart. Still a whole word
+    // of three characters or more, and an unbroken sentence is one word.
+    assert.equal(eventConcernsPlayer(event("首尔消息：大韩民国，举行选举。"), ["大韩民国"]), true);
+    assert.equal(eventConcernsPlayer(event("大韩民国举行选举"), ["大韩民国"]), false);
+    assert.equal(eventConcernsPlayer(event("东京消息：日本，公布新预算。"), ["日本"]), false);
+});
+
 test("the floor is met when enough of the period belongs to the rest of the world", () => {
     const events = [
         event("Russian forces enter Kharkiv", "", { playerRelated: true }),
@@ -163,6 +176,20 @@ test("a beat is written when an event near its date shares its particular words"
     assert.equal(beatIsWritten(beat, [{ date: "2014-05-26", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), true);
     assert.equal(beatIsWritten(beat, [{ date: "2014-05-25", title: "Fighting near Donetsk", description: "Separatists seize the airport." }]), false, "same day, different event");
     assert.equal(beatIsWritten(beat, [{ date: "2014-07-25", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), false, "two months out is not this beat");
+});
+
+test("a beat its author wrote in Russian is found written, and is not written a second time", () => {
+    // Split on a-z0-9 the beat had no words, so it was never found written: the
+    // engine added the author's event beside the model's own telling of it.
+    const beats = parseScriptedEvents("2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
+    const told = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах уже в первом туре." }];
+    assert.equal(beatIsWritten(beats[0], told), true);
+    assert.equal(beatIsWritten(beats[0], [{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }]), false, "same day, different event");
+    const kept = ensureScriptedEvents(told, beats);
+    assert.deepEqual([kept.events.length, kept.written.length, kept.inserted.length], [1, 1, 0]);
+    // Left out, it is still written by the engine.
+    const added = ensureScriptedEvents([{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }], beats);
+    assert.deepEqual([added.events.length, added.inserted.length], [2, 1]);
 });
 
 test("a generated selected outcome must remain anchored to its parent event context", () => {

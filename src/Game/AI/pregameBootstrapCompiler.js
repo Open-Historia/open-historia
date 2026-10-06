@@ -84,10 +84,17 @@ const unique = (values) => {
   return out;
 };
 
+// A fact's title as it is compared: the letters, marks and digits of every
+// script. Folded to a-z0-9, a title in Cyrillic, Arabic or Chinese had no key
+// at all, so a storyline among a war's participants was always "ambiguous
+// with" that war, whatever either was called, and the whole Round-Zero answer
+// was refused for it. The key also seeds the id a NEW record is given
+// (allocatePregameCanonicalId); a record already in a save keeps the id it
+// has, which is stored and never worked out again. ASCII titles are unchanged.
 const titleKey = (value) => lower(value)
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 

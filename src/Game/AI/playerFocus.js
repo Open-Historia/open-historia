@@ -39,7 +39,12 @@ export const normalizePlayerFocus = (value) => {
 // and what happens inside its territory — the regions and cities it holds and
 // the polities it absorbed, so riots in Lahore are the British Empire's even
 // when the event never names it. Whole words, case and accents folded.
-const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+//
+// Words of any script. Folded to a-z0-9, anything written in Cyrillic, Arabic
+// or Chinese was nothing at all: a Project or an order of the player's was
+// found in no event, a polity so named was "no owner" and so the player's own,
+// and an order's title had no word an event could answer it by.
+const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
 
 // Shorter names match too much ("Ob", "Uri"); the polity's own names are
 // allowed down to three letters, as the world share counts them.

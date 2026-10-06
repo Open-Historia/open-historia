@@ -1119,11 +1119,16 @@ const coalesceWorldStorylines = (worldLike) => {
   };
 };
 
+// A storyline's title as it is compared: the letters, marks and digits of
+// every script, case, accents and punctuation folded away. Folded to a-z0-9, a
+// title in Cyrillic, Arabic or Chinese had no key at all: two processes of one
+// kind among the same participants were one storyline whatever each was
+// called. An ASCII title keeps the key it had.
 const pregameStorylineTitleKey = (value) => normalizeString(value)
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -1689,12 +1694,14 @@ const STORYLINE_LINK_STOPWORDS = new Set([
   "republic", "state", "states", "process", "current", "continues", "continued",
 ]);
 
+// Words of any script: a storyline and an event written in Russian or Chinese
+// used to fold to nothing here, and shared no word to be linked by.
 const storylineLinkText = (value) =>
   normalizeString(value)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 

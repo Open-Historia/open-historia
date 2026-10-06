@@ -18,6 +18,10 @@
 // that says "Russia" on a world whose power is the "Russian Federation" (and
 // nothing called "Russia") names nobody; the two are different countries
 // wherever both exist. Ranking is never allowed to blur that line.
+//
+// A name is its letters, marks and digits in any script. Folded to a-z0-9, a
+// power the map names in Cyrillic, Arabic or Chinese had no form to be
+// recognised by, and nothing said about it ever weighed.
 
 export const foldName = (value) =>
   String(value ?? "")
@@ -25,7 +29,7 @@ export const foldName = (value) =>
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/['’`]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 
 // The forms under which a power is recognised in prose: the names the map

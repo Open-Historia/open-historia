@@ -246,6 +246,28 @@ test("an Overlord acknowledging what was just agreed is not a fresh demand", () 
   assert.equal(fresh[0]?.kind, "demand_made");
 });
 
+test("what is already agreed is recognised in any script, by its words and not by a number in it", () => {
+  // The summaries are written in the player's language. Shorn to a-z0-9, a
+  // Russian one was empty, restated nothing, and opened a card every time; one
+  // with a figure in it was that figure, and "restated" anything else with the
+  // same figure.
+  const context = { role: "overlord", overlord: "Россия", puppet: "Беларусь" };
+  const ask = (summary, demands) => interpretDemandCheck({
+    payload: { outcome: "demand", summary }, context, demands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
+  });
+  const protocols = [{ id: "d1", by: "Россия", target: "Беларусь", summary: "Выполнить Женевские протоколы", status: "accepted" }];
+  assert.deepEqual(ask("Выполнить Женевские протоколы!", protocols), [], "the same obligation, worded again");
+  assert.deepEqual(ask("Выполнить Женевские протоколы в полном объёме", protocols), [], "and with a clause added");
+  assert.equal(ask("Передать журналы патрулей", protocols)[0]?.kind, "demand_made");
+
+  const payment = [{ id: "d2", by: "Россия", target: "Беларусь", summary: "Выплатить 500 миллионов", status: "accepted" }];
+  assert.equal(ask("Передать 500 винтовок", payment)[0]?.kind, "demand_made", "another demand that happens to say 500");
+
+  const chinese = [{ id: "d3", by: "Россия", target: "Беларусь", summary: "履行日内瓦议定书", status: "settled" }];
+  assert.deepEqual(ask("履行日内瓦议定书。", chinese), []);
+  assert.equal(ask("移交巡逻日志", chinese)[0]?.kind, "demand_made");
+});
+
 test("the prompt tells the model what is already agreed, so it does not ask for it again", () => {
   const prompt = demandCheckPrompt({
     context: { role: "overlord", overlord: "Russia", puppet: "Belarus" },

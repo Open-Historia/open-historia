@@ -807,6 +807,33 @@ test("accents are folded away, not turned into word breaks", () => {
   assert.deepEqual(concerned({ title: "Quebec project advances", description: "" }, board), ["qc"]);
 });
 
+test("a Board kept in another script is matched by its own words", () => {
+  // Two entries from a player's log (2026-10-05, the game in Russian). Folded
+  // to a-z0-9, nothing on this Board had a word, so no event ever concerned an
+  // entry on it, and a miss here is a retried segment.
+  const board = [
+    project({ id: "leviathan", name: "Проект Левиафан", summary: "Ключевая военно-морская программа по созданию сверхмощного корабля, обеспечивающего доминирование в Черном море." }),
+    project({ id: "fortress", name: "Проект Береговая Крепость", summary: "Строительство и модернизация оборонительных рубежей на южном побережье (особенно вокруг Крыма)." }),
+  ];
+  assert.deepEqual(
+    concerned({ title: "Проект Левиафан: установлен энергетический блок", description: "Сборочные работы перешли на новый этап." }, board),
+    ["leviathan"],
+    "named exactly",
+  );
+  assert.deepEqual(
+    concerned({ title: "Строительство оборонительных рубежей на южном побережье ускорено", description: "" }, board),
+    ["fortress"],
+    "described by the summary's own words",
+  );
+  assert.deepEqual(concerned({ title: "Парламент принял бюджет", description: "" }, board), []);
+
+  // A name in Chinese is matched where quotation marks or punctuation set it
+  // apart; inside an unbroken sentence it is part of one long word.
+  const chinese = [project({ id: "dragon", name: "蛟龙计划", summary: "深海载人潜水器研制。" })];
+  assert.deepEqual(concerned({ title: "“蛟龙计划”完成首次下潜", description: "" }, chinese), ["dragon"]);
+  assert.deepEqual(concerned({ title: "蛟龙计划完成首次下潜", description: "" }, chinese), []);
+});
+
 // --- Where the board pass's ops go ------------------------------------------
 //
 // The board pass reads the visible events, then the Hidden events, as one

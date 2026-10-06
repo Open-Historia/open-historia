@@ -675,3 +675,96 @@ test("semantic receipt is family-specific even when scenario canon reuses an id 
   assert.ok(result.projectedWorld.wars.some((entry) => entry.id === "shared-id"));
   assert.ok(result.projectedWorld.agreements.some((entry) => entry.id === "shared-id"));
 });
+
+// --- titles that are not written in Latin letters ---
+//
+// Every identity rule above compares titles by a folded key, and the fold kept
+// a-z0-9 only. A game played in Russian or Chinese writes its titles in neither,
+// so each title's key was "" and every title was every other: two wars between
+// the same sides were one war, two treaties among the same parties one treaty,
+// and a crisis among a war's belligerents was always "ambiguous with" the war.
+// The rules are the same rules in every script now.
+const SCRIPTS = {
+  Cyrillic: {
+    wars: ["Крымская война", "Донбасская война"],
+    pacts: ["Договор о дружбе, сотрудничестве и партнёрстве", "Договор о создании Союзного государства"],
+    crises: ["Политический кризис и смена власти", "Газовый спор"],
+  },
+  Chinese: {
+    wars: ["第一次边境战争", "第二次边境战争"],
+    pacts: ["睦邻友好合作条约", "和平友好条约"],
+    crises: ["政治危机与政权更迭", "天然气争端"],
+  },
+};
+
+for (const [script, { wars, pacts, crises }] of Object.entries(SCRIPTS)) {
+  test(`${script}: a live war keeps its identity under its own title, and another title is another war's`, () => {
+    const first = compile([warFact({ title: wars[0] })]);
+    assert.equal(first.ok, true, first.error);
+    const warId = first.receipt.facts[0].canonicalId;
+
+    // The same war again, its title cased and punctuated otherwise.
+    const again = compile([warFact({ ref: "w2", title: `  ${wars[0].toUpperCase()}!` })], { world: first.projectedWorld });
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.receipt.facts[0].outcome, "merged");
+    assert.equal(again.receipt.facts[0].canonicalId, warId);
+
+    // Same sides, same date, another name: it used to be merged into the first
+    // without a word, because both names were the empty key.
+    const renamed = compile([warFact({ ref: "w3", title: wars[1] })], { world: first.projectedWorld });
+    assert.equal(renamed.ok, false);
+    assert.match(renamed.error, /identity is ambiguous/);
+  });
+
+  test(`${script}: two wars of one day between the same sides are given two ids`, () => {
+    const worldOf = (title) => compile([warFact({ title })]).receipt.facts[0].canonicalId;
+    assert.match(worldOf(wars[0]), /^war-r0v1-/);
+    assert.notEqual(worldOf(wars[0]), worldOf(wars[1]), "the title is part of what a new war's id is made from");
+  });
+
+  test(`${script}: a second treaty among the same parties is not the first under another name`, () => {
+    const pact = (ref, title, terms) => ({ ref, kind: "agreement", type: "alliance", title, parties: ["Alpha", "Gamma"], startedDate: "2020-01-01", terms });
+    const first = compile([pact("a1", pacts[0], "Standing alliance.")]);
+    assert.equal(first.ok, true, first.error);
+    const other = compile([pact("a2", pacts[1], "Standing alliance.")], { world: first.projectedWorld });
+    assert.equal(other.ok, false, "it was merged into the first: same parties, same type, same date, and the same empty title key");
+    assert.match(other.error, /identity is ambiguous/);
+    const same = compile([pact("a3", pacts[0], "Standing alliance.")], { world: first.projectedWorld });
+    assert.equal(same.ok, true, same.error);
+    assert.equal(same.receipt.facts[0].outcome, "merged");
+  });
+
+  test(`${script}: a crisis among a war's belligerents is not the war unless it has the war's title`, () => {
+    const crisis = (title) => ({
+      ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title,
+      participants: ["Alpha", "Beta"], startedDate: "2020-11-01", pressure: 95, momentum: 60,
+      state: "A constitutional crisis accompanies the fighting.",
+    });
+    // Its own title: a process of its own. This answer used to be refused whole.
+    const own = compile([warFact({ title: wars[0] }), crisis(crises[0])]);
+    assert.equal(own.ok, true, own.error);
+    assert.ok(own.projectedWorld.storylines.some((entry) => entry.kind === "crisis" && entry.title === crises[0]));
+    // The war's title: still ambiguous with the war, as in any script.
+    const shared = compile([warFact({ title: wars[0] }), crisis(wars[0])]);
+    assert.equal(shared.ok, false);
+    assert.match(shared.error, /ambiguous with war fact w1/);
+  });
+
+  test(`${script}: a scenario's own storyline is not replaced by one of another name`, () => {
+    const world = makeWorld();
+    world.storylines = [{
+      id: "scenario-crisis", kind: "crisis", title: crises[0], participants: ["Alpha"], status: "active",
+      pressure: 70, momentum: 20, startedDate: "2020-01-01", state: "Unresolved.",
+    }];
+    const fact = (title) => ({
+      ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title,
+      participants: ["Alpha"], startedDate: "2020-01-01", pressure: 70, momentum: 20, state: "Unresolved.",
+    });
+    const renamed = compile([fact(crises[1])], { world });
+    assert.equal(renamed.ok, false, "it was adopted as the scenario's storyline: same kind, same participants, same empty title key");
+    assert.match(renamed.error, /identity is ambiguous/);
+    const same = compile([fact(crises[0])], { world });
+    assert.equal(same.ok, true, same.error);
+    assert.equal(same.receipt.facts[0].canonicalId, "scenario-crisis");
+  });
+}
