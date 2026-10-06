@@ -471,3 +471,154 @@ test("the placing pass tells the reader whose thing it is", () => {
     assert.ok(body.includes("home: normalizeString(marker.ownerCode ?? op.ownerCode)"), "a structure's owner");
     assert.ok(body.includes("home: entry.owner || entry.home"), "a unit's owner, or the structure's");
 });
+
+// --- a town the map does not carry ---
+//
+// "Grand Forks, North Dakota": a real skip opened a depot there and lost it.
+// The map had neither name; the game's list of the world's towns has the town.
+// Here, a list of the wider world laid over the same small map:
+//
+//   Riverton      one town, in Westmark North
+//   Springfield   three: one in each of Westmark's regions, one in Eastland North
+//   Twinbridge    two, both in Westmark South
+//   Farhaven      one, in Eastland South
+//   Midburg       a namesake of the map's own Midburg, in Eastland North
+//   Seaholm       one, out at sea
+const WORLD = {
+    riverton: [[31, 51.5]],
+    springfield: [[30.5, 51], [33, 49], [36, 51]],
+    twinbridge: [[31, 48.5], [33, 49.5]],
+    farhaven: [[37, 49]],
+    midburg: [[36.5, 51.5]],
+    seaholm: [[40, 45]],
+};
+const asked = [];
+const atlas = { ...gazetteer, worldCities: (name) => { asked.push(name); return WORLD[fold(name)] ?? []; } };
+const placeWith = (phrase, options = {}) => resolvePlacement(phrase, atlas, options);
+
+test("a town the map does not carry is taken from the world's list, when it is the one town of its name in the owner's land", () => {
+    const depot = placeWith("Riverton", { home: "Westmark" });
+    assert.deepEqual([depot.lng, depot.lat, depot.regionId, depot.how], [31, 51.5, "wm-n", "at"]);
+    const unit = placeWith("Riverton, Nowhereshire", { owner: "Westmark" });
+    assert.deepEqual([unit.lng, unit.lat], [31, 51.5], "an address whose place the map does not know is put to the same test");
+    assert.deepEqual(placeWith("Riverton", { home: "Westmark" }), depot, "and it is the same point every time");
+    // The same map with no list to ask, or with one that has not arrived: as before.
+    assert.match(resolvePlacement("Riverton", gazetteer, { owner: "Westmark" }).error, /is called "Riverton"/);
+    assert.match(resolvePlacement("Riverton", { ...gazetteer, worldCities: () => [] }, { owner: "Westmark" }).error, /is called "Riverton"/);
+});
+
+test("namesakes are refused, and the refusal says which regions the choice lies between", () => {
+    const refused = placeWith("Springfield", { owner: "Westmark" });
+    assert.equal(refused.error, '2 towns called Springfield lie in Westmark, in the regions Westmark North and Westmark South; name the region it is in, as "Springfield, <region>"');
+    assert.deepEqual(refused.names, [], "no near miss on the map's own names is offered beside it");
+    assert.match(placeWith("near Springfield", { owner: "Westmark" }).error, /^2 towns called Springfield lie in Westmark/, "whatever the grammar");
+    // Two of the name in one region: naming the region will put it in that region, which is as near as a name gets.
+    assert.equal(placeWith("Twinbridge", { owner: "Westmark" }).error, '2 towns called Twinbridge lie in Westmark, in the region Westmark South; name the region it is in, as "Twinbridge, <region>"');
+    // Eastland has one Springfield: there it is no namesake.
+    const theirs = placeWith("Springfield", { owner: "Eastland" });
+    assert.deepEqual([theirs.lng, theirs.lat, theirs.regionId], [36, 51, "el-n"]);
+});
+
+test("a town across the border is refused: nothing crosses on a name's say-so", () => {
+    const abroad = placeWith("Farhaven", { owner: "Westmark" });
+    assert.equal(abroad.error, 'no town called Farhaven lies in Westmark: the one on this map is in the region Eastland South; name the region it is in, as "Farhaven, <region>"');
+    assert.match(placeWith("near Farhaven, Nowhereshire", { owner: "Westmark" }).error, /^no town called Farhaven lies in Westmark/);
+    assert.match(placeWith("Springfield, Nowhereshire", { home: "North Korea" }).error, /^no town called Springfield lies in North Korea: the 3 on this map are in the regions Westmark North, Westmark South and Eastland North;/);
+    // With nobody's land to test it against it is not taken, and the list is not even asked.
+    asked.length = 0;
+    assert.match(placeWith("Farhaven").error, /is called "Farhaven"/);
+    assert.match(placeWith("Riverton, Nowhereshire").error, /is called "Riverton, Nowhereshire"/);
+    assert.deepEqual(asked, []);
+    // Out at sea it is no town of this map.
+    assert.match(placeWith("Seaholm", { owner: "Westmark" }).error, /is called "Seaholm"/);
+});
+
+test("an address whose place the map knows is respected", () => {
+    // Of three Springfields, the one in the region named.
+    const south = placeWith("Springfield, Westmark South", { owner: "Westmark" });
+    assert.deepEqual([south.lng, south.lat, south.regionId], [33, 49, "wm-s"]);
+    // The address says where, across a border too: this time the country was named.
+    const east = placeWith("Springfield, Eastland", { owner: "Westmark" });
+    assert.deepEqual([east.lng, east.lat], [36, 51]);
+    const inner = placeWith("Springfield, Westmark North, Westmark", { owner: "Westmark" });
+    assert.deepEqual([inner.lng, inner.lat], [30.5, 51], "inside every place the address names, not any one of them");
+    // The map's only Midburg is in Westmark; the list has the one in Eastland.
+    const namesake = placeWith("Midburg, Eastland", { owner: "Westmark" });
+    assert.deepEqual([namesake.lng, namesake.lat], [36.5, 51.5]);
+    // A town that is not where the address says: the place itself, as before.
+    const elsewhere = placeWith("Farhaven, Westmark North", { owner: "Westmark" });
+    assert.deepEqual([elsewhere.regionId, elsewhere.how], ["wm-n", "inside"]);
+    // Two of the name in it: the place itself, and neither of them.
+    const both = placeWith("Springfield, Westmark", { owner: "Westmark" });
+    assert.equal(both.how, "inside");
+    assert.ok(["wm-n", "wm-s"].includes(both.regionId), String(both.regionId));
+    const twins = placeWith("Twinbridge, Westmark South", { owner: "Westmark" });
+    assert.deepEqual([twins.regionId, twins.how], ["wm-s", "inside"]);
+    // A place the map knows but cannot stand anything in (no shape): the address named it, so the
+    // owner's own land is not what the refusal talks about.
+    const shapeless = { ...atlas, find: (name, options) => (fold(name) === "ghostland" ? { kind: "region", name: "Ghostland", region: { id: "gh", name: "Ghostland", geometry: null } } : atlas.find(name, options)) };
+    assert.match(resolvePlacement("Springfield, Ghostland", shapeless, { owner: "Westmark" }).error, /is called "Springfield, Ghostland"/);
+});
+
+test("grammar still applies to a town from the world's list", () => {
+    const near = placeWith("near Riverton, Nowhereshire", { owner: "Westmark", seedText: "3rd Army" });
+    assert.equal(near.how, "near");
+    assert.equal(near.regionId, "wm-n");
+    assert.ok(Math.abs(distanceKm([near.lng, near.lat], [31, 51.5]) - NEAR_KM) < 1, "beside it, not on it");
+    assert.equal(placeWith("near Riverton", { owner: "Westmark" }).how, "near");
+    assert.equal(placeWith("toward Riverton", { owner: "Westmark" }).how, "near", "an objective is beside the place");
+    const east = placeWith("east of Riverton", { owner: "Westmark" });
+    assert.ok(east.lng > 31 && Math.abs(distanceKm([east.lng, east.lat], [31, 51.5]) - DIRECTION_KM) < 1, JSON.stringify(east));
+    // Grammar after a comma still means what it meant: the north of it, not a town in a place called North.
+    const north = placeWith("Riverton, north", { owner: "Westmark" });
+    assert.ok(north.lat > 51.7 && Math.abs(north.lng - 31) < 0.01, JSON.stringify(north));
+});
+
+test("the world's list is asked only about a place the map does not have", () => {
+    asked.length = 0;
+    const onTheMap = [
+        "Midburg", "near Midburg", "east of Midburg", "Midburg, Westmark", "Midburg, Westmark North", "near Midburg, Westmark",
+        "Westmark South", "northern Westmark", "northern border", "off Porthaven", "coast of Eastland", "between Midburg and Porthaven",
+        "Westmark South facing Eastland", "[35.5, 49.5]", "1st Guards Army", "North Korea",
+    ];
+    for (const phrase of onTheMap) assert.equal(placeWith(phrase, { owner: "Westmark" }).error, undefined, phrase);
+    assert.deepEqual(asked, [], "the list has a Midburg of its own, and is not asked for it");
+    // What the map lacks is asked for by the spot alone, before settling for what the spot is in.
+    assert.equal(placeWith("Fort Nowhere, Westmark North", { owner: "Westmark" }).regionId, "wm-n");
+    assert.deepEqual(asked, ["Fort Nowhere"]);
+    // A phrase the map could not place for another reason is still not the list's to answer: Midburg is on the map.
+    asked.length = 0;
+    assert.ok(placeWith("Midburg facing Atlantis", { owner: "Eastland" }).error);
+    assert.deepEqual(asked, ["Midburg facing Atlantis"], "the whole phrase is no name the map has; Midburg is");
+    // The same for an address, with a gazetteer that finds nothing loosely (the real one finds no "near Midburg").
+    asked.length = 0;
+    const exactOnly = { ...atlas, find: (name) => gazetteer.find(name, { exact: true }) };
+    assert.equal(resolvePlacement("near Midburg, Westmark", exactOnly, { owner: "Westmark" }).error, undefined);
+    assert.deepEqual(asked, ["near Midburg"]);
+});
+
+test("a gazetteer that throws on one of the list's towns costs that town, not the placement", () => {
+    const brittle = { ...atlas, regionAt: (point) => { if (point[0] === 31 && point[1] === 51.5) throw new Error("bad polygon"); return atlas.regionAt(point); } };
+    assert.match(resolvePlacement("Riverton", brittle, { owner: "Westmark" }).error, /is called "Riverton"/);
+    const address = resolvePlacement("Riverton, Midburg", brittle, { owner: "Westmark" });
+    assert.deepEqual([address.lng, address.lat], [32, 51], "and an address still falls back to what the spot is in");
+});
+
+test("the placing pass fetches the world's list only when a phrase has named a place the map does not have", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    // The list is read in one place, and that place is reached one way: by a
+    // pass that has a name left unanswered.
+    assert.equal(source.match(/loadWorldCities\(\)/g)?.length, 1);
+    assert.equal(source.match(/readWorldCities\(\)/g)?.length, 1);
+    // The gazetteer answers from the list when it is here, and otherwise remembers that it was asked.
+    const body = source.slice(source.indexOf("const buildPlacementGazetteer = "), source.indexOf("const resolvePlacements = async"));
+    assert.ok(body.includes("if (worldCities) return worldCities.find(name);"));
+    assert.ok(body.includes("unanswered = true;"));
+    assert.ok(body.includes("if (!unanswered) return false;"), "a pass whose places the map all has fetches nothing");
+    assert.ok(body.includes("if (!worldCities && !asked) {"), "and a pass asks at most once");
+    assert.ok(body.includes("await readWorldCities();"));
+    assert.ok(body.includes("worldCities: worldCitiesNamed, worldCitiesArrived };"));
+    // The pass reads the phrase again once the list has arrived.
+    const pass = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(pass.includes("if (byPhrase && await gazetteer.worldCitiesArrived()) byPhrase = readPhrase();"));
+});

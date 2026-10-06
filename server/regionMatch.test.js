@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "../src/Game/AI/regionMatch.js";
+import { editDistance, foldRegionKey, foldRegionKeyOnce, matchRegionName, stripRegionAffixes } from "../src/Game/AI/regionMatch.js";
 
 // A slice of the hand-drawn Fault Lines world: Ukraine's regions are named after towns.
 const ukraine = [
@@ -44,6 +44,15 @@ test("folding is remembered, and remembering changes no answer", () => {
   assert.equal(foldRegionKey("Donets’k"), "donetsk");
   assert.equal(stripRegionAffixes("the kharkiv region"), "kharkiv");
   assert.equal(matchRegionName("Kharkiv Oblast", ukraine)?.region.id, "2026");
+});
+
+test("the fold that remembers nothing gives the same answers", () => {
+  // For a list longer than any map, folded once (worldCities.js): the answer
+  // has to be the one a lookup of the same name will fold to.
+  for (const name of ["Donets’k", "  Ivano-Frankivsk ", "Zürich", "São José do Jacuípe", "Sault Ste. Marie", "GRAND FORKS", "", "   ", null, undefined, 12]) {
+    assert.equal(foldRegionKeyOnce(name), foldRegionKey(name), String(name));
+  }
+  assert.equal(foldRegionKeyOnce("São José do Jacuípe"), "sao jose do jacuipe");
 });
 
 test("affixes: administrative words the model appends are stripped, repeatedly", () => {
