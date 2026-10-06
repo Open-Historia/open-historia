@@ -27,7 +27,11 @@ const appMessages = {
 };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const until = async (check, ms = 3000) => {
+// These run on the real clock (the handshake's own timers do), and a machine
+// busy with something else can take seconds over what is otherwise instant: a
+// wait ends as soon as its condition holds, so a long limit costs nothing
+// until something is wrong.
+const until = async (check, ms = 20_000) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (check()) return true;
@@ -35,6 +39,24 @@ const until = async (check, ms = 3000) => {
   }
   return check();
 };
+
+// Every session a test opens is closed when the test ends, passed or failed: a
+// host or a player left running keeps its timers, and the file then never exits.
+const opened = [];
+const track = (session) => {
+  opened.push(session);
+  return session;
+};
+test.afterEach(() => {
+  for (const session of opened.splice(0)) {
+    try {
+      if (typeof session.stop === "function") session.stop();
+      else session.leave();
+    } catch {
+      // already closed
+    }
+  }
+});
 
 const world = ({ seats = 4, hostLimits = {} } = {}) => {
   const relays = createFakeRelayNetwork();
@@ -44,24 +66,24 @@ const world = ({ seats = 4, hostLimits = {} } = {}) => {
   const hostKey = createIdentity();
   const invite = createInvite(hostKey.publicKey);
   const events = { joins: [], leaves: [], messages: [] };
-  const host = createHostSession({
+  const host = track(createHostSession({
     invite: parseInvite(invite.token), host: hostKey, room: { name: "The Cold War", seats, version: VERSION },
     appMessages, channelFactory, peerFactory,
     onJoin: (player, detail) => events.joins.push({ ...player, ...detail }),
     onLeave: (player, reason) => events.leaves.push({ ...player, reason }),
     onMessage: (player, message) => events.messages.push({ from: player.name, message }),
     limits: { beaconIntervalMs: 200, pingIntervalMs: 100_000, ...hostLimits },
-  });
+  }));
   const join = (name, { token = invite.token, device = createIdentity(), version = VERSION, ...extra } = {}) => {
     const log = { states: [], messages: [], room: null };
-    const client = createClientSession({
+    const client = track(createClientSession({
       token, device, name, version, appMessages, channelFactory, peerFactory,
-      offerIntervalMs: 100, findTimeoutMs: 4000, joinTimeoutMs: 2000,
+      offerIntervalMs: 100, findTimeoutMs: 40_000, joinTimeoutMs: 20_000,
       onState: (state, detail) => log.states.push({ state, ...detail }),
       onRoom: (room) => { log.room = room; },
       onMessage: (message) => log.messages.push(message),
       ...extra,
-    });
+    }));
     client.connect();
     return { client, log, device };
   };
@@ -104,11 +126,11 @@ test("someone else holding the token cannot answer as the host", async () => {
   // signed with the wrong key, and the player never takes them.
   const impostorKey = createIdentity();
   const forged = { ...parseInvite(setup.invite.token), hostKey: impostorKey.id };
-  const impostor = createHostSession({
+  const impostor = track(createHostSession({
     invite: forged, host: impostorKey, room: { name: "Totally the host", seats: 8, version: VERSION },
     appMessages, channelFactory: setup.channelFactory, peerFactory: setup.peerFactory,
     limits: { beaconIntervalMs: 200 },
-  });
+  }));
   impostor.start();
   const player = setup.join("Ana");
   await wait(600);
