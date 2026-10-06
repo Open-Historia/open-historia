@@ -84,7 +84,7 @@ const Lobby = ({ shared, me }) => {
     <div style={{ ...glass, left: "50%", maxHeight: "80vh", maxWidth: "min(34rem, calc(100vw - 2rem))", overflowY: "auto", padding: "1.2rem 1.3rem", position: "fixed", top: "12vh", transform: "translateX(-50%)", width: "100%", zIndex: 4000 }}>
       <div style={{ fontSize: "1.15rem", fontWeight: 800, marginBottom: "0.2rem" }}><span style={isolate}>{lobby?.settings?.name || "Shared game"}</span></div>
       <div style={small}>
-        {lobby ? <>On <span style={isolate}>{lobby.scenario?.name || "a scenario"}</span> · {lobby.settings?.roundMinutes} min rounds · {lobby.settings?.daysPerRound} days a round</> : "Finding the host…"}
+        {lobby ? <><span style={isolate}>{lobby.scenario?.name || "Scenario"}</span> · {lobby.settings?.roundMinutes} min rounds · {lobby.settings?.daysPerRound} days a round</> : "Finding the host…"}
       </div>
 
       {role === "host" && token ? (
@@ -92,7 +92,7 @@ const Lobby = ({ shared, me }) => {
           <div style={small}>Invite code: anyone who has it can join, up to {lobby?.settings?.seats ?? 8} players.</div>
           <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
             <code style={{ background: "rgba(255,255,255,0.06)", borderRadius: "8px", flex: 1, fontSize: "0.72rem", overflow: "hidden", padding: "0.45rem 0.6rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
-            <button type="button" style={button} onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+            <button type="button" style={button} onClick={copy}>{copied ? "✓ Copied!" : "Copy"}</button>
             <button type="button" style={button} onClick={() => hostControl("rotate")} title="A new code: the old one stops working">New code</button>
           </div>
           <div style={{ ...small, marginTop: "0.35rem" }}>
@@ -107,7 +107,7 @@ const Lobby = ({ shared, me }) => {
           <div key={seat.country} style={{ display: "flex", fontSize: "0.86rem", gap: "0.5rem", padding: "0.2rem 0" }}>
             <span style={{ ...isolate, flex: 1 }}>{seat.country}</span>
             <span style={{ ...isolate, color: "rgba(255,255,255,0.6)" }}>{seat.name}{seat.you ? " (you)" : ""}</span>
-            <span style={small}>{seat.status === "human" ? "" : seat.status === "away" ? "away" : "AI"}</span>
+            <span style={small}>{seat.status === "human" ? "" : seat.status === "away" ? "Away" : "AI player"}</span>
           </div>
         ))}
       </div>
@@ -160,10 +160,10 @@ const RoundBar = ({ shared, me }) => {
   return (
     <div style={{ ...glass, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", left: "50%", maxWidth: "calc(100vw - 1.5rem)", padding: "0.45rem 0.6rem 0.45rem 0.9rem", position: "fixed", top: "calc(3.4rem + env(safe-area-inset-top, 0px))", transform: "translateX(-50%)", zIndex: 3500 }}>
       <span style={{ fontSize: "0.82rem", fontWeight: 750 }}>Round {round?.round ?? "–"} · {PHASES[round?.phase] ?? "…"}</span>
-      {timed ? <span style={{ fontVariantNumeric: "tabular-nums", fontSize: "0.82rem" }}>{round?.paused ? "paused" : clock(clockState.remaining)}</span> : null}
+      {timed ? <span style={{ fontVariantNumeric: "tabular-nums", fontSize: "0.82rem" }}>{round?.paused ? "Paused" : clock(clockState.remaining)}</span> : null}
       <span style={small}>{round ? `${round.ready?.length ?? 0} of ${round.counted ?? 0} ready${round.needed ? ` (countdown at ${round.needed})` : ""}` : ""}</span>
       {["planning", "countdown"].includes(round?.phase) && me ? (
-        <button type="button" style={ready ? primary : button} onClick={() => sharedRequest("ready", { value: !ready })}>{ready ? "Ready ✓" : "Ready"}</button>
+        <button type="button" style={ready ? primary : button} onClick={() => sharedRequest("ready", { value: !ready })}>{ready ? "Ready ✓" : "I'm ready"}</button>
       ) : null}
       {role === "host" && ["planning", "countdown"].includes(round?.phase) ? (
         <>

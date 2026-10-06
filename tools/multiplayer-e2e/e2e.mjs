@@ -642,8 +642,8 @@ try {
 
   // The host's screen hears of the AI calls its engine makes.
   await host.eval(`(() => { window.__aiDone = []; window.addEventListener('oh:ai-generation-complete', (event) => window.__aiDone.push(event.detail || {})); return true; })()`);
-  await host.eval("window.__e2e.click('Ready')");
-  await guest.eval("window.__e2e.click('Ready')");
+  await host.eval(`window.__e2e.click("I'm ready")`);
+  await guest.eval(`window.__e2e.click("I'm ready")`);
   const resolved = await until(guest, "window.__e2e.view('events').then((events) => events.some((e) => String(e.title).startsWith('Oil prices slide further')))", 240000);
   check("everyone ready: the host runs the round and its events reach the guest", resolved, `jump answers: ${answeredJumps}; tools asked: ${[...new Set(sentTools)].join(", ")}`);
   check("the model is told who plays what, and whose each order is",
