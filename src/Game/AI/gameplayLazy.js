@@ -107,3 +107,7 @@ export const generateCountryStatSheet = hostOnly(async (...args) => (await gamep
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
 export const generateCountryStats = hostOnly(async (...args) => (await gameplay()).generateCountryStats(...args));
+// Listen in: one request for what people in a place are posting (runtime/listenIn.js).
+// It writes nothing to the game: asked with the player's own key, kept on the
+// player's own device, so a page playing a shared game asks it like any other.
+export const generateListenInFeed = async (...args) => (await gameplay()).generateListenInFeed(...args);

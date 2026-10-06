@@ -17,8 +17,8 @@ import {
 // carries every feature, so the exact-object checks below spread it in.
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
-const puppetStates = featureDefaults().puppetStates;
 const groups = featureDefaults().groups;
+const listenIn = featureDefaults().listenIn;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -40,8 +40,8 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(settings, {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
-    puppetStates,
     groups,
+    listenIn,
     worldDirection,
     playerFocus,
   });
@@ -49,8 +49,8 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(normalizeFeatureSettings({ espionage: false, idleDiplomacy: { averageMinutes: 100000 } }), {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
-    puppetStates,
     groups,
+    listenIn,
     worldDirection,
     playerFocus,
   });
@@ -97,6 +97,18 @@ test("groups are a feature a scenario can switch off and a game can switch back 
   assert.equal(isFeatureEnabled(resolveFeatures(scenario, {}), "groups"), false);
   assert.equal(isFeatureEnabled(resolveFeatures(scenario, { groups: { enabled: true } }), "groups"), true);
   assert.deepEqual(normalizeFeatureOverrides({ groups: { enabled: false } }), { groups: { enabled: false } });
+});
+
+// Puppet states were a feature a scenario could switch off until 2026-10-05.
+// A scenario, a game or an imported bundle saved before then may still carry
+// the key, off included: it is dropped like any feature this build does not
+// define, so the game plays with puppet states on.
+test("an older save's puppetStates setting is dropped from a scenario and from a game", () => {
+  const scenario = normalizeFeatureSettings({ espionage: false, puppetStates: { enabled: false } });
+  assert.deepEqual(scenario, { ...featureDefaults(), espionage: { enabled: false } });
+  assert.equal("puppetStates" in scenario, false);
+  assert.deepEqual(normalizeFeatureOverrides({ espionage: { enabled: true }, puppetStates: { enabled: false } }), { espionage: { enabled: true } });
+  assert.equal("puppetStates" in resolveFeatures({ puppetStates: { enabled: false } }, { puppetStates: { enabled: false } }), false);
 });
 
 // ---- World direction: the director's settings ----

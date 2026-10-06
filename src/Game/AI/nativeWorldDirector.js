@@ -2839,10 +2839,6 @@ export const buildWorldInitiativeContext = (
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
     playerFocus = "",
-    // The scenario's "Puppet states" feature, handed down rather than read:
-    // this module runs in a worker and in node tests, so it stays clear of the
-    // browser runtime (see the same argument in nativeDiplomaticDirector.js).
-    puppetStates = true,
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -2897,7 +2893,6 @@ export const buildWorldInitiativeContext = (
     playerPolity: normalizeString(bundle?.game?.country),
     selectedStorylines: storylineAttention.selected,
     maxActors: 8,
-    puppetStates,
   });
 
   const canonicalStorylineId = (value) => {

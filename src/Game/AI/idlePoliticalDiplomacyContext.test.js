@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { setPuppetStatesEnabled } from "../../runtime/puppets.js";
 import { buildIdleDiplomacyPoliticalDecisionSet } from "./idlePoliticalDiplomacyContext.js";
 
 const actor = (polityKey) => ({
@@ -38,7 +37,6 @@ const worldWithActors = (puppets) => ({
 const selectedActors = (decisionSet) => decisionSet.contexts.map((context) => context.actorPolity);
 
 test("idle Political World context prioritizes the player's direct Puppet relationship", () => {
-  setPuppetStatesEnabled(true);
   const bundle = {
     game: { country: "Player" },
     chats: [],
@@ -59,7 +57,6 @@ test("idle Political World context prioritizes the player's direct Puppet relati
 });
 
 test("idle Political World context prioritizes the player's own overlord", () => {
-  setPuppetStatesEnabled(true);
   const bundle = {
     game: { country: "Player" },
     chats: [],
@@ -77,29 +74,4 @@ test("idle Political World context prioritizes the player's own overlord", () =>
 
   const decisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 1 });
   assert.deepEqual(selectedActors(decisionSet), ["Overlord"]);
-});
-
-test("idle Political World context respects the Puppet States feature switch", () => {
-  const bundle = {
-    game: { country: "Player" },
-    chats: [],
-    world: worldWithActors([{
-      id: "player-puppet",
-      overlord: "Player",
-      puppet: "Direct Puppet",
-      kind: "satellite",
-      loyalty: 55,
-      secrecy: "open",
-      status: "active",
-      knownTo: [],
-    }]),
-  };
-
-  setPuppetStatesEnabled(false);
-  try {
-    const decisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 1 });
-    assert.deepEqual(selectedActors(decisionSet), ["Fallback State"]);
-  } finally {
-    setPuppetStatesEnabled(true);
-  }
 });

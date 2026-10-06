@@ -45,6 +45,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `unitDirector` | `UNIT_DIRECTOR_SCHEMA` | `submit_unit_director` | unit operations for the turn's military events (sanitized by `nativeUnitDirector.js`) |
 | `idleDiplomacy` | `IDLE_DIPLOMACY_SCHEMA` | `submit_idle_diplomacy` | idle inbox drip |
 | `pregameHistory` | `PREGAME_HISTORY_SCHEMA` | `submit_pregame_history` | pre-game backstory |
+| `listenIn` | `LISTEN_IN_SCHEMA` | `submit_listen_in_feed` | `generateListenInFeed`: the Listen in phone's feed |
 
 `getGameplayTool` returns `null` for an unknown key; `validateGameplayPayload` returns `{ valid: false, error: "Unknown gameplay task key: …" }`.
 
@@ -283,6 +284,7 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 | `GAME_MASTER_SCHEMA` | `summary`*, `impacts`* | GM intervention + world effects |
 | `IDLE_DIPLOMACY_SCHEMA` | `chat`* (`null \| createdChatSchema`) | At most one idle note, or `null` for silence |
 | `PREGAME_HISTORY_SCHEMA` | `events`* (array `minItems:1`,`maxItems:12` of `pregameEventSchema`), `summary`* | Pre-game backstory |
+| `LISTEN_IN_SCHEMA` | `posts`* (array of `{ author*, text*, handle, about, filler, minutesAgo, likes, reposts, replies }`; deliberately no `minItems`, since one usable post is still a feed), `trends` (≤ 5 strings) | What ordinary people in a place are posting (the Listen in phone) |
 
 `actionSchema`: `id`, `title`*, `text`*, `kind`, `invitees`, `chatStarter`. `pregameEventSchema`: `date`*, `title`*, `description`*, `importance`, `kind` — **deliberately no `impacts`** (a backstory event is a record, not a change to apply).
 

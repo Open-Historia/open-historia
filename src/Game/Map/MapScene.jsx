@@ -10,6 +10,7 @@ import RegionPopup from "../Selection/Regions";
 import CountryInfoPanel from "../Selection/CountryPanel.jsx";
 import UnitPopup from "../Selection/Units";
 import FeaturePopup from "../Selection/Features.jsx";
+import ListenInPhone from "../GameUI/ListenInPhone.jsx";
 
 // Opt-in only (?mapFillProbe=1, or localStorage oh:mapFillProbe = "1"): a
 // diagnostic, not something every player's console and window should carry.
@@ -154,6 +155,7 @@ const MapScene = ({ isGlobe = false }) => {
       <CountryInfoPanel />
       <UnitPopup />
       <FeaturePopup />
+      <ListenInPhone />
     </>
   );
 };

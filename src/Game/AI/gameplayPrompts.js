@@ -261,6 +261,12 @@ export const PROMPT_SECTION_DEFINITIONS = [
     label: "Idle Diplomacy",
     type: "task",
   },
+  {
+    description: "What ordinary people in a place are posting: the feed the Listen in button opens from a region's card or a country's panel. Whether the button is there at all is the Features tab's Listen in switch.",
+    key: "listenIn",
+    label: "Listen In",
+    type: "task",
+  },
 ];
 
 export const PROMPT_TASK_KEYS = Object.keys(PROMPT_TASK_DEFAULTS);

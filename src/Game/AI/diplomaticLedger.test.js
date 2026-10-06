@@ -92,11 +92,6 @@ test("bounded diplomatic context pulls a seed actor's active Puppet counterpart 
   assert.deepEqual(active.actors, ["Germany", "Russia"]);
   assert.equal(active.puppets.length, 1);
   assert.match(active.text, /Germany directs Russia/);
-
-  const disabled = buildBoundedDiplomaticContext(puppetWorld, { playerPolity: "Germany", maxActors: 2, puppetStates: false });
-  assert.deepEqual(disabled.actors, ["Germany"]);
-  assert.equal(disabled.puppets.length, 0);
-  assert.doesNotMatch(disabled.text, /SUBORDINATIONS/);
 });
 
 test("bounded diplomatic context shows every standing subordination, the attention actors' first", () => {
