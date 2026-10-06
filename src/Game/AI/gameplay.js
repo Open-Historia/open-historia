@@ -117,6 +117,7 @@ import {
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { OUTPUT_LIMIT_MESSAGE } from "./providerErrors.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -3473,6 +3474,9 @@ const runJsonTask = async (taskKey, {
       if (eventReader) {
         try { onPartialEvents([]); } catch { /* as above */ }
       }
+      // Set by callAI when the answer it hands back was stopped at the
+      // provider's output limit (main.jsx onOutputLimit).
+      let cutAtOutputLimit = false;
       let response;
       try {
         response = await callAI(systemPrompt, history, {
@@ -3508,6 +3512,7 @@ const runJsonTask = async (taskKey, {
           __debugSink: attemptSink,
           ...(requestKind ? { requestKind } : {}),
           ...(typeof onRequest === "function" ? { onRequest } : {}),
+          onOutputLimit: () => { cutAtOutputLimit = true; },
           // The arguments as they assemble (streamAssembly.js). A lookup round's
           // call is ignored by name, so only the answer itself is read.
           ...(eventReader ? {
@@ -3557,6 +3562,13 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // Stopped at the output limit with nothing in it that parses. An answer
+      // the salvage can still read is judged below like any other; this one
+      // cannot be used, and asking again sends the same request under the same
+      // limit, to be cut at the same place (a player's log: 4,171 characters,
+      // then 4,173, then the canned fallback). It ends the task instead, with
+      // the reason that names what to change.
+      const unusableCut = cutAtOutputLimit && !parsed;
       let pregameDecodedTransportSections = null;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
@@ -3780,7 +3792,7 @@ const runJsonTask = async (taskKey, {
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
           : validateGameplayPayload(taskKey, parsed))
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+        : { valid: false, error: unusableCut ? OUTPUT_LIMIT_MESSAGE : "Response did not contain parseable JSON or tool arguments." };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
         const contractError = validateStatContract(taskKey, parsed, statContract);
@@ -3915,6 +3927,14 @@ const runJsonTask = async (taskKey, {
       if (schemaValid && !salvageCandidate) {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
+      }
+      // Not asked again (see unusableCut above): what follows is the task's own
+      // fallback rules, as for any attempt that ends without an answer.
+      if (unusableCut) {
+        logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} was cut at the output limit with nothing usable in it; not asked again.`, {
+          responseChars: rawText.length,
+        }, { verbose: true });
+        break;
       }
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({

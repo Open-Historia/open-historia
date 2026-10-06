@@ -304,6 +304,32 @@ export const toolStreamRefusalError = (providerLabel, error, retried) => {
     return refusal;
 };
 
+// ---------------------------------------------------------------------------
+// An answer that stopped before it was finished
+// ---------------------------------------------------------------------------
+//
+// Two ways, and neither is the model answering badly:
+//
+//   The connection closed. The stream ended with nothing to say the provider
+//   had finished (streamAssembly.js marks the envelope `endedEarly`), or a
+//   buffered body arrived cut short. It is a transport failure, and is thrown
+//   as one, rather than passed on as an answer that "did not contain parseable
+//   JSON" for the task runner to ask again about.
+//
+//   The output limit. The provider stopped the model at max_tokens
+//   (streamAssembly.js stoppedAtOutputLimit). What arrived is kept when it can
+//   still be used. When it cannot, asking again is the same request under the
+//   same limit, cut at the same place: a player's log has a local server
+//   answering 4,171 characters and then, asked again, 4,173. The task fails
+//   with this sentence instead, which names what to change.
+export const CONNECTION_CLOSED_MESSAGE = "The connection closed before the model finished its answer.";
+export const OUTPUT_LIMIT_MESSAGE = "The model stopped at its output limit before it finished its answer.";
+
+// The error for the first. `cause` is what the transport itself reported, when
+// it reported anything.
+export const connectionClosedError = (cause = null) =>
+    new Error(CONNECTION_CLOSED_MESSAGE, cause ? { cause } : undefined);
+
 // What the player reads when the game server's relay had to stop an answer it
 // had already begun to pass on (relayResponse.js puts it on the read error).
 // Kept here, with the other messages the player reads, so the language packs

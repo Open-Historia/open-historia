@@ -44,6 +44,7 @@ import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
     classifyProviderFailure,
+    connectionClosedError,
     contextWindowMessage,
     describeHtmlErrorPage,
     errorPayloadText,
@@ -59,13 +60,20 @@ import {
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
 } from "./providerErrors.js";
-import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
+import { ANSWER_SENTINEL_DIRECTIVE, extractJsonPayload } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
+import {
+    isCutShortJson,
+    readAnthropicStreamedResponse,
+    readGeminiStreamedResponse,
+    readOpenAIStreamedResponse,
+    stoppedAtOutputLimit,
+    streamFrameEnds,
+} from "./streamAssembly.js";
 import {
     anthropicMessagesFromHistory,
     appendLookupRound,
@@ -197,6 +205,10 @@ function extractErrorMessage(payload, fallback) {
 // The body of a reply that claimed success. A 200 carrying a web page (a gateway
 // landing page, a proxy's error screen) used to surface as JSON.parse's
 // "Unexpected token '<', "<!doctype "... is not valid JSON" — true, and no help.
+//
+// And a body that is no JSON because it stops partway (or holds nothing at
+// all) is a connection that closed before the answer was in: it said "Unexpected
+// end of JSON input", which names the symptom and not the cause.
 async function readJsonAnswer(response, providerLabel) {
     const text = await response.text();
     try {
@@ -204,9 +216,21 @@ async function readJsonAnswer(response, providerLabel) {
     } catch (error) {
         const page = describeHtmlErrorPage(text, `${providerLabel} request failed (${response.status})`);
         if (page) throw new Error(page);
+        if (isCutShortJson(text)) throw connectionClosedError(error);
         throw error;
     }
 }
+
+// The same for a stream. One that closed with nothing to say the provider had
+// finished comes back marked `endedEarly` (streamAssembly.js, "How a stream
+// ended"): a broken connection, not an answer. It used to go on to the task
+// runner, which found half a tool call unparseable and sent the whole request
+// again. `text` is what the answer holds as text: when that is still the JSON
+// that was asked for, complete, nothing was lost and the answer stands.
+const refuseCutShortAnswer = (data, text) => {
+    if (!data?.endedEarly || extractJsonPayload(text)) return;
+    throw connectionClosedError();
+};
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
 // UI doesn't expose (e.g. reasoning budget/effort limits). Shallow-merged last
@@ -666,6 +690,11 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     let finishReason = "";
     let frames = 0;
     let streamError = null;
+    // Whether the provider said it had finished: `[DONE]`, or a frame that
+    // carries a finish reason (streamAssembly.js streamFrameEnds). A reply whose
+    // stream closed without either was cut off by the connection, however much
+    // of it had arrived.
+    let ended = false;
     const sample = [];
     try {
         for (;;) {
@@ -677,10 +706,12 @@ async function streamTextSSE(response, extractDelta, onChunk) {
             for (const line of lines) {
                 if (!line.startsWith("data:")) continue;
                 const payload = line.slice(5).trim();
+                if (payload === "[DONE]") ended = true;
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
                 frames += 1;
+                if (streamFrameEnds(json)) ended = true;
                 // An error object in place of a delta: the provider gave up
                 // mid-stream. Keep the FIRST one — it is the cause; anything
                 // after it is fallout.
@@ -701,6 +732,10 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     } finally {
         try { reader.releaseLock(); } catch { /* already closed */ }
     }
+
+    // The provider's own error inside the stream says why it stopped, and each
+    // caller handles that; anything else that stops unfinished is the connection.
+    if (!ended && !streamError) throw connectionClosedError();
 
     // Inline <think> blocks arrive as ordinary content, so the streamed preview
     // shows them; strip them from what is RETURNED, which is what gets persisted
@@ -1116,6 +1151,7 @@ async function callGemini(systemPrompt, history, {
             ? await readGeminiStreamedResponse(response, onActivity, onToolStream)
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
+        refuseCutShortAnswer(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
@@ -1501,6 +1537,8 @@ async function callOpenAIStyleChatCompletions({
             const detail = text || errorPayloadText(data?.error);
             throw providerFailureError(contextWindowMessage(providerLabel, detail, requestChars), { kind: "tooBig", reason: detail });
         }
+
+        refuseCutShortAnswer(data, text);
 
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
@@ -1899,6 +1937,7 @@ async function callAnthropic(systemPrompt, history, {
             ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
             : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
+        refuseCutShortAnswer(data, extractAnthropicText(data));
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
@@ -2133,6 +2172,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
             : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
+        refuseCutShortAnswer(data, extractAnthropicText(data));
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
@@ -2379,9 +2419,13 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // `requestKind` says whether the player asked for this call or the game made
     // it in the background, and `onRequest` lets the caller count along (a time
     // skip reports what it cost): both are for the request budget below.
+    // `onOutputLimit` is told when the answer handed back was stopped at the
+    // provider's output limit, so the task runner does not ask again for one it
+    // cannot use (providerErrors.js, "An answer that stopped before it was
+    // finished").
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
-        requestKind = PLAYER_REQUEST, onRequest: observeRequest = null,
+        requestKind = PLAYER_REQUEST, onRequest: observeRequest = null, onOutputLimit: tellOutputLimit = null,
         ...providerOpts
     } = opts;
     const directive = languageMode === "none" ? ""
@@ -2457,6 +2501,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     let roundUsage = null;
     let lookupRounds = 0;
     let lookupCalls = 0;
+    // Whether the last envelope read was stopped at the provider's output limit
+    // (streamAssembly.js). The last one read is the one the answer came from: a
+    // lookup round, a retry or the next Fallback entry each read another.
+    let stoppedAtLimit = false;
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2516,7 +2564,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
                     rateLimitPolicy: getRateLimitPolicy(),
                     onActivity: timer.note,
                     onRequest: noteRequest,
+                    // Hears the whole envelope once it has been read: how the
+                    // answer ended, and what it cost.
                     onUsage: (data) => {
+                        stoppedAtLimit = stoppedAtOutputLimit(data);
                         const reported = normalizeUsage(data);
                         if (!reported) return;
                         roundUsage = reported;
@@ -2548,6 +2599,20 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
             ...(usage ?? {}),
         }, { verbose: true });
+        // Always logged: an answer cut at the output limit is why a turn then
+        // falls back, and nothing else in a log without detailed mode says so.
+        if (stoppedAtLimit) {
+            logDebugEvent("ai-call", `${label}: ${answeredBy.label} [${answeredBy.provider}] stopped at its output limit; the answer may be cut short.`, {
+                replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
+                viaToolCall: Boolean(result?.toolInput),
+                maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
+            });
+            try {
+                tellOutputLimit?.();
+            } catch (error) {
+                console.warn("[ai] an output-limit observer threw; continuing.", error);
+            }
+        }
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, {
             ok: true,

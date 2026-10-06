@@ -56,10 +56,15 @@ const observe = (hook, payload) => {
 // is still arriving, and a keep-alive comment or half a frame answers it just as
 // well as a token does. Wrapped like the onChunk callbacks, since a throwing UI
 // callback must never cost the player a turn.
+//
+// Returns { sawDone }: whether the body carried the `[DONE]` line an
+// OpenAI-style stream ends with. With no finish reason either, a body that
+// simply stopped is a connection that closed early (see "How a stream ended").
 async function readSSE(response, onFrame, onActivity) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let sawDone = false;
     try {
         for (;;) {
             const { done, value } = await reader.read();
@@ -73,6 +78,7 @@ async function readSSE(response, onFrame, onActivity) {
             for (const line of lines) {
                 if (!line.startsWith("data:")) continue;
                 const data = line.slice(5).trim();
+                if (data === "[DONE]") sawDone = true;
                 if (!data || data === "[DONE]") continue;
                 let chunk;
                 try { chunk = JSON.parse(data); } catch { continue; }
@@ -82,7 +88,86 @@ async function readSSE(response, onFrame, onActivity) {
     } finally {
         try { reader.releaseLock(); } catch { /* stream already closed */ }
     }
+    return { sawDone };
 }
+
+// ---------------------------------------------------------------------------
+// How a stream ended
+//
+// Every provider says when it has finished: OpenAI-style streams with a
+// finish_reason and a closing `[DONE]`, Anthropic with a stop_reason and a
+// message_stop event, Gemini with a finishReason. A body that ends with none of
+// them did not finish. Its connection closed: a proxy's timeout, a server that
+// was stopped, a relay that gave up. The readers used to hand that back as an
+// ordinary envelope, so half a tool call went on to the task runner as "the
+// response did not contain parseable JSON" and the runner answered by sending
+// the whole request again.
+//
+// So each finisher marks such an envelope `endedEarly`, and the callers in
+// main.jsx refuse it. Two exceptions, both because a usable answer is never
+// thrown away over how the connection behaved afterwards:
+//   - the provider's own error inside the stream already says why it stopped,
+//     and has its own handling;
+//   - a tool call whose arguments arrived whole is a whole answer. Cut-off
+//     arguments do not parse (that is the all-or-nothing rule below), so one
+//     that parses lost nothing.
+// Whether TEXT is usable is the caller's to judge, since only it knows whether
+// text was what it asked for.
+
+// How each provider says the answer ran into its output limit, read off the
+// envelope: finish_reason "length" (OpenAI-style), finishReason "MAX_TOKENS"
+// (Gemini), stop_reason "max_tokens" (Anthropic). Streamed or buffered, since
+// the readers rebuild the buffered envelope.
+export const stoppedAtOutputLimit = (data) => {
+    if (!data || typeof data !== "object") return false;
+    const reasons = [data.choices?.[0]?.finish_reason, data.candidates?.[0]?.finishReason, data.stop_reason];
+    return reasons.some((reason) => ["length", "max_tokens"].includes(String(reason ?? "").toLowerCase()));
+};
+
+const parsesAsObject = (text) => {
+    if (typeof text !== "string" || !text.trim()) return false;
+    try {
+        const value = JSON.parse(text);
+        return Boolean(value) && typeof value === "object";
+    } catch {
+        return false;
+    }
+};
+
+// The same question for the chat reader in main.jsx (streamTextSSE), which
+// forwards text as it arrives and builds no envelope: does this frame say the
+// provider has finished? Any of the three spellings, since that reader serves
+// all of them, and Gemini's refusal of a prompt before it generates anything,
+// which is the provider stopping too.
+export const streamFrameEnds = (frame) => Boolean(
+    frame?.choices?.[0]?.finish_reason
+    || frame?.candidates?.[0]?.finishReason
+    || frame?.promptFeedback?.blockReason
+    || frame?.type === "message_stop"
+    || (frame?.type === "message_delta" && frame?.delta?.stop_reason),
+);
+
+// And for a BUFFERED body that would not parse: was it cut short? JSON whose
+// string or containers are still open when the text runs out, or no body at
+// all. Anything else that fails to parse is a body that is whole and wrong (a
+// gateway's plain-text error), which is a different failure and keeps its own
+// message.
+export const isCutShortJson = (text) => {
+    const body = String(text ?? "").trim();
+    if (!body) return true;
+    if (body[0] !== "{" && body[0] !== "[") return false;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (const ch of body) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = inString;
+        else if (ch === '"') inString = !inString;
+        else if (!inString && (ch === "{" || ch === "[")) depth += 1;
+        else if (!inString && (ch === "}" || ch === "]")) depth -= 1;
+    }
+    return inString || depth > 0;
+};
 
 // ---------------------------------------------------------------------------
 // OpenAI-style chat completions
@@ -95,6 +180,8 @@ export const createOpenAIStreamState = () => ({
     // each arriving under its own `index` in the tool_calls deltas.
     toolCalls: [],
     finishReason: null,
+    // The closing `[DONE]` line, which is not a frame: the reader sets it.
+    done: false,
     streamError: null,
     usage: null,
 });
@@ -145,6 +232,10 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
 }
 
 export function finishOpenAIStream(state) {
+    // Neither a finish reason nor `[DONE]`: the stream did not finish (see
+    // "How a stream ended"), unless every tool call in it is whole.
+    const wholeCalls = state.toolCalls.length > 0 && state.toolCalls.every((call) => parsesAsObject(call.arguments));
+    const endedEarly = !state.finishReason && !state.done && !state.streamError && !wholeCalls;
     return {
         choices: [{
             finish_reason: state.finishReason,
@@ -161,13 +252,15 @@ export function finishOpenAIStream(state) {
             },
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
     };
 }
 
 export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress) {
     const state = createOpenAIStreamState();
-    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity);
+    const { sawDone } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity);
+    state.done = sawDone;
     return finishOpenAIStream(state);
 }
 
@@ -180,6 +273,8 @@ export const createAnthropicStreamState = () => ({
     // then calls the tool is three blocks whose deltas arrive under one stream.
     blocks: new Map(),
     stopReason: null,
+    // The closing message_stop event has been seen.
+    stopped: false,
     streamError: null,
     // Anthropic splits the accounting across two events: message_start carries
     // the input side (including the cache_read figure that proves a prefix cache
@@ -242,6 +337,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         if (chunk.usage) state.usage = { ...state.usage, ...chunk.usage };
     }
 
+    if (type === "message_stop") state.stopped = true;
+
     return state;
 }
 
@@ -278,11 +375,17 @@ export function finishAnthropicStream(state) {
         if (block.text) content.push({ type: "text", text: block.text });
     }
 
+    // Neither a stop reason nor message_stop: the stream did not finish (see
+    // "How a stream ended"), unless a tool call arrived whole and none was cut.
+    const wholeCall = !partialToolJson && content.some((block) => block.type === "tool_use");
+    const endedEarly = !state.stopReason && !state.stopped && !state.streamError && !wholeCall;
+
     return {
         content,
         stop_reason: state.stopReason,
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
     };
 }
@@ -436,6 +539,10 @@ export function finishGeminiStream(state) {
         try { partialToolJson = JSON.stringify(entry.args); } catch { partialToolJson = ""; }
     }
 
+    // No finishReason on any frame: the stream did not finish (see "How a
+    // stream ended"), unless a function call arrived whole and none was cut.
+    const endedEarly = !state.finishReason && !state.streamError && !(state.calls.length > 0 && !partialToolJson);
+
     return {
         candidates: [{
             content: {
@@ -449,6 +556,7 @@ export function finishGeminiStream(state) {
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
+        ...(endedEarly ? { endedEarly: true } : {}),
         ...(state.usage ? { usageMetadata: state.usage } : {}),
     };
 }

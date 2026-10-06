@@ -5,6 +5,10 @@ import assert from "node:assert/strict";
 import {
   busyProviderMessage,
   classifyProviderFailure,
+  CONNECTION_CLOSED_MESSAGE,
+  connectionClosedError,
+  OUTPUT_LIMIT_MESSAGE,
+  RELAY_CUT_OFF_MESSAGE,
   errorPayloadText,
   isBusyErrorPayload,
   isQuotaExhaustedPayload,
@@ -476,4 +480,25 @@ test("a per-minute limit is Rate limited, and carries the wait the provider aske
   assert.deepEqual(classifyProviderFailure({ status: 429, payload: { error: { message: "Too many requests" } } }), {
     kind: "rateLimited", reason: "rate limited", waitMs: null,
   });
+});
+
+// ---------------------------------------------------------------------------
+// An answer that stopped before it was finished
+
+test("the two sentences for an unfinished answer are the ones the language packs carry", () => {
+  assert.equal(CONNECTION_CLOSED_MESSAGE, "The connection closed before the model finished its answer.");
+  assert.equal(OUTPUT_LIMIT_MESSAGE, "The model stopped at its output limit before it finished its answer.");
+});
+
+test("a closed connection is an error that says so and keeps what the transport reported", () => {
+  const bare = connectionClosedError();
+  assert.equal(bare.message, CONNECTION_CLOSED_MESSAGE);
+  assert.equal(bare.cause, undefined);
+  const network = new TypeError("network error");
+  assert.equal(connectionClosedError(network).cause, network);
+});
+
+test("the relay cut-off sentence names the setting that lengthens the wait", () => {
+  assert.match(RELAY_CUT_OFF_MESSAGE, /cut off partway through the game server.s relay/);
+  assert.match(RELAY_CUT_OFF_MESSAGE, /OH_RELAY_TIMEOUT_MS/);
 });

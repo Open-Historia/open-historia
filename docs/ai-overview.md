@@ -318,6 +318,14 @@ Gemini still picks its stream URL only when there is a tool or an `onChunk`; a p
 
 The response is always branched on the **actual** `content-type`, not on what was asked, so a gateway that ignores the request still works: `text/event-stream` → the matching reader in `streamAssembly.js`, else `response.json()`. Each reader rebuilds that provider's normal envelope, including its `usage` block, so the extractors and the telemetry work unchanged.
 
+### An answer that stopped before it was finished
+
+Two ways, and neither is the model answering badly (`providerErrors.js` holds both sentences, so the language packs carry them).
+
+**The connection closed.** Every provider says when it has finished: a `finish_reason` and a closing `[DONE]` (OpenAI-style), a `stop_reason` and `message_stop` (Anthropic), a `finishReason` (Gemini). A stream that ends with none of them was cut off by the connection, and each finisher in `streamAssembly.js` marks its envelope `endedEarly`. `refuseCutShortAnswer` (`main.jsx`) then throws *"The connection closed before the model finished its answer."* from the provider caller, so it is a transport failure for the task runner (no corrective second request, which is what half a tool call read as "unparseable JSON" used to cost). Two things are left alone: a stream carrying the provider's own error, which has its own handling, and an answer that is whole anyway (a tool call whose arguments parse, or text that `extractJsonPayload` still reads as the JSON asked for), since a usable answer is never thrown away over how the connection ended. The chat reader (`streamTextSSE`) applies the same rule through `streamFrameEnds`, and a buffered body that stops partway (`isCutShortJson`) reads the same instead of "Unexpected end of JSON input".
+
+**The output limit.** `stoppedAtOutputLimit(data)` reads `finish_reason: "length"`, `finishReason: "MAX_TOKENS"` or `stop_reason: "max_tokens"` off the envelope, streamed or buffered. `callAI` logs it (always, not only in detailed mode) and tells the caller through `onOutputLimit`. `runJsonTask` keeps whatever the salvage can still read and judges it as usual; when nothing parses, it does **not** ask again (the retry would be the same request under the same limit, cut at the same place) and the task ends with *"The model stopped at its output limit before it finished its answer."* under its ordinary fallback rules. A chat reply cut at the limit is kept as it arrived.
+
 ### Retries and what counts as transient
 
 `retries = 3`, `retryDelay = 15000` ms, bounded by `canRetryBeforeDeadline`.
