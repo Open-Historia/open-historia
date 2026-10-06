@@ -113,13 +113,16 @@ async function readSSE(response, onFrame, onActivity, onChunkRead) {
 // A stream that just stops is not one that finished. Every provider says when
 // an answer is over — a finish reason on the last frame, Anthropic's
 // message_stop, the [DONE] line — or says why it is not (an error frame). One
-// with none of those is a connection that closed early: a proxy that gave up,
-// a server that went down, a relay's upstream ending without a word. The
-// envelope was rebuilt and handed back as if whole all the same, so half a tool
-// call failed to parse downstream and the task asked for it again, and a chat
-// reply was kept cut short. Each finish* below marks such an envelope
-// `closedEarly`, and main.jsx fails the call on it as the transport failure it
-// is (failIfClosedEarly) unless what did arrive is a whole answer.
+// with none of those is, as a rule, a connection that closed early: a proxy
+// that gave up, a server that went down, a relay's upstream ending without a
+// word. The envelope was rebuilt and handed back as if whole all the same, so
+// half a tool call failed to parse downstream and the task asked for it again.
+// Each finish* below marks such an envelope `closedEarly`, and main.jsx decides
+// by what the call wanted (toolResponsePayload.js unmarkedEndVerdict). A
+// structured answer that is not all there fails the call, as the transport
+// failure it is (failIfClosedEarly). A reply in words is kept and the log says
+// how its stream ended (keepProseClosedEarly): words have no shape to be held
+// to, and some gateways end every stream this way.
 const streamEndedEarly = (state, finished) => !finished && !state.done && !state.streamError;
 
 // What each network chunk carried, told to `onReceived` (see the top of this

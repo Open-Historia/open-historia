@@ -73,7 +73,7 @@ import {
     unreachableServerError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
-import { holdsWholeAnswer } from "./toolResponsePayload.js";
+import { unmarkedEndVerdict } from "./toolResponsePayload.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
@@ -275,16 +275,32 @@ async function readJsonAnswer(response, providerLabel) {
 
 // A stream that stopped before the provider said it had finished
 // (streamAssembly.js marks the rebuilt envelope `closedEarly`): no finish
-// reason, no [DONE], no error frame. That is a connection that closed, and it
-// used to be read as a whole answer: half a tool call failed to parse, the task
-// told the model its JSON was invalid and paid for a second request. It fails
-// here instead, as the transport failure it is and marked like one.
+// reason, no [DONE], no error frame. For a structured answer that is a
+// connection that closed, and it used to be read as a whole answer: half a tool
+// call failed to parse, the task told the model its JSON was invalid and paid
+// for a second request. It fails here instead, as the transport failure it is
+// and marked like one.
 //
 // Unless what did arrive is a whole answer (toolResponsePayload.js
-// holdsWholeAnswer: the output function's call, or text holding one complete
+// unmarkedEndVerdict: the output function's call, or text holding one complete
 // JSON payload), which is then used as it always was.
 const failIfClosedEarly = (data, answerText = "", toolInput = null) => {
-    if (data?.closedEarly && !holdsWholeAnswer(answerText, toolInput)) throw connectionClosedError();
+    if (data?.closedEarly && unmarkedEndVerdict({ structured: true, answerText, toolInput }) === "closed") throw connectionClosedError();
+};
+
+// The same ending under a reply in words: a conversation's, or a task's that
+// answers in text. Words have no shape to be held to, and some gateways end
+// every stream this way, with neither a finish reason nor [DONE]: failing here
+// would fail every reply they send, where a reply that really was cut is at
+// worst visibly cut short. So what arrived is the reply, as it was before the
+// ending was looked at, and callAI is told so that the call's log says how the
+// stream ended (`onUnmarkedEnd`). With nothing to keep, it is the closed
+// connection it looks like. A body that breaks while it is read never gets
+// this far: that throws, and fails as it did (asUnreachable).
+const keepProseClosedEarly = (closedEarly, text, onUnmarkedEnd) => {
+    if (!closedEarly) return;
+    if (unmarkedEndVerdict({ structured: false, answerText: text }) === "closed") throw connectionClosedError();
+    try { onUnmarkedEnd?.(); } catch { /* a listener must not cost the reply */ }
 };
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
@@ -760,7 +776,7 @@ const frameEndsReply = (json) => Boolean(
     || json?.error,
 );
 
-async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
+async function streamTextSSE(response, extractDelta, onChunk, onFrame = null, onUnmarkedEnd = null) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -819,17 +835,20 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
         try { reader.releaseLock(); } catch { /* already closed */ }
     }
 
-    // The stream just stopped: the provider never said the reply was over, nor
-    // why it was not. That is a connection that closed, and what arrived used
-    // to be kept as the whole reply. It is the failure a broken read is.
-    if (!finished) throw connectionClosedError();
-
     // Inline <think> blocks arrive as ordinary content, so the streamed preview
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
+    const text = stripThinking(full);
+
+    // The stream just stopped: the provider never said the reply was over, nor
+    // why it was not. What arrived is kept as the reply all the same, and the
+    // call's log says how the stream ended; with nothing to keep, the call
+    // fails as a closed connection (keepProseClosedEarly has the reasons).
+    keepProseClosedEarly(!finished, text, onUnmarkedEnd);
+
     return {
-        text: stripThinking(full),
+        text,
         reasoning: reasoning.trim(),
         finishReason,
         frames,
@@ -1068,6 +1087,7 @@ async function callGemini(systemPrompt, history, {
     onRequest,
     onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -1190,7 +1210,7 @@ async function callGemini(systemPrompt, history, {
                 );
             }
             const callState = chatTools.length && !requireOutputTool ? createGeminiStreamState() : null;
-            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, callState ? (frame) => applyGeminiFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, callState ? (frame) => applyGeminiFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromGemini(finishGeminiStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -1327,7 +1347,7 @@ async function callGemini(systemPrompt, history, {
             return { rawText: streamedText, toolInput: null };
         }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-        failIfClosedEarly(data, text);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         if (!text) {
             throw new Error("Gemini response did not contain text.");
@@ -1376,6 +1396,7 @@ async function callOpenAIStyleChatCompletions({
     onRequest,
     onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     allowJsonSchemaFallback = false,
     configuredStructuredMode = "auto",
@@ -1674,7 +1695,7 @@ async function callOpenAIStyleChatCompletions({
             const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, (frame) => {
                 hearKoboldCpp(frame);
                 if (callState) applyOpenAIFrame(callState, frame);
-            });
+            }, onUnmarkedEnd);
             const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             const chatCalls = callState ? lookupCallsFromOpenAI(finishOpenAIStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamed, lookupCalls: chatCalls };
@@ -1824,7 +1845,7 @@ async function callOpenAIStyleChatCompletions({
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
         }
-        failIfClosedEarly(data, text);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from a gateway that answered buffered.
         if (!tool && chatTools.length) {
@@ -1983,6 +2004,7 @@ async function callAnthropic(systemPrompt, history, {
     onRequest,
     onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -2154,7 +2176,7 @@ async function callAnthropic(systemPrompt, history, {
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -2215,7 +2237,7 @@ async function callAnthropic(systemPrompt, history, {
             return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
-        failIfClosedEarly(data, text);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2243,6 +2265,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onRequest,
     onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -2431,7 +2454,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -2508,7 +2531,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             return { rawText: anthropicText, toolInput: null };
         }
         const text = extractAnthropicText(data);
-        failIfClosedEarly(data, text);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2854,6 +2877,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // The output limit the attempt in hand was given (entryOutputLimit): the
     // last attempt is the one that answered.
     let attemptLimit = { tokens: 0, source: "" };
+    // The reply handed back came off a stream that ended without saying it had
+    // (keepProseClosedEarly). Set by the request whose reply is returned: each
+    // request starts it afresh.
+    let endedUnmarked = false;
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2921,6 +2948,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                     // failed: one request, or several when the provider path
                     // asks again (it says so with onSend).
                     const live = showsActivity ? requestActivity.open({ label: `${label} → ${entry.label}` }) : null;
+                    endedUnmarked = false;
                     return dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
                         ...providerOpts,
                         ...roundOpts,
@@ -2932,6 +2960,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         onActivity: timer.note,
                         onSend: live?.sent,
                         onReceived: live?.received,
+                        onUnmarkedEnd: () => { endedUnmarked = true; },
                         onRequest: noteRequest,
                         onUsage: (data) => {
                             answerCutAtLimit = stoppedAtOutputLimit(data);
@@ -2988,6 +3017,15 @@ export async function callAI(systemPrompt, history, opts = {}) {
                 maxTokens: attemptLimit.tokens || "(the call named none)",
                 ...(usage?.outputTokens ? { outputTokens: usage.outputTokens } : {}),
             });
+        }
+        // The reply came off a stream that ended without saying it had: no
+        // finish reason, no [DONE], no error. A reply in words is kept all the
+        // same (keepProseClosedEarly), and this is the line to look for when
+        // one reads as cut short. It carries no detail, so a gateway that ends
+        // every stream this way folds into one entry with a count while its
+        // replies come close together.
+        if (endedUnmarked) {
+            logDebugEvent("ai-call", `${label}: ${answeredBy.label}'s stream ended without an end marker (no finish reason, no [DONE]); the reply is kept as it arrived.`);
         }
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, {

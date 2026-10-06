@@ -542,10 +542,12 @@ test("a throwing receiver never breaks the stream", async () => {
 // A stream that just stops is not one that finished.
 //
 // Every provider says when an answer is over, or why it is not. A stream with
-// neither is a connection that closed early, and its envelope used to be handed
-// on as a whole answer: half a tool call failed to parse downstream and the
-// task paid for a second request. The envelope is marked, and main.jsx fails
-// the call on it.
+// neither is, as a rule, a connection that closed early, and its envelope used
+// to be handed on as a whole answer: half a tool call failed to parse
+// downstream and the task paid for a second request. The envelope is marked,
+// and main.jsx decides by what the call wanted: a structured answer that is not
+// all there fails the call, a reply in words is kept
+// (toolResponsePayload.test.js has that rule).
 
 const rawSse = (text) => {
   const encoder = new TextEncoder();

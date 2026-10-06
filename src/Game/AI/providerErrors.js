@@ -358,7 +358,9 @@ export const isBrokenBodyError = (error) => error instanceof TypeError && BROKEN
 
 // The connection closed while the answer was still arriving. What the player
 // reads, whichever way it showed: a body that failed to read partway, or a
-// stream that ended before the provider said it had finished.
+// stream that ended before the provider said it had finished and left a
+// structured answer short or no answer at all (a reply in words is kept:
+// toolResponsePayload.js unmarkedEndVerdict).
 export const CONNECTION_CLOSED_MESSAGE = "The connection closed before the model finished its answer.";
 
 // `connectionClosed` lets the task runner say so in the turn's report instead
