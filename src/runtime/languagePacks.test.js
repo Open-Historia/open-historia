@@ -26,6 +26,12 @@ const PROMPT_CATALOG = read("prompts/catalog-en.json");
 // A pack made from an older catalog still ships, but not one that has fallen
 // this far behind it: regenerate the packs with the catalog (docs/i18n.md).
 const MIN_COVERAGE = 0.9;
+// "Features" is the scenario and game editors' tab of gameplay features
+// (Espionage, Groups, Listen in…), and these sentences send the player to it.
+// It was also the title of the Workshop's list of cities, bases and ports, so
+// most packs gave it the map's word ("地物", "Objecten") while their sentences
+// said "機能" and "Functies". That list is "Map features" now.
+const FEATURES_TAB_SENTENCES = CATALOG.filter((english) => /\bFeatures tab\b|\(Features\)/.test(english));
 
 test("every shipped pack on disk is one the game knows it has, and the other way round", () => {
   const onDisk = fs.readdirSync(LANG).filter((file) => /^[a-z]{2,3}\.json$/.test(file)).map((file) => file.slice(0, -5)).sort();
@@ -48,6 +54,17 @@ for (const code of SHIPPED_PACK_LANGUAGES) {
     assert.deepEqual(problems.slice(0, 10), [], `${problems.length} broken entries`);
     const covered = CATALOG.filter((english) => Object.hasOwn(pack, english)).length;
     assert.ok(covered / CATALOG.length >= MIN_COVERAGE, `${covered} of ${CATALOG.length} catalog strings`);
+  });
+
+  test(`${code}: the Features tab has one name, and it is not the map list's`, () => {
+    const pack = read(`${code}.json`);
+    assert.ok(FEATURES_TAB_SENTENCES.length > 0, "the catalog has sentences that name the tab");
+    if (!Object.hasOwn(pack, "Features")) return;
+    assert.notEqual(pack.Features, pack["Map features"], "the gameplay tab and the Workshop's list read the same");
+    const elsewhere = FEATURES_TAB_SENTENCES
+      .filter((english) => Object.hasOwn(pack, english) && !pack[english].includes(pack.Features))
+      .map((english) => pack[english]);
+    assert.deepEqual(elsewhere, [], `the tab is "${pack.Features}", and these call it something else`);
   });
 
   test(`${code}: the prompts' guidance keeps every placeholder`, () => {

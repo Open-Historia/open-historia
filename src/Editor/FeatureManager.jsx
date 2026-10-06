@@ -163,9 +163,11 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     }
   };
 
+  // Not the bare "Features": that string is the scenario and game editors' tab
+  // of gameplay features, and a language pack has one translation per string.
   return (
     <Panel
-      title="Features"
+      title="Map features"
       icon="pin"
       onClose={onClose}
       width={340}
