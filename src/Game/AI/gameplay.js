@@ -1767,7 +1767,7 @@ const buildPlacementGazetteer = (context, world) => {
   // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
   // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
   // substring match would read "off Sevastopol" as the region Sevastopol.
-  const find = (name, { exact: exactOnly = false } = {}) => {
+  const lookUp = (name, exactOnly) => {
     const key = fold(name);
     if (!key) return null;
     const unit = units.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
@@ -1791,6 +1791,17 @@ const buildPlacementGazetteer = (context, world) => {
     const stripped = stripRegionAffixes(key) || key;
     const close = stripped.length >= 5 && context.cityRows.find((entry) => editDistance(stripped, fold(entry.name), 1) <= 1);
     return close ? { kind: "city", name: close.name, point: close.coordinates } : null;
+  };
+  // Reading one phrase asks for the same names again and again: an address asks
+  // for each of its parts, as the map spells it and then loosely, once for
+  // every way the phrase can be read, and a failed lookup walks every city and
+  // region on the map. Nothing a lookup reads changes while this gazetteer
+  // lives, so each name is worked out once. What comes back is only ever read.
+  const lookedUp = new Map();
+  const find = (name, { exact: exactOnly = false } = {}) => {
+    const memoKey = `${exactOnly ? "=" : "~"}${String(name ?? "")}`;
+    if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));
+    return lookedUp.get(memoKey);
   };
 
   // A region by its id, for an operation that gives `regionId` and no phrase.
