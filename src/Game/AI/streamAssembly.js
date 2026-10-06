@@ -232,6 +232,12 @@ export const createOpenAIStreamState = () => ({
     done: false,
     streamError: null,
     usage: null,
+    // What the server calls the model it answered with, and the id it gave the
+    // answer: every chunk repeats them, and a buffered body carries them once.
+    // Kept because they say what kind of server answered (outputLimit.js reads
+    // KoboldCpp off them), which the model name in the request does not.
+    model: "",
+    id: "",
 });
 
 export function applyOpenAIFrame(state, chunk, onToolProgress) {
@@ -239,6 +245,9 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // error in a frame on an otherwise fine 200. Keep it so the caller can tell
     // "busy, ask again" from "the model said nothing".
     if (chunk?.error && !state.streamError) state.streamError = chunk.error;
+    // The first chunk to name them is the one kept (they do not change).
+    if (!state.model && typeof chunk?.model === "string") state.model = chunk.model;
+    if (!state.id && typeof chunk?.id === "string") state.id = chunk.id;
     // Token accounting rides on the final frame and has no `choices`, so it has
     // to be picked up before the early return below. Native OpenAI only sends it
     // when asked (stream_options.include_usage); most local gateways send it
@@ -285,6 +294,9 @@ export function finishOpenAIStream(state) {
     const wholeCalls = state.toolCalls.length > 0 && state.toolCalls.every((call) => parsesAsObject(call.arguments));
     const endedEarly = !state.finishReason && !state.done && !state.streamError && !wholeCalls;
     return {
+        // Where a buffered body has them, so a reader need not know which arrived.
+        ...(state.id ? { id: state.id } : {}),
+        ...(state.model ? { model: state.model } : {}),
         choices: [{
             finish_reason: state.finishReason,
             message: {
