@@ -33,7 +33,7 @@ const memoized = (compute) => {
   };
 };
 
-export const foldRegionKey = memoized((text) =>
+const foldText = (text) =>
   text
     .trim()
     .normalize("NFD")
@@ -42,7 +42,15 @@ export const foldRegionKey = memoized((text) =>
     .replace(/['’`´.]/g, "")
     .replace(/[-_/]+/g, " ")
     .replace(/\s+/g, " ")
-    .trim());
+    .trim();
+
+export const foldRegionKey = memoized(foldText);
+
+// The same fold with nothing remembered, for a list far longer than any map
+// that is folded once and let go: the world's seventy thousand towns
+// (worldCities.js). Through the memo they would empty it of the map's own
+// names on the way in and sit in it afterwards.
+export const foldRegionKeyOnce = (value) => foldText(String(value ?? ""));
 
 // Administrative words a model appends that a map rarely carries. The
 // autonomous-* forms come first so the longer suffix wins.

@@ -164,6 +164,7 @@ import {
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
+import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
@@ -1781,6 +1782,23 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
 // It runs where region names are resolved — at validation — because the runtime
 // layer that APPLIES operations has no geometry (see buildOwnerFootprint in
 // gameState.js) and must go on receiving plain coordinates.
+
+// The world's towns (worldCities.js), for a phrase naming one this map does
+// not carry: Grand Forks, on a map of 2,527 cities. Null until a placing pass
+// first wants them, because the list is 7.9 MB and most skips name only places
+// the map has. What comes back is a compact index, kept for the session. A
+// list that could not be read stays null (loadWorldCities says why) and is
+// asked for again by a later pass.
+let worldCities = null;
+const readWorldCities = async () => {
+  if (worldCities) return worldCities;
+  worldCities = await loadWorldCities();
+  if (worldCities) {
+    logDebugEvent("turn", `Placement: the world city list was read for a place this map does not carry (${worldCities.towns} towns under ${worldCities.names} names).`, undefined, { verbose: true });
+  }
+  return worldCities;
+};
+
 const buildPlacementGazetteer = (context, world) => {
   const fold = (value) => foldRegionKey(value);
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
@@ -1871,7 +1889,30 @@ const buildPlacementGazetteer = (context, world) => {
     const ashore = nearestInteriorPoint(best.geometry, point);
     return ashore ? { point: ashore, region: asRegion(best) } : null;
   };
-  return { find, findRegionId, suggest, regionAt, nearestLand };
+
+  // Where each town of that name stands in the wider world, for placement.js
+  // to test against this map (resolveWorldTown). While the list is not here
+  // the answer is none, and that a name went unanswered is remembered: the
+  // placing pass then asks for the list, once, and reads its phrase again.
+  let unanswered = false;
+  let asked = false;
+  const worldCitiesNamed = (name) => {
+    if (worldCities) return worldCities.find(name);
+    unanswered = true;
+    return [];
+  };
+  // True once, when a name went unanswered and the list is here now.
+  const worldCitiesArrived = async () => {
+    if (!unanswered) return false;
+    if (!worldCities && !asked) {
+      asked = true;
+      await readWorldCities();
+    }
+    if (!worldCities) return false;
+    unanswered = false;
+    return true;
+  };
+  return { find, findRegionId, suggest, regionAt, nearestLand, worldCities: worldCitiesNamed, worldCitiesArrived };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -1905,8 +1946,9 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
       // `home`: whose structure it is, for an address the map cannot check
-      // (placement.js resolveAddress). Not `owner`, which would also read a
-      // border phrase as a unit's own side of it.
+      // and a town it does not carry (placement.js addressSpot,
+      // resolveWorldTown). Not `owner`, which would also read a border phrase
+      // as a unit's own side of it.
       placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, home: normalizeString(marker.ownerCode ?? op.ownerCode) });
     }
   }
@@ -1930,7 +1972,12 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     // operation that gives only an id it is the whole answer. It used to be
     // ignored, so such an operation was dropped for having no coordinates: the
     // exact move a model reaches for after being told its `at` was not on the map.
-    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home }) : null;
+    const readPhrase = () => resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home });
+    let byPhrase = entry.phrase ? readPhrase() : null;
+    // A phrase naming a place this map does not carry is read a second time
+    // with the world's towns to hand. They are fetched here, the first time a
+    // pass wants them, and never by a skip whose places the map all has.
+    if (byPhrase && await gazetteer.worldCitiesArrived()) byPhrase = readPhrase();
     const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
       ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
       : null;
