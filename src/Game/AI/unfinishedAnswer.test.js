@@ -50,17 +50,49 @@ test("every provider's envelope is checked for a stream that closed early, befor
     assert.equal(main.split("readAnthropicStreamedResponse(response,").length - 1, 2);
 });
 
-test("a cut-short answer is refused as a closed connection, unless what arrived is still the JSON asked for", () => {
+test("a cut-short structured answer is refused as a closed connection, unless what arrived is still the JSON asked for", () => {
     const refuse = body(main, "const refuseCutShortAnswer = ", "\n};");
-    assert.match(refuse, /if \(!data\?\.endedEarly \|\| extractJsonPayload\(text\)\) return;/);
-    assert.match(refuse, /throw connectionClosedError\(\);/);
+    assert.match(refuse, /if \(!data\?\.endedEarly\) return;/);
+    // The rule itself is judgeUnmarkedEnd's (providerErrors.test.js); here, that
+    // it is asked with what this call was for and what arrived.
+    assert.match(refuse, /const verdict = judgeUnmarkedEnd\(\{ structured, whole: Boolean\(extractJsonPayload\(text\)\), text \}\);/);
+    assert.match(refuse, /if \(verdict === UNMARKED_END\.fail\) throw connectionClosedError\(\);/);
+    assert.match(refuse, /if \(verdict === UNMARKED_END\.keepAndSay\) noteUnmarkedEnd\(providerLabel, text\);/);
 });
 
-test("the chat reader fails a reply whose stream closed without the provider finishing", () => {
+test("every provider says whether its call was for a structured answer: one with an output function is, a chat reply is not", () => {
+    const checks = [...main.matchAll(/refuseCutShortAnswer\(data, [^\n]*?, \{ structured: Boolean\(tool\), providerLabel(?:: "[A-Za-z-]+")? \}\);/g)];
+    assert.equal(checks.length, 4, "Gemini, the OpenAI-style caller, Anthropic and the Anthropic-compatible proxy");
+    assert.equal(main.split("refuseCutShortAnswer(data, ").length - 1, 4, "and none is asked any other way");
+});
+
+test("the chat reader keeps a reply whose stream ended without an end marker, says so once, and fails an empty one", () => {
     const reader = body(main, "async function streamTextSSE(", "// One incremental text chunk per provider's stream event.");
     assert.match(reader, /if \(payload === "\[DONE\]"\) ended = true;/);
     assert.match(reader, /if \(streamFrameEnds\(json\)\) ended = true;/);
-    assert.match(reader, /if \(!ended && !streamError\) throw connectionClosedError\(\);/);
+    const unmarked = body(reader, "if (!ended && !streamError) {", "\n    }");
+    assert.match(unmarked, /if \(judgeUnmarkedEnd\(\{ text \}\) === UNMARKED_END\.fail\) throw connectionClosedError\(\);/,
+        "judged on the reply with its thinking stripped: nothing but thinking is nothing arrived");
+    assert.match(unmarked, /noteUnmarkedEnd\(providerLabel, text\);/);
+    assert.match(reader, /const text = stripThinking\(full\);/);
+    assert.ok(reader.indexOf("const text = stripThinking(full);") < reader.indexOf("if (!ended && !streamError) {"));
+    // One line a reply, in the log and not on screen.
+    const note = body(main, "const noteUnmarkedEnd = ", "\n};");
+    assert.match(note, /logDebugEvent\("ai", `\$\{providerLabel\}: the reply's stream ended without an end marker/);
+    assert.equal(main.split("noteUnmarkedEnd(").length - 1, 2, "called from the two places a reply is judged");
+    // Each chat stream is read under its provider's name, for that line.
+    assert.equal([...main.matchAll(/await streamTextSSE\(response, \w+StreamDelta, onChunk, (?:providerLabel|"[A-Za-z-]+")\);/g)].length, 4);
+});
+
+test("a stream that breaks is still a failed connection: the reader's own error is not caught on the way", () => {
+    const reader = body(main, "async function streamTextSSE(", "// One incremental text chunk per provider's stream event.");
+    const read = reader.indexOf("const { done, value } = await reader.read();");
+    const judged = reader.indexOf("if (!ended && !streamError) {");
+    assert.ok(read > -1 && judged > read);
+    // try { read loop } finally { release }: no catch between the read and the
+    // judgement, so a thrown body error leaves before any of it is kept.
+    assert.equal(/\bcatch\s*\(\s*\w+\s*\)\s*\{[^}]*\b(?:full|text)\b/.test(reader.slice(read, judged)), false);
+    assert.match(reader.slice(read, judged), /\} finally \{\s*try \{ reader\.releaseLock\(\); \} catch \{ \/\* already closed \*\/ \}\s*\}/);
 });
 
 test("a buffered body that stops partway is a closed connection too, not 'Unexpected end of JSON input'", () => {

@@ -16,6 +16,8 @@ import {
   isBusyErrorPayload,
   isUnreachableError,
   isUnreachableFailure,
+  judgeUnmarkedEnd,
+  UNMARKED_END,
   UNREACHABLE_FAILURE,
   isQuotaExhaustedPayload,
   isStreamingRefusal,
@@ -502,6 +504,30 @@ test("a closed connection is an error that says so and keeps what the transport 
   assert.equal(bare.cause, undefined);
   const network = new TypeError("network error");
   assert.equal(connectionClosedError(network).cause, network);
+});
+
+test("a structured answer whose stream ended without an end marker stands only when it arrived whole", () => {
+  assert.equal(judgeUnmarkedEnd({ structured: true, whole: true, text: '{"events":[]}' }), UNMARKED_END.keep);
+  assert.equal(judgeUnmarkedEnd({ structured: true, whole: false, text: '{"events":[{"title":"The fle' }), UNMARKED_END.fail);
+  // Prose where JSON was asked for is not the answer, however much of it came.
+  assert.equal(judgeUnmarkedEnd({ structured: true, whole: false, text: "Let me think about the period first." }), UNMARKED_END.fail);
+  assert.equal(judgeUnmarkedEnd({ structured: true }), UNMARKED_END.fail);
+});
+
+test("a chat reply whose stream ended without an end marker is kept, and said: some gateways never send one", () => {
+  // No finish reason and no [DONE] on any reply: failing these would fail
+  // every reply such a gateway gives.
+  assert.equal(judgeUnmarkedEnd({ structured: false, text: "The harvest will hold, Majesty, if the roads do." }), UNMARKED_END.keepAndSay);
+  assert.equal(judgeUnmarkedEnd({ text: "Yes." }), UNMARKED_END.keepAndSay);
+  // `whole` is a question about JSON and says nothing about prose.
+  assert.equal(judgeUnmarkedEnd({ structured: false, whole: false, text: "Half a sent" }), UNMARKED_END.keepAndSay);
+});
+
+test("an empty chat reply with no end marker is the connection closing before anything came", () => {
+  for (const text of ["", "   ", "\n\n", null, undefined]) {
+    assert.equal(judgeUnmarkedEnd({ structured: false, text }), UNMARKED_END.fail, JSON.stringify(text));
+  }
+  assert.equal(judgeUnmarkedEnd(), UNMARKED_END.fail);
 });
 
 // ---------------------------------------------------------------------------

@@ -60,11 +60,13 @@ import {
     isTemperatureRefusal,
     isUnreachableError,
     isUnreachableFailure,
+    judgeUnmarkedEnd,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
+    UNMARKED_END,
     UNREACHABLE_FAILURE,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE, extractJsonPayload } from "./jsonSalvage.js";
@@ -218,15 +220,28 @@ async function readJsonAnswer(response, providerLabel) {
     }
 }
 
+// A chat reply whose stream ended with nothing to say the provider had finished
+// is kept (judgeUnmarkedEnd, providerErrors.js), and this is the one line that
+// says so: a report can then tell a gateway that never marks the end of its
+// streams from a reply that lost its connection partway.
+const noteUnmarkedEnd = (providerLabel, text) => {
+    logDebugEvent("ai", `${providerLabel}: the reply's stream ended without an end marker (no finish reason, no [DONE]); the ${String(text ?? "").length} characters that arrived are kept as the reply.`);
+};
+
 // The same for a stream. One that closed with nothing to say the provider had
 // finished comes back marked `endedEarly` (streamAssembly.js, "How a stream
-// ended"): a broken connection, not an answer. It used to go on to the task
-// runner, which found half a tool call unparseable and sent the whole request
-// again. `text` is what the answer holds as text: when that is still the JSON
-// that was asked for, complete, nothing was lost and the answer stands.
-const refuseCutShortAnswer = (data, text) => {
-    if (!data?.endedEarly || extractJsonPayload(text)) return;
-    throw connectionClosedError();
+// ended"). What becomes of it is judgeUnmarkedEnd's rule:
+//   - `structured` (the call carried an output function): a broken connection,
+//     not an answer. It used to go on to the task runner, which found half a
+//     tool call unparseable and sent the whole request again. Unless `text`,
+//     what the answer holds as text, is still the JSON that was asked for,
+//     complete: then nothing was lost and the answer stands.
+//   - a chat reply: kept when anything arrived, and said in the log.
+const refuseCutShortAnswer = (data, text, { structured, providerLabel }) => {
+    if (!data?.endedEarly) return;
+    const verdict = judgeUnmarkedEnd({ structured, whole: Boolean(extractJsonPayload(text)), text });
+    if (verdict === UNMARKED_END.fail) throw connectionClosedError();
+    if (verdict === UNMARKED_END.keepAndSay) noteUnmarkedEnd(providerLabel, text);
 };
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
@@ -675,7 +690,7 @@ async function retryOrFailByStatus(response, { attempt, retries, retryDelay, dea
     await sleep(wait, signal);
 }
 
-async function streamTextSSE(response, extractDelta, onChunk) {
+async function streamTextSSE(response, extractDelta, onChunk, providerLabel) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -690,9 +705,9 @@ async function streamTextSSE(response, extractDelta, onChunk) {
     let frames = 0;
     let streamError = null;
     // Whether the provider said it had finished: `[DONE]`, or a frame that
-    // carries a finish reason (streamAssembly.js streamFrameEnds). A reply whose
-    // stream closed without either was cut off by the connection, however much
-    // of it had arrived.
+    // carries a finish reason (streamAssembly.js streamFrameEnds). What becomes
+    // of a reply whose stream closed without either is decided once it has all
+    // been read, below.
     let ended = false;
     const sample = [];
     try {
@@ -732,16 +747,26 @@ async function streamTextSSE(response, extractDelta, onChunk) {
         try { reader.releaseLock(); } catch { /* already closed */ }
     }
 
-    // The provider's own error inside the stream says why it stopped, and each
-    // caller handles that; anything else that stops unfinished is the connection.
-    if (!ended && !streamError) throw connectionClosedError();
-
     // Inline <think> blocks arrive as ordinary content, so the streamed preview
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
+    const text = stripThinking(full);
+
+    // The stream ended with nothing to say the provider had finished. Its own
+    // error inside the stream says why it stopped, and each caller handles that.
+    // Otherwise this is prose, with nothing to hold it against, and some gateways
+    // never send a marker at all: what arrived is the reply, as it always was,
+    // and the log says how it ended. With no reply in it, the connection closed
+    // before anything came (judgeUnmarkedEnd, providerErrors.js). A stream that
+    // BROKE never gets here: the read above threw.
+    if (!ended && !streamError) {
+        if (judgeUnmarkedEnd({ text }) === UNMARKED_END.fail) throw connectionClosedError();
+        noteUnmarkedEnd(providerLabel, text);
+    }
+
     return {
-        text: stripThinking(full),
+        text,
         reasoning: reasoning.trim(),
         finishReason,
         frames,
@@ -1069,7 +1094,7 @@ async function callGemini(systemPrompt, history, {
                     classifyProviderFailure({ status: response.status, payload }),
                 );
             }
-            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, "Gemini");
             if (streamResult.text) return streamResult.text;
             if (!retriedInStream && isBusyErrorPayload(streamResult.streamError) && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedInStream = true;
@@ -1165,7 +1190,7 @@ async function callGemini(systemPrompt, history, {
             ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
-        refuseCutShortAnswer(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
+        refuseCutShortAnswer(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts), { structured: Boolean(tool), providerLabel: "Gemini" });
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
@@ -1502,7 +1527,7 @@ async function callOpenAIStyleChatCompletions({
         // on the actual content-type so a gateway that ignored stream:true (plain
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, providerLabel);
             const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             if (streamed) return streamed;
             // The provider said what went wrong inside the stream. Say THAT
@@ -1565,7 +1590,7 @@ async function callOpenAIStyleChatCompletions({
             throw providerFailureError(contextWindowMessage(providerLabel, detail, requestChars), { kind: "tooBig", reason: detail });
         }
 
-        refuseCutShortAnswer(data, text);
+        refuseCutShortAnswer(data, text, { structured: Boolean(tool), providerLabel });
 
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
@@ -1942,7 +1967,7 @@ async function callAnthropic(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, "Anthropic");
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
@@ -1967,7 +1992,7 @@ async function callAnthropic(systemPrompt, history, {
             ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
-        refuseCutShortAnswer(data, extractAnthropicText(data));
+        refuseCutShortAnswer(data, extractAnthropicText(data), { structured: Boolean(tool), providerLabel: "Anthropic" });
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
@@ -2180,7 +2205,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, "Anthropic-compatible");
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
@@ -2205,7 +2230,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onStreamContent)
             : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
-        refuseCutShortAnswer(data, extractAnthropicText(data));
+        refuseCutShortAnswer(data, extractAnthropicText(data), { structured: Boolean(tool), providerLabel: "Anthropic-compatible" });
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };

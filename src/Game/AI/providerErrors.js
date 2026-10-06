@@ -396,7 +396,8 @@ export const toolStreamRefusalError = (providerLabel, error, retried) => {
 //   had finished (streamAssembly.js marks the envelope `endedEarly`), or a
 //   buffered body arrived cut short. It is a transport failure, and is thrown
 //   as one, rather than passed on as an answer that "did not contain parseable
-//   JSON" for the task runner to ask again about.
+//   JSON" for the task runner to ask again about. (A chat reply is the
+//   exception: judgeUnmarkedEnd, below.)
 //
 //   The output limit. The provider stopped the model at max_tokens
 //   (streamAssembly.js stoppedAtOutputLimit). What arrived is kept when it can
@@ -416,6 +417,28 @@ export const connectionClosedError = (cause = null) => {
     const error = new Error(CONNECTION_CLOSED_MESSAGE, cause ? { cause } : undefined);
     error.providerFailure = { ...UNREACHABLE_FAILURE, midAnswer: true };
     return error;
+};
+
+// What becomes of an answer whose stream ended cleanly but with nothing to say
+// the provider had finished: no finish reason, no `[DONE]`, no error.
+//
+//   A structured answer (the JSON or the tool call a task asked for) can be held
+//   against what was asked. One that arrived whole (`whole`) is used; anything
+//   less is a connection that closed on it.
+//
+//   A chat reply cannot. It is prose, and prose that was cut off does not look
+//   different from prose that ended. Some gateways send neither marker, ever:
+//   every reply through one ends this way, and each has always been shown as it
+//   arrived. Failing them would break what works, so a reply with text in it is
+//   kept and the log says how its stream ended. A reply with nothing in it is
+//   the connection closing before anything came.
+//
+// A stream that BREAKS (its reader throws) is not judged here: that is a broken
+// connection whatever was asked for (asUnreachable, above).
+export const UNMARKED_END = Object.freeze({ keep: "keep", keepAndSay: "keepAndSay", fail: "fail" });
+export const judgeUnmarkedEnd = ({ structured = false, whole = false, text = "" } = {}) => {
+    if (structured) return whole ? UNMARKED_END.keep : UNMARKED_END.fail;
+    return String(text ?? "").trim() ? UNMARKED_END.keepAndSay : UNMARKED_END.fail;
 };
 
 // What the player reads when the game server's relay had to stop an answer it
