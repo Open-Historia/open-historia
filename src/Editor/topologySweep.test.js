@@ -10,18 +10,22 @@ import fs from "node:fs";
 import test from "node:test";
 
 import GeoJSON from "ol/format/GeoJSON.js";
+import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
 import VectorSource from "ol/source/Vector.js";
 
-import { enclosedGapGeoms, enclosedGapsOfUnion, overlapGeoms, unionAllGeoms } from "./geometry.js";
+import { enclosedGapGeoms, enclosedGapsOfUnion, overlapGeoms, planarGeometryArea, unionAllGeoms } from "./geometry.js";
 import {
   BORDER_CLEANUP,
   bucketRegions,
   chunkIndexFor,
+  cracksAmong,
   describeCleanupProgress,
   describeCleanupResult,
   findEnclosedGaps,
+  holdsRim,
   hotspotsOf,
+  isSliver,
   mergeWithinBudget,
   planTopologyChunks,
   splitByVertexBudget,
@@ -112,8 +116,9 @@ test("the save-time floor ignores cracks too narrow to be anything but rounding 
 // The width. A defect is as wide as twice its area over its perimeter: its
 // real width when it is long and thin, half its diameter when it is round.
 // Two 30 km blocks with a slot between them, closed at both ends by a cap, is
-// the crack between regions the sweep is for; a pond is the same test on a
-// hole that is not a crack, and the sweep cannot tell them apart.
+// the crack between regions the sweep is for; a pond in one block is a hole
+// just as wide that is not a crack. The width cannot tell them apart; the
+// regions on the rim can (the next test).
 const slotBetweenBlocks = (slot) => [
   new Polygon([[[0, 0], [10000, 0], [10000, 30000], [0, 30000], [0, 0]]]),
   new Polygon([[[10000 + slot, 0], [30000, 0], [30000, 30000], [10000 + slot, 30000], [10000 + slot, 0]]]),
@@ -134,9 +139,9 @@ test("the sweep repairs cracks and slivers up to 1.5 km wide, and what that take
   assert.equal(enclosedGapGeoms(slotBetweenBlocks(1200), { ...sweep, maxWidth: 500 }).length, 0, "which the old 500 m limit left open");
   assert.equal(enclosedGapGeoms(slotBetweenBlocks(1700), sweep).length, 0, "a 1.7 km one is not a crack any more");
   // Round holes count as half as wide as they are across.
-  assert.equal(enclosedGapGeoms(blockWithPond(8000), sweep).length, 0, "a lake 8 km across is left alone");
-  assert.equal(enclosedGapGeoms(blockWithPond(2000), sweep).length, 1, "a pond 2 km across counts as 1 km wide and is filled: what must stay empty has to be a region");
-  assert.equal(enclosedGapGeoms(blockWithPond(2000), { ...sweep, maxWidth: 500 }).length, 0, "the old limit left that one too");
+  assert.equal(enclosedGapGeoms(blockWithPond(8000), sweep).length, 0, "a lake 8 km across is too wide, whatever is round it");
+  assert.equal(enclosedGapGeoms(blockWithPond(2000), sweep).length, 1, "a pond 2 km across counts as 1 km wide: narrow enough, and spared only by its rim");
+  assert.equal(enclosedGapGeoms(blockWithPond(2000), { ...sweep, maxWidth: 500 }).length, 0, "the old limit did not reach it");
   // The same for overlaps: one block reaching 1.2 km into the other.
   const [west, east] = slotBetweenBlocks(-1200);
   const sliver = overlapGeoms(west, east, sweep);
@@ -146,6 +151,105 @@ test("the sweep repairs cracks and slivers up to 1.5 km wide, and what that take
   assert.equal(enclosedGapGeoms(slotBetweenBlocks(1200)).length, 1);
   assert.equal(enclosedGapGeoms(slotBetweenBlocks(1700)).length, 0);
   assert.equal(overlapGeoms(west, east).length, 1);
+});
+
+// The two guards that keep 1.5 km to cracks between regions. On a map cut from
+// the stock world the wider limit alone filled narrow inlets and lagoons that
+// one region surrounds (Randers Fjord, Laguna Madre, Santa Rosa Sound) and
+// trimmed away most of regions a few square kilometres across (Montegiardino
+// in San Marino kept 0.1 of its 1.3 km²).
+//
+// A region's boundary segments around a point, the slow way: the Workshop
+// reads them from the region's R-tree.
+const boundaryNear = (geom) => {
+  const segments = [];
+  const polys = geom.getType() === "Polygon" ? [geom.getCoordinates()] : geom.getCoordinates();
+  for (const poly of polys) {
+    for (const ring of poly) {
+      for (let i = 1; i < ring.length; i += 1) segments.push([ring[i - 1], ring[i]]);
+    }
+  }
+  return ([x, y], reach) => segments.filter(([a, b]) => (
+    Math.min(a[0], b[0]) <= x + reach && Math.max(a[0], b[0]) >= x - reach
+    && Math.min(a[1], b[1]) <= y + reach && Math.max(a[1], b[1]) >= y - reach
+  ));
+};
+const rimRegionsAmong = (geoms) => (hole) => geoms.filter((geom) => holdsRim(hole.geom.getCoordinates()[0], boundaryNear(geom))).length;
+
+test("a hole one region surrounds keeps the old 500 m limit; the same width between two regions is a crack, and is filled", () => {
+  assert.equal(BORDER_CLEANUP.maxWidthInsideOneRegion, 500);
+  const sweep = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  // A pond 2 km across in one block and a slot 1 km wide between two: each
+  // measures about 1 km.
+  const pond = blockWithPond(2000);
+  const pondHoles = enclosedGapGeoms(pond, sweep);
+  assert.equal(pondHoles.length, 1);
+  assert.equal(rimRegionsAmong(pond)(pondHoles[0]), 1);
+  assert.deepEqual(cracksAmong(pondHoles, rimRegionsAmong(pond)), [], "one region all the way round: its own water, left alone");
+  const slot = slotBetweenBlocks(1000);
+  const slotHoles = enclosedGapGeoms(slot, sweep);
+  assert.ok(slotHoles[0].width > 900 && slotHoles[0].width < 1000, `the slot measures ${slotHoles[0].width}`);
+  assert.equal(rimRegionsAmong(slot)(slotHoles[0]), 4, "both blocks and both caps hold an edge of it");
+  assert.equal(cracksAmong(slotHoles, rimRegionsAmong(slot)).length, 1, "between regions: a crack, filled");
+  // Up to the old limit a lone hole is filled as it always was, and its rim is
+  // not even looked at.
+  const puddle = enclosedGapGeoms(blockWithPond(600), sweep);
+  assert.equal(puddle.length, 1);
+  assert.equal(cracksAmong(puddle, () => assert.fail("a hole this narrow needs no rim count")).length, 1);
+
+  // A corner is not a rim. A wedge between two regions, closed along its base
+  // by a third, comes to a point on the border of a fourth: three hold an
+  // edge of it, the fourth only that point.
+  const wedgeWest = new Polygon([[[-10000, 0], [0, 0], [-500, 10000], [-10000, 10000], [-10000, 0]]]);
+  const wedgeEast = new Polygon([[[0, 0], [10000, 0], [10000, 10000], [500, 10000], [0, 0]]]);
+  const base = new Polygon([[[-10000, 10000], [10000, 10000], [10000, 12000], [-10000, 12000], [-10000, 10000]]]);
+  const atThePoint = new Polygon([[[-10000, -2000], [10000, -2000], [10000, 0], [-10000, 0], [-10000, -2000]]]);
+  const wedges = enclosedGapGeoms([wedgeWest, wedgeEast, base, atThePoint], sweep);
+  assert.equal(wedges.length, 1);
+  const ring = wedges[0].geom.getCoordinates()[0];
+  assert.deepEqual([wedgeWest, wedgeEast, base, atThePoint].map((geom) => holdsRim(ring, boundaryNear(geom))), [true, true, true, false]);
+
+  // The Workshop asks exactly this of every hole a search finds.
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
+  assert.ok(olMap.includes("for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width })) {"));
+});
+
+test("a pair that shares more than a tenth of the smaller region is left alone; one that shares less is a sliver, and trimmed", () => {
+  assert.equal(BORDER_CLEANUP.maxSliverShare, 0.1);
+  const sweep = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  const large = new Polygon([[[-90000, 0], [10000, 0], [10000, 30000], [-90000, 30000], [-90000, 0]]]);
+  // A neighbour reaching 1 km into it along 30 km: the same 30 km² piece,
+  // 968 m wide by the sweep's measure, whatever the neighbour's own size.
+  const reachingIn = (width) => new Polygon([[[9000, 0], [9000 + width, 0], [9000 + width, 30000], [9000, 30000], [9000, 0]]]);
+  const shareOf = (region) => {
+    const pieces = overlapGeoms(large, region, sweep);
+    assert.equal(pieces.length, 1);
+    assert.ok(pieces[0].width > 960 && pieces[0].width < 975);
+    assert.equal(Math.round(pieces[0].shared), 30e6);
+    return isSliver(pieces[0].shared, Math.min(planarGeometryArea(large), planarGeometryArea(region)));
+  };
+  assert.equal(shareOf(reachingIn(4000)), false, "a quarter of a 120 km² region: not a sliver, left alone");
+  assert.equal(shareOf(reachingIn(15000)), true, "a fifteenth of a 450 km² one: a sliver, trimmed");
+  assert.equal(isSliver(10, 100), true, "a tenth exactly is still a sliver");
+  assert.equal(isSliver(10.5, 100), false);
+  assert.equal(isSliver(0, 0), true);
+  assert.equal(isSliver(1, 0), false, "nothing is small beside nothing");
+
+  // `shared` is all the two share, because a trim takes all of it: a thin
+  // strip (5 km²) beside a lobe too wide to be a piece (50 km²).
+  const strip = [[[9500, 0], [12000, 0], [12000, 10000], [9500, 10000], [9500, 0]]];
+  const lobe = [[[5000, 15000], [12000, 15000], [12000, 25000], [5000, 25000], [5000, 15000]]];
+  const both = new MultiPolygon([strip, lobe]);
+  const narrow = overlapGeoms(large, both, sweep);
+  assert.equal(narrow.length, 1, "only the strip is narrow enough to be a piece");
+  assert.equal(Math.round(narrow[0].area), 5e6);
+  assert.equal(Math.round(narrow[0].shared), 55e6);
+  assert.equal(isSliver(narrow[0].area, planarGeometryArea(both)), true, "the strip alone is a twentieth of the region");
+  assert.equal(isSliver(narrow[0].shared, planarGeometryArea(both)), false, "all they share is over half of it");
+
+  // The Workshop asks exactly this of every pair before it trims one.
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
+  assert.ok(olMap.includes("if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) continue;"));
 });
 
 test("the loading screen reports each phase in plain words with a bar that only moves forward", () => {
@@ -369,19 +473,33 @@ test("the built-in map at 1.5 km: the cracks 500 m left behind are filled, and n
   assert.ok(water.length >= 10, "the lakes, lagoons and the Caspian are holes, and stay");
   assert.ok(Math.min(...water.map((hole) => hole.width)) > 7000, "the narrowest of them is over 7 km");
 
+  // The guard on holes leaves every one of them a crack: each has two or more
+  // regions on its rim (the save fills the same 106 with it as without).
+  const rimRegionsOf = (hole) => source.getFeaturesInExtent(hole.geom.getExtent())
+    .filter((feature) => holdsRim(hole.geom.getCoordinates()[0], boundaryNear(feature.getGeometry()))).length;
+  for (const hole of filled) assert.ok(rimRegionsOf(hole) > 1, `a ${Math.round(hole.width)} m crack lies between regions`);
+  assert.equal(cracksAmong(filled, rimRegionsOf).length, filled.length, "none is left alone as one region's water");
+
   // The overlaps: every piece two neighbouring regions share, however wide.
   const order = new Map(features.map((feature, index) => [feature, index]));
   const pieces = [];
+  let largestShare = 0;
   for (let i = 0; i < features.length; i += 1) {
     const geom = features[i].getGeometry();
     for (const other of source.getFeaturesInExtent(geom.getExtent())) {
-      if (order.get(other) > i) pieces.push(...overlapGeoms(geom, other.getGeometry(), { maxWidth: Infinity, minWidth }));
+      if (!(order.get(other) > i)) continue;
+      const shared = overlapGeoms(geom, other.getGeometry(), { maxWidth: Infinity, minWidth });
+      if (!shared.length) continue;
+      pieces.push(...shared);
+      largestShare = Math.max(largestShare, shared[0].shared / Math.min(planarGeometryArea(geom), planarGeometryArea(other.getGeometry())));
     }
   }
   assert.ok(pieces.length > 50, `the stock map has its known slivers (${pieces.length})`);
   const beyond = pieces.filter((piece) => piece.width > 500);
   assert.equal(beyond.length, 1, "one sliver between 500 m and 1.5 km");
   assert.ok(beyond[0].width < 1000, `and nothing wider: ${Math.round(beyond[0].width)} m is the widest piece two regions share`);
+  // The guard on slivers passes over none of them either (the same 59).
+  assert.ok(largestShare < 0.01, `no pair shares more than ${(largestShare * 100).toFixed(2)}% of its smaller region, far under a tenth`);
 });
 
 test("the Workshop's save runs this search, with the budget on overlaps and gap targets too", () => {
