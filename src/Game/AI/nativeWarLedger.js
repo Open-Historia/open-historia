@@ -140,11 +140,16 @@ export const buildPregameWarBaselineRecord = ({
   return { record: normalized, error: "" };
 };
 
+// A war's title as it is compared: the letters, marks and digits of every
+// script, case, accents and punctuation folded away. Folded to a-z0-9, a title
+// in Cyrillic, Arabic or Chinese had no key at all, so two wars between the
+// same sides on the same date were one war whatever each was called, and no
+// such title could be told from a blank one. An ASCII title keeps its key.
 const pregameWarTitleKey = (value) => normalizeString(value)
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -161,10 +166,23 @@ const samePregameSourceSet = (superset, required) => {
   return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
 };
 
-// Resolve Day-One war identity conservatively. Sides/date identify possible
-// candidates; title/provenance provide identity evidence. A title mismatch is
-// ambiguity, not permission to fork or silently merge a second live war.
-export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null } = {}) => {
+// Resolve Day-One war identity conservatively. Sides and date say which war it
+// is; the title is how it is worded.
+//
+// ONE live war between the same two sides, with no conflicting known date, is
+// that war whatever the fact calls it: the same belligerents are not fighting
+// each other twice at once, and a model that restates canon writes the war's
+// name in the game's language. Such a fact used to be "ambiguous: the same live
+// sides/date already exist under a different canonical title", which refused
+// the whole Round-Zero answer; it is now the match, marked `restated`, and the
+// caller keeps the canonical title (see resolvePregameAgreementBaselineMatch,
+// where a player's game met this).
+//
+// MORE than one such war is still an error, marked `ambiguous` so the caller
+// can leave that fact out on its last attempt. So is a single one that another
+// fact of the same answer already resolved to (`claimedIds`), or that has no
+// title of its own to keep. Neither is permission to fork a second live war.
+export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null, claimedIds = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero war resolver requires a candidate." };
   const sides = pregameWarSidePairKey(candidate.sideA, candidate.sideB);
   const title = pregameWarTitleKey(candidate.title);
@@ -180,10 +198,13 @@ export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null 
   };
   const possible = live.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameWarTitleKey(entry.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero war identity matches multiple canonical wars." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero war identity matches multiple canonical wars." };
   if (exact.length === 1) return { match: exact[0], error: "" };
+  if (possible.length === 1 && pregameWarTitleKey(possible[0].title) && !claimedIds?.has(normalizeString(possible[0].id))) {
+    return { match: possible[0], restated: true, error: "" };
+  }
   if (possible.length) {
-    return { match: null, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
+    return { match: null, ambiguous: true, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
   }
 
   const conflictingKnownDate = live.some((entry) =>
@@ -264,9 +285,29 @@ const parseEventNumbers = (value) =>
     .map((entry) => entry - 1)
     .slice(0, 16);
 
+// A record is fields joined by "~", and the shortest one — an id and what
+// happens to it — has a "~" in it. A line with none is not a record the model
+// got wrong; it is prose where the records go: "No changes.", a Markdown
+// heading. It used to be read as a war whose id was the whole line and whose
+// operation was blank. A player's skip (2026-10-05) answered warUpdates with
+// "### Обновления войн:" and a sentence saying no war began or ended, and the
+// ledger refused the answer over two wars that were never there: a strict
+// attempt is asked again for that, a whole second request, and the salvage
+// pass reported both lines to the next prompt as dropped war records.
+const isWarUpdateProse = (text) => !text.includes(WAR_UPDATE_SEPARATOR);
+
+// The lines of a compact warUpdates answer that decodeWarUpdates passes over
+// as prose, for the one caller that says so (gameplay.js validateSegmentLedgers).
+export const warUpdateProseLines = (value) => {
+  const lines = Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string")
+    : String(value ?? "").split(/\r?\n/);
+  return lines.map(normalizeString).filter((line) => line && isWarUpdateProse(line));
+};
+
 const parseWarUpdateRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  if (!text || isWarUpdateProse(text)) return null;
 
   // id~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
   const fields = [];

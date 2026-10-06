@@ -117,8 +117,15 @@ Makes the local tree match the manifest. Called by the launcher and updater **in
 |---|---|---|
 | Verify | `node scripts/fetch-map-assets.mjs` | Re-fetch anything whose SHA-256 differs (picks up a re-uploaded map, repairs truncation) |
 | Ensure | `node scripts/fetch-map-assets.mjs --ensure` | Faster: trusts size, only fetches missing / wrong-size files |
+| Progress | add `--progress` to either | Also prints `@progress {"asset","received","total"}` lines while a file downloads (the first, the last, and at most one every 250 ms between) |
 
-Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path, `fetch-map-assets.mjs:92`) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+Each file streams to `<dst>.download` and is hashed as it arrives (a 100 MB archive is never held in memory), and the SHA-256 is checked **before** it is renamed into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+
+Manifest paths are relative to the current directory, except that the fetcher follows the server's folders when they are set (`resolveAssetTarget`): `public/assets/…` lands in `OH_ASSETS_DIR` and `server/data/…` in `OH_DATA_DIR`. The desktop app sets both before it spawns the fetcher, and its setup check (`assetTarget` in `electron/main.cjs`) applies the same rule, so the check, the download and the server look at one folder. That matters for the packaged beta, whose `OH_ASSETS_DIR` is the stable app's `%APPDATA%/open-historia/public/assets` while its own data lives under `Open Historia Beta`; `server/mapAssetsFetch.test.js` keeps the two rules in step.
+
+A beta build from before that rule (0.0.66 was one) downloaded those files under its own `public/assets`, where nothing read them. `relocateOwnFolderMap` in `electron/main.cjs` moves each one into the shared folder before the setup check, so that install is not sent through the download a second time. A file is moved only when its SHA-256 is the manifest's (the folder is the stable app's too) and the shared folder does not already hold it at the right size; the move is logged as `map.relocated`.
+
+On the desktop, a missing or wrong-size file opens the setup window before the server starts: `downloadMapData` runs the fetcher with `--ensure --progress` and turns the `@progress` lines into the bar. Because the fetcher always exits 0, `electron/main.cjs` checks the disk again afterwards; if files are still missing it logs `map.incomplete` and the window says how many map files could not be downloaded and offers **Try again** or **Continue without the map**. Every stderr line of the fetcher, from the setup download (`map.download`) and the background check (`map.verify`), goes to the Desktop log.
 
 ### `scripts/trim-pmtiles.mjs` — the zoom levels nothing draws
 

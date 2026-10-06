@@ -20,12 +20,16 @@ const STATUS_LABEL = {
 const POLITY_WEIGHT = 100;
 const SAME_PLACE_DEGREES = 0.75;
 
+// What a name and a query are compared by: case and accents folded, the
+// letters, marks and digits of every script kept. Folded to a-z0-9, a query
+// typed in Cyrillic, Greek or Chinese was empty and searched for nothing, and
+// a structure or a renamed city so named could not be found by its name.
 export const normalizePlaceText = (value) =>
   String(value ?? "")
     .normalize("NFD")
     .toLowerCase()
     .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 
 const titleCase = (value) =>

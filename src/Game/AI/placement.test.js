@@ -26,6 +26,7 @@ import {
     NEAR_KM,
     distanceKm,
     hashText,
+    homeWaters,
     interiorPoint,
     nearestInteriorPoint,
     nearestSea,
@@ -230,6 +231,131 @@ test("a fleet put on land is moved to sea in the placement pass", () => {
     assert.ok(body.includes('atSea: normalizeString(mover?.type).toLowerCase() === "naval"'), "a moving fleet is marked");
     assert.ok(body.includes("entry.atSea && gazetteer.regionAt([lng, lat])") && body.includes("nearestSea([lng, lat], gazetteer"), "and taken off the land");
     assert.ok(/was sent inland, too far from any sea for a fleet, and was not moved[\s\S]{0,200}delete target\[lngKey\]; delete target\[latKey\];/.test(body), "and with no sea in reach, not placed at all");
+});
+
+// --- a new fleet with no sea in reach ---
+//
+// A player's log (beta 0.0.66, 2026-10-05, the game played in Russian): "unitOps[1]
+// dropped — spawn has unusable coordinates (lng=undefined, lat=undefined)" for a
+// squadron of the Black Sea Fleet, type naval. Its place had not been read, so
+// it had been given the fallback an army gets, inland in its owner's country;
+// the fleet rule found no sea within 400 km of that and took its coordinates
+// away. A new fleet now goes to its owner's own waters instead.
+//
+//        0    2    4    6
+//   6    +----+----+----+
+//        | NW | N  | NE |
+//   4    +----+----+----+
+//        | W  | C  | E  |          (sea everywhere else)
+//   2    +----+----+----+
+//        | SW | S  | SE |
+//   0    +----+----+----+
+//
+// Inland holds C alone and has no coast. Longland holds C and E: its only shore
+// is E's east side. Rimland holds the other seven and has shore on every side.
+const GRID = [
+    ["nw", "North-West", "Rimland", 0, 4], ["n", "North", "Rimland", 2, 4], ["ne", "North-East", "Rimland", 4, 4],
+    ["w", "West", "Rimland", 0, 2], ["c", "Centre", "Inland", 2, 2], ["e", "East", "Rimland", 4, 2],
+    ["sw", "South-West", "Rimland", 0, 0], ["s", "South", "Rimland", 2, 0], ["se", "South-East", "Rimland", 4, 0],
+].map(([id, name, owner, west, south]) => ({ id, name, owner, geometry: box(west, south, west + 2, south + 2) }));
+const gridGazetteer = (owners = {}) => {
+    const regions = GRID.map((region) => ({ ...region, owner: owners[region.id] ?? region.owner }));
+    return {
+        regions,
+        regionAt: (point) => regions.find((region) => pointInGeometry(point, region.geometry)) ?? null,
+        find: (name) => {
+            const owned = regions.filter((region) => fold(region.owner) === fold(name));
+            return owned.length ? { kind: "polity", name: owned[0].owner, regions: owned } : null;
+        },
+    };
+};
+
+test("a new fleet's own waters are the sea off its owner's coast, the stretch nearest where it was put", () => {
+    const grid = gridGazetteer();
+    // Put in the middle of the map, just south of centre: Rimland's nearest shore is the south one.
+    const south = homeWaters("Rimland", grid, { near: [3, 1.9] });
+    assert.equal(south.how, "home waters");
+    assert.equal(south.label, "Rimland");
+    assert.equal(south.coast, "South");
+    assert.equal(grid.regionAt([south.lng, south.lat]), null, "at sea");
+    assert.ok(south.lat < 0, `south of the land, not ${south.lat}`);
+    assert.equal(south.regionId, "", "and in no region");
+    // The same fleet, put by the north edge instead.
+    assert.equal(homeWaters("Rimland", grid, { near: [3, 5.5] }).coast, "North");
+    // The same answer every time: a unit must not move when the save is read again.
+    assert.deepEqual(homeWaters("Rimland", grid, { near: [3, 1.9], seed: 12 }), homeWaters("Rimland", grid, { near: [3, 1.9], seed: 12 }));
+});
+
+test("the coast is the owner's own, even when another power's shore is nearer", () => {
+    // Longland: the centre and the box east of it. From the west of its land the
+    // nearest sea is past Rimland's West; its own shore is the far side of East.
+    const grid = gridGazetteer({ c: "Longland", e: "Longland" });
+    const waters = homeWaters("Longland", grid, { near: [2.2, 3] });
+    assert.equal(waters.coast, "East");
+    assert.ok(waters.lng > 6, `east of its own shore, not ${waters.lng}`);
+    assert.equal(grid.regionAt([waters.lng, waters.lat]), null);
+});
+
+test("with nowhere said, the coast nearest the middle of the owner's land", () => {
+    const grid = gridGazetteer({ c: "Longland", e: "Longland" });
+    assert.equal(homeWaters("Longland", grid).coast, "East");
+    assert.equal(homeWaters("Longland", grid, { near: [NaN, 3] }).coast, "East", "a point that is not one is no point");
+});
+
+test("an owner with no coast, or one the map does not know, has no waters of its own", () => {
+    const grid = gridGazetteer();
+    assert.equal(homeWaters("Inland", grid, { near: [3, 3] }), null);
+    assert.equal(homeWaters("Atlantis", grid, { near: [3, 3] }), null);
+    assert.equal(homeWaters("", grid), null);
+});
+
+// The map the squadron was raised on, with the land looked up by box first:
+// the plain scan above is too slow for a walk along a coast.
+const MODERN_DAY_ROWS = MODERN_DAY_REGIONS.map((feature) => {
+    const ring = feature.geometry.type === "Polygon" ? feature.geometry.coordinates.flat() : feature.geometry.coordinates.flat(2);
+    const lngs = ring.map((vertex) => vertex[0]); const lats = ring.map((vertex) => vertex[1]);
+    return {
+        id: String(feature.properties.id), name: feature.properties.name, owner: feature.properties.owner, geometry: feature.geometry,
+        box: [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
+    };
+});
+const modernDay = {
+    regionAt: ([lng, lat]) => MODERN_DAY_ROWS.find((row) => lng >= row.box[0] && lng <= row.box[2] && lat >= row.box[1] && lat <= row.box[3]
+        && pointInGeometry([lng, lat], row.geometry)) ?? null,
+    find: (name) => {
+        const owned = MODERN_DAY_ROWS.filter((row) => fold(row.owner) === fold(name));
+        return owned.length ? { kind: "polity", name: owned[0].owner, regions: owned } : null;
+    },
+};
+const MOSCOW = [37.596, 55.779];
+const SEVASTOPOL = [33.498, 44.583];
+
+test("Modern Day: a Russian fleet put by Moscow has no sea in reach, and is put to sea off Russia's own coast", () => {
+    assert.equal(nearestSea(MOSCOW, modernDay), null, "no open water within 400 km: the dead end the squadron met");
+    const waters = homeWaters("Russia", modernDay, { near: MOSCOW, seed: hashText("ru-bsf-squadron") });
+    assert.ok(waters, "Russia has a coast");
+    assert.equal(modernDay.regionAt([waters.lng, waters.lat]), null, "the point is open water");
+    const shore = MODERN_DAY_ROWS.find((row) => row.name === waters.coast && row.owner === "Russia");
+    assert.ok(shore, `${waters.coast} is a Russian region`);
+    assert.ok(distanceKm([waters.lng, waters.lat], MOSCOW) < 800, "the nearest of Russia's shores, not its far one");
+    // Told a place on its own coast, that is the coast it is off.
+    const home = homeWaters("Russia", modernDay, { near: SEVASTOPOL });
+    assert.ok(distanceKm([home.lng, home.lat], SEVASTOPOL) < 80, `off Sevastopol, not ${home.lng},${home.lat}`);
+    assert.equal(modernDay.regionAt([home.lng, home.lat]), null);
+});
+
+test("the placement pass sends a new fleet stranded in its own country to those waters", () => {
+    // What the pass then does with them is run in placementPass.test.js; this
+    // pins that the pass asks, and of whom.
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    const rule = body.slice(body.indexOf("if (entry.atSea && gazetteer.regionAt([lng, lat]))"), body.indexOf("// Clear of everything else"));
+    assert.match(
+        rule,
+        /const ownWaters = !offshore && entry\.spawn && entry\.owner\s*&& gazetteer\.samePolity\(gazetteer\.regionAt\(\[lng, lat\]\)\?\.owner, entry\.owner\)\s*\? homeWaters\(entry\.owner, gazetteer, \{/,
+        "a spawn with no sea in reach, in its owner's own country; never a move",
+    );
+    assert.match(rule, /near: \(homeland && !homeland\.error && gazetteer\.capitalOf\(entry\.owner\)\?\.point\) \|\| \[lng, lat\]/, "by the capital when it was given no place at all");
 });
 
 // --- geometry ---

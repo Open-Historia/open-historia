@@ -136,7 +136,7 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
-import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -275,6 +275,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -858,6 +859,18 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
     }
   });
+
+  // Prose where the war records go ("No changes.", a Markdown heading) is not a
+  // record and is not judged as one (nativeWarLedger.js). Said here, once, for
+  // the Logging file only: the receipt is the model's next prompt, and nothing
+  // was lost that it needs telling about.
+  const warProse = warUpdateProseLines(candidate?.warUpdates);
+  if (warProse.length) {
+    console.info(
+      `[ai] war ledger: ${warProse.length} line(s) of warUpdates are prose, not records, and were passed over: `
+      + warProse.map((line) => `"${line.length > 80 ? `${line.slice(0, 79)}…` : line}"`).join(", "),
+    );
+  }
 
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
@@ -2468,17 +2481,44 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
     // its regionId, it was given a point inside that land, and sailed about on
     // it (a player's Game, 2026-09-30). It goes to the water off that coast.
     if (entry.atSea && gazetteer.regionAt([lng, lat])) {
-      const offshore = nearestSea([lng, lat], gazetteer, { seed: placementHash(entry.id || entry.name) });
+      const seaSeed = placementHash(entry.id || entry.name);
+      const offshore = nearestSea([lng, lat], gazetteer, { seed: seaSeed });
+      // A NEW fleet inland in its owner's own country, with no sea in reach,
+      // goes to its owner's own waters (placement.js homeWaters), as a new army
+      // nothing places is raised in its owner's own land. The inland point is
+      // usually the engine's own: a place the map could not read is put near
+      // the capital, a unit given no place in the middle of its country, and
+      // for Russia, India or Brazil neither is within reach of a sea. Seen in a
+      // player's Game (2026-10-05): a Black Sea Fleet squadron was raised that
+      // way and then dropped here, so the event's formation never reached the
+      // map. Off the coast nearest where it was put; nearest the capital when
+      // it was given no place at all. A fleet put inland in another power's
+      // country is not sent home to a coast an ocean away: it is dropped, below.
+      const ownWaters = !offshore && entry.spawn && entry.owner
+        && gazetteer.samePolity(gazetteer.regionAt([lng, lat])?.owner, entry.owner)
+        ? homeWaters(entry.owner, gazetteer, {
+          near: (homeland && !homeland.error && gazetteer.capitalOf(entry.owner)?.point) || [lng, lat],
+          seed: seaSeed,
+        })
+        : null;
       if (offshore) {
         noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed on land and was moved to the sea off its coast. Place fleets with "off <port>" or the name of a sea.`);
         lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = "";
+      } else if (ownWaters) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was put to sea off ${ownWaters.coast || entry.owner}, on ${entry.owner}'s own coast, instead. Place fleets with "off <port>" or the name of a sea.`);
+        lng = ownWaters.lng; lat = ownWaters.lat;
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
       } else {
         // Inland, with no sea within reach: there is nowhere for a fleet to go,
-        // so the placement is dropped (a move with no destination is not made)
-        // rather than leaving it sailing on land.
-        noteReceipt(receipt, "dropped", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        // so the placement is dropped (a move with no destination is not made;
+        // a new fleet with no waters of its own to go to is not raised) rather
+        // than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", entry.spawn
+          ? `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was left off the map. Place fleets with "off <port>" or the name of a sea.`
+          : `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
         delete target[lngKey]; delete target[latKey];
         target.regionId = "";
         continue;
@@ -17387,6 +17427,41 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
   return "";
 };
 
+// A fact the compiler left out of the baseline (receipt.omitted) covers nobody.
+// The coverage check counts the answer's wars and processes as written, so it is
+// run again without those facts: a baseline is never accepted, or published, on
+// the strength of a war that is not in it. Nothing left out, nothing to check.
+const pregameCoverageErrorWithoutOmitted = (payload, compilation, options) => {
+  const omittedRefs = new Set(
+    normalizeArray(compilation?.receipt?.omitted).map((entry) => normalizeString(entry?.ref)).filter(Boolean),
+  );
+  if (!omittedRefs.size) return "";
+  return validatePregameBootstrapCoverage({
+    ...payload,
+    canonicalUpdates: normalizeArray(payload?.canonicalUpdates)
+      .filter((fact) => !omittedRefs.has(normalizeString(fact?.ref))),
+  }, options);
+};
+
+// What the compiler did with a fact that says again what the world already
+// holds, in the log the player sends: one line for each fact read as an
+// existing record under that record's title, one for each left out. Logged where
+// the baseline is published, so once, and only for the answer that landed.
+const logPregameRestatedAndOmittedFacts = (compilation) => {
+  for (const entry of normalizeArray(compilation?.receipt?.restated)) {
+    logDebugEvent("ai", `Round Zero read the ${entry.kind} "${entry.title}" as the ${entry.kind} already on record, "${entry.canonicalTitle}": the canonical title is kept and nothing new was made.`, {
+      ref: entry.ref,
+      canonicalId: entry.canonicalId,
+    });
+  }
+  for (const entry of normalizeArray(compilation?.receipt?.omitted)) {
+    logDebugEvent("warn", `[ai] Round Zero left the ${entry.kind} "${entry.title}" out of the baseline; the rest of it stands.`, {
+      ref: entry.ref,
+      reason: entry.reason,
+    });
+  }
+};
+
 // Round Zero validates semantic baseline facts against the current snapshot, but
 // persistent identity is NOT finalized here. Publication recompiles the exact
 // accepted candidate inside mutateCanonicalTurnState against the fresh world and
@@ -17427,9 +17502,20 @@ const validatePregameCanonicalBootstrap = (
     startDate,
     round: 1,
     puppetStates: isActiveFeatureEnabled("puppetStates"),
+    // While a corrective attempt remains, a fact that could be more than one
+    // canonical record is sent back to be said plainly. On the last attempt it
+    // is left out and the rest of the baseline stands: one such fact used to
+    // fail the bootstrap on both attempts, and at every open after that. A fact
+    // that restates the ONE record it could be is accepted on any attempt.
+    leaveOutAmbiguous: !strict,
   });
   if (!compilation.ok) return compilation.error || "Round-Zero semantic baseline compilation failed.";
-  return "";
+  return pregameCoverageErrorWithoutOmitted(candidate, compilation, {
+    world,
+    briefing,
+    canonicalPolities,
+    requirements: coverageRequirements,
+  });
 };
 
 // A fresh game whose scenario wrote a "World Before Round One" briefing gets
@@ -17557,10 +17643,22 @@ export const maybeGeneratePregameHistory = async () => {
         startDate,
         round: 1,
         puppetStates: isActiveFeatureEnabled("puppetStates"),
+        // The answer is accepted and no attempt remains: a fact that could be
+        // more than one canonical record is left out here as it was when the
+        // answer was accepted on its last attempt, and as it must be if the
+        // world gained such a record since. The baseline is not lost to it.
+        leaveOutAmbiguous: true,
       });
       if (!compilation.ok) {
         throw new Error(compilation.error || "Round-Zero semantic baseline compilation failed against fresh canonical state.");
       }
+      const omittedCoverageError = pregameCoverageErrorWithoutOmitted(payload, compilation, {
+        world: currentWorld,
+        briefing,
+        canonicalPolities,
+        requirements: freshCoverageRequirements,
+      });
+      if (omittedCoverageError) throw new Error(omittedCoverageError);
 
       const bootstrapEvents = attachCompiledPregameStorylines(generatedEvents, compilation.projectedWorld);
       const committedEventIds = new Set(bootstrapEvents.map((event) => normalizeString(event?.id)).filter(Boolean));
@@ -17611,6 +17709,7 @@ export const maybeGeneratePregameHistory = async () => {
         `${factCounts.storyline || 0} non-war storyline fact(s), ${derivedStorylineIds.length} derived war mirror(s), ` +
         `${freshCoverageRequirements.length} authoritative armed-actor coverage anchor(s).`,
       );
+      logPregameRestatedAndOmittedFacts(compilation);
 
       const summary = normalizeString(payload?.summary);
       bootstrapWorld.simulationHistory = [

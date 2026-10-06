@@ -881,6 +881,58 @@ export const nearestSea = (point, gazetteer, { seed = 0, maxKm = 400 } = {}) => 
     return null;
 };
 
+// Where a NEW fleet goes when nothing else puts it at sea: the open water off
+// its owner's own coast, at the stretch nearest `near` (where it had been put,
+// or its owner's capital). An army nothing places is raised in its owner's own
+// land; this is the same promise for a fleet, whose own land is no use to it.
+//
+// Seen in a player's Game (2026-10-05, played in Russian): a squadron of the
+// Black Sea Fleet was given the inland fallback an army gets, found no sea
+// within nearestSea's reach of it, and lost its coordinates. The event raised
+// a formation the map never showed.
+//
+// Regions are tried nearest first, by the nearest edge of their box, and the
+// walk stops once no box left could hold a nearer shore than the one found, so
+// a power of three hundred regions is not walked to its far coast. null for an
+// owner the map does not know, or one that holds no coast at all.
+export const homeWaters = (owner, gazetteer, { near = null, seed = 0 } = {}) => {
+    const country = landedPolity(gazetteer.find(asText(owner), { exact: true }));
+    if (!country) return null;
+    const anchor = Array.isArray(near) && near.length >= 2 && near.every(Number.isFinite)
+        ? near
+        : centreOf(heartland(country.regions));
+    if (!anchor) return null;
+    const byReach = country.regions
+        .map((region) => ({ region, box: bboxOfGeometry(region.geometry) }))
+        .filter((entry) => entry.box)
+        .map(({ region, box }) => ({
+            region,
+            km: distanceKm(anchor, [Math.min(Math.max(anchor[0], box[0]), box[2]), Math.min(Math.max(anchor[1], box[1]), box[3])]),
+        }))
+        .sort((a, b) => a.km - b.km);
+    let best = null; let bestKm = Infinity;
+    for (const { region, km } of byReach) {
+        if (km >= bestKm) break;
+        let coast = null;
+        try {
+            coast = coastOf(region, gazetteer, { toward: anchor, seed });
+        } catch {
+            coast = null; // one odd polygon must not cost the fleet its coast
+        }
+        if (!coast) continue;
+        const reach = distanceKm(coast.vertex, anchor);
+        if (reach >= bestKm) continue;
+        for (const out of [OFFSHORE_KM, 16, 8]) {
+            const point = seawardPoint(region, coast.vertex, coast.inner, gazetteer, out);
+            if (!point) continue;
+            best = { point, region };
+            bestKm = reach;
+            break;
+        }
+    }
+    return best ? { ...done(best.point, "home waters", gazetteer, country.name), coast: asText(best.region.name) } : null;
+};
+
 const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
     const readings = readPlacement(phrase, { owner });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };

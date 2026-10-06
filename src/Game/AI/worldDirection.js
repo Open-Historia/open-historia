@@ -39,8 +39,10 @@ export const scaleEventRange = (range, pacePercent = 100) => {
 // An event is the player's when the simulator says so (playerRelated) or when
 // its own words name the player's polity: a model that under-declares cannot
 // talk its way past the count. Whole words, case folded; a short name ("Ob") is
-// matched the same way and simply matches rarely.
-const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+// matched the same way and simply matches rarely. Words of any script: a
+// polity named in Cyrillic or Chinese used to fold to nothing and was never
+// found in an event.
+const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
 
 export const eventConcernsPlayer = (event, playerNames = []) => {
     if (event?.playerRelated === true) return true;
@@ -141,7 +143,10 @@ export const scriptedBeatsInSpan = (beats, { originDate, targetDate, includeOrig
 };
 
 const STOP_WORDS = new Set(["that", "this", "with", "from", "into", "over", "after", "before", "their", "there", "which", "while", "where", "when", "have", "been", "were", "will", "would", "than", "then", "them", "they", "against", "between", "under", "about", "through", "during", "first", "second", "third", "held", "holds", "hold", "makes", "made", "make", "takes", "take", "taken", "signed", "signs", "sign", "declares", "declared", "declare", "wins", "won", "win", "dies", "died", "die", "begins", "begin", "began", "ends", "end", "ended", "falls", "fall", "fell", "opens", "open", "opened", "government", "president", "minister", "state", "states", "national", "forces", "troops", "army", "city", "region", "country", "people", "power", "powers", "war", "treaty", "election", "elections", "vote", "votes"]);
-const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
+// The words a text is known by. Of any script: split on a-z0-9, a beat its
+// author wrote in Russian or Arabic had no words, was never found written,
+// and the engine wrote it a second time beside the model's own telling of it.
+const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
 
 // Did the answer write this beat? An event within a week of the beat's date
 // that shares enough of its particular words — names, places, the things that

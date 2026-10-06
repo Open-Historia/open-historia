@@ -309,3 +309,76 @@ test("a world event that happens to share the order's words cites nothing", () =
   }];
   assert.equal(citeNarratedOrders([nigeriaOrder], events, { isPlayerEvent: () => false }), events);
 });
+
+// --- A game that is not played in Latin letters ---
+// From a player's log (2026-10-05): the game in Russian, the orders, the
+// Projects and the events all in Cyrillic. Every rule above reads words, and
+// the words were folded to a-z0-9: there were none. An order was never found
+// answered, a Project was never found named, and a polity named in Cyrillic
+// folded to no name at all, which the Board reads as the player's own.
+
+const RUSSIA = "Российская Федерация";
+// The order as the player typed it (the log's "Order queued").
+const barnaulOrder = {
+  id: "order-barnaul",
+  status: "planned",
+  title: "Приказ о военных учениях в Барнауле и проверка боеспособности армии",
+  text: "",
+};
+
+test("an event names the player, or happens in their territory, in any script", () => {
+  const isPlayerEvent = createPlayerEventTest({ playerNames: [RUSSIA], territoryNames: ["Севастополь", "Барнаул"] });
+  const event = (title, description = "") => ({ title, description });
+  assert.equal(isPlayerEvent(event("Российская Федерация открывает верфь")), true);
+  assert.equal(isPlayerEvent(event("Беспорядки на юге", "Толпы вышли на улицы: Севастополь перекрыт.")), true);
+  assert.equal(isPlayerEvent(event("Сеул и Пхеньян обмениваются огнём", "Корейский полуостров напряжён.")), false);
+  // Whole words still: a longer word that begins the same way is another word.
+  assert.equal(isPlayerEvent(event("Барнаульский завод закрыт")), false);
+  // A name in Chinese is found where punctuation sets it apart. It is still a
+  // whole word that is looked for, and a sentence written without spaces is
+  // one word: the engine does not cut Chinese or Japanese into words.
+  const chinese = createPlayerEventTest({ playerNames: ["中华人民共和国"] });
+  assert.equal(chinese(event("声明：中华人民共和国，将公布新的五年计划。")), true);
+  assert.equal(chinese(event("首尔消息：大韩民国，举行选举。")), false);
+  assert.equal(chinese(event("中华人民共和国宣布新的五年计划")), false);
+});
+
+test("a Russian order is cited by the event that carries its subject, and settles", () => {
+  const isPlayerEvent = createPlayerEventTest({ playerNames: [RUSSIA] });
+  const events = [
+    {
+      title: "Военные учения в Барнауле: проверка боеспособности армии",
+      description: "Министерство обороны провело внезапную проверку частей Центрального военного округа.",
+      playerRelated: true,
+      impacts: {},
+    },
+    { title: "Сеул объявил о программе модернизации экспорта", description: "Правительство представило пакет мер.", impacts: {} },
+  ];
+  const cited = citeNarratedOrders([barnaulOrder], events, { isPlayerEvent, playerNames: [RUSSIA] });
+  assert.deepEqual(cited[0].impacts.actionIds, ["order-barnaul"]);
+  assert.deepEqual(cited[1], events[1]);
+  assert.equal(settleOrders([barnaulOrder], cited)[0].status, "resolved");
+
+  // An event of the player's that shares a word or two is not the order's answer.
+  const other = [{ title: "Армия получает новые танки", description: "Поставки идут по графику.", playerRelated: true, impacts: {} }];
+  assert.equal(citeNarratedOrders([barnaulOrder], other, { isPlayerEvent, playerNames: [RUSSIA] }), other);
+});
+
+test("a Project named in Cyrillic is the player's or another's by its owner, and is found in an event", () => {
+  const board = [
+    { id: "p-leviathan", name: "Проект Левиафан", ownerCode: "", status: "active", targetDate: "2014-06-01", milestones: [] },
+    { id: "p-fortress", name: "Проект Береговая Крепость", ownerCode: RUSSIA, status: "active", targetDate: "2014-05-15", milestones: [] },
+    { id: "p-kyiv", name: "Программа перевооружения", ownerCode: "Украина", status: "active", targetDate: "2014-05-20", milestones: [] },
+  ];
+  const material = collectPlayerMaterial({
+    projects: board, originDate: "2014-05-01", targetDate: "2014-06-01", playerNames: [RUSSIA], isPlayerEvent: () => false,
+  });
+  assert.deepEqual(
+    material.filter((item) => item.kind === "target").map((item) => item.id).sort(),
+    ["p-fortress", "p-leviathan"],
+    "Ukraine's programme is not the player's: its owner has a name",
+  );
+  const spare = createSpareTest(material);
+  assert.equal(spare({ title: "Проект Левиафан: установлен энергетический блок", impacts: {} }), true);
+  assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: {} }), false);
+});
