@@ -11685,6 +11685,48 @@ export const ensureCountryStatSheet = (target, { reason = "", rateIntelligence =
     return sheet;
   });
 
+// A shared game's host, answering a player whose Stats pane opened a country
+// with no sheet (multiplayer/host/engineMain.js): the sheet, and with it the
+// rating of its service when it has none, in the one request. The player asked,
+// so this is not background AI and no allowance is consulted; whoever asks,
+// one reading of a polity runs at a time. Resolves to the sheet; rejects with
+// the reason when it could not be written.
+const playerReadingsInFlight = new Map();
+export const readCountryForPlayer = (target) => {
+  const name = normalizeString(target);
+  if (!name) return Promise.reject(new Error("There is no country to read."));
+  const key = firstReadingKey("a player's stat sheet", name);
+  if (playerReadingsInFlight.has(key)) return playerReadingsInFlight.get(key);
+  const run = (async () => {
+    const [world, definition] = await Promise.all([
+      readWorldState({ force: true }).then(normalizeWorldState),
+      loadStatSheetDefinition(),
+    ]);
+    const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
+    const complete = definition.custom
+      ? isCompleteCustomCountryStatSheet(persisted, statSheetKeys(definition))
+      : isCompleteCountryStatSheet(persisted);
+    if (complete) return persisted;
+    await waitForSimulationIdle();
+    const rate = !isIntelligenceRated(world, name);
+    const campaign = activeCampaignId();
+    let assessment = null;
+    const sheet = await generateCountryStatSheet({
+      code: name,
+      name,
+      ...(rate ? { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } } : {}),
+    });
+    if (assessment) {
+      await storeFirstIntelligenceRating(name, assessment, { campaign }).catch((error) => {
+        logDebugEvent("espionage", `${name}: the rating that came with the stat sheet was not kept: ${error?.message || error}`);
+      });
+    }
+    return sheet;
+  })().finally(() => playerReadingsInFlight.delete(key));
+  playerReadingsInFlight.set(key, run);
+  return run;
+};
+
 // The background stat-sheet reading now running for this polity, or null. The
 // Stats pane's Economy view waits on it rather than asking for the same sheet
 // a second time as a player request.

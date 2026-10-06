@@ -24,14 +24,20 @@ import { projectForViewer } from "./projection.js";
 import { ORDER_MAX_CHARS } from "../game/messages.js";
 import { withPlayerGoal } from "../../runtime/playerGoal.js";
 import { normalizeProjects } from "../../runtime/gameState.js";
+import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
+import { agentOrderFor } from "./agents.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
+// Stat sheets a player may ask the host to write in one round: each is a
+// request on the host's own AI key.
+export const MAX_SHEETS_PER_ROUND = 6;
 const SEEN_REQUESTS = 64;
 const VIEW_KEYS = ["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags"];
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
+const fold = (value) => clean(value).toLocaleLowerCase();
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -66,6 +72,9 @@ export const createGameHost = ({
   store,
   resolveRound = async () => {},
   replyTo = async () => {},
+  // Write a country's stat sheet (the game's own, on the host's AI key);
+  // rejects with the reason when it cannot.
+  readCountry = async () => {},
   onStatus = () => {},
   log = () => {},
   now = () => Date.now(),
@@ -82,6 +91,8 @@ export const createGameHost = ({
   if (hostCountry && hostSeat.device) seats.claim(hostCountry, { device: hostSeat.device, name: hostSeat.name });
   // playerId → { id, device, name, sent: Map(key → json), rev, seen: string[] }
   const connections = new Map();
+  // seat (folded) → { round, count }: the stat sheets it has asked for this round.
+  const sheetsAsked = new Map();
   let expiryTimer = null;
   let stopped = false;
   let pushing = Promise.resolve();
@@ -249,16 +260,101 @@ export const createGameHost = ({
     unorder: async (connection, { order }, seat) => {
       if (!planning()) return "Orders can be withdrawn while a round is being planned.";
       let found = false;
-      await store.updateActions((actions) => {
-        const next = list(actions).filter((action) => {
-          const mine = clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned";
-          if (mine) found = true;
-          return !mine;
-        });
-        return found ? next : null;
+      // An order that raised or stood down a formation is undone on the map in
+      // the same write that takes it off the queue (host/forces.js).
+      await store.updateForces(({ world, actions }) => {
+        const withdrawn = list(actions).find((action) =>
+          clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
+        if (!withdrawn) return null;
+        found = true;
+        const next = { actions: list(actions).filter((action) => action !== withdrawn) };
+        const reverted = revertOrderFor(world, withdrawn, seat.country, { at: new Date(now()).toISOString() });
+        return reverted === world ? next : { ...next, world: reverted };
       });
       round.touch(seat.country);
       return found ? "" : "That is not one of your queued orders.";
+    },
+    // Raise a formation: it stands on the map as pending, and its Deploy
+    // request rides with the next skip (host/forces.js).
+    deploy: async (connection, request, seat) => {
+      if (!planning()) return "Formations are raised while a round is being planned.";
+      let refusal = "";
+      await store.updateForces(({ world, actions }) => {
+        const result = deployFor({ world, actions }, seat.country, request, {
+          orderId: mintId("order", now),
+          unitId: mintId("unit", now),
+          at: new Date(now()).toISOString(),
+          maxOrders: MAX_ORDERS_PER_ROUND,
+        });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: result.world, actions: result.actions };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    disband: async (connection, { unit }, seat) => {
+      if (!planning()) return "Formations are stood down while a round is being planned.";
+      let refusal = "";
+      await store.updateForces(({ world, actions }) => {
+        const result = disbandFor({ world, actions }, seat.country, unit, {
+          orderId: mintId("order", now),
+          at: new Date(now()).toISOString(),
+          maxOrders: MAX_ORDERS_PER_ROUND,
+        });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: result.world, actions: result.actions };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // The Intelligence tab's orders (host/agents.js): the player's own agents,
+    // and the foreign ones its own service has caught.
+    agent: async (connection, request, seat) => {
+      if (!planning()) return "Agents take orders while a round is being planned.";
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const mine = same(seat.country, hostCountry);
+        const boards = isRecord(world?.seatBoards) ? world.seatBoards : {};
+        const key = Object.keys(boards).find((country) => same(country, seat.country));
+        const board = mine ? list(world?.projects) : list(key ? boards[key] : []);
+        const result = agentOrderFor(world, board, seat.country, request, {
+          host: hostCountry,
+          date: clean(game?.gameDate),
+          known: (name) => countries.some((country) => same(country, name))
+            || Object.entries(isRecord(world?.polityOverrides) ? world.polityOverrides : {}).some(([polity, entry]) => same(polity, name) || same(entry?.name, name)),
+        });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: withSeatBoard(result.world, seat.country, result.board, { host: hostCountry }) };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // A country's stat sheet, when the player's Stats pane has none to show:
+    // the host writes it, on its own AI key, and it reaches every view. The
+    // answer waits for the writing, so the pane can say why when it fails.
+    sheet: async (connection, { country, fresh }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: the figures come with it.";
+      const current = round.status().round;
+      const asked = sheetsAsked.get(fold(seat.country));
+      const count = asked?.round === current ? asked.count : 0;
+      if (count >= MAX_SHEETS_PER_ROUND) return `A player may ask for ${MAX_SHEETS_PER_ROUND} stat sheets a round.`;
+      sheetsAsked.set(fold(seat.country), { round: current, count: count + 1 });
+      try {
+        await readCountry({ country: clean(country), fresh: fresh === true, seat: seat.country });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The host could not write that country's figures.";
+      }
+      round.touch(seat.country);
+      return "";
     },
     goal: async (connection, { text }, seat) => {
       // The game's own rule for a standing goal (runtime/playerGoal.js).

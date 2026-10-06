@@ -22,9 +22,12 @@
 // it is sent.
 //
 // v1 limits, kept deliberately narrow rather than guessed at:
-// - Another country's stat sheet is sent without its intelligence index and its
-//   scenario-defined custom stats (which may be military; the host cannot yet
-//   mark them public), and without its history.
+// - A country's stat sheet is what any government can count or read: capital,
+//   government, population, the economy and the scenario's own figures. Every
+//   sheet goes to every player, as single player shows them. (A scenario's own
+//   figures may be military; the host cannot yet mark some of them private.)
+// - How good a country's intelligence service is, is exact only for its own
+//   government: everyone else is sent an estimate, to the nearest ten.
 // - Agreements carry no secrecy flag yet, so every treaty is public.
 // - Scenes and intercepts are single-player features still keyed to the host's
 //   seat; other seats get none of them.
@@ -56,6 +59,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionSovereigntyOverrides", "settledRegionClaims",
   "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
+  // The stat sheets, and how each has moved: public figures (see the limits above).
+  "countryStats", "countryStatsHistory",
 ]);
 
 // The narrator's and the engine's own. Never in any view.
@@ -70,6 +75,9 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
 // intercepts are sealed with): its own view only.
 const HOST_SEAT_WORLD_KEYS = Object.freeze([
   "activeInteractive", "interactiveOffer", "lastInteractiveOfferRound", "spySeal",
+  // Which countries' sheets a skip refreshes is the host's setting, on the
+  // host's AI key.
+  "countryStatsTracking",
 ]);
 
 const ownsUnit = (world, unitId, viewer) => {
@@ -182,19 +190,13 @@ const FILTERED_WORLD_KEYS = Object.freeze({
     [relation?.a, relation?.b, relation?.polityA, relation?.polityB, relation?.actorA, relation?.actorB]
       .some((party) => same(party, viewer))),
 
-  // Its own sheet whole; another's without what its services would guard.
-  countryStats: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.countryStats) ? world.countryStats : {})
-    .map(([country, sheet]) => {
-      if (same(country, viewer) || !isRecord(sheet)) return [country, sheet];
-      const { customStats: _custom, indices, ...rest } = sheet;
-      if (!isRecord(indices)) return [country, rest];
-      const { intelligenceService: _intel, ...publicIndices } = indices;
-      return [country, { ...rest, indices: publicIndices }];
-    })),
-  countryStatsHistory: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.countryStatsHistory) ? world.countryStatsHistory : {})
-    .filter(([country]) => same(country, viewer))),
+  // Its own service's rating exact; another's as its own services would put
+  // it, to the nearest ten. (The Intelligence tab reads how much of an
+  // intercept it can make out from the two ratings, so it needs one of each.)
   intelligence: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.intelligence) ? world.intelligence : {})
-    .filter(([country]) => same(country, viewer))),
+    .map(([country, rating]) => [country, same(country, viewer) || !Number.isFinite(Number(rating))
+      ? rating
+      : Math.max(0, Math.min(100, Math.round(Number(rating) / 10) * 10))])),
   playerGoals: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.playerGoals) ? world.playerGoals : {})
     .filter(([country]) => same(country, viewer))),
 

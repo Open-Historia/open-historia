@@ -23,7 +23,7 @@ import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState 
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/telemetry.js";
-import { UNSENT_NOTICES, planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
+import { planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
 import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
@@ -136,7 +136,6 @@ const ownWrite = ({ key, wanted, held }) => {
       owner.runtime.patch("world", plan.device, { quiet: true });
     }
     if (plan.board) sendBoard(owner, plan.board);
-    for (const what of plan.unsent) notify(UNSENT_NOTICES[what]);
   }
   return asThePageSavesIt(key, owner.runtime.held(key));
 };
@@ -386,8 +385,8 @@ const connectionError = (connection) => ({
 
 // --- Playing ---------------------------------------------------------------------
 
-export const sharedRequest = (t, fields = {}) => (current?.client
-  ? current.client.request(t, fields)
+export const sharedRequest = (t, fields = {}, options = {}) => (current?.client
+  ? current.client.request(t, fields, options)
   : Promise.resolve({ ok: false, error: "Not in a shared game." }));
 // The game's own panels reach the host through the bridge.
 setSharedRequester(sharedRequest);

@@ -71,8 +71,9 @@ export const createGameClient = ({
     },
 
     // A request to the host; resolves { ok, error } when the host answers, or
-    // with an error when it does not answer in time. Never rejects.
-    request(t, fields = {}) {
+    // with an error when it does not answer in time (`timeoutMs`, for the few
+    // the host answers only once its own AI has: a stat sheet). Never rejects.
+    request(t, fields = {}, { timeoutMs = requestTimeoutMs } = {}) {
       if (closed) return Promise.resolve({ ok: false, error: "Not connected to a shared game." });
       const id = toHex(randomBytes(8));
       const message = { t, id, ...fields };
@@ -80,7 +81,7 @@ export const createGameClient = ({
       const checked = schema ? validate(schema, message) : { ok: false, error: `unknown request ${t}` };
       if (!checked.ok) return Promise.resolve({ ok: false, error: checked.error });
       return new Promise((resolve) => {
-        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), requestTimeoutMs);
+        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), timeoutMs);
         pending.set(id, { resolve, timer });
         try {
           send(checked.value);

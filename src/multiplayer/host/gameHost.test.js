@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createGameHost, MAX_ORDERS_PER_ROUND } from "./gameHost.js";
+import { createGameHost, MAX_ORDERS_PER_ROUND, MAX_SHEETS_PER_ROUND } from "./gameHost.js";
 import { normalizeSettings } from "./settings.js";
 
 const LATVIA = "Republic of Latvia";
@@ -80,6 +80,13 @@ const createStore = () => {
     updateChats: update("chat"),
     updateWorld: update("world"),
     updateGame: update("game"),
+    // The world and the queue together, as one commit.
+    updateForces: async (fn) => {
+      const next = await fn({ world: structuredClone(docs.world), actions: structuredClone(docs.actions), game: structuredClone(docs.game) });
+      if (!next) return;
+      if (next.world) docs.world = next.world;
+      if (next.actions) docs.actions = next.actions;
+    },
   };
 };
 
@@ -89,6 +96,7 @@ const setup = (options = {}) => {
   const sent = [];
   const resolved = [];
   const replies = [];
+  const sheets = [];
   const settings = normalizeSettings({ roundMinutes: 10, countdownSeconds: 30, leaverGraceMinutes: 1, ...options.settings }).settings;
   const host = createGameHost({
     transport: { send: (id, message) => sent.push({ id, message }) },
@@ -104,6 +112,11 @@ const setup = (options = {}) => {
     replyTo: async (info) => {
       replies.push(info);
     },
+    readCountry: async (info) => {
+      sheets.push(info);
+      if (info.country === ESTONIA && options.sheetFails) throw new Error("The model did not answer.");
+      store.docs.world = { ...store.docs.world, countryStats: { ...store.docs.world.countryStats, [info.country]: { capital: "A capital", stability: 50 } } };
+    },
     now: clock.now,
     timers: clock.timers,
   });
@@ -118,7 +131,7 @@ const setup = (options = {}) => {
   const ack = (player, id) => to(player, "ack").find((message) => message.id === id);
   // What a player's screen holds: every view it was sent, applied in order.
   const shown = (player) => Object.assign({}, ...to(player, "view").map((view) => view.docs));
-  return { clock, store, sent, resolved, replies, host, hostPlayer, guest, request, to, ack, shown };
+  return { clock, store, sent, resolved, replies, sheets, host, hostPlayer, guest, request, to, ack, shown };
 };
 
 const id = (n) => n.toString(16).padStart(16, "0");
@@ -304,6 +317,110 @@ test("each player keeps a Projects board of its own: the host's is the game's, a
   await s.request(s.guest, { t: "board", id: id(5), projects: [] });
   assert.deepEqual(s.store.docs.world.seatBoards, {});
   assert.deepEqual(names(s.shown(s.guest).world.projects), []);
+});
+
+test("a player's forces: raised and stood down by the host, for the player who asked, and undone with the order", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  const brigade = { type: "armor", strength: 80, name: "4th Guards", composition: "T-90 tanks", lng: 28.3, lat: 57.8 };
+  await s.request(s.guest, { t: "deploy", id: id(2), ...brigade });
+  assert.match(s.ack(s.guest, id(2)).error, /while a round is being planned/);
+  await s.host.control.start();
+
+  await s.request(s.guest, { t: "deploy", id: id(3), ...brigade });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  const raised = s.store.docs.world.units.at(-1);
+  assert.deepEqual([raised.ownerCode, raised.status, raised.source, raised.type], [RUSSIA, "pending", "player", "armor"]);
+  const request = s.store.docs.actions.find((action) => action.unitRevert?.unitId === raised.id);
+  assert.equal(request.ownerCode, RUSSIA);
+  // Both players see the formation on the map; only its owner sees the request.
+  assert.ok(s.shown(s.hostPlayer).world.units.some((unit) => unit.id === raised.id));
+  assert.deepEqual(s.shown(s.guest).actions.map((action) => action.id), [request.id]);
+  assert.equal(s.shown(s.hostPlayer).actions.some((action) => action.id === request.id), false);
+
+  // Nobody stands down another's formation.
+  await s.request(s.hostPlayer, { t: "disband", id: id(4), unit: raised.id });
+  assert.match(s.ack(s.hostPlayer, id(4)).error, /not one of your formations/);
+  // Withdrawing the request takes the pending formation off the map again.
+  await s.request(s.guest, { t: "unorder", id: id(5), order: request.id });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  assert.equal(s.store.docs.world.units.some((unit) => unit.id === raised.id), false);
+  assert.equal(s.shown(s.hostPlayer).world.units.some((unit) => unit.id === raised.id), false);
+
+  // A standing formation stood down leaves the map with an order that says so.
+  s.store.docs.world.units = [{ id: "ru-1", name: "76th Division", type: "infantry", ownerCode: RUSSIA, strength: 90, lng: 28.3, lat: 57.8, status: "idle", source: "ai" }];
+  await s.request(s.guest, { t: "disband", id: id(6), unit: "ru-1" });
+  assert.equal(s.ack(s.guest, id(6)).ok, true);
+  assert.deepEqual(s.store.docs.world.units, []);
+  const disband = s.store.docs.actions.find((action) => action.unitRevert?.restore?.id === "ru-1");
+  assert.match(disband.text, /^Disband order: 76th Division/);
+  await s.request(s.guest, { t: "unorder", id: id(7), order: disband.id });
+  assert.deepEqual(s.store.docs.world.units.map((unit) => unit.id), ["ru-1"], "the order withdrawn, it stands again");
+});
+
+test("a player's agents: its own to place and recall, and a caught one the business of the country that caught it", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const agent = (fields) => ({ t: "agent", target: "", spy: "", story: "", ...fields });
+
+  await s.request(s.guest, agent({ id: id(2), op: "deploy", target: ESTONIA }));
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  const placed = s.store.docs.world.spies[0];
+  assert.deepEqual([placed.owner, placed.target, placed.status, placed.deployedAt], [RUSSIA, ESTONIA, "active", "2014-04-01"]);
+  // It stands on its owner's board, which is not the game's own.
+  assert.deepEqual(s.store.docs.world.seatBoards[RUSSIA].map((project) => project.name), [`Agent in ${ESTONIA}`]);
+  assert.deepEqual(s.store.docs.world.projects ?? [], []);
+  assert.equal(s.shown(s.guest).world.spies.length, 1);
+  assert.equal(JSON.stringify(s.shown(s.hostPlayer).world).includes(placed.id), false, "nobody else is told");
+
+  await s.request(s.guest, agent({ id: id(3), op: "deploy", target: "Atlantis" }));
+  assert.match(s.ack(s.guest, id(3)).error, /Unknown country/);
+  await s.request(s.hostPlayer, agent({ id: id(4), op: "recall", spy: placed.id }));
+  assert.match(s.ack(s.hostPlayer, id(4)).error, /not one of your agents/);
+
+  // Latvia's service catches a Russian agent: what becomes of it is Latvia's call.
+  s.store.docs.world.spies.push({ id: "spy-in-lv", owner: RUSSIA, target: LATVIA, status: "discovered", deployedAt: "2014-03-01" });
+  await s.request(s.guest, agent({ id: id(5), op: "expel", spy: "spy-in-lv" }));
+  assert.match(s.ack(s.guest, id(5)).error, /not an agent your service is holding/);
+  await s.request(s.hostPlayer, agent({ id: id(6), op: "turn", spy: "spy-in-lv", story: "The fleet stays in port." }));
+  assert.equal(s.ack(s.hostPlayer, id(6)).ok, true);
+  const turned = s.store.docs.world.spies.find((spy) => spy.id === "spy-in-lv");
+  assert.deepEqual([turned.status, turned.coverStory], ["turned", "The fleet stays in port."]);
+  // Its owner still sees an agent at work, and never the story it is fed.
+  const seenByOwner = s.shown(s.guest).world.spies.find((spy) => spy.id === "spy-in-lv");
+  assert.equal(seenByOwner.status, "active");
+  assert.equal(JSON.stringify(s.shown(s.guest).world).includes("The fleet stays in port."), false);
+
+  await s.request(s.guest, agent({ id: id(7), op: "recall", spy: placed.id }));
+  assert.equal(s.store.docs.world.spies.find((spy) => spy.id === placed.id).status, "recalled");
+  assert.equal(s.store.docs.world.seatBoards[RUSSIA][0].status, "cancelled");
+});
+
+test("a stat sheet is written by the host when a player's Stats pane has none, a few a round, and reaches everyone", async () => {
+  const s = setup({ sheetFails: true });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "sheet", id: id(2), country: RUSSIA, fresh: false });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual(s.sheets, [{ country: RUSSIA, fresh: false, seat: RUSSIA }]);
+  assert.equal(s.shown(s.guest).world.countryStats[RUSSIA].capital, "A capital");
+  assert.equal(s.shown(s.hostPlayer).world.countryStats[RUSSIA].capital, "A capital", "a sheet is public");
+  // The host's reason for failing is the player's answer.
+  await s.request(s.guest, { t: "sheet", id: id(3), country: ESTONIA, fresh: true });
+  assert.equal(s.ack(s.guest, id(3)).error, "The model did not answer.");
+  // Each is a request on the host's key: a player has a few a round.
+  for (let n = 0; n < MAX_SHEETS_PER_ROUND; n += 1) await s.request(s.guest, { t: "sheet", id: id(10 + n), country: LATVIA, fresh: false });
+  assert.match(s.ack(s.guest, id(10 + MAX_SHEETS_PER_ROUND - 1)).error, /stat sheets a round/);
+  // The other player's count is its own.
+  await s.request(s.hostPlayer, { t: "sheet", id: id(40), country: LATVIA, fresh: false });
+  assert.equal(s.ack(s.hostPlayer, id(40)).ok, true);
 });
 
 test("when the game stops being shared the save is single player again", async () => {

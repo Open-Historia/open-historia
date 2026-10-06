@@ -27,5 +27,6 @@ export const buildSharedGameDirective = (game) => {
     "- The world acts on every player's polity as on any other — pressure, incidents, reactions, attacks — and never decides a player polity's own reply.",
     "- A player polity's choice with no order or message of its own behind it is withdrawn by the engine: write each player's outcomes from their own orders.",
     "- Share the period between the players: every player's orders get their outcomes, and no one player's polity is the whole story.",
+    "- On the Projects board, an entry owned by one of these polities is that player's own work, lent to this board for the period: advance it, miss its milestones or finish it by what happens, exactly as you do the first player's own. It is never something another government has found out, and an entry marked secret or covert is known to its own government alone: no event may reveal it to the others.",
   ].join("\n");
 };

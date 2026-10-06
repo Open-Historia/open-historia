@@ -17,14 +17,14 @@ const held = () => ({
 
 test("a save that changes nothing of the player's own plans nothing", () => {
   const wanted = { ...held(), polityOverrides: { France: { name: "Changed by a cheat" } }, lastJumpSummary: "", gmAudit: [] };
-  assert.deepEqual(planWorldWrite(held(), wanted), { device: {}, board: null, unsent: [] });
-  assert.deepEqual(planWorldWrite(held(), null), { device: {}, board: null, unsent: [] });
+  assert.deepEqual(planWorldWrite(held(), wanted), { device: {}, board: null });
+  assert.deepEqual(planWorldWrite(held(), null), { device: {}, board: null });
 });
 
 test("the AI's suggestions stay on this device", () => {
   const topics = [{ id: "topic-0", title: "Shore up the franc", actions: [] }];
   const plan = planWorldWrite(held(), { ...held(), actionSuggestions: topics });
-  assert.deepEqual(plan, { device: { actionSuggestions: topics }, board: null, unsent: [] });
+  assert.deepEqual(plan, { device: { actionSuggestions: topics }, board: null });
   // Held already (this device's own, laid over the view): saved again, nothing to do.
   assert.deepEqual(planWorldWrite({ ...held(), actionSuggestions: topics }, { ...held(), actionSuggestions: topics }).device, {});
   // Cleared by the page itself.
@@ -39,15 +39,9 @@ test("the player's own Projects board is asked of the host, whole", () => {
   assert.equal(planWorldWrite(held(), { units: [] }).board, null, "a save that says nothing of the board changes none");
 });
 
-test("orders to units and agents are not sent, and are named once each", () => {
-  const moved = { ...held(), units: [unit("fr-1", 11, 50), held().units[1]] };
-  assert.deepEqual(planWorldWrite(held(), moved).unsent, ["units"]);
-  const deployed = { ...held(), units: [...held().units, unit("fr-2", 2, 48, { status: "pending" })], pendingUnitOrders: [{ id: "o1", status: "" }] };
-  assert.deepEqual(planWorldWrite(held(), deployed).unsent, ["units"]);
-  assert.deepEqual(planWorldWrite(held(), { ...held(), spies: [...held().spies, { id: "spy-2", status: "active" }] }).unsent, ["agents"]);
-  // The page's normalizer filling a default or reordering a field is not an order.
-  const renormalized = { ...held(), units: held().units.map((entry) => ({ note: "", ...entry, lng: Number(entry.lng.toFixed(6)) })) };
-  assert.deepEqual(planWorldWrite(held(), renormalized).unsent, []);
+test("forces and agents never travel in a save: their own screens ask the host", () => {
+  const moved = { ...held(), units: [unit("fr-1", 11, 50), held().units[1]], spies: [...held().spies, { id: "spy-2", status: "active" }] };
+  assert.deepEqual(planWorldWrite(held(), moved), { device: {}, board: null });
 });
 
 test("suggestions are for the round they were asked in", () => {

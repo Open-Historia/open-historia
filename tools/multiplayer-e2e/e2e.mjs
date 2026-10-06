@@ -606,6 +606,37 @@ try {
       && !(hostFile.projects ?? []).some((project) => project.name === PROJECT)
       && !JSON.stringify(hostScreenWorld).includes(PROJECT),
     JSON.stringify({ status: await guest.eval("window.__boardSave"), onGuestBoard, kept: (hostFile.seatBoards?.[GUEST_COUNTRY] ?? []).map((project) => project.name), onTheGamesOwn: (hostFile.projects ?? []).length, onTheHostsScreen: JSON.stringify(hostScreenWorld).includes(PROJECT) }));
+  // An agent of the guest's own, placed from the Intelligence tab: the host
+  // keeps it, tells nobody else, and it stands on the guest's own board.
+  const clickButton = (tab, test) => tab.eval(`(() => { const button = [...document.querySelectorAll('button')].find((b) => !b.disabled && (${test})(b.textContent.replace(/\\s+/g, ' ').trim())); if (button) button.click(); return Boolean(button); })()`);
+  await toggleChats(guest);
+  await sleep(500);
+  await backToList(guest);
+  await until(guest, "[...document.querySelectorAll('button')].some((b) => b.textContent.trim().startsWith('Intelligence'))", 15000);
+  await clickButton(guest, "(text) => text.startsWith('Intelligence')");
+  await until(guest, "Boolean(document.querySelector('[data-intelligence-workspace]'))", 15000);
+  // The button that places one is on the workspace's Operations page, or its first.
+  if (!(await clickButton(guest, "(text) => text.includes('Deploy a network')"))) {
+    await clickButton(guest, "(text) => text === 'Operations'");
+    await sleep(400);
+    await clickButton(guest, "(text) => text.includes('Deploy a network')");
+  }
+  await until(guest, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
+  await pickCountry(guest, AI_COUNTRY);
+  const confirmedAgent = await clickButton(guest, "(text) => /^(Deploy|Send|Place)/.test(text) && !text.includes('♟') && !text.includes('a network')");
+  const agentPlaced = await until(guest, `window.__e2e.view('world').then((world) => (world.spies || []).some((spy) => spy.target === ${JSON.stringify(AI_COUNTRY)}))`, 20000);
+  const guestWorldWithAgent = await guest.eval("window.__e2e.view('world')");
+  const hostWorldWithAgent = await host.eval("window.__e2e.view('world')");
+  const hostFileWithAgent = await (await fetch(`${HOST}/api/runtime/json/world?v=e2e`)).json();
+  check("the guest places an agent from the Intelligence tab: the host keeps it for the guest alone, and it stands on the guest's board",
+    agentPlaced
+      && (hostFileWithAgent.spies ?? []).some((spy) => spy.owner === GUEST_COUNTRY && spy.target === AI_COUNTRY && spy.status === "active")
+      && !(hostWorldWithAgent.spies ?? []).some((spy) => spy.target === AI_COUNTRY)
+      && (guestWorldWithAgent.projects ?? []).some((project) => project.name === `Agent in ${AI_COUNTRY}`),
+    JSON.stringify({ confirmed: confirmedAgent, placed: agentPlaced, inTheHostsGame: (hostFileWithAgent.spies ?? []).map((spy) => `${spy.owner}>${spy.target}:${spy.status}`), onTheHostsScreen: (hostWorldWithAgent.spies ?? []).length, guestBoard: (guestWorldWithAgent.projects ?? []).map((project) => project.name), guestSays: (await guest.eval("document.body.innerText")).split("\n").filter((line) => /could not|did not|not one|Unknown|at most/i.test(line)).slice(0, 3) }));
+  await toggleChats(guest);
+  await sleep(300);
+
   await shoot(guest, "1-guest-planning");
   await shoot(host, "1-host-planning");
 
@@ -618,6 +649,15 @@ try {
   check("the model is told who plays what, and whose each order is",
     lastJumpBody.includes("[Shared Game") && lastJumpBody.includes(`(action, ${GUEST_COUNTRY})`) && lastJumpBody.includes(`(action, ${HOST_COUNTRY})`),
     lastJumpBody.split("\n").filter((line) => line.includes("(action,") || line.startsWith("People play")).slice(0, 4).join(" | "));
+  // The guest's own open project stood on the game's board for the skip, so
+  // the world could move it, and is home again afterwards: on the guest's
+  // board, not the host's.
+  const hostFileAfterRound = await (await fetch(`${HOST}/api/runtime/json/world?v=e2e`)).json();
+  check("the time skip is shown every player's own projects, and each board is its owner's again afterwards",
+    resolved && lastJumpBody.includes(PROJECT)
+      && (hostFileAfterRound.seatBoards?.[GUEST_COUNTRY] ?? []).some((project) => project.name === PROJECT)
+      && !(hostFileAfterRound.projects ?? []).some((project) => project.name === PROJECT),
+    JSON.stringify({ inThePrompt: lastJumpBody.includes(PROJECT), guestBoard: (hostFileAfterRound.seatBoards?.[GUEST_COUNTRY] ?? []).map((project) => project.name), gamesOwn: (hostFileAfterRound.projects ?? []).map((project) => project.name) }));
   const guestEvents = resolved ? await guest.eval("window.__e2e.view('events')") : [];
   const hostEvents = resolved ? await host.eval("window.__e2e.view('events')") : [];
   const war = (events) => events.some((event) => String(event.title).includes("declares war on Ukraine"));

@@ -15,7 +15,8 @@
 // prefetchGameplay() warms the chunk after first world idle so the player's
 // first turn does not also pay the download.
 
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { readWorldStateView } from "../../runtime/gameState.js";
 
 let modulePromise = null;
 
@@ -103,10 +104,35 @@ export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-export const generateCountryStatSheet = hostOnly(async (...args) => (await gameplay()).generateCountryStatSheet(...args));
+// A stat sheet is the game's own record, so in a shared game the host writes
+// it, on the host's AI key: the page asks (the host answers once it is
+// written, which takes as long as the model does) and reads the sheet out of
+// its next view. A refusal is thrown with the host's reason, as any failed
+// reading is, and the Stats pane shows it.
+const SHEET_ANSWER_MS = 5 * 60 * 1000;
+const sheetFromHost = async ({ code, name, forceReassess = false, signal } = {}) => {
+  const country = String(code || name || "").trim();
+  const answer = await requestFromHost("sheet", { country, fresh: forceReassess === true }, { timeoutMs: SHEET_ANSWER_MS });
+  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  if (!answer.ok) throw new Error(answer.error || "The host did not write the stat sheet.");
+  // The sheet comes with the view the host sends right after its answer.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const world = await readWorldStateView({ force: true }).catch(() => null);
+    const sheet = world?.countryStats?.[country];
+    if (sheet && typeof sheet === "object") return sheet;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("The host wrote the stat sheet, but it has not arrived yet. Open the country again in a moment.");
+};
+export const generateCountryStatSheet = async (...args) => (inSharedGame()
+  ? sheetFromHost(...args)
+  : (await gameplay()).generateCountryStatSheet(...args));
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
-export const generateCountryStats = hostOnly(async (...args) => (await gameplay()).generateCountryStats(...args));
+// A briefing on a country, in prose: asked with the player's own key from what
+// the player's own screen holds, and written nowhere. A page playing a shared
+// game asks it like any other.
+export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
 // Listen in: one request for what people in a place are posting (runtime/listenIn.js).
 // It writes nothing to the game: asked with the player's own key, kept on the
 // player's own device, so a page playing a shared game asks it like any other.

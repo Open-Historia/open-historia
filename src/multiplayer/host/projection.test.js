@@ -76,10 +76,10 @@ const state = () => ({
       { id: "rel-lv-ru", a: LATVIA, b: RUSSIA, score: -40, status: "tense", summary: "a relation both know" },
     ],
     countryStats: {
-      [RUSSIA]: { capital: "Moscow", stability: 60, customStats: { secretMissiles: 4242 }, indices: { intelligenceService: 97, sovereignty: 80 } },
-      [LATVIA]: { capital: "Riga", stability: 70, customStats: { reserves: 5151 }, indices: { intelligenceService: 41, sovereignty: 60 } },
+      [RUSSIA]: { capital: "Moscow", stability: 60, customStats: { prestige: 4242 }, indices: { sovereignty: 80 } },
+      [LATVIA]: { capital: "Riga", stability: 70, customStats: { prestige: 5151 }, indices: { sovereignty: 60 } },
     },
-    countryStatsHistory: { [RUSSIA]: [{ date: "2014-01-01", stability: 58, note: "CANARY-RU-HISTORY" }] },
+    countryStatsHistory: { [RUSSIA]: [{ date: "2014-01-01", stability: 58 }] },
     intelligence: { [RUSSIA]: 88, [LATVIA]: 36 },
     playerGoals: { [RUSSIA]: { text: "CANARY-RU-GOAL" }, [LATVIA]: { text: "Riga's goal" } },
     politicalActors: {
@@ -176,15 +176,19 @@ test("nothing private of the second player reaches the host's view", () => {
   const view = text(projectForViewer(state(), LATVIA));
   for (const canary of [
     "CANARY-RU-DESTINATION", "CANARY-RU-PROJECT", "CANARY-RU-FILE-ON-LV", "CANARY-RU-PAST-ORDER", "CANARY-RU-REPORT", "CANARY-RU-EST-RELATION",
-    "CANARY-RU-HISTORY", "CANARY-RU-GOAL", "CANARY-RU-STRATEGY", "CANARY-RU-TO-EST", "CANARY-RU-ORDER",
+    "CANARY-RU-GOAL", "CANARY-RU-STRATEGY", "CANARY-RU-TO-EST", "CANARY-RU-ORDER",
     "order-ru-1", "order-ru-march", "CANARY-MOVE-NOTE", "CANARY-ACTOROP", "CANARY-LEADER-MEMORY",
-    "secretMissiles", "spy-ru-in-est", "pup-covert",
+    "spy-ru-in-est", "pup-covert",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the host's view`);
-  // Numbers are checked where they live: a bare "97" can turn up in any timestamp.
-  const sheet = projectForViewer(state(), LATVIA).world.countryStats[RUSSIA];
-  assert.equal(sheet.customStats, undefined);
-  assert.equal(sheet.indices.intelligenceService, undefined);
-  assert.equal(sheet.indices.sovereignty, 80);
+  // Numbers are checked where they live: a bare "88" can turn up in any timestamp.
+  // How good Russia's service is, is Russia's to know: everyone else has an estimate.
+  const world = projectForViewer(state(), LATVIA).world;
+  assert.deepEqual(world.intelligence, { [RUSSIA]: 90, [LATVIA]: 36 });
+  // A stat sheet is what anyone can count: it goes to everyone whole, as single player shows it.
+  const whole = normalizeWorldState(state().world);
+  assert.deepEqual(world.countryStats[RUSSIA], whole.countryStats[RUSSIA]);
+  assert.equal(world.countryStats[RUSSIA].customStats.prestige, 4242);
+  assert.deepEqual(world.countryStatsHistory, whole.countryStatsHistory);
 });
 
 test("nothing private of the host reaches the second player's view", () => {
@@ -193,7 +197,7 @@ test("nothing private of the host reaches the second player's view", () => {
     "CANARY-LV-PATROL", "CANARY-LV-PROJECT", "CANARY-LV-FILE-ON-RU", "CANARY-LV-PAST-ORDER", "CANARY-HOST-PROVIDER-ERROR",
     "CANARY-LV-TO-EST", "CANARY-LV-ORDER", "order-lv-1", "order-lv-patrol",
     SEAL, "CANARY-LV-SCENE", "CANARY-LV-INTERCEPT", "CANARY-LV-OPENING",
-    "CANARY-BALTIC-PROPOSAL", "Riga's goal", "reserves",
+    "CANARY-BALTIC-PROPOSAL", "Riga's goal",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the second player's view`);
 });
 
@@ -222,9 +226,10 @@ test("each player sees all of its own, as single player shows it", () => {
     plannedActions: ru.world.simulationHistory[0].plannedActions,
   }]);
   assert.deepEqual(ru.world.simulationHistory[0].plannedActions.map((action) => action.id), ["order-ru-0"]);
-  assert.deepEqual(ru.world.intelligence, { [RUSSIA]: 88 });
+  assert.deepEqual(ru.world.intelligence, { [RUSSIA]: 88, [LATVIA]: 40 }, "its own exactly, another's to the nearest ten");
   assert.deepEqual(ru.world.playerGoals, { [RUSSIA]: { text: "CANARY-RU-GOAL" } });
-  assert.equal(ru.world.countryStats[RUSSIA].customStats.secretMissiles, 4242);
+  assert.equal(ru.world.countryStats[RUSSIA].customStats.prestige, 4242);
+  assert.equal(ru.world.countryStats[LATVIA].customStats.prestige, 5151, "every sheet, whole");
   assert.equal(ru.world.politicalActors.byPolity[RUSSIA].strategy.summary, "CANARY-RU-STRATEGY");
   assert.equal(ru.world.puppets[0].loyalty, 37, "the overlord knows its puppet's loyalty");
   assert.deepEqual(ru.world.reports.map((report) => report.id).sort(), ["rep-lv", "rep-public", "rep-ru"]);

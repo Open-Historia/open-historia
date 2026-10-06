@@ -10,11 +10,10 @@
 //   asked of the host     the player's own Projects board (request "board"):
 //                         what their advisor put on it, or the board's own
 //                         buttons changed. The host keeps one for each country.
-//   not sent, and said    orders to units and to agents. They are not requests
-//                         yet, and the player is told so rather than left
-//                         watching a unit they placed disappear.
 //
-// Everything else in the document stays as the host's view has it.
+// Everything else in the document stays as the host's view has it. What a
+// player does with forces and agents never comes this way: those screens ask
+// the host themselves (requests "deploy", "disband", "order" and "agent").
 //
 // Import-free: plain data in, a plan out, tested under bare node.
 
@@ -24,42 +23,17 @@ const differs = (left, right) => JSON.stringify(left ?? null) !== JSON.stringify
 
 export const DEVICE_WORLD_KEYS = Object.freeze(["actionSuggestions"]);
 
-// What stands for a list when asking whether the player changed it. The page
-// saves through the game's own normalizer, which may reorder a field or fill a
-// default the host's copy left out, so only what a player's order would change
-// is compared.
-const unitsSignature = (units) => list(units)
-  .map((unit) => [unit?.id, unit?.ownerCode, unit?.status, Number(unit?.lng).toFixed(3), Number(unit?.lat).toFixed(3), unit?.orderId ?? ""].join("|"))
-  .sort()
-  .join(";");
-const idsSignature = (rows) => list(rows).map((row) => `${row?.id ?? ""}|${row?.status ?? ""}`).sort().join(";");
-
-const UNSENT = Object.freeze([
-  { key: "units", signature: unitsSignature, what: "units" },
-  { key: "pendingUnitOrders", signature: idsSignature, what: "units" },
-  { key: "spies", signature: idsSignature, what: "agents" },
-]);
-
-export const UNSENT_NOTICES = Object.freeze({
-  units: "Orders to units cannot be given in a shared game yet, so that one was not sent. Write it as an order in the Actions panel instead.",
-  agents: "Orders to agents cannot be given in a shared game yet, so that one was not sent.",
-});
-
 // What a world the page wants to save would change, against the one it holds:
 //   device   fields kept on this device (field → value)
 //   board    the player's Projects board to ask the host to keep, or null
-//   unsent   what the player tried that cannot be asked of the host yet
 export const planWorldWrite = (held, wanted) => {
-  const plan = { device: {}, board: null, unsent: [] };
+  const plan = { device: {}, board: null };
   if (!isRecord(wanted)) return plan;
   const before = isRecord(held) ? held : {};
   for (const key of DEVICE_WORLD_KEYS) {
     if (key in wanted && differs(before[key], wanted[key])) plan.device[key] = wanted[key];
   }
   if (Array.isArray(wanted.projects) && differs(list(before.projects), wanted.projects)) plan.board = wanted.projects;
-  for (const { key, signature, what } of UNSENT) {
-    if (key in wanted && signature(before[key]) !== signature(wanted[key]) && !plan.unsent.includes(what)) plan.unsent.push(what);
-  }
   return plan;
 };
 

@@ -37,7 +37,8 @@ export const setSharedRequester = (request) => {
   requester = typeof request === "function" ? request : null;
 };
 
-// { ok, error }; never rejects.
-export const requestFromHost = (t, fields = {}) => (requester
-  ? requester(t, fields)
+// { ok, error }; never rejects. `options.timeoutMs` for a request the host
+// answers only once its own AI has (a stat sheet).
+export const requestFromHost = (t, fields = {}, options = {}) => (requester
+  ? requester(t, fields, options)
   : Promise.resolve({ ok: false, error: "Not in a shared game." }));

@@ -279,6 +279,11 @@ const Main = ({
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
     && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
     && sharedRole !== "guest";
+  // The game master's tools are not offered in a shared game (see onOpenCheats
+  // below): a panel already open when one begins closes.
+  useEffect(() => {
+    if (sharedRole) setIsCheatsOpen(false);
+  }, [sharedRole]);
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -696,7 +701,9 @@ const Main = ({
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
           onOpenEvents={() => setActiveBottomPanel("history")}
-          onOpenCheats={() => {
+          // The game master's tools write the game itself, which in a shared
+          // game is the host's engine's alone: they are not offered there.
+          onOpenCheats={sharedRole ? undefined : () => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);
             setIsSettingsOpen(false);

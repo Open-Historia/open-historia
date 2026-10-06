@@ -2910,6 +2910,13 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     // Refused while a turn runs: the turn writes back the world it read, and a
     // deployed, expelled or recalled agent would be undone when it landed. Every
     // caller shows the error.
+    // In a shared game an agent's order is asked of the host, which keeps every
+    // player's agents and holds each order to the same rules
+    // (multiplayer/host/agents.js); the change comes back in the next view.
+    const askHostForAgent = async (fields) => {
+        const answer = await requestFromHost("agent", { target: "", spy: "", story: "", ...fields });
+        if (!answer.ok) throw new Error(answer.error || "The host did not take the order.");
+    };
     const commitSpies = async (next) => {
         assertNoTurnRunning();
         const fresh = await readWorldState({ force: true });
@@ -2923,16 +2930,25 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 
     const handleExpel = async (spy) => {
         setError("");
-        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "expel", spy: spy.id });
+            else await commitSpies(expelSpy(world, spy.id, { date: gameDate }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleTurn = async (spy) => {
         setError("");
-        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "turn", spy: spy.id, story: String(storyDraft[spy.id] || "").slice(0, 300) });
+            else await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleStory = async (spy) => {
         setError("");
         try {
-            await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
+            if (inSharedGame()) await askHostForAgent({ op: "story", spy: spy.id, story: String(storyDraft[spy.id] ?? spy.coverStory ?? "").slice(0, 300) });
+            else await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
             setSavedFlash(spy.id);
             setTimeout(() => setSavedFlash((current) => (current === spy.id ? "" : current)), 1800);
         } catch (err) { setError(err?.message || String(err)); }
@@ -2941,8 +2957,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         setChoosing(false); setError("");
         const target = selected?.[0]?.name;
         try {
-            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
-            await commitSpies(next);
+            if (inSharedGame()) await askHostForAgent({ op: "deploy", target: String(target || "") });
+            else await commitSpies(deploySpy(world, target, { date: gameDate, playerPolity: playerCountry }));
             setSelectedCountry(target || "");
             setSection("countries");
             void ensureCountryAssessed(target, { reason: "agent deployed" });
@@ -2950,7 +2966,10 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     };
     const handleRecall = async (spy) => {
         setError("");
-        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "recall", spy: spy.id });
+            else await commitSpies(recallSpy(world, spy.id));
+        } catch (err) { setError(err?.message || String(err)); }
     };
 
     if (open) {
