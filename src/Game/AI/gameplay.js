@@ -140,7 +140,7 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
-import { OUTPUT_LIMIT_MESSAGE } from "./providerErrors.js";
+import { OUTPUT_LIMIT_MESSAGE, isUnreachableError } from "./providerErrors.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -2953,6 +2953,12 @@ const runJsonTask = async (taskKey, {
   // (providerErrors.js connectionClosedError): the report below says that, not
   // that the request never got an answer.
   let connectionClosed = false;
+  // The task ended on the connection either way: that, or a server that could
+  // not be reached at all (providerErrors.js couldNotBeReached). Handed back
+  // with the result, so a caller that asks again differently when the provider
+  // REFUSED the request does not take this for a refusal (a folded time skip:
+  // foldedSkip.js providerRefusedContract).
+  let transportFailure = false;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3488,6 +3494,7 @@ const runJsonTask = async (taskKey, {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
     connectionClosed = actualError?.connectionClosed === true;
+    transportFailure = connectionClosed || isUnreachableError(actualError);
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -3549,7 +3556,7 @@ const runJsonTask = async (taskKey, {
   }
 
   if (typeof fallback !== "function") {
-    throw new Error(`AI task "${taskKey}" failed: ${failureReason}`);
+    throw Object.assign(new Error(`AI task "${taskKey}" failed: ${failureReason}`), transportFailure ? { transportFailure: true } : {});
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
@@ -3578,6 +3585,9 @@ const runJsonTask = async (taskKey, {
   return {
     generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
     payload: await fallback(),
+    // Beside the generation, not in it: that record is written into the game's
+    // history, and this is for the caller alone.
+    ...(transportFailure ? { transportFailure: true } : {}),
   };
 };
 
@@ -14132,14 +14142,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (state.folded) {
         let refused = false;
         let refusal = null;
+        // A call that ended on the connection (the server could not be reached,
+        // or closed while the answer was arriving) is no refusal, whatever
+        // statuses came before it: the task runner says which it was
+        // (`transportFailure`), and the turn fails the way any skip does.
         try {
           answer = await askSegment(true);
-          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses);
+          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses, { transportFailure: answer.transportFailure === true });
         } catch (error) {
           // A request too large for every model the player has is the same
           // case: the folded one is the larger of the two.
           const tooBig = error?.providerFailure?.kind === "tooBig";
-          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses))) throw error;
+          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses, { transportFailure: error?.transportFailure === true }))) throw error;
           refused = true;
           refusal = error;
         }

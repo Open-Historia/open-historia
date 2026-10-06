@@ -52,6 +52,28 @@ test("an answered request, a busy model and a rate limit are not the contract's 
   assert.equal(providerRefusedContract(null), false);
 });
 
+// The statuses cannot tell these apart from a refusal: the call gave way on
+// something else first (a 400), and then the connection went. The task runner
+// says how the call ended.
+test("a call that ended on the connection was not refused, whatever statuses came before it", () => {
+  // The JSON-text form refused, then the server could not be reached for the second request.
+  assert.equal(providerRefusedContract([400]), true);
+  assert.equal(providerRefusedContract([400], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([422, 400], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([429, 400], { transportFailure: true }), false);
+  // A server that was never reached sent nothing at all, and one that closed
+  // mid-answer had answered 200: neither was a refusal to begin with.
+  assert.equal(providerRefusedContract([], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([200], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([400, 200], { transportFailure: true }), false);
+  // An answer cut at the model's output limit came with a 200.
+  assert.equal(providerRefusedContract([200]), false);
+  // And a refusal stays one: the word is only ever the task runner's, about the connection.
+  assert.equal(providerRefusedContract([400], { transportFailure: false }), true);
+  assert.equal(providerRefusedContract([400], {}), true);
+  assert.equal(providerRefusedContract([400, 400]), true, "refused as JSON text and again as a function call");
+});
+
 // ---------------------------------------------------------------------------
 // The board's ops, lifted off the events
 
@@ -185,13 +207,24 @@ test("a skip is folded exactly when requests are being saved, decided once", () 
 
 test("a refused folded request is asked again the old way, and only a refusal is", () => {
   const body = functionBody("runJumpSegments");
-  assert.match(body, /refused = answer\.generation\?\.source === "fallback" && providerRefusedContract\(statuses\);/);
-  assert.match(body, /if \(signal\?\.aborted \|\| error\?\.name === "AbortError" \|\| !\(tooBig \|\| providerRefusedContract\(statuses\)\)\) throw error;/, "a cancel is never swallowed");
+  assert.match(body, /refused = answer\.generation\?\.source === "fallback" && providerRefusedContract\(statuses, \{ transportFailure: answer\.transportFailure === true \}\);/);
+  assert.match(body, /if \(signal\?\.aborted \|\| error\?\.name === "AbortError" \|\| !\(tooBig \|\| providerRefusedContract\(statuses, \{ transportFailure: error\?\.transportFailure === true \}\)\)\) throw error;/, "a cancel is never swallowed");
   const retry = body.slice(body.indexOf("if (refused) {"), body.indexOf("const { generation: segmentGeneration"));
   assert.match(retry, /state\.folded = false;/);
   assert.match(retry, /answer = await askSegment\(false\);/);
   assert.match(retry, /if \(answer\.generation\?\.source !== "fallback"\) foldedSkipRefused = true;/, "remembered only once the old way has worked");
   assert.ok(retry.indexOf("state.folded = false;") < retry.indexOf("answer = await askSegment(false);"));
+});
+
+// How the skip knows a call ended on the connection: the task runner says so,
+// beside a fallback's result (a single-request skip) and on the error it throws
+// (a segment of a longer one, which has no fallback).
+test("the task runner says when a call ended on the connection, on its result and on the error it throws", () => {
+  const body = functionBody("runJsonTask");
+  assert.match(body, /transportFailure = connectionClosed \|\| isUnreachableError\(actualError\);/, "a server never reached, or a connection that closed mid-answer");
+  assert.match(body, /payload: await fallback\(\),[^}]*\.\.\.\(transportFailure \? \{ transportFailure: true \} : \{\}\),\s*\};/, "beside the generation, which is written into the game's history");
+  assert.match(body, /throw Object\.assign\(new Error\(`AI task "\$\{taskKey\}" failed: \$\{failureReason\}`\), transportFailure \? \{ transportFailure: true \} : \{\}\);/);
+  assert.match(gameplaySource, /import \{ OUTPUT_LIMIT_MESSAGE, isUnreachableError \} from "\.\/providerErrors\.js";/);
 });
 
 test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {

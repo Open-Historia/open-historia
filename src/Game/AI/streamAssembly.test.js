@@ -677,3 +677,31 @@ test("gemini: a thought summary is not part of the answer", () => {
   assert.deepEqual(seen, ['{"events":[]}']);
   assert.equal(finishGeminiStream(state).candidates[0].content.parts[0].text, '{"events":[]}');
 });
+
+// The two together, through the reader a skip uses: the line under the skip's
+// spinner is told what each chunk of a JSON-text answer carried
+// (requestActivity.js) while the watcher reads the same text for its events,
+// and a thought summary is reasoning to the one and nothing to the other.
+test("gemini: a JSON-text answer is counted as it is written, and a thought summary as reasoning", async () => {
+  const { heard, onReceived } = collect();
+  const watched = [];
+  const thought = "Weighing the fronts.";
+  const first = '{"events":[{"title":"A treaty"}';
+  const second = '],"stopDate":"2016-02-01"}';
+  const data = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: thought, thought: true }] } }] },
+    { candidates: [{ content: { parts: [{ text: first }] } }] },
+    { candidates: [{ content: { parts: [{ text: second }] }, finishReason: "STOP" }] },
+  ], { done: false }), null, (progress) => watched.push(progress.json), onReceived);
+  assert.deepEqual(heard, [[thought.length, 0], [0, first.length], [0, second.length]]);
+  assert.deepEqual(watched, [first, first + second], "the thought summary never reaches the text the events are read from");
+  assert.equal(data.candidates[0].content.parts[0].text, first + second);
+  assert.equal("closedEarly" in data, false);
+
+  // The same answer on a stream that just stops is marked, with what it carried.
+  const cut = await readGeminiStreamedResponse(sseResponse([
+    { candidates: [{ content: { parts: [{ text: first }] } }] },
+  ], { done: false }));
+  assert.equal(cut.closedEarly, true);
+  assert.equal(cut.candidates[0].content.parts[0].text, first);
+});
