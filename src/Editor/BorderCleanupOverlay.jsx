@@ -103,7 +103,7 @@ const CleanupCard = ({ state, onStop }) => {
           </div>
         ))}
         <div style={{ fontSize: 12, lineHeight: 1.5, color: "rgba(255,255,255,0.55)" }}>
-          The Workshop is not frozen. Before the map is saved it checks every region for cracks and slivers between {BORDER_CLEANUP.minWidth} m and {maxWidthKm} km wide and repairs them as one undo step, then looks again around each repair until nothing is left. A whole world takes about ten seconds; a very detailed map stops after {Math.round(BORDER_CLEANUP.maxMillis / 1000)} s, keeps what it repaired, and says so.
+          The Workshop is not frozen. Before the map is saved it checks the regions that are new or have changed since the last check for cracks and slivers between {BORDER_CLEANUP.minWidth} m and {maxWidthKm} km wide and repairs them as one undo step, then looks again around each repair until nothing is left. A whole world takes about ten seconds; a very detailed map stops after {Math.round(BORDER_CLEANUP.maxMillis / 1000)} s, keeps what it repaired, and says so.
         </div>
         {canStop ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

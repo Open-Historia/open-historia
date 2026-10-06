@@ -55,6 +55,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
+import { ownsShape } from "./shapeAuthority.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -379,20 +380,33 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
-  // Every save first runs the border repair over the WHOLE map at
-  // BORDER_CLEANUP.maxWidth (1.5 km) — enclosed cracks filled, thin overlaps
-  // trimmed, one undo step — behind the "Cleaning up the borders" screen,
-  // which is painted before the work starts and updated between its chunks.
-  // Nothing else in the Workshop repairs borders, so this is also where a
-  // merge that fails sends the author (OlMap.jsx). A failure here never
-  // blocks the save: the map is then written as it is.
+  // Every save first runs the border repair at BORDER_CLEANUP.maxWidth
+  // (1.5 km) — enclosed cracks filled, thin overlaps trimmed, one undo step —
+  // behind the "Cleaning up the borders" screen, which is painted before the
+  // work starts and updated between its chunks. Nothing else in the Workshop
+  // repairs borders, so this is also where a merge that fails sends the
+  // author (OlMap.jsx). A failure here never blocks the save: the map is then
+  // written as it is.
   //
-  // Leaves the screen up, saying the map is being written; whoever writes it
-  // takes the screen down (setBorderCleanup(null)). Resolves to the note for
-  // after the save, as its lines: what was repaired, then what the two guards
-  // passed over (topologySweep.js describeCleanupLeftAlone). `exporting`: the
-  // map goes to a file, not into a scenario, and the screen says so.
+  // It reads the regions whose shape is this map's own and has changed since
+  // the last sweep: all of them the first time, and none of the stock world's
+  // regions that nobody has reshaped (shapeAuthority.js; topologySweep.js says
+  // why). A save that changed no shape has nothing to read: no screen goes up
+  // and there is no note.
+  //
+  // Otherwise it leaves the screen up, saying the map is being written;
+  // whoever writes it takes the screen down (setBorderCleanup(null)). Resolves
+  // to the note for after the save, as its lines: what was repaired, then
+  // what the two guards passed over (topologySweep.js
+  // describeCleanupLeftAlone). `exporting`: the map goes to a file, not into
+  // a scenario, and the screen says so.
   const cleanBorders = async ({ exporting = false } = {}) => {
+    try {
+      if (api.borderCleanupPending && !api.borderCleanupPending({ ownsShape })) return [];
+    } catch (e) {
+      // Not knowing is no reason to skip it: the sweep works it out again.
+      console.warn("[editor] could not tell whether the borders need a look; checking them:", e);
+    }
     let cleanup = null;
     let cleanupError = "";
     cleanupStopRef.current = false;
@@ -403,6 +417,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         maxWidth: BORDER_CLEANUP.maxWidth,
         onProgress: setBorderCleanup,
         stopRequested: () => cleanupStopRef.current,
+        ownsShape,
       })) ?? null;
     } catch (e) {
       console.warn("[editor] border cleanup before saving failed; saving the map as it is:", e);

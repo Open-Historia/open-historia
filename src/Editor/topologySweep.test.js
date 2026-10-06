@@ -229,9 +229,13 @@ test("a hole one region surrounds keeps the old 500 m limit; the same width betw
   assert.deepEqual([wedgeWest, wedgeEast, base, atThePoint].map((geom) => holdsRim(ring, boundaryNear(geom))), [true, true, true, false]);
 
   // The Workshop asks exactly this of every hole a search finds, and the
-  // save-time sweep keeps count of the ones passed over.
+  // save-time sweep keeps count of the ones passed over. (Every hole, where
+  // all the regions are the map's own: `judged` is `holes` then. Among
+  // regions that are not, only the holes with one of the map's own on the
+  // rim, cleanupScope.test.js.)
   const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
-  assert.ok(olMap.includes("for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width, onLeftAlone })) {"));
+  assert.ok(olMap.includes("for (const row of cracksAmong(judged, rimRegionsOf, { maxWidth: width, onLeftAlone })) {"));
+  assert.match(olMap, /const judged = mixed\r?\n\s+\? holes\.filter\([^\n]+\r?\n\s+: holes;/);
   assert.ok(olMap.includes("maxTargetVertices: BORDER_CLEANUP.maxUnionVertices, onLeftAlone: leftAlone.hole });"));
 });
 

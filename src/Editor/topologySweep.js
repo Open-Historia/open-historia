@@ -921,6 +921,120 @@ export const hotspotsOf = (repairs, pad) =>
 export const touchesHotspot = (extent, hotspots) =>
   hotspots.some((spot) => !(extent[2] < spot[0] || extent[0] > spot[2] || extent[3] < spot[1] || extent[1] > spot[3]));
 
+// ---- What a save has to look at ------------------------------------------------
+//
+// Not every region, every time. Two things are left out, and with them the
+// cleanup costs what the author's changes cost, not what the map costs.
+//
+// A stock region nobody has reshaped is not this map's to repair. A world map
+// starts as the stock world, the GADM regions every scenario without a map of
+// its own is drawn on, and that world was read back out of the tile archive
+// (scripts/extract-regions.mjs), so along every border it carries the tiles'
+// rounding: 24,661 cracks and 49,647 slivers at 1.5 km on its 3,662 regions.
+// Until a refused union stopped ending the sweep, no save ever got through
+// that map, so none of them has ever been repaired. Repairing them at a save
+// takes eight minutes, a minute and a half at a time, and marks every region
+// it touches as reshaped: a scenario that only gave the stock world new
+// owners would come out of its saves with thousands of regions that are
+// shapes of its own, each a little different from the same region in every
+// other scenario. They are the stock world's to fix, in the stock world. So
+// such a region is only ever read as a neighbour: a crack is filled into a
+// region the map owns the shape of, a sliver is trimmed off one, and what
+// lies between two stock regions is left as the stock world has it. `own`
+// below is that: true for a region whose shape is the map's (drawn, imported,
+// merged or reshaped), told the way the game tells it (shapeAuthority.js).
+//
+// And a region the sweep has been over, and which has not changed since, has
+// nothing new in it. A repair changes the map only inside its own footprint,
+// which is why a follow-up pass looks only around the last pass's repairs; an
+// edit is no different. So the sweep keeps, for the session, how each region
+// stood when it was last checked (`seen`: its extent, and a stamp of its
+// shape once a sweep that ran to its end has been over it), and a save checks
+// the regions that are new or stand otherwise now, around where they were and
+// where they are. The stamp is taken from the coordinates themselves, as
+// regionChanges.js does for what a save writes: nothing has to say what it
+// touched, so an edit cannot be missed however it was made. A sweep that was
+// stopped settles nothing, and the next save starts where this one did.
+//
+// What that comes to: the first save of a map whose regions are all its own
+// is the whole sweep it always was (the built-in map: 106 cracks and 59
+// slivers, the same file byte for byte), a second save of it with one region
+// reshaped reads that region and its neighbours, and a world map nobody has
+// reshaped is not swept at all.
+
+const STAMP_VALUE = new Float64Array(1);
+const STAMP_WORDS = new Uint32Array(STAMP_VALUE.buffer);
+
+// A stamp of a shape: its flat coordinates (x, y, x, y, …) and where each
+// ring ends, as the bits they are. Two 32-bit hashes run side by side, so a
+// shape that changed is taken for unchanged about once in 2^64 edits, and
+// then only until its next one.
+export const shapeStamp = (flat, ends = []) => {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let i = 0; i < flat.length; i += 1) {
+    STAMP_VALUE[0] = flat[i];
+    first = Math.imul(first ^ STAMP_WORDS[0], 0x01000193);
+    first = Math.imul(first ^ STAMP_WORDS[1], 0x01000193);
+    second = Math.imul(second ^ STAMP_WORDS[1], 0x85ebca6b);
+    second = Math.imul((second ^ (second >>> 15)) ^ STAMP_WORDS[0], 0xc2b2ae35);
+  }
+  for (const end of ends) {
+    first = Math.imul(first ^ end, 0x01000193);
+    second = Math.imul(second ^ end, 0x85ebca6b);
+  }
+  return `${flat.length.toString(36)}:${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}`;
+};
+
+const joinedExtent = (a, b) => (a && b
+  ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]
+  : (a || b).slice());
+
+// What a save's sweep reads. `regions` are the map as it stands, each
+// { id, extent, own, stamp }: `own` as above, and `stamp` a function, asked
+// only of a region that is the map's own and has been settled before, so a
+// world nobody reshaped is never hashed. `seen` is how the regions stood when
+// they were last checked (id -> { extent, stamp }; a stamp of null is a region
+// no finished sweep has been over).
+//
+// Returned: `changed`, the ids to read as changed (the map's own regions that
+// are new, unsettled, or stand otherwise than when they were settled);
+// `hotspots`, where to look, each padded by `pad` (around a changed region
+// both where it was and where it is, because what it left behind is a gap
+// too; and where a region that is gone used to be); and `whole`, true when
+// that is every region on the map, which is the sweep over everything it
+// always was. Nothing changed and nothing gone is nothing to do.
+export const planCleanupScope = (regions, seen, { pad = 0 } = {}) => {
+  const changed = [];
+  const hotspots = [];
+  const present = new Set();
+  const padded = ([minX, minY, maxX, maxY]) => [minX - pad, minY - pad, maxX + pad, maxY + pad];
+  for (const region of regions) {
+    present.add(region.id);
+    if (!region.own) continue;
+    const before = seen.get(region.id);
+    if (before && before.stamp != null && before.stamp === region.stamp()) continue;
+    changed.push(region.id);
+    hotspots.push(padded(joinedExtent(before?.extent, region.extent)));
+  }
+  const whole = regions.length > 0 && changed.length === regions.length;
+  for (const [id, before] of seen) {
+    if (!present.has(id) && before?.extent) hotspots.push(padded(before.extent));
+  }
+  return { changed, hotspots, whole };
+};
+
+// Which of two overlapping regions is trimmed. Where only one of them is the
+// map's own, that one: the other is the stock world's, and trimming it would
+// make it a shape of this map's for the sake of a sliver. Otherwise the
+// smaller, as ever: the larger region keeps the overlap. Null when neither is
+// the map's own, which is a sliver the stock world has between two of its own.
+export const sliverLoser = ({ aOwn, bOwn, aArea, bArea }) => {
+  if (!aOwn && !bOwn) return null;
+  if (aOwn !== bOwn) return aOwn ? "a" : "b";
+  return aArea >= bArea ? "b" : "a";
+};
+
 const plural = (n, word) => `${formatCount(n)} ${word}${count(n) === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
 
 // What a heavy map's sweep could not look at, said after the result. The
@@ -958,7 +1072,9 @@ const describeStop = (result) => {
 
 export const describeCleanupResult = (result, error = "") => {
   if (error) return `Border cleanup was skipped (${error}); the map was saved as it is.`;
-  if (!result) return "";
+  // No sweep, or one with nothing to read because no shape had changed since
+  // the last: nothing to say.
+  if (!result || result.scope === "none") return "";
   const limits = describeCleanupLimits(result);
   const stop = describeStop(result);
   const left = count(result.repairsLeft) > 0
@@ -966,7 +1082,10 @@ export const describeCleanupResult = (result, error = "") => {
     : "";
   if (!result.changed) {
     if (stop) return `Border cleanup ${stop}; nothing was changed.${left}${limits}`;
-    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth / 1000} km across ${plural(result.regionCount, "region")}.${limits}`;
+    // Across the regions it read: all of them, or the changed ones and the
+    // regions around them (a result from before it kept the two apart has
+    // only the map's count).
+    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth / 1000} km across ${plural(result.checkedRegions ?? result.regionCount, "region")}.${limits}`;
   }
   const passes = count(result.passes) > 1 ? ` in ${plural(result.passes, "pass")}` : "";
   const repairs = `${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}`;
@@ -1041,11 +1160,14 @@ export const describeCleanupLeftAlone = (result) => {
 export const describeCleanupProgress = (state) => {
   if (!state) return { fraction: 0, headline: "Preparing", detail: "" };
   const regions = count(state.regionCount);
-  // A follow-up pass walks only the regions around the last pass's repairs.
+  // A follow-up pass walks only the regions around the last pass's repairs,
+  // and a first pass that is not the whole map those around what has changed.
   const walked = count(state.passRegions) || regions;
-  const scope = walked < regions ? `${plural(walked, "region")} around the last repairs` : plural(regions, "region");
   const share = (done, total) => (total > 0 ? Math.min(1, Math.max(0, done / total)) : 0);
   const pass = count(state.pass);
+  const scope = walked < regions
+    ? `${plural(walked, "region")} around ${pass > 1 ? "the last repairs" : "what has changed"}`
+    : plural(regions, "region");
   const passLabel = pass > 1 ? `Pass ${pass} of up to ${count(state.maxPasses) || BORDER_CLEANUP.maxPasses}, checking the repairs left nothing behind — ` : "";
   switch (state.phase) {
     case "gaps": {

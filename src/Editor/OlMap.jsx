@@ -37,7 +37,7 @@ import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
-import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, indexBoundary, isSliver, leftAloneTally, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, indexBoundary, isSliver, leftAloneTally, planCleanupScope, planTopologyChunks, shapeStamp, sliverLoser, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1225,7 +1225,12 @@ const OlMap = ({
     // over every region, which repairs them (repairTopologyEverywhere), and
     // for the Shared border tool's check on its two regions, which only marks
     // them (analyzeTopology).
-    const topologyContext = (feats) => {
+    // `owns(feature)`: whether a region's shape is this map's, or the stock
+    // world's (topologySweep.js, "What a save has to look at"). Every region
+    // is the map's own unless the save-time sweep is told otherwise, and
+    // `mixed` says whether these regions hold any that are not.
+    const topologyContext = (feats, { owns = () => true } = {}) => {
+      const mixed = feats.some((feature) => !owns(feature));
       const selectedSet = new Set(feats);
       const featureOrder = new globalThis.Map(feats.map((feature, index) => [feature, index]));
       const areaCache = new globalThis.Map();
@@ -1246,7 +1251,7 @@ const OlMap = ({
         return index;
       };
       let serial = 0;
-      return { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId: () => ++serial };
+      return { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId: () => ++serial, owns, mixed };
     };
 
     // Each enclosed hole becomes a gap filled into the neighbour whose boundary
@@ -1259,12 +1264,30 @@ const OlMap = ({
     // a lake or an inlet that region was drawn around, not a crack between
     // regions (topologySweep.js cracksAmong). `onLeftAlone(hole)` hears of
     // each one passed over for that.
-    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity, onLeftAlone } = {}) => {
+    //
+    // Among regions that are not all the map's own, a crack goes to one that
+    // is: the neighbour of the map's own that touches it most. A crack none
+    // of them touches lies between two regions of the stock world, and is
+    // left as the stock world has it.
+    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId, owns, mixed }, { maxTargetVertices = Infinity, onLeftAlone } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
+      const rims = new globalThis.Map();
+      const rimOf = (row) => {
+        if (!rims.has(row)) rims.set(row, geometryRings(row.geom)[0] || []);
+        return rims.get(row);
+      };
+      // Whether a region is one of the map's own and on a hole's rim.
+      const ownOnRim = (row, feature) => owns(feature) && holdsRim(rimOf(row), ([x, y], reach) => boundaryIndexOf(feature).near(x, y, reach));
+      // Among regions that are not all the map's own, a hole is the map's to
+      // judge only with one of its own on the rim. The rest lie between stock
+      // regions: they are not filled, and not counted as left alone either.
+      const judged = mixed
+        ? holes.filter((row) => regionSource.getFeaturesInExtent(row.geom.getExtent()).some((feature) => selectedSet.has(feature) && ownOnRim(row, feature)))
+        : holes;
       // How many of the pass's regions are on a hole's rim, as far as two.
       const rimRegionsOf = (row) => {
-        const ring = geometryRings(row.geom)[0] || [];
+        const ring = rimOf(row);
         let holders = 0;
         for (const feature of regionSource.getFeaturesInExtent(row.geom.getExtent())) {
           if (!selectedSet.has(feature)) continue;
@@ -1274,13 +1297,17 @@ const OlMap = ({
         }
         return holders;
       };
-      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width, onLeftAlone })) {
+      for (const row of cracksAmong(judged, rimRegionsOf, { maxWidth: width, onLeftAlone })) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
           // The save-time sweep never fills a gap into a region too heavy to
           // union (BORDER_CLEANUP.maxUnionVertices); a lighter neighbour takes it.
           .filter((feature) => selectedSet.has(feature) && vertexCountOf(feature.getGeometry()) <= maxTargetVertices)
+          // Really on its rim, where some are not the map's own: the touch
+          // score below reaches a little past the crack, and would hand it to
+          // a region of the map's own that is merely nearby.
+          .filter((feature) => !mixed || ownOnRim(row, feature))
           .sort((a, b) => featureOrder.get(a) - featureOrder.get(b));
         let target = null;
         let bestScore = -1;
@@ -1314,10 +1341,15 @@ const OlMap = ({
     // share is then measured on the welded copies, and a trim is still made
     // from the regions as they are); refused both ways it is passed over,
     // and `onRefused(a, b)` hears of it.
-    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip, onLeftAlone, weld = null, onRefused } = {}) => {
+    //
+    // Two regions of the stock world that nobody reshaped are not compared,
+    // and where one of a pair is such a region the other is the one trimmed
+    // (topologySweep.js sliverLoser).
+    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId, owns, mixed }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip, onLeftAlone, weld = null, onRefused } = {}) => {
       const items = [];
       for (let i = from; i < to; i += 1) {
         const a = feats[i];
+        const aOwn = !mixed || owns(a);
         const aExtent = a.getGeometry().getExtent();
         const nearby = regionSource
           .getFeaturesInExtent(aExtent)
@@ -1326,6 +1358,8 @@ const OlMap = ({
           .sort((x, y) => x.index - y.index);
 
         for (const { feature: b } of nearby) {
+          const bOwn = !mixed || owns(b);
+          if (!aOwn && !bOwn) continue;
           // Two regions together heavier than one call can safely be handed
           // (the save-time sweep's BORDER_CLEANUP.maxUnionVertices) are left
           // uncompared, rather than risk the page's memory on them.
@@ -1359,9 +1393,10 @@ const OlMap = ({
           }
           // Deterministic conservative rule: the larger region keeps the tiny
           // overlap; the smaller one is trimmed to its exact boundary. This is
-          // only done for narrow overlaps.
-          const winner = aArea >= bArea ? a : b;
-          const loser = winner === a ? b : a;
+          // only done for narrow overlaps. (Beside a stock region, the map's
+          // own region is the one trimmed, whichever is larger.)
+          const loser = sliverLoser({ aOwn, bOwn, aArea, bArea }) === "a" ? a : b;
+          const winner = loser === a ? b : a;
           for (const row of pieces) {
             items.push({
               id: `overlap-${nextId()}`,
@@ -1529,6 +1564,69 @@ const OlMap = ({
       };
     };
 
+    // How each region stood when the save-time sweep last looked
+    // (topologySweep.js, "What a save has to look at"): id -> { extent, stamp },
+    // the stamp null until a sweep that ran to its end has been over the
+    // region. Kept for as long as this map is the one loaded: a region is
+    // noted when it comes onto the map, with where it stands then, so that an
+    // edit made before the first save still has somewhere it used to be; and
+    // the lot is dropped when the map is cleared for another.
+    const cleanupSeen = new globalThis.Map();
+    const noteRegionSeen = (feature) => {
+      const id = feature?.getId?.();
+      const geom = feature?.getGeometry?.();
+      if (id == null || !geom || cleanupSeen.has(id)) return;
+      cleanupSeen.set(id, { extent: geom.getExtent().slice(), stamp: null });
+    };
+    regionSource.getFeatures().forEach(noteRegionSeen);
+    regionSource.on("addfeature", (event) => noteRegionSeen(event.feature));
+    regionSource.on("clear", () => cleanupSeen.clear());
+    const stampOfRegion = (geom) => {
+      const type = geom.getType();
+      const ends = type === "Polygon" ? geom.getEnds() : type === "MultiPolygon" ? geom.getEndss().flat() : [];
+      return shapeStamp(geom.getFlatCoordinates(), ends);
+    };
+    // What this save's sweep reads: every region (`whole`), or the regions of
+    // the map's own that changed and the places to look around them.
+    const cleanupScopeOf = (feats, owns, pad) => {
+      feats.forEach(noteRegionSeen);
+      // (A region with no id stands for itself, and so is never settled.)
+      const keyOf = (feature) => feature.getId() ?? feature;
+      const byId = new globalThis.Map(feats.map((feature) => [keyOf(feature), feature]));
+      const plan = planCleanupScope(feats.map((feature) => ({
+        id: keyOf(feature),
+        extent: feature.getGeometry().getExtent(),
+        own: owns(feature),
+        stamp: () => stampOfRegion(feature.getGeometry()),
+      })), cleanupSeen, { pad });
+      return { whole: plan.whole, hotspots: plan.hotspots, changed: new Set(plan.changed.map((id) => byId.get(id))) };
+    };
+    // After a sweep that ran to its end: every region as it stands now. The
+    // regions its last pass repaired, when that pass was the last one allowed,
+    // have had nothing look around them since (`unsettled`), and are left for
+    // the next save.
+    const settleCleanup = (feats, owns, unsettled) => {
+      cleanupSeen.clear();
+      for (const feature of feats) {
+        const id = feature.getId();
+        if (id == null) continue;
+        const geom = feature.getGeometry();
+        cleanupSeen.set(id, {
+          extent: geom.getExtent().slice(),
+          stamp: owns(feature) && !unsettled.has(feature) ? stampOfRegion(geom) : null,
+        });
+      }
+    };
+    // Whether a save now would have anything to look at: asked before the
+    // loading screen goes up, so a save that changed no shape shows none.
+    const borderCleanupPending = ({ ownsShape = null } = {}) => {
+      const feats = regionSource.getFeatures().filter((f) => f.getGeometry?.());
+      if (feats.length < 2) return false;
+      const owns = typeof ownsShape === "function" ? (feature) => Boolean(ownsShape(feature)) : () => true;
+      const scope = cleanupScopeOf(feats, owns, 0);
+      return scope.whole || scope.changed.size > 0 || scope.hotspots.length > 0;
+    };
+
     // Save-time border cleanup (MapEditor.jsx cleanBorders): the repair
     // pass over EVERY region, repeated until a pass finds nothing (at most
     // BORDER_CLEANUP.maxPasses — trimming a sliver can expose a hairline
@@ -1562,11 +1660,27 @@ const OlMap = ({
     // uncompared, a crack unfilled, a sliver untrimmed, and the note says how
     // many of each. Welding only finds: every repair is made from the regions
     // as they are, so no welded region is written into the map.
-    const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress, stopRequested } = {}) => {
+    //
+    // And it is not every region every time (topologySweep.js, "What a save
+    // has to look at"). `ownsShape(feature)` says whether a region's shape is
+    // this map's or the stock world's (shapeAuthority.js; every region is the
+    // map's own when nothing says): a stock region is read as a neighbour and
+    // never changed. And of the map's own regions, the first pass reads
+    // those that are new or have changed since a sweep last ran to its end,
+    // with the regions around them. That is the whole map the first time, and
+    // nothing at all when no shape has changed: the result then says so
+    // (`scope` "none") and no undo step is made.
+    const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress, stopRequested, ownsShape = null } = {}) => {
       const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const floor = Math.min(width, BORDER_CLEANUP.minWidth);
       const feats = regionSource.getFeatures().filter((f) => f.getGeometry?.());
       const regionCount = feats.length;
+      const owns = typeof ownsShape === "function" ? (feature) => Boolean(ownsShape(feature)) : () => true;
+      const scope = cleanupScopeOf(feats, owns, width * BORDER_CLEANUP.hotspotPad);
+      const nothingToRead = !scope.whole && !scope.changed.size && !scope.hotspots.length;
+      // How many regions the first pass reads: all of them, or the changed
+      // ones and the regions around them.
+      let checkedRegions = scope.whole ? regionCount : 0;
       const startedAt = Date.now();
       const elapsed = () => Date.now() - startedAt;
       let stopped = "";
@@ -1631,6 +1745,10 @@ const OlMap = ({
         overlaps: totals.overlaps,
         affectedRegions,
         regionCount,
+        // What the sweep read: every region, the changed ones and the regions
+        // around them, or nothing because no shape had changed.
+        scope: scope.whole ? "whole" : nothingToRead ? "none" : "changed",
+        checkedRegions,
         gapsFound: totals.gapsFound,
         overlapsFound: totals.overlapsFound,
         passes,
@@ -1646,22 +1764,29 @@ const OlMap = ({
         elapsedMs: elapsed(),
         repairsLeft,
       });
-      if (regionCount < 2) {
+      if (regionCount < 2 || nothingToRead) {
         report({ phase: "done" });
         return outcome(0);
       }
       const edit = beginTopologyEdit();
-      // After the first pass: the padded footprints of the last pass's repairs
-      // and the regions it changed. The next pass reads only around those.
-      let hotspots = null;
-      let changedLast = new Set();
+      // Where a pass looks, and the regions it reads as changed: for the first
+      // pass what has changed since the last sweep (nothing set when that is
+      // the whole map), then the padded footprints of the last pass's repairs
+      // and the regions it changed. A pass with these reads only around them.
+      let hotspots = scope.whole ? null : scope.hotspots;
+      let changedLast = scope.whole ? new Set() : scope.changed;
+      // Set when the last pass allowed still had repairs to make: nothing has
+      // looked around those since.
+      let unsettled = new Set();
       try {
         while (passes < BORDER_CLEANUP.maxPasses && !shouldStop()) {
           passes += 1;
+          unsettled = new Set();
           const local = hotspots !== null;
-          // The regions this pass reads: every one the first time, then those
-          // reaching a hotspot, the changed ones first so the overlap walk can
-          // stop after them (a new overlap always involves a changed region).
+          // The regions this pass reads: every one when it is the whole map,
+          // else those reaching a hotspot, the changed ones first so the
+          // overlap walk can stop after them (a new overlap always involves a
+          // changed region).
           let passFeats = feats;
           let walk = regionCount;
           if (local) {
@@ -1672,9 +1797,10 @@ const OlMap = ({
             passFeats = [...changed, ...others];
             walk = changed.length;
           }
+          if (passes === 1) checkedRegions = passFeats.length;
           report({ pass: passes, phase: "gaps", passRegions: passFeats.length, chunkIndex: 0, chunkCount: 0, gapsFound: 0, regionsChecked: 0, overlapsFound: 0, repairsDone: 0, repairCount: 0 });
           // Areas change as regions are trimmed, so the context is rebuilt per pass.
-          const context = topologyContext(passFeats);
+          const context = topologyContext(passFeats, { owns });
           // And so is what the pass turns to when a call is refused.
           const weld = welderFor(passFeats);
 
@@ -1797,6 +1923,7 @@ const OlMap = ({
           if (!gapsFilled && !overlapsTrimmed) break;
           hotspots = hotspotsOf(applied, width * BORDER_CLEANUP.hotspotPad);
           changedLast = changed;
+          unsettled = changed;
         }
       } catch (e) {
         console.warn("[editor] border cleanup stopped early; keeping the repairs made so far:", e);
@@ -1804,6 +1931,10 @@ const OlMap = ({
         error = e?.message || String(e);
       }
       const affectedRegions = finishTopologyEdit(edit);
+      // A sweep that ran to its end has been over everything it set out to
+      // read: the regions as they stand now are what the next save compares
+      // with. One that was stopped settles nothing.
+      if (!stopped) settleCleanup(feats, owns, unsettled);
       report({ phase: "done" });
       return outcome(affectedRegions);
     };
@@ -2376,6 +2507,8 @@ const OlMap = ({
       },
       // The save-time border cleanup (MapEditor.jsx cleanBorders).
       repairTopologyEverywhere,
+      // Whether it would have anything to look at (asked before its screen goes up).
+      borderCleanupPending,
 
       // Province Map Importer preview. Bounds arrive as WGS84 lon/lat and are
       // projected here so the source image can be checked against the live map
