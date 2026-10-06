@@ -2974,6 +2974,11 @@ const WorkspaceTabIcon = ({ type, size = 14 }) => {
     return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>;
 };
 
+// Two names for one country, however they are cased or spaced. Outside the
+// component: the country list below is memoized on it, and a function made anew
+// on every render is a dependency no list can name.
+const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
@@ -3025,7 +3030,6 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [storyDraft, setStoryDraft] = useState({});
     const [savedFlash, setSavedFlash] = useState("");
 
-    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
     const countryByName = (name) => countries.find((country) => sameCountry(country.name, name)) || { name };
     const countryRows = useMemo(() => countries
         .filter((country) => !sameCountry(country.name, playerCountry))

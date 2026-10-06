@@ -725,9 +725,10 @@ const FiledEventsSection = ({ events }) => {
             <FiledNote fate={event.fate} note={event.note} />
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.75rem 1rem 0.85rem" }}>
             {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
-            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
-            {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
-            <EventQuotation quote={event.quote} compact />
+            {/* The AI wrote these in the player's language: the interface translator leaves them alone. */}
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
+            {event.description && <div data-no-translate style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            <div data-no-translate><EventQuotation quote={event.quote} compact /></div>
             </div>
             </div>
         ))}
@@ -1233,7 +1234,7 @@ const HeldFailureList = ({ failures }) => {
         <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {events.map((event) => (
             <li key={`event-${event.title}`}>
-            <span style={{ fontWeight: 600 }}>{event.title}</span>
+            <span data-no-translate style={{ fontWeight: 600 }}>{event.title}</span>
             <span style={{ color: "rgba(253,230,138,0.72)" }}> — {event.reason}</span>
             </li>
         ))}

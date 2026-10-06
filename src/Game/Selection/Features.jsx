@@ -5,6 +5,7 @@ import { useMap } from "react-map-gl/maplibre";
 import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { getPlayerCode, setInteractionMode } from "../Map/unitsController.js";
 import { approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen } from "../../runtime/mobileUi.js";
@@ -412,7 +413,11 @@ const FeaturePopup = () => {
             <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
               <button
                 className="oh-tap"
-                onClick={() => { void saveSettledStructure(feature.id); }}
+                onClick={() => {
+                  // In a shared game the host may refuse (the round is being resolved).
+                  void saveSettledStructure(feature.id)
+                    .catch((error) => logDebugEvent("warn", "[map] Accepting the structure's place failed.", error));
+                }}
                 style={settleButton}
               >
                 Accept
