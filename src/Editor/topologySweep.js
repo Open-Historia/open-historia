@@ -6,10 +6,12 @@
 // Every scenario save (Save, Save & Exit, Apply & Play) first runs a
 // conservative border repair over EVERY region — enclosed cracks narrower than
 // 1.5 km filled, thin overlaps trimmed — before the map is written
-// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere).
-// Nothing else in the Workshop repairs borders. This module is the pure part:
-// how regions are grouped for the staged union, and what the loading screen
-// and the note after the save say.
+// (MapEditor.jsx persistScenario → OlMap.jsx repairTopologyEverywhere). The
+// standalone editor has no scenario to save into: a map leaves it as a file,
+// so there Export JSON and Export for game run it first instead (MapEditor.jsx
+// exportFromMenu). Nothing else in the Workshop repairs borders. This module
+// is the pure part: how regions are grouped for the staged union, and what
+// the loading screen and the note after the save say.
 //
 // The pass is not all-pairs. Overlap discovery asks the map's spatial index for
 // extent neighbours only (the stock 4,848-region world: 14,011 pairs, ~3 s),
@@ -442,7 +444,7 @@ const describeCleanupLimits = (result) => {
 };
 
 // The one-line result shown after the save (and inside the loading screen
-// while the scenario is being written).
+// while the map is being written).
 // Why a sweep ended before it was done, when it did.
 const describeStop = (result) => {
   const seconds = Math.max(1, Math.round(count(result.elapsedMs) / 1000));
@@ -554,7 +556,9 @@ export const describeCleanupProgress = (state) => {
     case "save":
       return {
         fraction: 0.97,
-        headline: "saving the map into the scenario",
+        // The standalone editor has no scenario: there the map is being
+        // written to a file (MapEditor.jsx exportFromMenu).
+        headline: state.exporting ? "exporting the map" : "saving the map into the scenario",
         detail: describeCleanupResult(state.result, state.error),
         leftAlone: describeCleanupLeftAlone(state.result),
       };

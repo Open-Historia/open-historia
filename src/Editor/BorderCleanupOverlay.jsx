@@ -3,12 +3,13 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-// Shown by MapEditor.jsx from the moment a scenario save starts until the map
-// is written. The whole-map topology pass blocks the main thread for a few
-// seconds on a large world, chunk by chunk; this screen is what says the page
-// is working rather than frozen, and what it is working on. After ten seconds
-// it also offers "Save now": the sweep then stops at its next step, applies
-// what it has found, and the save goes on. (The sweep stops on its own after
+// Shown by MapEditor.jsx from the moment a scenario save starts, or an export
+// from the standalone editor, until the map is written. The whole-map
+// topology pass blocks the main thread for a few seconds on a large world,
+// chunk by chunk; this screen is what says the page is working rather than
+// frozen, and what it is working on. After ten seconds it also offers "Save
+// now": the sweep then stops at its next step, applies what it has found, and
+// the save goes on. (The sweep stops on its own after
 // BORDER_CLEANUP.maxMillis; the button is for the player who will not wait
 // that long.)
 
@@ -142,9 +143,10 @@ const BorderCleanupOverlay = ({ state, onStop }) => {
 };
 
 // The result left beside the save buttons for a few seconds after a plain Save
-// (Save & Exit and Apply & Play leave the Workshop): what was repaired, then a
-// line for each kind of thing the guards left alone. Each line is an element
-// of its own, so the translator looks each sentence up by itself.
+// (Save & Exit and Apply & Play leave the Workshop), and after an export from
+// the standalone editor: what was repaired, then a line for each kind of
+// thing the guards left alone. Each line is an element of its own, so the
+// translator looks each sentence up by itself.
 export const BorderCleanupNote = ({ lines, top = 56 }) => {
   if (!lines?.length) return null;
   return (

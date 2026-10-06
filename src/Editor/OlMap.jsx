@@ -463,6 +463,10 @@ const OlMap = ({
   selectionIds,
   activeTool,
   seedKind = "import-world",
+  // Whether this map is a scenario's, saved into it by the Workshop's Save
+  // buttons, or the standalone editor's, which leaves it as an exported file:
+  // where a merge that fails sends the author for the border repair.
+  scenarioMode = false,
   defaultTypeId = "land",
   paintOwner = "",
   paintOnlyOwner = "*",
@@ -556,10 +560,12 @@ const OlMap = ({
   const paintOnlyOwnerRef = useRef(paintOnlyOwner);
   const onSelectionRef = useRef(onSelectionChange);
   const onRegionsChangedRef = useRef(onRegionsChanged);
+  const scenarioModeRef = useRef(scenarioMode);
   const selectionKey = (selectionIds || []).join("|");
 
   typesByIdRef.current = toTypesById(types);
   colorsRef.current = colors || {};
+  scenarioModeRef.current = scenarioMode;
   activeToolRef.current = activeTool;
   defaultTypeIdRef.current = defaultTypeId;
   paintOwnerRef.current = paintOwner;
@@ -973,8 +979,11 @@ const OlMap = ({
         if (!cmd) {
           // A union fails on borders that cross or nearly coincide, and the
           // save's border cleanup (repairTopologyEverywhere) is the only thing
-          // that repairs those. The Merge button says the same.
-          window.alert("The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again.");
+          // that repairs those: a scenario's Save buttons, or the standalone
+          // editor's exports. The Merge button says the same.
+          window.alert(scenarioModeRef.current
+            ? "The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
+            : "The border between these two regions could not be removed. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
         }
         regionLayer.changed();
@@ -1478,7 +1487,7 @@ const OlMap = ({
       return before.size;
     };
 
-    // Save-time border cleanup (MapEditor.jsx persistScenario): the repair
+    // Save-time border cleanup (MapEditor.jsx cleanBorders): the repair
     // pass over EVERY region, repeated until a pass finds nothing (at most
     // BORDER_CLEANUP.maxPasses — trimming a sliver can expose a hairline
     // between the winner and a third region), all as ONE undo step. The gap
@@ -1875,7 +1884,9 @@ const OlMap = ({
         if (feats.length < 2) return;
         const cmd = mergeRegionFeatures(regionSource, feats);
         if (!cmd) {
-          window.alert("These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again.");
+          window.alert(scenarioModeRef.current
+            ? "These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
+            : "These regions could not be merged. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
         }
         regionLayer.changed();
@@ -2275,7 +2286,7 @@ const OlMap = ({
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
-      // The save-time border cleanup (MapEditor.jsx persistScenario).
+      // The save-time border cleanup (MapEditor.jsx cleanBorders).
       repairTopologyEverywhere,
 
       // Province Map Importer preview. Bounds arrive as WGS84 lon/lat and are

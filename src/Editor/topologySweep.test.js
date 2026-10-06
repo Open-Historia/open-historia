@@ -318,6 +318,7 @@ test("the loading screen reports each phase in plain words with a bar that only 
   assert.match(apply.detail, /40 of 353 repairs this pass · 12 cracks filled, 28 slivers trimmed so far/);
   const save = describeCleanupProgress({ phase: "save", result: { changed: true, gaps: 12, overlaps: 41, affectedRegions: 48, regionCount: 4848, passes: 2 } });
   assert.equal(save.headline, "saving the map into the scenario");
+  assert.equal(describeCleanupProgress({ phase: "save", exporting: true, result: null }).headline, "exporting the map", "the standalone editor has no scenario to save into");
   assert.equal(save.detail, "Borders cleaned in 2 passes: 12 cracks filled and 41 slivers trimmed across 48 regions.");
   assert.ok(gaps.fraction < merging.fraction && merging.fraction <= overlaps.fraction && overlaps.fraction < apply.fraction && apply.fraction < save.fraction);
   assert.ok(describeCleanupProgress({ phase: "gaps", regionCount: 10, chunkIndex: 0, chunkCount: 0 }).fraction >= 0);
@@ -391,6 +392,7 @@ test("every sentence about what was left alone reaches the language packs whole"
     assert.ok(found.has(text), `${key} is read by the extractor`);
     assert.match(text, /\.$/, `${key} is a sentence`);
   }
+  assert.ok(found.has("exporting the map") && found.has("saving the map into the scenario"), "and both things the screen says while the map is written");
 
   const book = createPhraseBook();
   book.setAll({
@@ -663,12 +665,49 @@ test("only the save repairs borders: no Topology panel, and a merge that fails p
   assert.ok(!bottomBar.includes("\"topology\"") && !bottomBar.includes("label=\"Topology\""), "the bottom bar has no chip for it");
   assert.ok(!/topology panel/i.test(olMap + mapEditor + read("./BorderCleanupOverlay.jsx")), "nothing on screen sends the player to it");
   assert.equal(olMap.split("Borders are repaired when the map is saved into its scenario").length - 1, 2, "a merge and a border removal that fail both point to the save");
+  assert.equal(olMap.split("Borders are repaired when the map is exported, so export the map and then try again.").length - 1, 2, "and in the standalone editor, which has no scenario, to the export");
+  assert.ok(mapEditor.includes("scenarioMode={scenarioMode}"), "the map is told which of the two it is");
   assert.ok(!/\brepairTopology\b/.test(olMap), "the selection-scoped repair is gone with its only caller");
   const api = olMap.slice(olMap.indexOf("onReady?.({"), olMap.indexOf("replaceRegionsFromImport:"));
   assert.ok(api.includes("repairTopologyEverywhere,"), "the Workshop is handed the save-time sweep");
   assert.ok(!api.includes("analyzeTopology") && !api.includes("clearTopologyDiagnostics"), "and nothing of the panel's");
   // The Shared border tool keeps its own check after each edit, at its own width.
   assert.ok(olMap.includes("analyzeTopologyRef.current?.(pair.map((f) => f.getId()), { maxWidth: 100 })"));
+});
+
+// The standalone editor (/?editor=1) has no scenario, and so none of the three
+// Save buttons: with the panel gone nothing repaired borders in it at all. A
+// map leaves it as a file, so there Export JSON and Export for game run the
+// cleanup before they write. Save now does not: it writes the editor's own
+// stored copy, and is the autosave run early.
+test("an export from the standalone editor cleans the borders first; a scenario's exports and Save now do not", () => {
+  const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(mapEditor.includes("onExport={() => exportFromMenu(exportDocument)}"), "Export JSON");
+  assert.ok(mapEditor.includes("onExportGame={() => exportFromMenu(exportGameSeed)}"), "Export for game");
+  const fromMenu = mapEditor.slice(mapEditor.indexOf("const exportFromMenu = async (write) => {"), mapEditor.indexOf("// The ✕, and on a phone Back"));
+  assert.match(fromMenu, /if \(scenarioMode\) \{\n\s+await write\(\);\n\s+return;\n\s+\}/, "in a scenario's Workshop the file is written at once, as it was");
+  const cleaned = fromMenu.indexOf("await cleanBorders({ exporting: true })");
+  const written = fromMenu.indexOf("await write();", cleaned);
+  assert.ok(cleaned > 0 && written > cleaned, "the cleanup comes before the file is written");
+  assert.ok(fromMenu.indexOf("setCleanupNote(note);") > written, "and the note after it");
+  assert.ok(fromMenu.includes("if (!api || borderCleanup) return;"), "one at a time");
+  assert.ok(fromMenu.includes("setBorderCleanup(null);"), "the screen comes down whether or not the file was written");
+  // The file is built after the cleanup, from the map as it then is.
+  assert.ok(mapEditor.includes("const exportDocument = () => downloadJson({ ...buildPayload(), id: docIdRef.current, version: 1 });"));
+  assert.ok(mapEditor.includes("downloadJson(buildGameSeed(d.doc, api?.serializeRegions() || { type: \"FeatureCollection\", features: [] }, d.colors));"));
+
+  // One cleanup for both: the same sweep, width, screen, Save now and note.
+  const clean = mapEditor.slice(mapEditor.indexOf("const cleanBorders = async"), mapEditor.indexOf("const persistScenario = async"));
+  assert.ok(clean.includes("api.repairTopologyEverywhere?.({") && clean.includes("maxWidth: BORDER_CLEANUP.maxWidth,") && clean.includes("stopRequested: () => cleanupStopRef.current"));
+  assert.ok(clean.includes("return [describeCleanupResult(cleanup, cleanupError), ...describeCleanupLeftAlone(cleanup)].filter(Boolean);"));
+  const scenario = mapEditor.slice(mapEditor.indexOf("const persistScenario = async"), mapEditor.indexOf("const docIdRef = useRef(null);"));
+  assert.ok(scenario.includes("const note = await cleanBorders();") && scenario.includes("setCleanupNote(note);"));
+  assert.equal(mapEditor.split("api.repairTopologyEverywhere").length - 1, 1, "nothing else in the editor runs the sweep");
+
+  // Save now is the store's own write, the one the autosave makes every two
+  // seconds: no cleanup in front of it.
+  assert.ok(mapEditor.includes("onSave={saveNow}"));
+  assert.ok(mapEditor.includes("const saveNow = () => runSaveRef.current();"));
 });
 
 // Time. A map with one 41,000-vertex sea zone held the old sweep for tens of
