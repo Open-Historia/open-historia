@@ -1,0 +1,11 @@
+The map's offline basemap: what the game shows under the countries when the
+device has no network at all (src/Game/Map/World.jsx, offline style).
+
+ETOPO1 Global Relief Model, color shaded relief ("Ice Surface" version),
+by the NOAA National Centers for Environmental Information (NCEI).
+A work of the United States Government: public domain.
+
+Levels 1-3 (256 px, Web Mercator, {z}/{y}/{x}.jpg) as served by NCEI's tile
+service on 2026-09-22:
+  https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/ETOPO1_Global_Relief_Model_Color_Shaded_Relief/MapServer
+Level 0 was made from the four level-1 tiles (the service has no level 0).

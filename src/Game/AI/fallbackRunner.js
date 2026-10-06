@@ -20,7 +20,8 @@
 // took 68 seconds to arrive, three of them in a row before a model answered,
 // 101 of a jump's 114 seconds spent being told no, and a retry that a busy
 // model did not refuse but served in 191 seconds. So a busy entry sits out for
-// ten minutes, at the owner's word, and a Spent one until its reset; both sink
+// one minute, at the owner's word (it was ten, which left a whole list idle
+// far longer than a busy spell lasts), and a Spent one until its reset; both sink
 // to the BACK of the order rather than out of it: nothing above them answering
 // means the guess is worth making after all, and a mark that has quietly
 // expired must never be the thing that fails a turn.
@@ -88,7 +89,7 @@ export const SHORT_SKIP_MS = 60 * 1000;
 // A busy one sits out this long: a 503 is the provider saying it is overloaded,
 // and tonight's log showed that asking again in a minute gets the same answer,
 // slowly (see the note at the top).
-export const BUSY_SKIP_MS = 10 * 60 * 1000;
+export const BUSY_SKIP_MS = 60 * 1000;
 
 // Spent and Unusable are hard: the entry cannot answer. Spent also carries a
 // reset, which is why orderToTry waits it out, and so does busy; a rate-limit
@@ -114,7 +115,7 @@ const markFor = (entry, failure, at, rateLimitPolicy) => {
 };
 
 // Every entry, in list order — a task's own pick first, the rest from the top —
-// except that a busy one waits at the back for its ten minutes, and a Spent one
+// except that a busy one waits at the back for its minute, and a Spent one
 // behind that until its reset. A rate limited or Unusable entry does not move.
 //
 // Nothing is ever dropped. When everything else has failed, the call goes on to

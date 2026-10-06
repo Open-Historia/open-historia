@@ -538,6 +538,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",
+  // A scenario map's own named seas, for placing fleets (placement.js declaredSeas).
+  "seas",
   "simulationRules",
   "startingTimelineText",
   // The scenario's pre-history (src/runtime/scenarioPrehistory.js): applied by
@@ -1507,6 +1509,24 @@ const seedRegionsBytes = () => {
 // server — a source checkout's `git pull` deleting the files that used to be
 // tracked under server/data — is completed again rather than served empty.
 let builtInScenarioSynced = false;
+
+// A built-in stamped with the seed's map whose regions.geojson is the stock
+// world, byte for byte: an older build, run against this data directory, wrote
+// it back. The stamp alone said all was well, so a new campaign's owners named
+// regions its map did not have — no colours, and nothing could be placed. The
+// seed's map goes back, and the coarse copy made from the old one goes. A map
+// the player drew is never the stock world's exact size, so it is never touched.
+const restoreSeedMapOverStockWorld = (stamp) => {
+  const regionsPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
+  if (!fs.existsSync(regionsPath)) return;
+  const bytes = fs.statSync(regionsPath).size;
+  const stockBytes = readStockRegionsBytes();
+  if (stockBytes === null || bytes !== stockBytes || bytes === seedRegionsBytes()) return;
+  const dir = getScenarioDirectory(DEFAULT_SCENARIO_ID);
+  copySeedFile("regions.geojson", dir);
+  for (const coarse of ["regions.coarse.geojson", "regions.coarse.geojson.stamp"]) removeFileIfPresent(path.join(dir, coarse));
+  console.warn(`[built-in scenario] Modern Day (${stamp}) held the stock world as its map; the seed's map is restored`);
+};
 const syncBuiltInScenarioFromSeed = () => {
   const worldPath = getScenarioJsonPath(DEFAULT_SCENARIO_ID, "world");
   if (builtInScenarioSynced && fs.existsSync(worldPath)) return;
@@ -1517,6 +1537,7 @@ const syncBuiltInScenarioFromSeed = () => {
   }
   const scenarioDir = getScenarioDirectory(DEFAULT_SCENARIO_ID);
   if (readInstalledBuiltInStamp() === stamp) {
+    restoreSeedMapOverStockWorld(stamp);
     if (readInstalledBuiltInRevision() < readBuiltInSeedRevision()) refreshBuiltInContent(stamp);
     builtInScenarioSynced = true;
     return;

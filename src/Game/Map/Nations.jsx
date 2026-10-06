@@ -5,6 +5,7 @@ import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
+import { saveSettledStructure } from "../../runtime/structurePlacement.js";
 import {
   getInteractionMode,
   setInteractionMode,
@@ -450,7 +451,7 @@ const WorldMap = ({ isGlobe = false }) => {
   // The desired region -> fill map is a pure function of the two inputs cached
   // beside it, and a hold/release epoch changes neither. Keyed on identity so an
   // epoch bump mid-sweep reuses it instead of recolouring every region again.
-  const ownershipFillTargetRef = useRef({ overrides: null, colorCss: null, fills: null });
+  const ownershipFillTargetRef = useRef({ owners: null, colorCss: null, fills: null });
   const appliedTileFillStateRef = useRef(new Map());
   // The region-type feature-state written so far (id -> what and where), and
   // the source rebuilds it belongs to: a rebuilt source has none.
@@ -1050,6 +1051,15 @@ const WorldMap = ({ isGlobe = false }) => {
     // The map draws world copies either side of the date line and a click on
     // one reports its unwrapped longitude (e.g. 210); a unit is stored in range.
     const clicked = event.lngLat?.wrap?.() ?? event.lngLat;
+
+    // Move on an approximately placed structure's popup (Selection/Features.jsx):
+    // it goes where the player clicks, sea included, and is settled.
+    if (mode.kind === "structure-place") {
+      void saveSettledStructure(mode.markerId, { lng: event.lngLat.lng, lat: event.lngLat.lat })
+        .catch((error) => logDebugEvent("warn", "[map] Moving the structure failed.", error));
+      clearInteractionMode();
+      return;
+    }
 
     if (mode.kind === "admin-place") {
       clearInteractionMode();
@@ -2158,9 +2168,12 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map]);
 
-  // Only live ownership overrides touch the URL-backed authored source. Seed
-  // colours remain properties of the scenario file; conquests are a tiny state
-  // diff rather than a full GeoJSON replacement.
+  // The URL-backed authored source uses the same merged ownership lookup as
+  // click resolution and the stock-detail fill path. Live overrides stay
+  // authoritative; scenario metadata supplies the starting owner when no live
+  // override exists. This keeps edited/authored regions from falling through to
+  // neutral grey simply because their starting ownership was never duplicated
+  // into world.regionOwnershipOverrides.
   useEffect(() => {
     if (!customFlag) return undefined;
     const mapInstance = map?.getMap ? map.getMap() : map;
@@ -2186,17 +2199,19 @@ const WorldMap = ({ isGlobe = false }) => {
       let next = cachedTarget.fills;
       if (
         !next
-        || cachedTarget.overrides !== regionOwnershipOverrides
+        || cachedTarget.owners !== ownerByRegionId
         || cachedTarget.colorCss !== ownerColorCss
       ) {
         next = new Map();
-        for (const [regionId, owner] of Object.entries(regionOwnershipOverrides)) {
-          next.set(String(regionId), ownerColorCss(owner));
+        for (const [regionId, owner] of ownerByRegionId) {
+          const id = String(regionId ?? "");
+          if (!id || !owner) continue;
+          next.set(id, ownerColorCss(owner));
         }
         // Read-only below: the diff never writes to it, appliedAfterSync is its
         // own Map. Anything that starts mutating it must drop the cache too.
         ownershipFillTargetRef.current = {
-          overrides: regionOwnershipOverrides,
+          owners: ownerByRegionId,
           colorCss: ownerColorCss,
           fills: next,
         };
@@ -2282,7 +2297,7 @@ const WorldMap = ({ isGlobe = false }) => {
     ownerColorCss,
     ownershipPresentation.holds,
     ownershipPresentationHoldEpoch,
-    regionOwnershipOverrides,
+    ownerByRegionId,
     repairedRegionIdSet,
     repairedRegionIds,
   ]);

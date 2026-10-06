@@ -4,10 +4,13 @@ import test from "node:test";
 import {
   addInstitutionProposalAmendment,
   applyInstitutionGovernanceCommand,
+  applyInstitutionalPlayerMessage,
   castInstitutionProposalVote,
+  callInstitutionProposalVote,
   closeInstitutionProposalVoting,
   createInstitutionProposal,
   institutionEligibleVoters,
+  institutionCanCallProposalVote,
   institutionCanTableProposal,
   institutionCanProposeAmendment,
   implementInstitutionProposal,
@@ -69,6 +72,21 @@ const open = (rule = simpleRule, extraProposal = {}) => openInstitutionProposalV
 const vote = (world, polity, choice, authority = polity === "A" ? "player" : "npc", government = "Gov") => castInstitutionProposalVote({
   world, institutionId: "council", proposalId: "p1", polity, choice, date: "2000-01-05",
   government, playerCountry: "A", authority,
+});
+
+test("a non-Latin proposal title receives a stable canonical id", () => {
+  const result = createInstitutionProposal({
+    world: makeWorld(simpleRule),
+    institutionId: "council",
+    date: "2000-01-01",
+    proposal: {
+      title: "Вступление Великобритании в качестве наблюдателя",
+      summary: "Предоставить Лондону статус наблюдателя.",
+      createdBy: "A",
+    },
+  });
+  assert.match(result.proposal.id, /^u-[a-z0-9]+$/);
+  assert.equal(result.proposal.title, "Вступление Великобритании в качестве наблюдателя");
 });
 
 test("unconfigured institution fails closed with a typed migration signal instead of inventing a majority rule", () => {
@@ -674,6 +692,24 @@ test("only a current canonical sponsor may submit an existing proposal for forma
 });
 
 
+test("an eligible member may call a ready foreign-sponsored proposal to vote without taking sponsorship", () => {
+  const lodged = lodgeInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", proposer: "B", date: "2000-01-01",
+    proposal: { id: "member-call-vote", title: "Member Call Vote", type: "program", summary: "Test player procedural authority." },
+  });
+  const before = lodged.world.institutions.byId.council.proposals[lodged.proposal.id];
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "C", before), true);
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "D", before), false, "observer status is not proposal-eligible under the member-only rule");
+  const opened = callInstitutionProposalVote({
+    world: lodged.world, institutionId: "council", proposalId: lodged.proposal.id, caller: "C", date: "2000-01-02",
+  });
+  assert.equal(opened.proposal.status, "voting");
+  assert.equal(opened.proposal.createdBy, "B");
+  assert.deepEqual(opened.proposal.sponsorPolities, ["B"]);
+  assert.deepEqual(opened.proposal.voting.eligibleVoters, ["A", "B", "C"]);
+});
+
+
 test("policy commitment is complete institutional state, not reusable execution authority", () => {
   let result = createInstitutionProposal({
     world: makeWorld(simpleRule),
@@ -695,6 +731,57 @@ test("policy commitment is complete institutional state, not reusable execution 
   assert.equal(implemented.proposal.implementation.status, "complete");
   assert.deepEqual(implemented.proposal.implementation.pending, []);
   assert.equal(implemented.proposal.implementation.applied[0]?.kind, "policy-commitment");
+});
+
+test("Council writes never adopt an accession hearing that shares the institution foreign key", () => {
+  const world = makeWorld(simpleRule);
+  const lifecycle = {
+    id: "institution-invite-council-d-2000-01-02",
+    institutionId: "council",
+    lifecycleInstitutionId: "council",
+    lifecycleCaseIds: ["council-invitation-d-2000-01-02"],
+    countries: [{ polityKey: "D", code: "D", name: "D Republic" }],
+    messages: [{ role: "leader", speaker: "D Republic", text: "I accept the observer invitation.", time: "2000-01-02" }],
+    status: "open",
+    source: "institution-lifecycle",
+    title: "Continental Council invitation",
+  };
+  const council = {
+    id: "institution-channel-council",
+    institutionId: "council",
+    countries: [
+      { polityKey: "B", code: "B", name: "B Republic" },
+      { polityKey: "C", code: "C", name: "C Republic" },
+      { polityKey: "D", code: "D", name: "D Republic" },
+    ],
+    messages: [{ role: "leader", speaker: "B Republic", text: "Existing Council debate.", time: "2000-01-02" }],
+    status: "open",
+    source: "institution",
+    title: "Continental Council",
+  };
+
+  const result = applyInstitutionalPlayerMessage({
+    world,
+    // Lifecycle first reproduces the released failure: a loose `.find()` by
+    // institutionId used to select this temporary hearing as the Council.
+    chats: [lifecycle, council],
+    institutionId: "council",
+    playerCountry: "A",
+    text: "Continue the formal Council debate.",
+    date: "2000-01-03",
+  });
+
+  assert.equal(result.channel.id, "institution-channel-council");
+  assert.ok(result.channel.messages.some((message) => message.text === "Existing Council debate."));
+  assert.ok(result.channel.messages.some((message) => message.text === "Continue the formal Council debate."));
+  const preservedLifecycle = result.chats.find((chat) => chat.id === lifecycle.id);
+  assert.ok(preservedLifecycle, "the temporary accession hearing remains a distinct thread");
+  assert.ok(preservedLifecycle.messages.some((message) => message.text === "I accept the observer invitation."));
+  assert.equal(
+    preservedLifecycle.messages.some((message) => message.text === "Continue the formal Council debate."),
+    false,
+    "Council speech must never be written into the lifecycle hearing",
+  );
 });
 
 test("one-request institution batch keeps conversation and applies only explicit formal actions", async () => {
@@ -786,4 +873,144 @@ test("a government that has voted is not counted as asked", async () => {
     asked: [{ institutionId: "council", proposalId: "p1", actors: ["B", "C"] }],
   });
   assert.deepEqual(result.world.institutions.byId.council.proposals.p1.voting.asked, { C: 1 });
+});
+
+test("a refused formal action fails closed for that actor's same-turn Council speech and leaves a native notice", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: makeWorld(simpleRule), chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-01",
+    chatEvents: [
+      { id: "false-claim", kind: "message", time: "2000-01-01", by: "B Republic", role: "leader", code: "B", text: "We formally submit the finalized framework." },
+      { id: "safe-sibling", kind: "message", time: "2000-01-01", by: "C Republic", role: "leader", code: "C", text: "We remain ready to negotiate." },
+    ],
+    formalActions: [{ type: "institution_submit_proposal", actorName: "B Republic", proposalId: "missing-proposal" }],
+  });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.rejected.length, 1);
+  const text = result.channel.messages.map((message) => message.text).join("\n");
+  assert.doesNotMatch(text, /formally submit the finalized framework/i);
+  assert.match(text, /remain ready to negotiate/i);
+  assert.match(text, /Formal business was not recorded/i);
+  assert.match(text, /B Republic/i);
+});
+
+test("Council applies resolve-amendment then submit-proposal sequentially in one native formal batch", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  let prepared = createInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", date: "2000-01-01",
+    proposal: { id: "connectivity", title: "Connectivity Framework", createdBy: "B", sponsorPolities: ["B"] },
+  });
+  prepared = transitionInstitutionProposal({ world: prepared.world, institutionId: "council", proposalId: "connectivity", status: "debate", date: "2000-01-02" });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "connectivity", proposer: "A", date: "2000-01-03",
+    amendment: { id: "latvia-guardrail", text: "Keep support temporary and independently reviewed." },
+  });
+
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: prepared.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-04",
+    formalActions: [
+      { type: "institution_resolve_amendment", actorName: "B Republic", proposalId: "connectivity", amendmentId: "latvia-guardrail", amendmentStatus: "accepted" },
+      { type: "institution_submit_proposal", actorName: "B Republic", proposalId: "connectivity" },
+    ],
+  });
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.applied.length, 2);
+  const proposal = result.world.institutions.byId.council.proposals.connectivity;
+  assert.equal(proposal.amendments[0].status, "accepted");
+  assert.equal(proposal.status, "voting");
+});
+
+test("Council repairs a missing amendmentId only when one unresolved canonical amendment exists", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  let prepared = createInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", date: "2000-01-01",
+    proposal: { id: "regional-connectivity", title: "Regional Connectivity", createdBy: "B", sponsorPolities: ["B"] },
+  });
+  prepared = transitionInstitutionProposal({ world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", status: "debate", date: "2000-01-02" });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", proposer: "A", date: "2000-01-03",
+    amendment: { id: "temporary-support", text: "Keep support temporary and independently reviewed." },
+  });
+
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: prepared.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-04",
+    formalActions: [{
+      type: "institution_invalid",
+      rawType: "institution_resolve_amendment",
+      actorName: "B Republic",
+      proposalId: "regional-connectivity",
+      amendmentStatus: "accepted",
+      validationError: "institution_resolve_amendment requires amendmentId copied from the canonical proposal.",
+    }],
+  });
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.applied.length, 1);
+  assert.equal(result.applied[0].action.amendmentId, "temporary-support");
+  assert.ok(result.applied[0].repairedFrom, "the repair is explicit in the application result");
+  const proposal = result.world.institutions.byId.council.proposals["regional-connectivity"];
+  assert.equal(proposal.amendments[0].status, "accepted");
+  assert.equal(proposal.status, "debate", "resolving the last amendment returns the proposal to a vote-callable debate state");
+});
+
+test("Council never guesses a missing amendmentId when several unresolved amendments exist", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  let prepared = createInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", date: "2000-01-01",
+    proposal: { id: "regional-connectivity", title: "Regional Connectivity", createdBy: "B", sponsorPolities: ["B"] },
+  });
+  prepared = transitionInstitutionProposal({ world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", status: "debate", date: "2000-01-02" });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", proposer: "A", date: "2000-01-03",
+    amendment: { id: "temporary-support", text: "Keep support temporary." },
+  });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", proposer: "C", date: "2000-01-03",
+    amendment: { id: "annual-review", text: "Require an annual review." },
+  });
+
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: prepared.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-04",
+    formalActions: [{
+      type: "institution_invalid",
+      rawType: "institution_resolve_amendment",
+      actorName: "B Republic",
+      proposalId: "regional-connectivity",
+      amendmentStatus: "accepted",
+      validationError: "institution_resolve_amendment requires amendmentId copied from the canonical proposal.",
+    }],
+  });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /2 unresolved amendments; an exact amendmentId is required/i);
+  const proposal = result.world.institutions.byId.council.proposals["regional-connectivity"];
+  assert.deepEqual(proposal.amendments.map((entry) => entry.status), ["proposed", "proposed"]);
+});
+
+test("unambiguous amendment-id repair never weakens sponsor authority", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  let prepared = createInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", date: "2000-01-01",
+    proposal: { id: "regional-connectivity", title: "Regional Connectivity", createdBy: "B", sponsorPolities: ["B"] },
+  });
+  prepared = transitionInstitutionProposal({ world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", status: "debate", date: "2000-01-02" });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "regional-connectivity", proposer: "A", date: "2000-01-03",
+    amendment: { id: "temporary-support", text: "Keep support temporary." },
+  });
+
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: prepared.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-04",
+    formalActions: [{
+      type: "institution_invalid",
+      rawType: "institution_resolve_amendment",
+      actorName: "C Republic",
+      proposalId: "regional-connectivity",
+      amendmentStatus: "accepted",
+      validationError: "institution_resolve_amendment requires amendmentId copied from the canonical proposal.",
+    }],
+  });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /not a current sponsor authorized to resolve amendment/i);
+  assert.equal(result.world.institutions.byId.council.proposals["regional-connectivity"].amendments[0].status, "proposed");
 });

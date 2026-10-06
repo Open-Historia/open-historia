@@ -118,7 +118,7 @@ test("the scenario card shows what the last Update left to say, on every shelf",
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../Game/GameUI/libraryBar.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(source, /const scenarioUpdateNotes = useSyncExternalStore\(scenarioUpdates\.subscribe, scenarioUpdates\.notes, scenarioUpdates\.notes\);/);
-  assert.equal(source.split('updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}').length - 1, 3, "all three shelves");
+  assert.equal(source.split('updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}').length - 1, 2, "both shelves");
   assert.match(source, /scenarioUpdates\.end\(scenario\.id, outcome\);/);
   assert.match(source, /tell\(`Update failed: \$\{nextError\.message\}`\);/);
   assert.match(source, /\{updateNote && updateAvailable && !updating && \(/, "only while the card still offers Update, and not under the ring");

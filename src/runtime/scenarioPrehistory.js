@@ -15,15 +15,23 @@
 //   {
 //     version, prompt, summary, generatedAt,
 //     events: [{ id, date, title, description, importance, kind, tags,
-//                warId?, notable?, quote? }],
+//                warId?, ref?, notable?, quote? }],
 //     updates: { warUpdates, relationUpdates, agreementUpdates,
-//                puppetUpdates, storylineUpdates },
+//                puppetUpdates, storylineUpdates, canonicalUpdates },
 //   }
 //
 // The updates are kept as the generation's validated answer decoded them and
 // are applied by the same code that applies a live answer; nothing here reads
-// inside them beyond what the Workshop shows. A war links to its events by the
-// event's `warId`, never by position, so events may be edited, reordered and
+// inside them beyond what the Workshop shows. A generation's answer has had two
+// shapes, and a record holds whichever its generation wrote:
+//   - lifecycle records, one family a ledger (warUpdates, relationUpdates,
+//     agreementUpdates, puppetUpdates, storylineUpdates). A war links to its
+//     events by the event's `warId`.
+//   - semantic facts, all of them in canonicalUpdates, each saying its own
+//     kind (war, relation, agreement, storyline, puppet); a game compiles them
+//     into its ledgers (AI/pregameBootstrapCompiler.js). A fact cites its
+//     events by the event's `ref`, the name the answer gave the event.
+// Never by position, in either shape, so events may be edited, reordered and
 // removed freely.
 
 import { compareGameDates, parseGameDate } from "./gameDates.js";
@@ -36,6 +44,8 @@ export const PREHISTORY_UPDATE_FAMILIES = Object.freeze([
   "agreementUpdates",
   "puppetUpdates",
   "storylineUpdates",
+  // The semantic facts of a generation made since the answer became them.
+  "canonicalUpdates",
 ]);
 export const PREHISTORY_IMPORTANCE = Object.freeze(["minor", "major"]);
 // The Event Editor's kinds (GameUI/cheats.jsx), less "player": a backstory is
@@ -73,6 +83,9 @@ export const normalizePrehistoryEvent = (raw, { draft = false } = {}) => {
     kind: clean(raw.kind, LIMITS.kind).toLowerCase() || "world",
     tags: normalizeEventTags(raw.tags),
     ...(clean(raw.warId, LIMITS.id) ? { warId: clean(raw.warId, LIMITS.id) } : {}),
+    // The name a generation's answer gave the event, which its semantic facts
+    // cite. An event written by hand has none, and no fact cites it.
+    ...(clean(raw.ref, LIMITS.id) ? { ref: clean(raw.ref, LIMITS.id) } : {}),
     ...(raw.notable === true ? { notable: true } : {}),
     ...(quoteText ? { quote: { text: quoteText, ...(speaker ? { speaker } : {}), ...(role ? { role } : {}) } } : {}),
   };
@@ -144,10 +157,22 @@ export const prehistoryProblems = (prehistory, { startDate = "" } = {}) => {
 };
 
 // The Day-one facts as the Workshop lists them: who, what, and the family and
-// place a Remove button needs. Only names and titles, never prose.
+// place a Remove button needs. Only names and titles, never prose. A semantic
+// fact's row also says its `kind` (war, relation, agreement, puppet,
+// storyline): its family is the one list they all share.
+const names = (value) => array(value).map((name) => clean(name, 120)).filter(Boolean);
+const semanticFactRow = (fact) => {
+  const kind = clean(fact.kind, 40).toLowerCase();
+  if (kind === "war") return { kind, title: clean(fact.title, 160), sideA: names(fact.sideA), sideB: names(fact.sideB), detail: clean(fact.status, 40) };
+  if (kind === "relation") return { kind, sideA: names([fact.a]), sideB: names([fact.b]), detail: Number.isFinite(Number(fact.score)) ? String(Math.round(Number(fact.score))) : "" };
+  // An agreement names its parties, or the two ends of a guarantee or of access.
+  if (kind === "agreement") return { kind, title: clean(fact.title, 160), sideA: names([...array(fact.parties), fact.guarantor, fact.beneficiary, fact.grantor, fact.grantee]), detail: clean(fact.type, 60) };
+  if (kind === "puppet") return { kind, sideA: names([fact.overlord]), sideB: names([fact.puppet]), detail: clean(fact.puppetKind, 60) };
+  return { kind: "storyline", title: clean(fact.title, 160), sideA: names(fact.participants), detail: clean(fact.status, 40) };
+};
+
 export const prehistoryUpdateRows = (prehistory) => {
   const rows = [];
-  const names = (value) => array(value).map((name) => clean(name, 120)).filter(Boolean);
   for (const family of PREHISTORY_UPDATE_FAMILIES) {
     array(prehistory?.updates?.[family]).forEach((update, index) => {
       if (!isRecord(update)) return;
@@ -156,6 +181,7 @@ export const prehistoryUpdateRows = (prehistory) => {
       else if (family === "relationUpdates") Object.assign(row, { sideA: names([update.a]), sideB: names([update.b]), detail: Number.isFinite(Number(update.score)) ? String(Math.round(Number(update.score))) : "" });
       else if (family === "agreementUpdates") Object.assign(row, { title: clean(update.title || update.id, 160), sideA: names(update.parties), detail: clean(update.type, 60) });
       else if (family === "puppetUpdates") Object.assign(row, { sideA: names([update.overlord]), sideB: names([update.puppet]), detail: clean(update.kind, 60) });
+      else if (family === "canonicalUpdates") Object.assign(row, semanticFactRow(update));
       else Object.assign(row, { title: clean(update.title || update.id, 160), sideA: names(update.participants), detail: clean(update.status, 40) });
       rows.push(row);
     });
@@ -170,10 +196,11 @@ export const withoutPrehistoryUpdate = (prehistory, family, index) => {
   return next;
 };
 
-// What a game applies (gameplay.js maybeGeneratePregameHistory): the shape of
-// a validated pregameHistory answer. Only events dated before the start date,
-// oldest first: an event the designer left after it — the start date moved
-// since — is not history yet. Null when there is nothing to apply.
+// What a game applies (gameplay.js maybeGeneratePregameHistory, through
+// applyScenarioPrehistory): the shape of a validated pregameHistory answer,
+// each family of updates beside the events. Only events dated before the start
+// date, oldest first: an event the designer left after it — the start date
+// moved since — is not history yet. Null when there is nothing to apply.
 export const prehistoryPayload = (value, { startDate = "" } = {}) => {
   const prehistory = normalizeScenarioPrehistory(value);
   if (!prehistory) return null;

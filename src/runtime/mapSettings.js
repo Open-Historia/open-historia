@@ -69,6 +69,10 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // A skip whose player events were refused, or whose player orders got no
+    // outcome, is held for the player to retry (AI/playerTurnFailures.js). OFF
+    // by default: the skip lands and the orders carry over as overdue.
+    stopOnPlayerFailures: "ai_stop_on_player_failures",
 };
 
 // Families the label-font pickers suggest — Settings → Map and the game and
@@ -114,6 +118,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+    [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
 };
 
 export function setMapSetting(key, value) {

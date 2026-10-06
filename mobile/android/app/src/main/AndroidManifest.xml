@@ -39,6 +39,11 @@
          (UpdatePlugin.java). Android still asks the player to confirm each one,
          and the first time to allow installs from Open Historia. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Lets the WebView see connectivity. Without it navigator.onLine is always
+         true, so the game could not tell it was offline: the map kept asking
+         remote tile servers instead of drawing its bundled relief. A normal
+         permission, granted at install without a prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- An export is saved into Downloads/Open Historia (src/runtime/native/fileSave.js).
          Android 11 and newer let an app create files there with no permission at
          all, so these stop at Android 10 (API 29), where the Filesystem plugin asks

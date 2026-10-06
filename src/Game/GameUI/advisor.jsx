@@ -802,7 +802,7 @@ const formatAdvisorDate = (dateStr) => {
 // keystroke in the composer below.
 const AdvisorMessageRow = React.memo(({ msg, msgIndex, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
-        ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null })
+        ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 

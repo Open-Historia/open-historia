@@ -13,9 +13,11 @@ import {
     loadRollbackSnapshot,
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
-import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { PARKED_TURN_STALE_NOTE, discardParkedTurn, discardPendingJumpSegment,discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { undoableTurns } from "../../runtime/turnCommit.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { HELD_TURN, PARKED_TURN_STALE_NOTE, discardHeldTurn, discardParkedTurn, getHeldTurn, getParkedTurn, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { checksHeldError } from "../AI/turnChecks.js";
+import { describePlayerTurnFailures } from "../AI/playerTurnFailures.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -32,6 +34,9 @@ import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { describeReceiptForPlayer } from "../../runtime/applicationReceipt.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { isAuthoredEvent } from "../../runtime/translationRules.js";
+import { normalizeEventQuote } from "../../runtime/eventQuote.js";
+import { playerFacingJumpError } from "./jumpErrorCopy.js";
+import { filedFateLabel, normalizeFiledEvents } from "../../runtime/filedEvents.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
@@ -489,6 +494,8 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
         // Only ever non-empty on a fallback turn (see gameplay.js) — the main
         // thing the fallback warning's "Save logging file" button attaches.
         rawResponse: entry.rawResponse || "",
+        // Written but kept off the timeline (runtime/filedEvents.js).
+        filedEvents: normalizeFiledEvents(entry.filedEvents),
         rangeLabel: formatRange(fromDate, toDate),
         // What the engine dropped or changed of the answer (applicationReceipt.js);
         // only the newest turn keeps its notes.
@@ -660,6 +667,74 @@ const EventDocument = ({ report }) => {
 
 // openMapChanges/onToggleMapChanges let the panel hold the disclosure instead of
 // the card. Left out, the card keeps its own.
+// What became of an event the engine kept off the timeline, in the player's
+// words (runtime/filedEvents.js): the fate, then why.
+const FiledNote = ({ fate, note }) => (
+    <div style={{ background: "rgba(148,163,184,0.1)", borderBottom: "1px solid rgba(255,255,255,0.05)", color: "rgba(226,232,240,0.86)", fontSize: "0.7rem", lineHeight: 1.4, padding: "0.45rem 1rem" }}>
+    <strong style={{ fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{filedFateLabel(fate)}</strong>
+    {note ? <span> · {note}</span> : null}
+    </div>
+);
+
+const EventQuotation = ({ quote, compact = false }) => {
+    const entry = normalizeEventQuote(quote);
+    if (!entry) return null;
+    const attribution = [entry.speaker, entry.role].filter(Boolean).join(", ");
+    return (
+        <div
+        data-event-quotation="true"
+        style={{
+            borderLeft: "2px solid rgba(148,163,184,0.42)",
+            color: "rgba(239,239,242,0.86)",
+            marginTop: compact ? "0.15rem" : "0.05rem",
+            padding: compact ? "0.18rem 0 0.18rem 0.6rem" : "0.28rem 0 0.28rem 0.72rem",
+        }}
+        >
+        <div style={{ fontSize: compact ? "0.73rem" : "0.79rem", lineHeight: 1.5 }}>“{entry.text}”</div>
+        {attribution && (
+            <div style={{ color: "rgba(206,206,210,0.62)", fontSize: compact ? "0.66rem" : "0.7rem", fontStyle: "italic", marginTop: "0.18rem" }}>
+            {attribution}
+            </div>
+        )}
+        </div>
+    );
+};
+
+// The events a finished turn's writer produced but the engine kept off the
+// timeline. Folded under the cards, greyed, so a card watched arriving during
+// the skip does not simply vanish when the turn lands.
+const FiledEventsSection = ({ events }) => {
+    const [open, setOpen] = useState(false);
+    if (!events.length) return null;
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={() => setOpen((value) => !value)}
+        title="Events the AI wrote for this skip that the engine's checks kept off the timeline"
+        style={{ ...ghostButtonStyle, justifyContent: "flex-start", opacity: 0.8, width: "100%" }}
+        >
+        <span>{open ? "▴" : "▾"} {events.length} event{events.length === 1 ? "" : "s"} kept off the timeline</span>
+        </button>
+        {open && events.map((event) => (
+            <div
+            key={`filed-${event.title}`}
+            style={{ border: "1px dashed rgba(255,255,255,0.14)", borderRadius: "16px", opacity: 0.6, overflow: "hidden" }}
+            >
+            <FiledNote fate={event.fate} note={event.note} />
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.75rem 1rem 0.85rem" }}>
+            {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
+            {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            <EventQuotation quote={event.quote} compact />
+            </div>
+            </div>
+        ))}
+        </div>
+    );
+};
+
 const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onToggleMapChanges = null }) => {
     // The model's category tags, then what the event is about: links the map
     // can fly to when the card has them, the participants it names otherwise.
@@ -682,17 +757,22 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     // translator leaves them alone. A scenario's own events are content, and
     // are translated (runtime/translator.js).
     const written = isAuthoredEvent(event) ? undefined : "";
+    // A streamed card the engine's own checks will keep off the timeline, marked
+    // while the model is still writing (AI/gameplay.js markStreamedEvents).
+    const filed = event.filed && typeof event.filed === "object" ? event.filed : null;
 
     return (
         <div
         style={{
             background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: filed ? "1px dashed rgba(255,255,255,0.14)" : "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+            opacity: filed ? 0.6 : 1,
             overflow: "hidden",
         }}
         >
+        {filed && <FiledNote fate={filed.fate} note={filed.note} />}
         <div
         style={{
             alignItems: "center",
@@ -751,6 +831,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             {event.description}
             </Markdown>
         )}
+        <EventQuotation quote={event.quote} />
 
         {documents.length > 0 && (
             <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -1080,14 +1161,202 @@ const SkipProgressRow = ({ label, onCancel }) => (
     </div>
 );
 
+// A HELD turn, not a failed one: generated, NOT written, waiting on the
+// player (AI/simulationStatus.js HELD_TURN). Amber rather than red for that
+// reason, and worded so the player knows their turn still exists. Retry
+// re-runs only what failed, so the minutes already spent on the rest are not
+// spent again. What each kind says:
+//   segment  one segment of a split jump did not come back; the segments
+//            before it are in hand and the game is still on its old date
+//   board    the Projects & Operations board could not be brought in step
+//            with the events; Retry is seconds, where the events were minutes
+//   checks   a check that moves the map with the events (units, ground,
+//            structures, the timeline, the board, the agents' reports) did not
+//            come back. Before this the turn landed anyway with none of that
+//            done and said nothing. Continue takes it that way on purpose.
+const HELD_NOTICE = Object.freeze({
+    [HELD_TURN.segment]: {
+        retry: "Retry the segment",
+        retrying: "Retrying the segment…",
+        showProgress: true,
+        stillFailing: "that segment still did not come back. Retrying again may help if the problem was temporary; otherwise discard the turn and run it again, perhaps as a shorter skip.",
+    },
+    [HELD_TURN.board]: {
+        retry: "Retry the board",
+        retrying: "Retrying the board…",
+        stillFailing: "the board still did not update. Retrying again may help if the problem was temporary; otherwise discard the turn and run it again.",
+    },
+    [HELD_TURN.checks]: {
+        retry: "Retry the checks",
+        retrying: "Retrying the checks…",
+        showProgress: true,
+        canContinue: true,
+        stillFailing: "the checks still did not come back. Retrying again may help if the model is only busy; otherwise continue without them, or discard the turn.",
+    },
+    // Settings, AI: "Stop when my events fail" (AI/playerTurnFailures.js).
+    [HELD_TURN.events]: {
+        retry: "Retry the failed events",
+        retrying: "Retrying the failed events…",
+        showProgress: true,
+        playerEvents: true,
+        stillFailing: "some of your events still failed. Retry them again, retry the whole skip, or keep it and move on.",
+    },
+});
+
+// The turn already held for the open campaign, as its notice. The widget is
+// mounted afresh for each campaign, and a turn held in this one outlives a
+// visit to another: its notice is put back from the hold itself
+// (AI/simulationStatus.js), with the message it was held with when the hold
+// kept one, else said again from what the hold carries.
+const heldTurnMessage = (kind, hold) => {
+    if (hold.message) return hold.message;
+    if (kind === HELD_TURN.segment) return "A segment of this jump failed.";
+    if (kind === HELD_TURN.board) return "The Projects & Operations board did not update.";
+    if (kind === HELD_TURN.events) return describePlayerTurnFailures(hold.failures);
+    return checksHeldError(hold.state?.checks?.failures?.()).message;
+};
+const heldTurnOnOpen = () => {
+    for (const kind of Object.values(HELD_TURN)) {
+        const hold = getHeldTurn(kind);
+        if (hold) return { kind, message: heldTurnMessage(kind, hold), failures: hold.failures ?? null, retries: 0 };
+    }
+    return null;
+};
+
+// What failed, for a turn held on the player's events: each refused event with
+// why, and each order that got no outcome.
+const HeldFailureList = ({ failures }) => {
+    const events = failures?.events ?? [];
+    const orders = failures?.orders ?? [];
+    if (!events.length && !orders.length) return null;
+    return (
+        <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        {events.map((event) => (
+            <li key={`event-${event.title}`}>
+            <span style={{ fontWeight: 600 }}>{event.title}</span>
+            <span style={{ color: "rgba(253,230,138,0.72)" }}> — {event.reason}</span>
+            </li>
+        ))}
+        {orders.map((order) => (
+            <li key={`order-${order.id}`}>
+            <span style={{ fontWeight: 600 }}>Order: {order.title}</span>
+            <span style={{ color: "rgba(253,230,138,0.72)" }}> — not carried out</span>
+            </li>
+        ))}
+        </ul>
+    );
+};
+
+const heldButtonStyle = (primary, busy) => ({
+    background: primary ? "rgba(251,191,36,0.18)" : "rgba(255,255,255,0.06)",
+    border: primary ? "1px solid rgba(251,191,36,0.4)" : "1px solid rgba(255,255,255,0.16)",
+    borderRadius: "12px",
+    color: primary ? "#fde68a" : "rgba(255,255,255,0.72)",
+    cursor: busy ? "default" : "pointer",
+    flex: 1,
+    fontSize: "0.76rem",
+    opacity: busy ? 0.6 : 1,
+    padding: "0.5rem 0.7rem",
+});
+
+const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, onCancel = null, onRetryWholeSkip = null }) => {
+    const notice = HELD_NOTICE[held.kind];
+    if (!notice) return null;
+    return (
+        <div
+        style={{
+            background: "rgba(120,53,15,0.28)",
+            border: "1px solid rgba(251,191,36,0.35)",
+            borderRadius: "16px",
+            color: "#fde68a",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "0.76rem",
+            gap: "0.7rem",
+            lineHeight: "1.5",
+            padding: "0.85rem 0.9rem",
+        }}
+        >
+        <div>{held.message}</div>
+        {notice.playerEvents && <HeldFailureList failures={held.failures} />}
+        {/* A failed retry otherwise re-renders the identical message, so the
+            button reads as dead even though it ran. Say plainly that it was
+            tried and did not work. */}
+        {held.retries > 0 && !isRetrying && (
+            <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+            Tried {held.retries === 1 ? "once" : `${held.retries} times`} — {notice.stillFailing}
+            </div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={() => onRetry()} style={heldButtonStyle(true, isRetrying)}>
+            {isRetrying ? ((notice.showProgress && progressLabel) || notice.retrying) : notice.retry}
+            </button>
+            {notice.canContinue && (
+                <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={() => onRetry({ withoutFailedChecks: true })} style={heldButtonStyle(false, isRetrying)}>
+                Continue without them
+                </button>
+            )}
+            {notice.playerEvents && (
+                <>
+                <button type="button" className="oh-tap-row" disabled={isRetrying || typeof onRetryWholeSkip !== "function"} onClick={() => onRetryWholeSkip?.()} style={heldButtonStyle(false, isRetrying)}>
+                Retry the whole skip
+                </button>
+                <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={() => onRetry({ keep: true })} style={heldButtonStyle(false, isRetrying)}>
+                Keep it and move on
+                </button>
+                </>
+            )}
+            {/* While a retry runs, Cancel stands where Discard was: a retry on a
+                slow model can take minutes, and a cancelled one leaves the turn
+                held (simulationStatus.js attemptHeldTurn). */}
+            {isRetrying && typeof onCancel === "function" ? (
+                <button type="button" className="oh-tap-row" onClick={onCancel} style={heldButtonStyle(false, false)}>
+                Cancel
+                </button>
+            ) : notice.playerEvents ? null : (
+                <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={onDiscard} style={heldButtonStyle(false, isRetrying)}>
+                Discard the turn
+                </button>
+            )}
+        </div>
+        </div>
+    );
+};
+
+// A value read from the turn's restore points: read now, again whenever `deps`
+// change, and again when a restore point is saved (gameplay.js
+// captureRollbackSnapshot). That last is what the round alone missed: the
+// restore point is saved after the turn's round has changed, so the newest turn
+// could not be rolled back from here while the cheats menu, which reads when
+// opened, could. A failed read gives `initial` back. Returns [value, setValue].
+const useRestorePointReading = (read, initial, deps) => {
+    const [value, setValue] = useState(initial);
+    useEffect(() => {
+        let active = true;
+        const refresh = () => Promise.resolve()
+            .then(read)
+            .then((next) => { if (active) setValue(next); })
+            .catch(() => { if (active) setValue(initial); });
+        refresh();
+        window.addEventListener("oh:restore-point-saved", refresh);
+        return () => {
+            active = false;
+            window.removeEventListener("oh:restore-point-saved", refresh);
+        };
+        // The caller's deps, by design: `read` and `initial` are fixed per use.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, deps);
+    return [value, setValue];
+};
+
 const TimelineSkipPanel = ({
     canUndo,
     currentDate,
     error,
     isLoading,
     isOpen,
-    isRetryingProjects,
-    isRetryingSegment,
+    held = null,
+    isRetryingHeld = false,
     modeSuggestion,
     offeredInteractive = null,
     onAcceptModeSuggestion,
@@ -1095,22 +1364,17 @@ const TimelineSkipPanel = ({
     onCancel,
     onClose,
     onDeclineModeSuggestion,
-    onDiscardProjects,
-    onDiscardSegment,
+    onDiscardHeld,
     isApplyingParked = false,
     onApplyParked,
     onDiscardParked,
     parkedHeld = false,
     onJump,
-    onRetryProjects,
-    onRetrySegment,
+    onRetryHeld,
+    onRetryWholeSkip,
     onUndo,
     progressLabel,
-    projectsHeld,
-    projectsRetries,
     sceneInProgress = false,
-    segmentHeld,
-    segmentRetries,
     topOffset,
     undoCount,
 }) => {
@@ -1353,11 +1617,11 @@ const TimelineSkipPanel = ({
         </div>
 
         {/* The events are in the Events panel; this is for a player who came back to cancel.
-            A held turn's retry shows it too: it can run for minutes, and this
-            is its only Cancel when the skip is not watched live. */}
+            A held turn's retry shows it too: it can run for minutes, and its
+            Cancel is the skip's (the notice below offers the same one). */}
         {isLoading && (
             <SkipProgressRow
-            label={progressLabel || (isRetryingProjects ? "Retrying the board…" : isRetryingSegment ? "Retrying the segment…" : isApplyingParked ? "Applying the time skip…" : "")}
+            label={progressLabel || (isRetryingHeld ? (HELD_NOTICE[held?.kind]?.retrying ?? "") : isApplyingParked ? "Applying the time skip…" : "")}
             onCancel={onCancel}
             />
         )}
@@ -1443,154 +1707,16 @@ const TimelineSkipPanel = ({
             </div>
         )}
 
-        {/* A HELD jump, not a failed one: one segment of a split jump did not
-            come back, the segments before it are still in hand, and nothing has
-            been written — the game is still on its old date. Amber rather than
-            red for that reason, and Retry re-runs ONLY the segment that failed,
-            so the minutes already spent on the earlier ones are not spent
-            again. */}
-        {segmentHeld && (
-            <div
-            style={{
-                background: "rgba(120,53,15,0.28)",
-                border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: "16px",
-                color: "#fde68a",
-                display: "flex",
-                flexDirection: "column",
-                fontSize: "0.76rem",
-                gap: "0.7rem",
-                lineHeight: "1.5",
-                padding: "0.85rem 0.9rem",
-            }}
-            >
-            <div>{segmentHeld}</div>
-            {/* A failed retry otherwise re-renders the identical message, so the
-                button reads as dead even though it ran. Say plainly that it was
-                tried and did not work. */}
-            {segmentRetries > 0 && !isRetryingSegment && (
-                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
-                Tried {segmentRetries === 1 ? "once" : `${segmentRetries} times`} — that segment still
-                did not come back. Retrying again may help if the problem was temporary;
-                otherwise discard the turn and run it again, perhaps as a shorter skip.
-                </div>
-            )}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={isRetryingSegment}
-                onClick={onRetrySegment}
-                style={{
-                    background: "rgba(251,191,36,0.18)",
-                    border: "1px solid rgba(251,191,36,0.4)",
-                    borderRadius: "12px",
-                    color: "#fde68a",
-                    cursor: isRetryingSegment ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingSegment ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                {isRetryingSegment ? (progressLabel || "Retrying the segment…") : "Retry the segment"}
-                </button>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={isRetryingSegment}
-                onClick={onDiscardSegment}
-                style={{
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.16)",
-                    borderRadius: "12px",
-                    color: "rgba(255,255,255,0.72)",
-                    cursor: isRetryingSegment ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingSegment ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                Discard the turn
-                </button>
-            </div>
-            </div>
-        )}
-
-        {/* A HELD turn, not a failed one: the events are generated and valid but
-            nothing has been written, because the Projects & Operations board
-            could not be brought in step with them. Deliberately amber rather
-            than red, and worded so the player knows their turn still exists —
-            Retry re-runs only the board, which is seconds rather than the
-            minutes regenerating the events would cost. */}
-        {projectsHeld && (
-            <div
-            style={{
-                background: "rgba(120,53,15,0.28)",
-                border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: "16px",
-                color: "#fde68a",
-                display: "flex",
-                flexDirection: "column",
-                fontSize: "0.76rem",
-                gap: "0.7rem",
-                lineHeight: "1.5",
-                padding: "0.85rem 0.9rem",
-            }}
-            >
-            <div>{projectsHeld}</div>
-            {/* A failed retry otherwise re-renders the identical message, so the
-                button reads as dead even though it ran. Say plainly that it was
-                tried and did not work. */}
-            {projectsRetries > 0 && !isRetryingProjects && (
-                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
-                Tried {projectsRetries === 1 ? "once" : `${projectsRetries} times`} — the board still
-                did not update. Retrying again may help if the problem was temporary;
-                otherwise discard the turn and run it again.
-                </div>
-            )}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={isRetryingProjects}
-                onClick={onRetryProjects}
-                style={{
-                    background: "rgba(251,191,36,0.18)",
-                    border: "1px solid rgba(251,191,36,0.4)",
-                    borderRadius: "12px",
-                    color: "#fde68a",
-                    cursor: isRetryingProjects ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingProjects ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                {isRetryingProjects ? "Retrying the board…" : "Retry the board"}
-                </button>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={isRetryingProjects}
-                onClick={onDiscardProjects}
-                style={{
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.16)",
-                    borderRadius: "12px",
-                    color: "rgba(255,255,255,0.72)",
-                    cursor: isRetryingProjects ? "default" : "pointer",
-                    flex: 1,
-                    fontSize: "0.76rem",
-                    opacity: isRetryingProjects ? 0.6 : 1,
-                    padding: "0.5rem 0.7rem",
-                }}
-                >
-                Discard the turn
-                </button>
-            </div>
-            </div>
+        {held && (
+            <HeldTurnNotice
+            held={held}
+            isRetrying={isRetryingHeld}
+            progressLabel={progressLabel}
+            onRetry={onRetryHeld}
+            onRetryWholeSkip={onRetryWholeSkip}
+            onDiscard={onDiscardHeld}
+            onCancel={onCancel}
+            />
         )}
 
         {/* The ladder has twice found the same lower method working for this
@@ -1747,6 +1873,14 @@ const TimelineHistoryPanel = ({
     // { eventId, seq }: a card another panel asked to be shown.
     focusRequest = null,
     warning,
+    // { failed: [polity], state: "idle" | "working" }: agents whose report did
+    // not come back after the turn was written (AI/gameplay.js
+    // refreshSpyIntercepts), with the retry that asks them again.
+    agentReports = null,
+    onRetryAgentReports = null,
+    // The newest turn's restore point could not be saved (a very large save,
+    // or storage full): there is no Rollback for it, and the player is told why.
+    restorePointMissing = false,
 }) => {
     // An older turn, reread whole: it opens at its first event, not its last.
     const pastTurn = Boolean(turnPicker && turnPicker.index > 0);
@@ -1879,6 +2013,61 @@ const TimelineHistoryPanel = ({
         {pastTurn && (
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.75rem" }}>
             This is an earlier turn, shown in full. The map shows the world as it is now.
+            </div>
+        )}
+        {restorePointMissing && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.24)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "12px",
+                color: "#fde68a",
+                fontSize: "0.76rem",
+                lineHeight: "1.5",
+                marginBottom: "0.75rem",
+                padding: "0.75rem 0.85rem",
+            }}
+            >
+            This turn could not be saved as a restore point, so it cannot be rolled back. The turn itself is saved. If this keeps happening, the save may be too large or the storage full.
+            </div>
+        )}
+        {agentReports?.failed?.length > 0 && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.24)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "12px",
+                color: "#fde68a",
+                fontSize: "0.76rem",
+                lineHeight: "1.5",
+                marginBottom: "0.75rem",
+                padding: "0.75rem 0.85rem",
+            }}
+            >
+            Your agent{agentReports.failed.length === 1 ? "" : "s"} in {agentReports.failed.join(", ")} did not report this turn: the request failed. The turn itself is saved.
+            {typeof onRetryAgentReports === "function" && (
+                <div style={{ marginTop: "0.6rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={agentReports.state === "working"}
+                onClick={onRetryAgentReports}
+                style={{
+                    background: "rgba(251,191,36,0.1)",
+                    border: "1px solid rgba(251,191,36,0.3)",
+                    borderRadius: "8px",
+                    color: "#fde68a",
+                    cursor: agentReports.state === "working" ? "default" : "pointer",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    opacity: agentReports.state === "working" ? 0.6 : 1,
+                    padding: "0.4rem 0.7rem",
+                }}
+                >
+                {agentReports.state === "working" ? "Asking the agents again…" : "Retry the reports"}
+                </button>
+                </div>
+            )}
             </div>
         )}
         {warning && (
@@ -2118,7 +2307,13 @@ const TimelineHistoryPanel = ({
                 )}
                 </>
             )}
+            {/* Once the whole turn is revealed: what was written but kept off
+                the timeline, so no card watched arriving just disappears. */}
+            {!live && !hasMoreEvents && <FiledEventsSection events={record.filedEvents ?? []} />}
             </div>
+        )}
+        {!live && record && totalEvents === 0 && (record.filedEvents?.length ?? 0) > 0 && (
+            <div style={{ marginTop: "0.75rem" }}><FiledEventsSection events={record.filedEvents} /></div>
         )}
         {!live && record?.receipt && <EngineChangesNote receipt={record.receipt} />}
         {/* Under the cards, so the list reads as a finished turn's would. */}
@@ -2193,38 +2388,32 @@ const DateWidget = ({
     });
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
-    // A turn written without its restore point (AI/gameplay.js
-    // captureRollbackSnapshot) cannot be undone; said with the turn, beside a
-    // fallback's warning when there is none.
-    const warnIfNoRestorePoint = (result) => {
-        if (result?.restorePointSaved === false) setFallbackWarning((current) => current || RESTORE_POINT_NOT_SAVED_NOTE);
-    };
-    // A turn that is generated and valid but NOT written, because the Projects &
-    // Operations board could not be brought in step with it. Set means a turn is
-    // waiting: the player retries just the board, or discards and runs the turn
-    // again. Nothing has been saved either way.
+    // A turn generated but NOT written, waiting on the player: { kind, message,
+    // retries } (HeldTurnNotice). Nothing has been saved, so there is no
+    // rollback to run: the game is still on its pre-turn date. `retries` counts
+    // the tries for the turn currently held — without it a failed retry
+    // re-renders the identical message and reads as a dead button, which is
+    // exactly how it read in testing.
     // The widget is mounted afresh for each campaign, and a turn held in this one
     // outlives a visit to another: its notice is put back from the hold itself,
-    // with the message it was held with (AI/simulationStatus.js).
-    const [projectsHeld, setProjectsHeld] = useState(() => (getPendingProjectsJump()
-        ? getPendingProjectsJump().message || "The Projects & Operations board did not update."
-        : ""));
-    const [isRetryingProjects, setIsRetryingProjects] = useState(false);
-    // How many times the board has been retried for the turn currently held.
-    // Without it a failed retry re-renders the identical message and reads as a
-    // dead button - which is exactly how it read in testing.
-    const [projectsRetries, setProjectsRetries] = useState(0);
-    // A jump whose segments are part-generated: one segment failed and the rest
-    // of the round was never asked for. Set means a turn is waiting — the player
-    // retries that one segment, or discards. Nothing has been written either way,
-    // so there is no rollback to run: the game is still on its pre-jump date.
-    const [segmentHeld, setSegmentHeld] = useState(() => (getPendingJumpSegment()
-        ? getPendingJumpSegment().message || "A segment of this jump failed."
-        : ""));
-    const [isRetryingSegment, setIsRetryingSegment] = useState(false);
-    // How many times the failed segment has been retried for the jump currently
-    // held — same reason as projectsRetries.
-    const [segmentRetries, setSegmentRetries] = useState(0);
+    // with the message it was held with (heldTurnOnOpen).
+    const [held, setHeld] = useState(heldTurnOnOpen);
+    // Agents whose report failed after the turn was written (with Save AI
+    // requests off each asks on its own, after the write): told, with a retry.
+    const [agentReports, setAgentReports] = useState({ failed: [], state: "idle" });
+    // The newest turn could not be saved as a restore point (restorePointSaved):
+    // a turn written without one (AI/gameplay.js captureRollbackSnapshot) cannot
+    // be undone, and the Events page says so with the turn.
+    const [restorePointMissing, setRestorePointMissing] = useState(false);
+    const [isRetryingHeld, setIsRetryingHeld] = useState(false);
+    // A turn held by an error, keeping the count when the same kind holds it again.
+    const holdFrom = (heldError) => setHeld((current) => ({
+        kind: heldError.heldKind,
+        message: heldError.message || "The turn is held.",
+        // What failed, for a turn held on the player's events.
+        failures: heldError.playerFailures ?? null,
+        retries: current?.kind === heldError.heldKind ? current.retries : 0,
+    }));
     // A time skip that finished while another campaign was open, kept for this
     // one (AI/gameplay.js loadParkedTurn): set means it waits for the player to
     // apply or discard it. Nothing of it has been written.
@@ -2242,7 +2431,7 @@ const DateWidget = ({
     // offer comes at once when no turn is running, else when the running one
     // ends — never in the middle of one.
     const [modeEvidence, setModeEvidence] = useState(0);
-    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment || isApplyingParked;
+    const turnRunning = isLoading || isRetryingHeld || isApplyingParked;
     useEffect(() => {
         const noted = () => setModeEvidence((count) => count + 1);
         window.addEventListener("ai:structured-mode-suggestion", noted);
@@ -2254,7 +2443,14 @@ const DateWidget = ({
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
-    const [undoCount, setUndoCount] = useState(0);
+    // How many turns can be undone (a restore point is captured at the start of
+    // each turn). The index, not the snapshots: the full list carries every
+    // prior world. Only the unbroken run back from the last turn counts
+    // (runtime/turnCommit.js): past a turn that saved none, an Undo would take
+    // back more than one turn, and the engine refuses it. Re-read whenever the
+    // round changes — after a jump or undo — and when a restore point is saved.
+    const loadRollbackSnapshotCount = async () => undoableTurns(await loadRollbackSnapshotIndex(), { round: gameData?.round || 1 });
+    const [undoCount, setUndoCount] = useRestorePointReading(loadRollbackSnapshotCount, 0, [gameData?.round]);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
     // Wherever the « » are finger-sized (a touch screen, a phone either way
@@ -2320,6 +2516,8 @@ const DateWidget = ({
     useEffect(() => {
         const handleRolledBack = () => {
             setFallbackWarning("");
+            setAgentReports({ failed: [], state: "idle" });
+            setRestorePointMissing(false);
         };
         window.addEventListener("oh:rolled-back", handleRolledBack);
         return () => window.removeEventListener("oh:rolled-back", handleRolledBack);
@@ -2387,7 +2585,9 @@ const DateWidget = ({
         setLocalOpenPanel((current) => (current === panelName ? null : panelName));
     }
 
-    const runJump = async (days, mode = "jump") => {
+    // retryDirective: a whole skip run again from a turn held on the player's
+    // events, telling the model what failed the first time.
+    const runJump = async (days, mode = "jump", { retryDirective = "" } = {}) => {
         // A held turn's retry holds the controller too: a skip started under it
         // would run a second turn from the same pre-jump world, and the later
         // write would replace the earlier.
@@ -2449,11 +2649,10 @@ const DateWidget = ({
         setFallbackWarning("");
         // simulateTimelineJump abandons any held turn when it starts, so a notice
         // left on screen would offer buttons with nothing behind them.
-        setSegmentHeld("");
-        setSegmentRetries(0);
-        setProjectsHeld("");
-        setProjectsRetries(0);
+        setHeld(null);
         setParkedHeld(false);
+        setAgentReports({ failed: [], state: "idle" });
+        setRestorePointMissing(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2471,9 +2670,10 @@ const DateWidget = ({
             // No onEvents with the setting off: nothing streams anywhere.
             const onEvents = live ? showStreamedEvents : undefined;
             const result = mode === "auto"
-            ? await simulateAutoJump({ days, signal: controller.signal, onProgress: showSkipPhase, onEvents })
+            ? await simulateAutoJump({ days, signal: controller.signal, onProgress: showSkipPhase, onEvents, retryDirective })
             : await simulateTimelineJump({
                 days,
+                retryDirective,
                 signal: controller.signal,
                 // What the skip is doing right now, in its own words
                 // (AI/skipPhases.js). Without this the spinner said the same
@@ -2486,6 +2686,8 @@ const DateWidget = ({
             // Not for a fallback turn: the canned period is not the round that
             // was on screen, so it is read from the beginning.
             if (result.generation?.source !== "fallback") carryLiveReveal();
+            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
+            setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2517,7 +2719,6 @@ const DateWidget = ({
                     source: result.generation?.source || "ai",
                 });
             }
-            warnIfNoRestorePoint(result);
             // What the turn actually DID to the world, in detailed mode. This is
             // the entry that answers the most common report there is — "the
             // event said my army took the province but the border never moved".
@@ -2548,27 +2749,16 @@ const DateWidget = ({
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
                 logDebugEvent("turn", "Turn cancelled by the player.");
-            } else if (jumpError?.segmentHeld) {
-                // Not a failed turn: a long skip is generated in segments and one
-                // of them did not come back. The finished segments are still held,
-                // unwritten, so retrying re-runs only the segment that failed
-                // rather than the whole round.
+            } else if (jumpError?.heldKind) {
+                // Not a failed turn: it is generated and HELD unwritten — on a
+                // segment that did not come back, the board, or a failed check —
+                // and a retry re-runs only what failed.
                 setError("");
-                setSegmentHeld(jumpError.message || "A segment of this jump failed.");
-                setSegmentRetries(0);
-                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s: segment ${(jumpError.segmentIndex ?? 0) + 1} of ${jumpError.segmentCount ?? 0} failed; nothing was written.`);
-            } else if (jumpError?.projectsHeld) {
-                // Not a failed turn: the events are generated and valid, and the
-                // whole turn is being HELD unwritten because the Projects board
-                // could not be brought in step with them. Retrying re-runs only
-                // the board call — the events are not regenerated, which on a slow
-                // model is the difference between ten seconds and ten minutes.
-                setError("");
-                setProjectsHeld(jumpError.message || "The Projects & Operations board did not update.");
-                setProjectsRetries(0);
+                holdFrom(jumpError);
+                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s (${jumpError.heldKind}); nothing was written.`, jumpError.message);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
-                setError(jumpError.message || "Failed to simulate timeline jump.");
+                setError(playerFacingJumpError(jumpError));
             }
         } finally {
             jumpAbortRef.current = null;
@@ -2618,7 +2808,7 @@ const DateWidget = ({
 
     // Write the kept skip. Nothing is generated or asked again (AI/gameplay.js
     // applyParkedTurn), and it lands like any skip. Busy like a skip, for the
-    // same reasons as the board retry below.
+    // same reasons as a held turn's retry below.
     const applyHeldParked = async () => {
         if (isApplyingParked || isLoading || jumpAbortRef.current) return;
         setIsApplyingParked(true);
@@ -2631,7 +2821,8 @@ const DateWidget = ({
             const result = await applyParkedTurn({ signal: controller.signal });
             setParkedHeld(false);
             if (!result) return;
-            warnIfNoRestorePoint(result);
+            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
+            setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2647,11 +2838,11 @@ const DateWidget = ({
                 // puts it back), so the notice stays while it is.
                 setParkedHeld(Boolean(getParkedTurn()));
                 logDebugEvent("turn", "Applying the kept skip was cancelled.");
-            } else if (parkedError?.projectsHeld) {
-                // Held at the board now, like any skip: one notice at a time.
+            } else if (parkedError?.heldKind) {
+                // Held now, like any skip (at the board, or on a check): one
+                // notice at a time.
                 setParkedHeld(false);
-                setProjectsHeld(parkedError.message);
-                setProjectsRetries(0);
+                holdFrom(parkedError);
             } else {
                 setParkedHeld(Boolean(getParkedTurn()));
                 setError(parkedError.message || "Failed to apply the time skip that finished while another campaign was open.");
@@ -2677,71 +2868,29 @@ const DateWidget = ({
         }
     };
 
-    // Finish a held turn by re-running ONLY the board call. The events are not
-    // regenerated: they are already valid, and on a slow model regenerating them
-    // is the difference between a few seconds and several minutes.
+    // Finish the held turn by re-running only what failed: the one segment
+    // and the ones after it, the board call, or the failed checks. What was
+    // already generated is not regenerated — on a slow model that is the
+    // difference between seconds and minutes. `withoutFailedChecks` (checks
+    // only) takes the turn as the failed checks left it, asking no check again.
+    // keep (a turn held on the player's events): the turn lands as it is.
     //
     // Busy like a skip (isLoading): it writes a turn like one, so the skips,
     // Auto-jump and Undo wait for it, and its Cancel is the skip's.
-    const retryHeldProjects = async () => {
-        if (isRetryingProjects || isLoading || jumpAbortRef.current) return;
-        setIsRetryingProjects(true);
+    const retryHeld = async ({ withoutFailedChecks = false, keep = false } = {}) => {
+        if (isRetryingHeld || isLoading || jumpAbortRef.current || !held) return;
+        const { kind } = held;
+        // A segment retry writes the rest of the round, so it streams like a jump.
+        const live = kind === HELD_TURN.segment && getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
+        setIsRetryingHeld(true);
         setIsLoading(true);
-        setProjectsRetries((count) => count + 1);
-        const startedAt = Date.now();
-        const controller = new AbortController();
-        jumpAbortRef.current = controller;
-        try {
-            const result = await retryPendingProjectsJump({ signal: controller.signal });
-            warnIfNoRestorePoint(result);
-            setGameData(result.game);
-            setEvents(result.events);
-            setWorldState(result.world);
-            setVisibleEventCount(1);
-            setProjectsHeld("");
-            setProjectsRetries(0);
-            logDebugEvent("turn", `Held turn finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
-                round: result.game?.round ?? 0,
-                events: result.events?.length ?? 0,
-            });
-            // The turn is written: its events, as a skip that lands shows them.
-            setPanel("history");
-        } catch (retryError) {
-            if (controller.signal.aborted || retryError?.name === "AbortError") {
-                // Cancelled. The turn is still held and still unwritten, so leave
-                // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", "Board retry cancelled; the turn is still held.");
-            } else if (retryError?.projectsHeld) {
-                setProjectsHeld(retryError.message);
-            } else {
-                // The board worked but the write did not. The held turn is gone
-                // with it, so this is an ordinary turn failure from here.
-                setProjectsHeld("");
-                setError(retryError.message || "Failed to finish the held turn.");
-            }
-        } finally {
-            jumpAbortRef.current = null;
-            setIsRetryingProjects(false);
-            setIsLoading(false);
-            // Between turns, as after a skip.
-            setModeSuggestion(getStructuredModeSuggestion());
-        }
-    };
-
-    // Finish a held jump by re-running ONLY the segment that failed and the ones
-    // after it. The segments already generated are not regenerated: they are
-    // valid, and on a slow model each one may have cost minutes.
-    // Busy like a skip, for the same reasons as the board retry above.
-    const retryHeldSegment = async () => {
-        if (isRetryingSegment || isLoading || jumpAbortRef.current) return;
-        const live = getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
-        setIsRetryingSegment(true);
-        setIsLoading(true);
-        setSkipInFlight(live);
-        setSegmentRetries((count) => count + 1);
+        if (!withoutFailedChecks && !keep) setHeld((current) => (current ? { ...current, retries: current.retries + 1 } : current));
         setJumpProgress("");
-        setStreamedEvents([]);
-        revealCarryRef.current = null;
+        if (kind === HELD_TURN.segment) {
+            setSkipInFlight(live);
+            setStreamedEvents([]);
+            revealCarryRef.current = null;
+        }
         if (live) {
             setOpenMapChanges(new Set());
             setVisibleEventCount(1);
@@ -2754,71 +2903,83 @@ const DateWidget = ({
         const controller = new AbortController();
         jumpAbortRef.current = controller;
         try {
-            const result = await retryPendingJumpSegment({
-                signal: controller.signal,
-                onProgress: showSkipPhase,
-                onEvents: live ? showStreamedEvents : undefined,
-            });
-            carryLiveReveal();
-            warnIfNoRestorePoint(result);
+            const options = { signal: controller.signal, onProgress: showSkipPhase };
+            const result = kind === HELD_TURN.segment
+                ? await retryPendingJumpSegment({ ...options, onEvents: live ? showStreamedEvents : undefined })
+                : kind === HELD_TURN.board
+                    ? await retryPendingProjectsJump({ signal: controller.signal })
+                    : kind === HELD_TURN.events
+                        ? await retryHeldPlayerEvents({ ...options, keep })
+                        : await retryPendingChecksJump({ ...options, withoutFailedChecks });
+            if (kind === HELD_TURN.segment) carryLiveReveal();
+            else setVisibleEventCount(1);
+            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
+            setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
-            setSegmentHeld("");
-            setSegmentRetries(0);
-            logDebugEvent("turn", `Held jump finished in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+            setHeld(null);
+            logDebugEvent("turn", `Held turn (${kind}) finished ${withoutFailedChecks ? "without its failed checks " : keep ? "as it was " : ""}in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
                 round: result.game?.round ?? 0,
                 events: result.events?.length ?? 0,
             });
+            // The turn is written: its events, as a skip that lands shows them.
             setPanel("history");
         } catch (retryError) {
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
                 // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", "Segment retry cancelled; the turn is still held.");
-            } else if (retryError?.segmentHeld) {
-                setSegmentHeld(retryError.message);
-            } else if (retryError?.projectsHeld) {
-                // The segments finished; the BOARD is what is holding the turn
-                // now. One notice at a time, or the player is offered two retries
-                // for one turn and only one of them does anything.
-                setSegmentHeld("");
-                setSegmentRetries(0);
-                setProjectsHeld(retryError.message);
-                setProjectsRetries(0);
+                logDebugEvent("turn", `Retry of the held turn (${kind}) cancelled; the turn is still held.`);
+            } else if (retryError?.heldKind) {
+                // Held again — by the same thing, or by what comes after it (the
+                // segments finished and the board or a check holds it now). One
+                // notice at a time, or the player is offered two retries for one
+                // turn and only one of them does anything.
+                holdFrom(retryError);
             } else {
-                // The segments finished but the write did not. The held jump is
+                // What was held came back but the write did not. The held turn is
                 // gone with it, so this is an ordinary turn failure from here.
-                setSegmentHeld("");
-                setError(retryError.message || "Failed to finish the held jump.");
+                setHeld(null);
+                setError(retryError.message || "Failed to finish the held turn.");
             }
         } finally {
             jumpAbortRef.current = null;
-            setIsRetryingSegment(false);
+            setIsRetryingHeld(false);
             setIsLoading(false);
-            setSkipInFlight(false);
             setJumpProgress("");
-            setStreamedEvents([]);
-            setLiveStageBase(null);
+            if (kind === HELD_TURN.segment) {
+                setSkipInFlight(false);
+                setStreamedEvents([]);
+                setLiveStageBase(null);
+            }
+            // Between turns, as after a skip.
             setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
-    // Throw the held jump away. Nothing was ever written, so there is nothing to
-    // undo and no rollback to run — the game is still on its pre-jump date and
-    // the player simply loses the segments generated so far.
-    const discardHeldSegment = () => {
-        discardPendingJumpSegment();
-        setSegmentHeld("");
-        setSegmentRetries(0);
+    // Throw the held turn away. Nothing was ever written, so there is nothing to
+    // undo and no rollback to run — the player just loses the generation, as if
+    // they had cancelled.
+    const discardHeld = () => {
+        if (held) discardHeldTurn(held.kind);
+        setHeld(null);
     };
 
-    // Throw the held turn away. Nothing was ever written, so there is nothing to
-    // undo — the player just loses the generation, as if they had cancelled.
-    const discardHeldProjects = () => {
-        discardPendingProjectsJump();
-        setProjectsHeld("");
-        setProjectsRetries(0);
+    // A turn held on the player's events, run again from the start: the same
+    // length and mode, with the model told what failed. Nothing was written, so
+    // there is nothing to undo; the new skip discards the held turn itself.
+    const retryWholeSkip = async () => {
+        if (isRetryingHeld || isLoading || held?.kind !== HELD_TURN.events) return;
+        const rerun = await heldSkipToRerun();
+        if (!rerun) {
+            setHeld(null);
+            return;
+        }
+        logDebugEvent("turn", "The whole skip is run again after the player's events failed.", {
+            events: (rerun.failures?.events ?? []).map((event) => event.title),
+            orders: (rerun.failures?.orders ?? []).map((order) => order.title),
+        });
+        await runJump(rerun.days, rerun.mode === "auto" ? "auto" : "jump", { retryDirective: rerun.directive });
     };
 
     const acceptModeSuggestion = () => {
@@ -2834,20 +2995,18 @@ const DateWidget = ({
         setModeSuggestion(null);
     };
 
-    // How many turns can be undone (a restore point is captured at the start of
-    // each turn). Re-checked whenever the round changes — after a jump or undo.
-    // A turn's restore point is saved before the turn is written, so it is there
-    // by the time the new round is. Only the unbroken run back from the last
-    // turn counts (runtime/turnCommit.js): past a turn that saved none, an Undo
-    // would take back more than one turn, and the engine refuses it.
-    useEffect(() => {
-        let active = true;
-        // The index, not the snapshots: the full list carries every prior world.
-        loadRollbackSnapshotIndex().then((entries) => {
-            if (active) setUndoCount(undoableTurns(entries, { round: gameData?.round || 1 }));
-        });
-        return () => { active = false; };
-    }, [gameData?.round]);
+    const retryFailedAgentReports = async () => {
+        if (agentReports.state === "working" || !agentReports.failed.length) return;
+        setAgentReports((current) => ({ ...current, state: "working" }));
+        try {
+            const { failed } = await retryAgentReports({ targets: agentReports.failed });
+            setAgentReports({ failed: failed.map((entry) => entry.target), state: "idle" });
+            logDebugEvent("turn", `Agents' reports asked again: ${failed.length ? `${failed.length} still failed` : "all in"}.`);
+        } catch (retryError) {
+            setAgentReports((current) => ({ ...current, state: "idle" }));
+            setError(retryError.message || "The agents could not be asked again.");
+        }
+    };
 
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
     // which lives in the history panel — yanking that panel away mid-undo would
@@ -2891,17 +3050,14 @@ const DateWidget = ({
     };
 
     // Intervene (AI/intervene.js): whether the newest turn carries the journal
-    // it needs, re-checked with the round like the undo count. Cleared while a
-    // jump runs so a half-revealed turn is never stopped under a new one.
-    const [canInterveneTurn, setCanInterveneTurn] = useState(false);
+    // it needs, re-checked like the undo count. Cleared while a jump runs so a
+    // half-revealed turn is never stopped under a new one.
     const latestTurnDate = worldState?.simulationHistory?.[0]?.date ?? "";
-    useEffect(() => {
-        let active = true;
-        canInterveneInLastTurn()
-            .then((can) => { if (active) setCanInterveneTurn(Boolean(can)); })
-            .catch(() => { if (active) setCanInterveneTurn(false); });
-        return () => { active = false; };
-    }, [gameData?.round, latestTurnDate]);
+    const [canInterveneTurn] = useRestorePointReading(
+        async () => Boolean(await canInterveneInLastTurn()),
+        false,
+        [gameData?.round, latestTurnDate],
+    );
 
     // Stop the round after the events revealed so far. The engine rolls back to
     // the turn's snapshot and applies the kept prefix again, without a request;
@@ -2920,7 +3076,7 @@ const DateWidget = ({
                     kept: result.kept,
                     dropped: result.dropped,
                 });
-                warnIfNoRestorePoint(result.bundle);
+                setRestorePointMissing(result.bundle?.restorePointSaved === false);
                 setGameData(result.bundle.game);
                 setEvents(result.bundle.events);
                 setWorldState(result.bundle.world);
@@ -3404,7 +3560,9 @@ const DateWidget = ({
         // round, since the reveal now happens during the skip and the turn lands
         // fully revealed, the one state the staging below never covers.
         if (liveTurnRecord) {
-            const revealedLive = liveTurnRecord.events.slice(0, Math.max(1, visibleEventCount));
+            // A card the engine's checks will keep off the timeline changes nothing
+            // on the map when the turn lands, so it changes nothing here either.
+            const revealedLive = liveTurnRecord.events.slice(0, Math.max(1, visibleEventCount)).filter((event) => !event?.filed);
             if (openPanel === "history" && liveStageBase && revealedLive.length) {
                 try {
                     const { world: livePreview } = applyEventImpactsToWorld({
@@ -3482,31 +3640,26 @@ const DateWidget = ({
         error={error}
         isLoading={isLoading}
         isOpen={openPanel === "skip"}
-        isRetryingProjects={isRetryingProjects}
-        isRetryingSegment={isRetryingSegment}
+        held={held}
+        isRetryingHeld={isRetryingHeld}
         modeSuggestion={modeSuggestion}
         onAcceptModeSuggestion={acceptModeSuggestion}
         onAutoJump={() => runJump(365, "auto")}
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
         onDeclineModeSuggestion={declineModeSuggestion}
-        onDiscardProjects={discardHeldProjects}
-        onDiscardSegment={discardHeldSegment}
+        onDiscardHeld={discardHeld}
         isApplyingParked={isApplyingParked}
         onApplyParked={applyHeldParked}
         onDiscardParked={discardHeldParked}
         parkedHeld={parkedHeld}
         onJump={(days) => runJump(days, "jump")}
-        onRetryProjects={retryHeldProjects}
-        onRetrySegment={retryHeldSegment}
+        onRetryHeld={retryHeld}
+        onRetryWholeSkip={retryWholeSkip}
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
-        projectsHeld={projectsHeld}
-        projectsRetries={projectsRetries}
         sceneInProgress={sceneInProgress}
-        segmentHeld={segmentHeld}
-        segmentRetries={segmentRetries}
         topOffset={topOffset}
         undoCount={undoCount}
         />
@@ -3546,6 +3699,10 @@ const DateWidget = ({
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
         warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}
+        // The newest turn's own, like the live warning: not over an older turn.
+        agentReports={olderTurnRecord ? null : agentReports}
+        onRetryAgentReports={retryFailedAgentReports}
+        restorePointMissing={restorePointMissing && !olderTurnRecord}
         />
 
         <div

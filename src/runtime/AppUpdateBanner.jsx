@@ -6,6 +6,8 @@ import {
   APP_UPDATE_REFOCUS_THROTTLE_MS,
   LAUNCH_UPDATE_KEY,
   describeUpdateFailure,
+  desktopUpdateProgressIsStale,
+  desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
@@ -15,6 +17,10 @@ import {
 import { logDebugEvent, setDebugLogContext } from "./debugLog.js";
 import { desktopBuildLabel } from "./buildLabel.js";
 import { canInstallUpdates, cancelUpdateDownload, installUpdate } from "./native/appInstaller.js";
+import {
+  APP_UPDATE_MANUAL_CHECK_EVENT,
+  publishAppUpdateCheckResult,
+} from "./appUpdateManualCheck.js";
 
 // Stamped into the native app build by the APK workflow (VITE_APP_BUILD / _TRACK).
 // Desktop and dev builds have no stamp, so the banner is a no-op there.
@@ -167,6 +173,11 @@ export default function AppUpdateBanner() {
   // Null until the player asks for one — the banner is otherwise the same as it
   // was, and a build that cannot update itself never sets this at all.
   const [progress, setProgress] = useState(null);
+  // Which release-manifest build this updater attempt was started for. The release
+  // manifest uses an opaque CI build id while electron-updater reports a semver, so
+  // the renderer owns this association explicitly.
+  const [progressBuild, setProgressBuild] = useState("");
+  const [manualCheckToken, setManualCheckToken] = useState(0);
   // The Android app's own download from the banner's button: null, or
   // { stage: "downloading" | "installing" | "error", percent, error }.
   const [appProgress, setAppProgress] = useState(null);
@@ -178,6 +189,21 @@ export default function AppUpdateBanner() {
   // No check has answered yet: the next answer is the one "opening the game" gets.
   const firstCheckRef = useRef(true);
   const desktopStatusReadRef = useRef(false);
+  const desktopBuild = String(desktop?.build || "");
+  const progressMatchesDesktop = desktopUpdateProgressMatchesBuild(progressBuild, desktopBuild);
+
+  // Settings does not duplicate any updater/network logic. It emits this command;
+  // changing the token makes the same automatic probes below run immediately.
+  useEffect(() => {
+    const onManualCheck = () => setManualCheckToken((value) => value + 1);
+    window.addEventListener(APP_UPDATE_MANUAL_CHECK_EVENT, onManualCheck);
+    return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_EVENT, onManualCheck);
+  }, []);
+
+  const revealManuallyFoundUpdate = () => {
+    setDismissed(isWeb ? "" : 0);
+    try { localStorage.removeItem(DISMISS_KEY); } catch { /* a dismissed banner can still reappear this session */ }
+  };
 
   // A second-by-second poll, but only between pressing Update and the update being
   // ready (or failing) — never while the banner is merely sitting there. `progress`
@@ -216,19 +242,38 @@ export default function AppUpdateBanner() {
   useEffect(() => {
     if (isApp || isWeb) return undefined;
     let dropped = false;
-    const probe = async () => {
+    const probe = async ({ manual = false } = {}) => {
       try {
         const res = await fetch("/api/app-update?track=desktop", { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
         const data = await res.json();
         // `current` present = this is the desktop app, and it is the build the
         // Logging file names (only the server knows it).
         if (!dropped && data?.current) setDebugLogContext({ build: desktopBuildLabel(data.current) });
         // Any DIFFERENCE is an update: the ids are opaque, so a rollback counts
         // just as much as a newer build.
-        if (dropped || !data?.current || !data?.buildId || !data?.download) return;
-        if (data.buildId === data.current) return;
+        if (dropped) return;
+        if (!data?.current) {
+          if (manual) publishAppUpdateCheckResult({ status: "unsupported" });
+          return;
+        }
+        if (!data?.buildId || !data?.download) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
+        if (data.buildId === data.current) {
+          setDesktop(null);
+          if (manual) publishAppUpdateCheckResult({ status: "current", build: data.current });
+          return;
+        }
         setDesktop({ auto: Boolean(data.autoUpdate), build: data.buildId, notes: data.notes || "", url: data.download });
+        if (manual) {
+          revealManuallyFoundUpdate();
+          publishAppUpdateCheckResult({ status: "available", build: data.buildId });
+        }
         // A player who chose "Open the game now" while the update downloaded at
         // launch: the download carries on in the main process, and the banner
         // picks it up where it is (downloading, or ready to restart into). Not
@@ -240,16 +285,32 @@ export default function AppUpdateBanner() {
           const status = await fetch("/api/app-update/status", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
           if (!dropped && status?.supported && ["downloading", "ready"].includes(status.state)) {
             setProgress((current) => current ?? status);
+            // That download is of the release this reply names. Without the
+            // association it would read as an attempt for no build, never
+            // match the one on offer, and "Restart now" would not come up.
+            setProgressBuild((current) => current || String(data.buildId));
           }
         }
       } catch {
-        /* fail open: no banner */
+        if (manual) publishAppUpdateCheckResult({ status: "error" });
+        /* automatic checks fail open: no banner */
       }
     };
-    probe();
-    const timer = setInterval(probe, APP_UPDATE_CHECK_INTERVAL_MS);
+    probe({ manual: manualCheckToken > 0 });
+    const timer = setInterval(() => probe(), APP_UPDATE_CHECK_INTERVAL_MS);
     return () => { dropped = true; clearInterval(timer); };
-  }, [isApp, isWeb]);
+  }, [isApp, isWeb, manualCheckToken]);
+
+  // A newer release can be published after an older one has downloaded but before
+  // the player applies it. Never let that old settled state turn into "Restart now"
+  // for the new release. Keep an in-flight attempt alive; once it settles, discard
+  // its stale renderer state and offer the newly-advertised build normally.
+  useEffect(() => {
+    if (!desktopUpdateProgressIsStale(progressBuild, desktopBuild, progress?.state)) return;
+    setProgress(null);
+    setProgressBuild("");
+    setUpdating(false);
+  }, [desktopBuild, progress?.state, progressBuild]);
 
   // The app's download, from the cover as the game opens or from the banner's
   // button. Resolves once Android's installer is on screen.
@@ -281,20 +342,32 @@ export default function AppUpdateBanner() {
   useEffect(() => {
     if (!supported) return undefined;
     let cancelled = false;
-    const check = async () => {
+    const check = async ({ manual = false } = {}) => {
       try {
         if (isWeb) {
           // no-store, or the browser hands back the very file we are trying to
           // notice a change in.
           const res = await fetch(VERSION_URL, { cache: "no-store", signal: AbortSignal.timeout(6000) });
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (manual) publishAppUpdateCheckResult({ status: "error" });
+            return;
+          }
           const deployed = String((await res.json())?.build ?? "");
           if (cancelled) return;
           const firstCheck = firstCheckRef.current;
           firstCheckRef.current = false;
           // Any DIFFERENCE means the deploy moved on. Not a > comparison: the ids are
           // opaque, and a rollback is just as much "not what you are running".
-          if (!deployed || deployed === WEB_BUILD) return;
+          if (!deployed || deployed === WEB_BUILD) {
+            if (manual) publishAppUpdateCheckResult({ status: deployed ? "current" : "error", build: deployed });
+            return;
+          }
+          // Settings hears of the update whichever way it is then taken, and a
+          // banner dismissed for this build comes back.
+          if (manual) {
+            revealManuallyFoundUpdate();
+            publishAppUpdateCheckResult({ status: "available", build: deployed });
+          }
           if (shouldUpdateAtLaunch({ firstCheck, elapsedMs: Date.now() - openedAtRef.current, build: deployed, stored: readLaunchRecord() })) {
             noteLaunchAttempt(deployed);
             setLaunch({ stage: "reloading" });
@@ -307,11 +380,22 @@ export default function AppUpdateBanner() {
         const res = await fetch(`/api/app-update?track=${encodeURIComponent(APP_TRACK)}`, {
           signal: AbortSignal.timeout(6000),
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
         const manifest = parseUpdateManifest(await res.json());
         if (cancelled) return;
         const firstCheck = firstCheckRef.current;
         firstCheckRef.current = false;
+        if (manual) {
+          if (isUpdateAvailable(APP_BUILD, manifest)) {
+            revealManuallyFoundUpdate();
+            publishAppUpdateCheckResult({ status: "available", build: manifest.build });
+          } else {
+            publishAppUpdateCheckResult({ status: manifest ? "current" : "error", build: manifest?.build });
+          }
+        }
         if (!manifest) return;
         setLatest(manifest);
         if (
@@ -324,11 +408,14 @@ export default function AppUpdateBanner() {
           runAppInstall(manifest, true);
         }
       } catch {
-        /* fail-open: a failed check simply shows no banner */
+        if (manual) publishAppUpdateCheckResult({ status: "error" });
+        /* automatic checks fail open: no banner */
       }
     };
-    check();
-    const interval = setInterval(check, APP_UPDATE_CHECK_INTERVAL_MS);
+    // Desktop has its own manifest shape and reports the manual result from the
+    // desktop probe above. Native/web use this path.
+    check({ manual: manualCheckToken > 0 && (isApp || isWeb) });
+    const interval = setInterval(() => check(), APP_UPDATE_CHECK_INTERVAL_MS);
     const onVisibility = () => {
       if (document.visibilityState !== "visible") return;
       const now = Date.now();
@@ -344,7 +431,7 @@ export default function AppUpdateBanner() {
     };
     // runAppInstall only ever reads its arguments and state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supported, isWeb]);
+  }, [supported, isApp, isWeb, manualCheckToken]);
 
   // Android's installer is up. Installing the update ends this app; coming back
   // to it means the player closed the installer, and the banner takes over.
@@ -417,6 +504,7 @@ export default function AppUpdateBanner() {
       // swaps the installation on restart, so there is nothing for the player to
       // find in a downloads folder and run.
       if (desktop.auto && progress?.state !== "error") {
+        setProgressBuild(desktopBuild);
         setProgress({ state: "checking", percent: 0 });
         try {
           const res = await fetch("/api/app-update/download", { method: "POST" });
@@ -480,7 +568,8 @@ export default function AppUpdateBanner() {
       const failure = progress?.state === "error" ? `${describeUpdateFailure(progress.error)} ` : "";
       return `${failure}Download the new version and run it — your games are kept.`;
     }
-    if (progress?.state === "ready") return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready" && progressMatchesDesktop) return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready") return "A newer update is available. Download it before restarting.";
     if (progress?.state === "downloading") return `Downloading the update… ${progress.percent || 0}%`;
     if (progress?.state === "checking" || progress?.state === "available") return "Fetching the update…";
     return "Installs itself in the background — your games are kept.";
@@ -493,7 +582,7 @@ export default function AppUpdateBanner() {
     if (updating) return "Downloading… open the finished download to install and reopen.";
     return latest.notes || `Build ${latest.build} · tap Update to download and install.`;
   };
-  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready");
+  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready" && progressMatchesDesktop);
   // Anything the updater is still working through, by the same rule the poll uses —
   // so a state with no percentage to show yet still reads as busy rather than
   // falling through to the button's idle label and claiming a download is opening.

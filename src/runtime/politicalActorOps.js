@@ -223,6 +223,8 @@ const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {},
 // no-op such as {government:"Parliamentary Democracy"} instead of
 // {patch:{form:"Parliamentary Democracy"}}. State-dependent references (party ids,
 // power-bloc ids) are still checked by applyPoliticalActorOperation itself.
+const COLLECTIVE_LEADER_PLACEHOLDER_RE = /^(?:(?:caretaker|interim|provisional|transitional|acting)\s+)?(?:administration|government|cabinet)$/i;
+
 export const validatePoliticalActorOperationShape = (operation, { allowNativeDerived = true } = {}) => {
   const op = clean(operation?.op);
   const polityKey = clean(operation?.polityKey || operation?.polity || operation?.country);
@@ -286,6 +288,10 @@ export const validatePoliticalActorOperationShape = (operation, { allowNativeDer
     if (office !== "headOfState" && office !== "headOfGovernment") return "replace-leader office must be headOfState or headOfGovernment.";
     const leader = operation.leader;
     if (!(typeof leader === "string" || objectPatch(leader))) return "replace-leader requires a leader name/object.";
+    const leaderName = clean(typeof leader === "string" ? leader : leader?.name);
+    if (leaderName && COLLECTIVE_LEADER_PLACEHOLDER_RE.test(leaderName)) {
+      return `replace-leader leader "${leaderName}" is an administration/cabinet placeholder, not an officeholder. Use set-government for the caretaker/interim government and only replace-leader when an actual officeholder is established.`;
+    }
   } else if (op === POLITICAL_ACTOR_OPS.SET_STRATEGY) {
     const patch = objectPatch(operation.patch);
     const allowed = ["goals", "fears", "ambitions", "domesticPressures"];
@@ -560,6 +566,10 @@ export const applyPoliticalActorOperation = (world, operation) => {
     const leader = operation.leader;
     if (!(typeof leader === "string" || (leader && typeof leader === "object" && !Array.isArray(leader)))) {
       return result({ op, error: "replace-leader requires a leader name/object." });
+    }
+    const leaderName = clean(typeof leader === "string" ? leader : leader?.name);
+    if (leaderName && COLLECTIVE_LEADER_PLACEHOLDER_RE.test(leaderName)) {
+      return result({ op, error: `replace-leader leader "${leaderName}" is an administration/cabinet placeholder, not an officeholder.` });
     }
     actor.government = {
       ...(actor.government && typeof actor.government === "object" ? actor.government : {}),

@@ -304,4 +304,3 @@ export const initializePoliticalDispositionsForWorld = (world = {}, { updatedAt 
     applied: application.applied,
   };
 };
-

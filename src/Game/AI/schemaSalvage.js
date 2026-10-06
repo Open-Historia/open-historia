@@ -106,7 +106,13 @@ export const SCHEMA_SALVAGE_MAX_REMOVALS = 24;
 //
 // `describe(value, path)` may name what a path belongs to ("the event "Fall of
 // Kyiv""), so a removal can be reported in the model's own terms.
-export const salvageBySchema = (value, validate, { maxRemovals = SCHEMA_SALVAGE_MAX_REMOVALS, describe = null } = {}) => {
+// `protectedPathPrefixes` marks state-bearing subtrees that salvage may inspect
+// but must never repair by deletion; the original validation error is retained.
+export const salvageBySchema = (value, validate, {
+    maxRemovals = SCHEMA_SALVAGE_MAX_REMOVALS,
+    describe = null,
+    protectedPathPrefixes = [],
+} = {}) => {
     const removed = [];
     let verdict = validate(value);
     // Every pass takes something away, so this ends; the cap is what stops an
@@ -117,6 +123,15 @@ export const salvageBySchema = (value, validate, { maxRemovals = SCHEMA_SALVAGE_
         if (!parsed) break;
         const removal = planRemoval(value, parsed.segments, parsed.rest);
         if (!removal) break;
+        const removalPath = formatPath(removal.path);
+        const protectedRemoval = protectedPathPrefixes.some((prefix) => {
+            const normalized = String(prefix ?? "").trim();
+            if (!normalized) return false;
+            return removalPath === normalized
+                || removalPath.startsWith(`${normalized}[`)
+                || removalPath.startsWith(`${normalized}.`);
+        });
+        if (protectedRemoval) break;
         let label = "";
         try {
             label = describe ? String(describe(value, removal.path) ?? "") : "";

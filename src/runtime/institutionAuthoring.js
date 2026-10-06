@@ -6,18 +6,13 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
-import { collectScenarioPoliticalPolities } from "./scenarioPolities.js";
+import { collectScenarioPoliticalPolities, createScenarioPolityResolver } from "./scenarioPolities.js";
+import { stableAsciiId } from "./stableId.js";
 
 const clean = (value) => String(value ?? "").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
 
-export const institutionAuthoringId = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 96);
+export const institutionAuthoringId = (value) => stableAsciiId(value, { maxLength: 96 });
 
 const uniqueText = (value) => {
   const raw = Array.isArray(value)
@@ -63,7 +58,12 @@ export const unmatchedInstitutionMembers = (names = [], world = {}) => {
       if (clean(token)) known.add(clean(token));
     }
   }
-  return (Array.isArray(names) ? names : []).filter((name) => clean(name) && !known.has(clean(name)));
+  // A name the save turns into a polity's key (upsertScenarioInstitution: a
+  // known name or alias, in any letter case) is that polity, so it is not
+  // flagged either.
+  const resolvePolity = createScenarioPolityResolver(world);
+  return (Array.isArray(names) ? names : [])
+    .filter((name) => clean(name) && !known.has(clean(name)) && !known.has(resolvePolity(name)));
 };
 
 export const institutionAuthoringRows = (world = {}) => {
@@ -103,6 +103,11 @@ export const validateInstitutionAuthoringDraft = (draft = {}, world = {}) => {
     return "Logo must be an http(s) URL, a normal image asset path, or a persistent raster image data URL.";
   }
 
+  // Members are not checked here: a member that names no polity in the
+  // scenario is kept and flagged (unmatchedInstitutionMembers), never refused.
+  // A refusal on the roster alone also turned away real countries on the stock
+  // map, where the drawn countries are not listed.
+
   const institutions = normalizeInstitutions(world?.institutions, world);
   const existing = institutions.byId?.[normalizedId];
   if (existing && !clean(draft.id)) {
@@ -133,8 +138,14 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   const id = clean(draft.id) ? institutionAuthoringId(draft.id) : institutionAuthoringId(draft.name);
   const existing = institutions.byId?.[id] || null;
-  const existingMembers = new Map((existing?.members || []).map((member) => [lower(member?.polity), member]));
-  const members = institutionMemberNames(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
+  // A name or alias the scenario knows a polity by is saved as that polity's
+  // key, so the member is its country and not a namesake. A name that resolves
+  // to nothing is saved as written.
+  const polityRows = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
+  const resolvePolity = createScenarioPolityResolver(world);
+  const canonicalizePolity = (value) => (polityRows.length ? resolvePolity(value) : "") || clean(value);
+  const existingMembers = new Map((existing?.members || []).map((member) => [lower(canonicalizePolity(member?.polity)), member]));
+  const members = institutionMemberNames(draft.membersText).map((polity) => preserveMember(existingMembers, canonicalizePolity(polity)));
   const memberKeys = new Set(members.map((member) => lower(member.polity)));
   const leaders = (existing?.leaders || []).filter((polity) => memberKeys.has(lower(polity)));
 

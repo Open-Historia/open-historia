@@ -16,6 +16,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { isBrowserOnline } from "../../runtime/networkStatus.js";
 import { SCREEN_HEIGHT, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { createPickerHover } from "./countryPickerHover.js";
@@ -110,6 +111,11 @@ const buildBaseLayer = (customBackground) => {
       }),
     });
   }
+  // No network at all: the game's bundled relief (public/offline-relief), dimmed
+  // toward the dark canvas, instead of tile requests that can only fail.
+  if (!isBrowserOnline()) {
+    return new TileLayer({ source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3, wrapX: false }), opacity: 0.4 });
+  }
   return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
 };
 
@@ -154,6 +160,10 @@ const CountryPickerMap = ({
   const hoveredRegionRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
+  // A touch screen, where focus opens the keyboard (mobileUi.js: a phone can
+  // report a fine pointer, and then the box focused itself and raised the
+  // keyboard as the picker opened).
+  const [touchFirst] = useState(() => isTouchPrimary());
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
   const canHover = useCanHover();
@@ -421,12 +431,13 @@ const CountryPickerMap = ({
           territory. Click again to release one.
         </div>
       ) : (
-        // Not focused on a touch screen or a phone-sized one: the keyboard
-        // would come up over the map and the list before the player had seen
-        // either (mobileUi.js: a phone can report a fine pointer).
         <input
-          autoFocus={!isTouchPrimary() && !isMobile}
-          className="oh-tap-row"          value={query}
+          // On a touch screen or a phone-sized one, focusing raises the
+          // keyboard over the picker it is meant to help with; there the
+          // player taps the box to search.
+          autoFocus={!touchFirst && !isMobile}
+          className="oh-tap-row"
+          value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search countries…"
           style={{

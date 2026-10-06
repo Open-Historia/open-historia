@@ -274,6 +274,26 @@ test("the words that open a war include their other forms and a border crossing;
   assert.equal(eventNarratesHardCombat({ kind: "domestic", title: "Government battles wildfires in the north", description: "" }), false);
 });
 
+test("only the causal start event may rely on start-record sides; later battles still need combatants", () => {
+  const candidate = {
+    events: [
+      event("e1", "Ruritania Declares War on Borduria", {
+        kind: "diplomacy",
+        warId: "w",
+      }),
+      event("e2", "Ruritanian Brigade Assaults Bordurian Positions", {
+        warId: "w",
+      }),
+    ],
+    warUpdates: record("w", "start", "Ruritania", "Borduria", "1"),
+  };
+
+  assert.match(
+    validateWarLedgerPayload(candidate, { world }),
+    /must include event\.combatants naming at least the two opposing belligerent polities/,
+  );
+});
+
 test("a unit called a Combat Wing or a battle group is a formation, not a battle", () => {
   // Transcribed from the same log: an Ecuadorian air wing changing bases was
   // flagged as combat needing a war, on two turns running.

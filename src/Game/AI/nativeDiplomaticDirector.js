@@ -106,6 +106,19 @@ const stableHash = (value) => {
   return (hash >>> 0).toString(36);
 };
 
+const pregameTitleKey = (value) => clean(value)
+  .toLocaleLowerCase()
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+
+const pregameSourceIdsContain = (superset, required) => {
+  const values = new Set(array(superset).map(clean).filter(Boolean));
+  return array(required).map(clean).filter(Boolean).every((id) => values.has(id));
+};
+
 export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false } = {}) => {
   const raw = clean(token);
   if (!raw) return "";
@@ -222,6 +235,249 @@ const normalizedAgreements = (world) => array(normalizeWorldState(world)?.agreem
   .map((entry) => entry && typeof entry === "object" ? entry : null)
   .filter(Boolean)
   .slice(0, MAX_AGREEMENTS);
+
+// Pure Round-Zero constructors. The bootstrap compiler resolves identity and
+// decides whether a fact reuses existing canon; these helpers own only the
+// persisted diplomatic record shapes and domain-specific validation. They do
+// not replay normal-turn lifecycle operations.
+export const buildPregameRelationBaselineRecord = ({
+  id = "",
+  a = "",
+  b = "",
+  score = null,
+  summary = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const left = canonicalDiplomaticPolity(a, world);
+  const right = canonicalDiplomaticPolity(b, world);
+  const pairKey = relationPairKey(left, right);
+  const numeric = Number(score);
+  if (!left || !right || !pairKey) return { record: null, error: "Round-Zero relation requires two distinct current polities." };
+  if (!Number.isFinite(numeric)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} requires a finite absolute score.` };
+  const ordered = [left, right].sort((x, y) => lower(x).localeCompare(lower(y)));
+  const clamped = clamp(Math.round(numeric), -100, 100);
+  const date = clean(observedDate);
+  if (date && !isGameDate(date)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} has an invalid observed date.` };
+  return {
+    record: {
+      id: clean(id) || relationIdForPair(ordered[0], ordered[1]),
+      a: ordered[0],
+      b: ordered[1],
+      score: clamped,
+      status: normalizeRelationStatus("", clamped),
+      summary: clean(summary),
+      lastUpdatedDate: date,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const buildPregameAgreementBaselineRecord = ({
+  id = "",
+  type = "",
+  title = "",
+  parties = [],
+  guarantor = "",
+  beneficiary = "",
+  grantor = "",
+  grantee = "",
+  reciprocalAccess = false,
+  startedDate = "",
+  terms = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const canonicalId = clean(id);
+  const agreementType = normalizeAgreementType(type);
+  const start = clean(startedDate);
+  const observed = clean(observedDate);
+  if (!canonicalId) return { record: null, error: "Round-Zero agreement requires a native canonical id." };
+  if (!clean(title)) return { record: null, error: `Round-Zero agreement ${canonicalId} requires a title.` };
+  if (start && !isGameDate(start)) return { record: null, error: `Round-Zero agreement ${canonicalId} has an invalid startedDate.` };
+  if (observed && !isGameDate(observed)) return { record: null, error: `Round-Zero agreement ${canonicalId} has an invalid observed date.` };
+
+  let canonicalParties;
+  let directionalFields = {};
+  if (agreementType === "guarantee") {
+    const g = canonicalDiplomaticPolity(guarantor, world);
+    const beneficiaryPolity = canonicalDiplomaticPolity(beneficiary, world);
+    if (!g || !beneficiaryPolity || lower(g) === lower(beneficiaryPolity)) {
+      return { record: null, error: `Round-Zero guarantee ${canonicalId} requires distinct guarantor and beneficiary roles.` };
+    }
+    canonicalParties = [g, beneficiaryPolity];
+    directionalFields = { guarantor: g, beneficiary: beneficiaryPolity };
+  } else if (agreementType === "military_access") {
+    if (reciprocalAccess === true) {
+      canonicalParties = canonicalizeParties(parties, world);
+      if (canonicalParties.length !== 2) {
+        return { record: null, error: `Round-Zero reciprocal military access ${canonicalId} requires exactly two current parties.` };
+      }
+      directionalFields = { reciprocalAccess: true };
+    } else {
+      const accessGrantor = canonicalDiplomaticPolity(grantor, world);
+      const accessGrantee = canonicalDiplomaticPolity(grantee, world);
+      if (!accessGrantor || !accessGrantee || lower(accessGrantor) === lower(accessGrantee)) {
+        return { record: null, error: `Round-Zero military access ${canonicalId} requires distinct grantor and grantee roles or explicit reciprocal access.` };
+      }
+      canonicalParties = [accessGrantor, accessGrantee];
+      directionalFields = { grantor: accessGrantor, grantee: accessGrantee, reciprocalAccess: false };
+    }
+  } else {
+    canonicalParties = canonicalizeParties(parties, world);
+    if (canonicalParties.length < 2) {
+      return { record: null, error: `Round-Zero agreement ${canonicalId} requires at least two current parties.` };
+    }
+  }
+
+  return {
+    record: {
+      id: canonicalId,
+      title: clean(title),
+      type: agreementType,
+      status: "active",
+      parties: canonicalParties,
+      startedDate: start,
+      endedDate: "",
+      lastUpdatedDate: observed || start,
+      terms: clean(terms),
+      ...directionalFields,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
+
+const pregamePartySetKey = (parties, world = null) => unique(
+  array(parties)
+    .map((party) => world ? canonicalDiplomaticPolity(party, world, { allowUnknown: true }) : clean(party))
+    .filter(Boolean),
+  12,
+).map(lower).sort().join("|");
+
+export const pregameAgreementRoleKey = (agreement, world = null) => {
+  const type = normalizeAgreementType(agreement?.type);
+  if (type === "guarantee") {
+    const guarantor = world ? canonicalDiplomaticPolity(agreement?.guarantor || agreement?.parties?.[0], world, { allowUnknown: true }) : clean(agreement?.guarantor || agreement?.parties?.[0]);
+    const beneficiary = world ? canonicalDiplomaticPolity(agreement?.beneficiary || agreement?.parties?.[1], world, { allowUnknown: true }) : clean(agreement?.beneficiary || agreement?.parties?.[1]);
+    return guarantor && beneficiary ? `${type}|${lower(guarantor)}>${lower(beneficiary)}` : `${type}|unknown`;
+  }
+  if (type === "military_access") {
+    if (agreement?.reciprocalAccess === true) return `${type}|reciprocal|${pregamePartySetKey(agreement?.parties, world)}`;
+    const grantor = world ? canonicalDiplomaticPolity(agreement?.grantor, world, { allowUnknown: true }) : clean(agreement?.grantor);
+    const grantee = world ? canonicalDiplomaticPolity(agreement?.grantee, world, { allowUnknown: true }) : clean(agreement?.grantee);
+    if (grantor && grantee) return `${type}|${lower(grantor)}>${lower(grantee)}`;
+    return `${type}|legacy|${pregamePartySetKey(agreement?.parties, world)}`;
+  }
+  return `${type}|${pregamePartySetKey(agreement?.parties, world)}`;
+};
+
+export const resolvePregameRelationBaselineMatch = ({ records = [], a = "", b = "", world = {} } = {}) => {
+  const pair = relationPairKey(a, b, world);
+  if (!pair) return { match: null, error: "Round-Zero relation resolver requires two distinct current polities." };
+  const matches = array(records).filter((entry) => relationPairKey(entry?.a, entry?.b, world) === pair);
+  if (matches.length > 1) return { match: null, error: "Round-Zero relation pair matches multiple canonical records." };
+  return { match: matches[0] || null, error: "" };
+};
+
+export const mergePregameRelationBaselineRecord = ({ existing = null, incoming = null } = {}) => {
+  if (!existing || !incoming || clean(existing.id) !== clean(incoming.id)) return { record: null, error: "Round-Zero relation merge requires the same canonical id." };
+  if (relationPairKey(existing.a, existing.b) !== relationPairKey(incoming.a, incoming.b)) return { record: null, error: `Round-Zero relation ${existing.id} changes canonical pair identity.` };
+  if (Math.round(Number(existing.score)) !== Math.round(Number(incoming.score))) return { record: null, error: `Round-Zero relation ${existing.id} conflicts on absolute score.` };
+  return {
+    record: {
+      ...existing,
+      summary: clean(existing.summary) || clean(incoming.summary),
+      lastUpdatedDate: clean(existing.lastUpdatedDate) || clean(incoming.lastUpdatedDate),
+      sourceEventIds: unique([...array(existing.sourceEventIds), ...array(incoming.sourceEventIds)], 24),
+      createdRound: Math.max(0, Math.trunc(Number(existing.createdRound) || Number(incoming.createdRound) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(existing.updatedRound) || 0), Math.trunc(Number(incoming.updatedRound) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const pregameRelationBaselineCompatibilityError = (expected, actual, world = {}) => {
+  if (!expected || !actual) return "relation record is missing";
+  if (clean(expected.id) !== clean(actual.id)) return "relation id changed";
+  if (relationPairKey(expected.a, expected.b, world) !== relationPairKey(actual.a, actual.b, world)) return "relation pair changed";
+  if (Math.round(Number(expected.score)) !== Math.round(Number(actual.score))) return "relation score changed";
+  if (!pregameSourceIdsContain(actual.sourceEventIds, expected.sourceEventIds)) return "relation provenance was not conserved";
+  return "";
+};
+
+export const resolvePregameAgreementBaselineMatch = ({ records = [], candidate = null, world = {} } = {}) => {
+  if (!candidate) return { match: null, error: "Round-Zero agreement resolver requires a candidate." };
+  const type = normalizeAgreementType(candidate.type);
+  const roleKey = pregameAgreementRoleKey(candidate, world);
+  const title = pregameTitleKey(candidate.title);
+  const date = clean(candidate.startedDate);
+  const active = array(records).filter((entry) => normalizeAgreementStatus(entry?.status) === "active" && normalizeAgreementType(entry?.type) === type);
+  const sameRoles = active.filter((entry) => pregameAgreementRoleKey(entry, world) === roleKey);
+  const dateCompatible = (entry) => !date || !clean(entry?.startedDate) || clean(entry?.startedDate) === date;
+  const possible = sameRoles.filter(dateCompatible);
+  const exact = possible.filter((entry) => pregameTitleKey(entry?.title) === title);
+  if (exact.length > 1) return { match: null, error: "Round-Zero agreement identity matches multiple canonical instruments." };
+  if (exact.length === 1) return { match: exact[0], error: "" };
+
+  const candidateParties = pregamePartySetKey(candidate.parties, world);
+  const legacyDirectional = type === "military_access" && active.filter((entry) =>
+    pregamePartySetKey(entry?.parties, world) === candidateParties &&
+    pregameAgreementRoleKey(entry, world).includes("|legacy|") &&
+    dateCompatible(entry)
+  );
+  if (legacyDirectional.length) return { match: null, error: "Round-Zero military-access identity is ambiguous because existing canon does not record grant direction." };
+  if (possible.length) return { match: null, error: "Round-Zero agreement identity is ambiguous: the same roles/type/date already exist under a different canonical title." };
+  return { match: null, error: "" };
+};
+
+export const mergePregameAgreementBaselineRecord = ({ existing = null, incoming = null, world = {} } = {}) => {
+  if (!existing || !incoming || clean(existing.id) !== clean(incoming.id)) return { record: null, error: "Round-Zero agreement merge requires the same canonical id." };
+  if (pregameAgreementRoleKey(existing, world) !== pregameAgreementRoleKey(incoming, world)) return { record: null, error: `Round-Zero agreement ${existing.id} changes canonical role identity.` };
+  if (pregameTitleKey(existing.title) !== pregameTitleKey(incoming.title)) return { record: null, error: `Round-Zero agreement ${existing.id} changes canonical title identity.` };
+  if (normalizeAgreementStatus(existing.status) !== "active" || normalizeAgreementStatus(incoming.status) !== "active") return { record: null, error: `Round-Zero agreement ${existing.id} is not an active baseline instrument.` };
+  const existingDate = clean(existing.startedDate);
+  const incomingDate = clean(incoming.startedDate);
+  if (existingDate && incomingDate && existingDate !== incomingDate) return { record: null, error: `Round-Zero agreement ${existing.id} conflicts on known start date.` };
+  const existingTerms = clean(existing.terms);
+  const incomingTerms = clean(incoming.terms);
+  if (existingTerms && incomingTerms && existingTerms !== incomingTerms) return { record: null, error: `Round-Zero agreement ${existing.id} conflicts on substantive terms.` };
+  return {
+    record: {
+      ...existing,
+      startedDate: existingDate || incomingDate,
+      lastUpdatedDate: clean(existing.lastUpdatedDate) || clean(incoming.lastUpdatedDate) || existingDate || incomingDate,
+      terms: existingTerms || incomingTerms,
+      sourceEventIds: unique([...array(existing.sourceEventIds), ...array(incoming.sourceEventIds)], 24),
+      ...(normalizeAgreementType(existing.type) === "guarantee" ? { guarantor: existing.guarantor || incoming.guarantor, beneficiary: existing.beneficiary || incoming.beneficiary } : {}),
+      ...(normalizeAgreementType(existing.type) === "military_access" ? {
+        ...(existing.reciprocalAccess === true || incoming.reciprocalAccess === true ? { reciprocalAccess: true } : { grantor: existing.grantor || incoming.grantor, grantee: existing.grantee || incoming.grantee, reciprocalAccess: false }),
+      } : {}),
+      updatedRound: Math.max(0, Math.trunc(Number(existing.updatedRound) || 0), Math.trunc(Number(incoming.updatedRound) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const pregameAgreementBaselineCompatibilityError = (expected, actual, world = {}) => {
+  if (!expected || !actual) return "agreement record is missing";
+  if (clean(expected.id) !== clean(actual.id)) return "agreement id changed";
+  if (pregameAgreementRoleKey(expected, world) !== pregameAgreementRoleKey(actual, world)) return "agreement roles changed";
+  if (pregameTitleKey(expected.title) !== pregameTitleKey(actual.title)) return "agreement title identity changed";
+  if (clean(expected.startedDate) !== clean(actual.startedDate)) return "agreement start date was not conserved";
+  if (clean(expected.terms) !== clean(actual.terms)) return "agreement terms were not conserved";
+  if (!pregameSourceIdsContain(actual.sourceEventIds, expected.sourceEventIds)) return "agreement provenance was not conserved";
+  return "";
+};
 
 const relationMapFromWorld = (world) => {
   const map = new Map();
@@ -758,6 +1014,43 @@ const salvageUnboundAgreementUpdates = (
   return { updates: kept, repaired, dropped, retainedUnbound };
 };
 
+// A Puppet line the model forgot to tie to its event is thrown away at apply
+// (applyPuppetUpdates), so an accession the timeline narrated never happened on
+// the ledger. Repair it the way relations and agreements are repaired: only an
+// unbound line, only to the ONE event that names both parties, and never on the
+// GM preview. A line the model did tie keeps the event it named.
+//
+// A line left unbound loses the event numbers it came with: they count this
+// segment's events, and once the round's segments are joined the same number
+// can name another segment's event, which would bind the line to it at apply.
+const salvageUnboundPuppetUpdates = (updates, events, world) => {
+  const normalizedEvents = normalizeEvents(events);
+  let repaired = 0;
+  let unbound = 0;
+  const output = bindPuppetUpdatesToEvents(updates, normalizedEvents).map((update) => {
+    if (linkedEvents(update, normalizedEvents).length) return update;
+    const parties = [update?.overlord, update?.puppet].filter(Boolean);
+    const inferredIndex = inferUniqueDiplomaticEventIndex({
+      events: normalizedEvents,
+      actorAliases: parties.map((party) => politySearchAliases(party, world)),
+      subjectText: `${update?.op || ""} ${update?.kind || ""} ${update?.note || ""}`,
+      minimumActorHits: Math.max(1, parties.length),
+    });
+    if (inferredIndex < 0) {
+      unbound += 1;
+      return { ...update, eventIndexes: [], eventIds: [] };
+    }
+    const eventId = clean(normalizedEvents[inferredIndex]?.id);
+    repaired += 1;
+    console.warn(
+      `[OH diplomacy native binding] bound puppet ${update?.op || "?"} ${update?.overlord || "?"} -> ${update?.puppet || "?"} ` +
+      `to event${inferredIndex + 1} from native causal evidence.`,
+    );
+    return { ...update, eventIndexes: [inferredIndex], eventIds: eventId ? [eventId] : [] };
+  });
+  return { updates: output, repaired, unbound };
+};
+
 export const bindDiplomaticLedgerToCausalEvents = (
   candidate,
   {
@@ -812,6 +1105,9 @@ export const bindDiplomaticLedgerToCausalEvents = (
   candidate.relationUpdates = relationUpdates;
   candidate.agreementUpdates = agreementUpdates;
 
+  const puppetBinding = salvageUnboundPuppetUpdates(candidate?.puppetUpdates, events, world);
+  if (puppetBinding.repaired || puppetBinding.unbound) candidate.puppetUpdates = puppetBinding.updates;
+
   return {
     relationUpdates,
     agreementUpdates,
@@ -821,6 +1117,7 @@ export const bindDiplomaticLedgerToCausalEvents = (
     repairedAgreements: agreementBinding.repaired,
     droppedAgreements: agreementBinding.dropped,
     retainedUnboundAgreements: agreementBinding.retainedUnbound || 0,
+    repairedPuppets: puppetBinding.repaired,
   };
 };
 
@@ -1424,6 +1721,125 @@ const PUPPET_OP_SET = new Set(PUPPET_OP_VALUES);
 const PUPPET_ENDING_OPS = new Set(["release", "annex", "revolt"]);
 const PUPPET_KIND_SET = new Set(PUPPET_KINDS);
 const MAX_PUPPET_UPDATES_PER_PASS = 24;
+
+export const buildPregamePuppetBaselineRecord = ({
+  id = "",
+  overlord = "",
+  puppet = "",
+  kind = "client",
+  loyalty = 50,
+  secrecy = "open",
+  startedDate = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const canonicalId = clean(id);
+  const canonicalOverlord = canonicalDiplomaticPolity(overlord, world);
+  const canonicalPuppet = canonicalDiplomaticPolity(puppet, world);
+  const puppetKind = lower(kind);
+  const secrecyMode = lower(secrecy);
+  const start = clean(startedDate);
+  const observed = clean(observedDate);
+  const numericLoyalty = Number(loyalty);
+
+  if (!canonicalId) return { record: null, error: "Round-Zero puppet baseline requires a native canonical id." };
+  if (!canonicalOverlord || !canonicalPuppet || lower(canonicalOverlord) === lower(canonicalPuppet)) {
+    return { record: null, error: `Round-Zero puppet ${canonicalId} requires distinct current overlord and puppet polities.` };
+  }
+  if (!PUPPET_KIND_SET.has(puppetKind)) return { record: null, error: `Round-Zero puppet ${canonicalId} has unsupported kind ${kind || "<blank>"}.` };
+  if (!["open", "covert"].includes(secrecyMode)) return { record: null, error: `Round-Zero puppet ${canonicalId} secrecy must be open or covert.` };
+  if (!Number.isFinite(numericLoyalty)) return { record: null, error: `Round-Zero puppet ${canonicalId} requires finite loyalty.` };
+  if (start && !isGameDate(start)) return { record: null, error: `Round-Zero puppet ${canonicalId} has an invalid startedDate.` };
+  if (observed && !isGameDate(observed)) return { record: null, error: `Round-Zero puppet ${canonicalId} has an invalid observed date.` };
+
+  const knownDate = start || observed;
+  return {
+    record: {
+      id: canonicalId,
+      overlord: canonicalOverlord,
+      puppet: canonicalPuppet,
+      kind: puppetKind,
+      loyalty: clamp(Math.round(numericLoyalty), 0, 100),
+      secrecy: secrecyMode,
+      knownTo: [
+        { polity: canonicalOverlord, learnedDate: knownDate },
+        { polity: canonicalPuppet, learnedDate: knownDate },
+      ],
+      status: "active",
+      startedDate: start,
+      endedDate: "",
+      lastUpdatedDate: observed || start,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const resolvePregamePuppetBaselineMatch = ({ records = [], overlord = "", puppet = "" } = {}) => {
+  const key = `${lower(overlord)}>${lower(puppet)}`;
+  const matches = array(records).filter((entry) =>
+    lower(entry?.status) === "active" && `${lower(entry?.overlord)}>${lower(entry?.puppet)}` === key
+  );
+  if (matches.length > 1) return { match: null, error: "Round-Zero puppet identity matches multiple active canonical records." };
+  return { match: matches[0] || null, error: "" };
+};
+
+export const mergePregamePuppetBaselineRecord = ({ existing = null, incoming = null } = {}) => {
+  if (!existing || !incoming || clean(existing.id) !== clean(incoming.id)) return { record: null, error: "Round-Zero puppet merge requires the same canonical id." };
+  if (lower(existing.overlord) !== lower(incoming.overlord) || lower(existing.puppet) !== lower(incoming.puppet)) return { record: null, error: `Round-Zero puppet ${existing.id} changes canonical subordination identity.` };
+  if (lower(existing.kind) !== lower(incoming.kind) || Math.round(Number(existing.loyalty)) !== Math.round(Number(incoming.loyalty)) || lower(existing.secrecy) !== lower(incoming.secrecy)) {
+    return { record: null, error: `Round-Zero puppet ${existing.id} conflicts on kind, loyalty, or secrecy.` };
+  }
+  const existingDate = clean(existing.startedDate);
+  const incomingDate = clean(incoming.startedDate);
+  if (existingDate && incomingDate && existingDate !== incomingDate) return { record: null, error: `Round-Zero puppet ${existing.id} conflicts on known start date.` };
+  return {
+    record: {
+      ...existing,
+      startedDate: existingDate || incomingDate,
+      lastUpdatedDate: clean(existing.lastUpdatedDate) || clean(incoming.lastUpdatedDate) || existingDate || incomingDate,
+      sourceEventIds: unique([...array(existing.sourceEventIds), ...array(incoming.sourceEventIds)], 24),
+      knownTo: unique([
+        ...array(existing.knownTo).map((row) => JSON.stringify(row)),
+        ...array(incoming.knownTo).map((row) => JSON.stringify(row)),
+      ], 24).map((row) => { try { return JSON.parse(row); } catch { return null; } }).filter(Boolean),
+      updatedRound: Math.max(0, Math.trunc(Number(existing.updatedRound) || 0), Math.trunc(Number(incoming.updatedRound) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const pregamePuppetBaselineCompatibilityError = (expected, actual) => {
+  if (!expected || !actual) return "puppet record is missing";
+  if (clean(expected.id) !== clean(actual.id)) return "puppet id changed";
+  if (lower(expected.overlord) !== lower(actual.overlord) || lower(expected.puppet) !== lower(actual.puppet)) return "puppet identity changed";
+  if (lower(expected.kind) !== lower(actual.kind) || Math.round(Number(expected.loyalty)) !== Math.round(Number(actual.loyalty)) || lower(expected.secrecy) !== lower(actual.secrecy)) return "puppet state changed";
+  if (clean(expected.startedDate) !== clean(actual.startedDate)) return "puppet start date was not conserved";
+  if (!pregameSourceIdsContain(actual.sourceEventIds, expected.sourceEventIds)) return "puppet provenance was not conserved";
+  return "";
+};
+
+export const validatePregamePuppetGraph = (rows = []) => {
+  const parentByPuppet = new Map();
+  for (const row of array(rows).filter((entry) => lower(entry?.status) === "active")) {
+    const overlord = clean(row?.overlord);
+    const puppet = clean(row?.puppet);
+    if (!overlord || !puppet || lower(overlord) === lower(puppet)) return "Round-Zero puppet canon contains an invalid self/blank subordination.";
+    const key = lower(puppet);
+    const prior = parentByPuppet.get(key);
+    if (prior && lower(prior) !== lower(overlord)) return `Round-Zero puppet ${puppet} has more than one active overlord.`;
+    parentByPuppet.set(key, overlord);
+  }
+  for (const [puppetKey, overlord] of parentByPuppet) {
+    if (parentByPuppet.has(lower(overlord))) return `Round-Zero puppet chain is forbidden: ${overlord} is itself a puppet while directing ${puppetKey}.`;
+  }
+  return "";
+};
+
 // How many subordinations the bounded prompt slice may carry. Its own bound:
 // borrowing the agreements cap made the number lie about what it limited.
 const MAX_CONTEXT_PUPPETS = 24;

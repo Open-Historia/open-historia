@@ -245,7 +245,8 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   // validateSegmentLedgers), so they simply concatenate; a record still in its
   // raw line form is split into lines, which the ledger decoders accept too.
   // A family left out here never reaches the apply: every skip, segmented or
-  // not, is built from this merge.
+  // not, is built from this merge. Every list here must also be handed on in
+  // finishTimelineJump's result.
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];

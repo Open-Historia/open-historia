@@ -101,4 +101,3 @@ test("legacy divergence-description text is preserved for compatibility even tho
     "1970-01-01: Event X happens.\n1970-01-02: Event Y follows.\n1970-01-03: Event Z changes the political situation.",
   );
 });
-

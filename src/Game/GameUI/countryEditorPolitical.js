@@ -62,38 +62,48 @@ const percentText = (value) => {
   return Number.isFinite(number) ? String(number) : "";
 };
 
-const partyToEditor = (party, index) => ({
-  id: clean(party?.id) || `party-${index + 1}`,
-  name: clean(party?.name),
-  shortName: clean(party?.shortName),
-  leader: officeholderName(party?.leader),
-  ideology: clean(party?.ideology),
-  publicDescription: clean(party?.publicDescription),
-  publicPrioritiesText: listToEditorText(party?.publicPriorities?.length ? party.publicPriorities : party?.goals),
-  priorityField: Array.isArray(party?.publicPriorities) && party.publicPriorities.length ? "publicPriorities" : (Array.isArray(party?.goals) && party.goals.length ? "goals" : "publicPriorities"),
-  publicForeignPolicyText: listToEditorText(party?.publicForeignPolicy),
-  supportPercent: percentText(party?.support?.percent),
-  influencePercent: percentText(party?.influence?.percent),
-  influenceLabel: clean(party?.influence?.label),
-  ruling: party?.ruling === true,
-  coalition: party?.coalition === true,
-});
+const partyToEditor = (party, index) => {
+  const sourceId = clean(party?.id) || `party-${index + 1}`;
+  return {
+    _editorKey: `party-editor:${sourceId}:${index}`,
+    _sourceId: sourceId,
+    id: sourceId,
+    name: clean(party?.name),
+    shortName: clean(party?.shortName),
+    leader: officeholderName(party?.leader),
+    ideology: clean(party?.ideology),
+    publicDescription: clean(party?.publicDescription),
+    publicPrioritiesText: listToEditorText(party?.publicPriorities?.length ? party.publicPriorities : party?.goals),
+    priorityField: Array.isArray(party?.publicPriorities) && party.publicPriorities.length ? "publicPriorities" : (Array.isArray(party?.goals) && party.goals.length ? "goals" : "publicPriorities"),
+    publicForeignPolicyText: listToEditorText(party?.publicForeignPolicy),
+    supportPercent: percentText(party?.support?.percent),
+    influencePercent: percentText(party?.influence?.percent),
+    influenceLabel: clean(party?.influence?.label),
+    ruling: party?.ruling === true,
+    coalition: party?.coalition === true,
+  };
+};
 
-const blocToEditor = (bloc, index) => ({
-  id: clean(bloc?.id) || `bloc-${index + 1}`,
-  name: clean(bloc?.name),
-  shortName: clean(bloc?.shortName),
-  kind: clean(bloc?.kind),
-  status: clean(bloc?.status),
-  leader: officeholderName(bloc?.leader),
-  ideology: clean(bloc?.ideology),
-  publicDescription: clean(bloc?.publicDescription),
-  publicPrioritiesText: listToEditorText(bloc?.publicPriorities?.length ? bloc.publicPriorities : bloc?.goals),
-  priorityField: Array.isArray(bloc?.publicPriorities) && bloc.publicPriorities.length ? "publicPriorities" : (Array.isArray(bloc?.goals) && bloc.goals.length ? "goals" : "publicPriorities"),
-  publicForeignPolicyText: listToEditorText(bloc?.publicForeignPolicy),
-  influencePercent: percentText(bloc?.influence?.percent),
-  influenceLabel: clean(bloc?.influence?.label),
-});
+const blocToEditor = (bloc, index) => {
+  const sourceId = clean(bloc?.id) || `bloc-${index + 1}`;
+  return {
+    _editorKey: `bloc-editor:${sourceId}:${index}`,
+    _sourceId: sourceId,
+    id: sourceId,
+    name: clean(bloc?.name),
+    shortName: clean(bloc?.shortName),
+    kind: clean(bloc?.kind),
+    status: clean(bloc?.status),
+    leader: officeholderName(bloc?.leader),
+    ideology: clean(bloc?.ideology),
+    publicDescription: clean(bloc?.publicDescription),
+    publicPrioritiesText: listToEditorText(bloc?.publicPriorities?.length ? bloc.publicPriorities : bloc?.goals),
+    priorityField: Array.isArray(bloc?.publicPriorities) && bloc.publicPriorities.length ? "publicPriorities" : (Array.isArray(bloc?.goals) && bloc.goals.length ? "goals" : "publicPriorities"),
+    publicForeignPolicyText: listToEditorText(bloc?.publicForeignPolicy),
+    influencePercent: percentText(bloc?.influence?.percent),
+    influenceLabel: clean(bloc?.influence?.label),
+  };
+};
 
 export const politicalActorToEditorState = (actor) => {
   const source = actor && typeof actor === "object" && !Array.isArray(actor) ? actor : {};
@@ -228,10 +238,10 @@ export const applyPoliticalEditorStateToWorld = (world, polityKey, editor) => {
   const existingBlocs = new Map((Array.isArray(existing.powerBlocs) ? existing.powerBlocs : []).map((bloc) => [clean(bloc?.id), bloc]));
 
   const parties = (Array.isArray(editor?.parties) ? editor.parties : [])
-    .map((draft) => applyPartyEditor(draft, existingParties.get(clean(draft?.id))))
+    .map((draft) => applyPartyEditor(draft, existingParties.get(clean(draft?._sourceId || draft?.id))))
     .filter((party) => clean(party?.name));
   const powerBlocs = (Array.isArray(editor?.powerBlocs) ? editor.powerBlocs : [])
-    .map((draft) => applyBlocEditor(draft, existingBlocs.get(clean(draft?.id))))
+    .map((draft) => applyBlocEditor(draft, existingBlocs.get(clean(draft?._sourceId || draft?.id))))
     .filter((bloc) => clean(bloc?.name));
 
   const rulingPartyIds = parties

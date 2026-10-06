@@ -16,6 +16,7 @@ import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
+import { powerTierForPolity } from "../../runtime/powerStatus.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -78,6 +79,12 @@ if (typeof window !== "undefined") {
     window.addEventListener("oh:active-game-changed", () => memoryCache.clear());
 }
 onMemoryPressure(() => memoryCache.clear());
+
+const POWER_TIER_LABELS = Object.freeze({
+    "major-power": "Major power",
+    "regional-power": "Regional power",
+    "minor-power": "Minor power",
+});
 
 const readTrackingSettingsFallback = (gameKey, playerCountry = "") => {
     if (!gameKey) return normalizeCountryStatsTracking({}, { playerCountry });
@@ -714,7 +721,7 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                         <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.14rem" }}>{facts.join(" · ")}</div>
                     )}
                     </div>
-                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#c084fc" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
+                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#d4d4d8" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
                     </div>
                     </div>
                 );
@@ -2337,6 +2344,13 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
         || (worldSnapshot && targetCountry ? buildPublicPoliticalView(worldSnapshot, targetCountry) : null);
     const politicalKey = publicPoliticalProfile?.polityKey || resolvedTargetKey || targetCountry;
     const politicalTags = resolveCountryTags(baseTags, worldSnapshot, politicalKey);
+    const powerStatusRows = worldSnapshot?.powerStatus?.byPolity
+        || (worldSnapshot?.powerStatus && typeof worldSnapshot.powerStatus === "object" ? worldSnapshot.powerStatus : {});
+    const hasPowerTierRecord = Boolean(politicalKey) && Object.keys(powerStatusRows || {}).some((key) => (
+        key !== "schemaVersion" && String(key).toLowerCase() === String(politicalKey).toLowerCase()
+    ));
+    const powerTier = hasPowerTierRecord ? powerTierForPolity(worldSnapshot, politicalKey) : "";
+    const powerTierLabel = POWER_TIER_LABELS[powerTier] || "";
     const intelligence = targetCountry && worldSnapshot ? intelligenceOf(worldSnapshot, targetCountry) : null;
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
@@ -2437,10 +2451,18 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 )}
                 </>
             )}
-            {politicalTags.length > 0 && (
+            {(powerTierLabel || politicalTags.length > 0) && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
+                    {powerTierLabel && (
+                        <span
+                            data-power-tier={powerTier}
+                            style={{ background: "rgba(59,130,246,0.16)", border: "1px solid rgba(96,165,250,0.38)", borderRadius: "999px", color: "#bfdbfe", fontSize: "0.61rem", fontWeight: 700, padding: "0.1rem 0.38rem" }}
+                        >
+                            {powerTierLabel}
+                        </span>
+                    )}
                     {politicalTags.map((tag) => (
-                        <span key={tag} style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.5)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
+                        <span key={tag} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--oh-grey-border)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
                     ))}
                 </div>
             )}

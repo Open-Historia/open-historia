@@ -114,32 +114,35 @@ Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(c
 
 ## 3. The base style (`buildWorldStyle`)
 
-`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled)` (`World.jsx`) returns a MapLibre style JSON. The basemap it is given is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this browser only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID = "ocean"`. A player pick also replaces the scenario's own background.
+`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline)` (`World.jsx`) returns a MapLibre style JSON. The basemap it is given is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this browser only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID = "ocean"`. A player pick also replaces the scenario's own background.
 
 | # | Condition | Sources | Layers |
 |---|---|---|---|
 | 1 | `customBg.kind === "image"` | `custom-bg` (image, corners per `WORLD_IMAGE_COORDS_*`) | `custom-bg-base` (solid `#0b1a2b`), `custom-bg-layer` (raster) |
 | 2 | `customBg.kind === "vector"` | `custom-bg-vec` (geojson) | `custom-bg-sea` (bg), `custom-bg-fill` (per-feature `fill`), `custom-bg-line` |
 | 3 | `backgroundDeclared` (payload not loaded yet) | none | `custom-bg-loading` (solid `#0b1a2b`) |
-| 4 | relief basemaps: `atlas-relief`, `atlas-relief-dark`, `ocean-dark`, `midnight-terrain` | `pax-world-relief` (NOAA ETOPO1 relief, `maxzoom 3`) + `satellite-lowres` / `satellite` rendering ESRI World Terrain Base | `strategy-map-base` (background), `satellite-lowres-layer`, `satellite-layer`, `pax-world-relief-layer` |
-| 5 | any other built-in raster id | `satellite-lowres` / `satellite` for that ESRI service | `strategy-map-base`, `satellite-lowres-layer`, `satellite-layer` |
+| 4 | `offline` (no network at all) | `offline-relief` (raster, `/offline-relief/{z}/{y}/{x}.jpg`, `maxzoom:3`) | `strategy-map-base` (bg), `offline-relief-layer` |
+| 5 | relief basemaps: `atlas-relief`, `atlas-relief-dark`, `ocean-dark`, `midnight-terrain` | `pax-world-relief` (NOAA ETOPO1 relief, `maxzoom 3`) + `satellite-lowres` / `satellite` rendering ESRI World Terrain Base | `strategy-map-base` (background), `satellite-lowres-layer`, `satellite-layer`, `pax-world-relief-layer` |
+| 6 | any other built-in raster id | `satellite-lowres` / `satellite` for that ESRI service | `strategy-map-base`, `satellite-lowres-layer`, `satellite-layer` |
 
-**National Geographic - Dark** is not a `buildWorldStyle` branch. `World()` loads Esri's public NatGeo vector style (`natGeoDarkStyle.js`, `loadNatGeoDarkStyle`, cached for the session), darkens its cartography, drops its sovereign-country labels and lays World Physical Map (`oh-natgeo-dark-physical`) under it. While it loads, the map shows branch 4 as Atlas Relief Dark; when it arrives the map remounts. If it fails, the dark relief stays.
+**National Geographic - Dark** is not a `buildWorldStyle` branch. `World()` loads Esri's public NatGeo vector style (`natGeoDarkStyle.js`, `loadNatGeoDarkStyle`, cached for the session), darkens its cartography, drops its sovereign-country labels and lays World Physical Map (`oh-natgeo-dark-physical`) under it. While it loads, the map shows branch 5 as Atlas Relief Dark; when it arrives the map remounts. If it fails, the dark relief stays.
 
-Branches 1–3 **drop ESRI entirely** so a custom-map game never flashes satellite Earth or fires basemap tile requests it won't use. Branch 3 is the pre-load placeholder: `useCustomBackground` flips `declared:true` from the world's background descriptor, which arrives with `world.json`, *before* the heavy background payload loads.
+Branches 1–4 **drop ESRI entirely** so a custom-map game never flashes satellite Earth or fires basemap tile requests it won't use. Branch 3 is the pre-load placeholder: `useCustomBackground` flips `declared:true` from the world's background descriptor, which arrives with `world.json`, *before* the heavy background payload loads.
+
+Branch 4 is the map with no network (`useBrowserOnline()`, `src/runtime/networkStatus.js` — `navigator.onLine` and its online/offline events; the Android app needs `ACCESS_NETWORK_STATE` for the WebView to report it). Every basemap in branches 5 and 6 is a remote tile service, so offline the sea used to be plain black and each start logged ~90 failed tile requests. The game ships NOAA/NCEI's ETOPO1 colour shaded relief, levels 0–3 (85 JPEGs, 2.2 MB, public domain — `public/offline-relief/SOURCE.txt`), graded like the Atlas Relief preset and overzoomed past z3; no DEM, so 3D terrain waits for the network. The Workshop (`OlMap.jsx`) and the country picker (`CountryPickerMap.jsx`) draw the same tiles offline, and the startup preload skips its remote texture warm. Going offline or back online **remounts** the map (`connectivityKey` in `mapInstanceKey`), as a basemap change does: swapped in place, the style diff dropped every layer the React tree had added, and the political fills went grey.
 
 Every branch sets `sky: { "atmosphere-blend": 0 }` — MapLibre's uniform atmosphere is off because `GlobeEffects` supplies directional surface light instead, and transparent space lets the stars/sun show through the canvas.
 
-### Built-in raster basemaps (branches 4–5)
+### Built-in raster basemaps (branches 5–6)
 
 | Source id | Type | Tiles / template | Notes |
 |---|---|---|---|
 | `satellite-lowres` | raster | `esriTileTemplate(id)` | z0–2 always have real data; `maxzoom:2`. Sits under the detailed layer so a region still loading looks coarse rather than black |
 | `satellite` | raster | `basemapProtocolTemplate(id)` → `ohbase://…` | High-res via the **ohbase protocol** so ESRI "Map Data Not Yet Available" placeholders get replaced with upscaled ancestor tiles; `maxzoom` = the basemap's native max |
-| `pax-world-relief` | raster | ETOPO1 shaded relief (branch 4 only) | `maxzoom 3`, overzoomed above; glazed over the terrain layer and faded out between z3 and z4.85 |
+| `pax-world-relief` | raster | ETOPO1 shaded relief (branch 5 only) | `maxzoom 3`, overzoomed above; glazed over the terrain layer and faded out between z3 and z4.85 |
 | `terrain-source` | raster-dem | `TERRAIN_TILE_TEMPLATE` (AWS terrarium) | Only with `terrainEnabled`: `encoding:"terrarium"`, `maxzoom:5`. One DEM for both the `terrain` prop and the `hills` hillshade layer (exaggeration 0.1) |
 
-Branch 4 renders World Terrain Base (`"terrain"`) rather than the id it was given, with per-variant grades from `getPaxReliefPaints` (`PAX_*_PAINT`); branch 5 grades `imagery` with `SATELLITE_PAINT` and everything else with `ATLAS_PAINT`. `strategy-map-base` is `#0b1017`, darker for the dark variants (`#030a14` Ocean Dark, `#050609` Atlas Relief Dark, `#000205` Midnight Terrain). `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler; `configureMapRuntime()` runs first, since MapLibre's worker pool is made with the first map. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
+Branch 5 renders World Terrain Base (`"terrain"`) rather than the id it was given, with per-variant grades from `getPaxReliefPaints` (`PAX_*_PAINT`); branch 6 grades `imagery` with `SATELLITE_PAINT` and everything else with `ATLAS_PAINT`. `strategy-map-base` is `#0b1017`, darker for the dark variants (`#030a14` Ocean Dark, `#050609` Atlas Relief Dark, `#000205` Midnight Terrain). `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler; `configureMapRuntime()` runs first, since MapLibre's worker pool is made with the first map. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
 
 ### World-image corner coordinates
 
@@ -192,7 +195,7 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 | `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
 | `custom-regions-local-outline` | `buildProvinceOutlinePaint` | Scenario province grid (`customActive && worldKnown`): hidden through z6.5; opacity `6.5→0, 7.5→0.25, 10→0.38, 12→0.45`; width `6.5→0.25, 8→0.4, 12→0.5` CSS px, capped above z12. Country/frontier strokes stay visible, and fill-based province selection is unchanged. |
 
-No dissolved polity surface owns the political fill: live ownership colours the canonical regions through feature state, and `_fillColor` is carried only by the disputed-region features (with their `_stripes`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement. A scenario region type adds its own state beside it (§6a).
+No dissolved polity surface owns the political fill: live ownership colours the canonical regions through feature state, and `_fillColor` is carried only by the disputed-region features (with their `_stripes`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and the political fill reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement. The fill uses the same merged `ownerByRegionId` lookup as region selection and the stock-detail path: a live `regionOwnershipOverrides` row wins, otherwise the scenario region's authored `owner` is used. This is important for edited/authored geometry whose valid starting owner exists only in `regions.geojson`; without the scenario-owner fallback such regions remained clickable as their polity but rendered with `NEUTRAL_LAND_COLOR`. A genuinely unowned region has neither source and remains neutral. A scenario region type adds its own state beside it (§6a).
 
 ### 4.4 Ownership hand-over
 

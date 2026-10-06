@@ -16,6 +16,7 @@ import {
   normalizeInstitutionVotingRule,
   resolveInstitutionRecord,
 } from "./institutions.js";
+import { stableAsciiId } from "./stableId.js";
 import {
   mutateCanonicalTurnState,
   normalizeChatEntry,
@@ -27,12 +28,7 @@ import { getPoliticalProfile } from "./politicalActors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
-const slug = (value) => lower(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 96);
+const slug = (value) => stableAsciiId(value, { maxLength: 96 });
 const list = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => {
   if (value == null || typeof value !== "object") return value;
@@ -109,6 +105,18 @@ export const institutionCanTableProposal = (institutionInput = {}, polity = "", 
 export const institutionCanProposeAmendment = (institutionInput = {}, polity = "", proposalInput = {}) => (
   institutionCanTableProposal(institutionInput, polity, proposalInput)
 );
+
+// Calling a ready matter to a vote is a procedural member right, not ownership
+// of the proposal. Sponsorship remains canonical authorship and continues to
+// govern sponsor-only actions such as resolving proposed amendments. Until the
+// charter grows a distinct floor-control rule, reuse proposal eligibility here.
+export const institutionCanCallProposalVote = (institutionInput = {}, polity = "", proposalInput = {}) => {
+  const status = lower(proposalInput?.status);
+  if (!["debate", "formalized"].includes(status)) return false;
+  if (!institutionCanTableProposal(institutionInput, polity, proposalInput)) return false;
+  return !list(proposalInput?.amendments)
+    .some((entry) => lower(entry?.status || "proposed") === "proposed");
+};
 
 const proposalSponsor = (proposal = {}, polity = "") => lower(proposal?.createdBy) === lower(polity)
   || list(proposal?.sponsorPolities).some((entry) => lower(entry) === lower(polity));
@@ -484,6 +492,27 @@ export const submitInstitutionProposalForVoting = ({
   return openInstitutionProposalVoting({ world, institutionId, proposalId, date });
 };
 
+export const callInstitutionProposalVote = ({
+  world: worldInput = {}, institutionId = "", proposalId = "", date = "", caller = "",
+} = {}) => {
+  const institution = resolveInstitutionRecord(worldInput, institutionId);
+  const proposal = institution?.proposals?.[slug(proposalId)];
+  if (!proposal) throw new Error(`Unknown proposal ${clean(proposalId) || "<blank>"}.`);
+  const callerName = clean(caller);
+  if (!institutionCanCallProposalVote(institution, callerName, proposal)) {
+    if (!institutionCanTableProposal(institution, callerName, proposal)) {
+      throw new Error(`${callerName || "<blank>"} is not currently eligible to call a vote on ${proposal.title}.`);
+    }
+    const unresolvedAmendments = list(proposal.amendments)
+      .filter((entry) => lower(entry?.status || "proposed") === "proposed");
+    if (unresolvedAmendments.length) throw new Error("Proposal has unresolved amendments and cannot open voting yet.");
+    throw new Error("Proposal must be in debate/formalized state before an eligible member can call a vote.");
+  }
+  // Deliberately omit requester here: submitInstitutionProposalForVoting's
+  // requester path is sponsor-only and remains the AI/sponsor submit contract.
+  return submitInstitutionProposalForVoting({ world: worldInput, institutionId, proposalId, date });
+};
+
 export const castInstitutionProposalVote = ({
   world: worldInput = {}, institutionId = "", proposalId = "", polity = "", choice = "",
   date = "", government = "", reason = "", playerCountry = "", authority = "npc",
@@ -716,6 +745,7 @@ const systemTextForCommand = (institution, proposal, command, detail = {}) => {
   if (command === "create") return `${institution.name}: proposal opened — ${title}.`;
   if (command === "lodge-proposal") return `${detail.proposer || proposal?.createdBy || "A member"} tabled ${title} for debate in ${institution.name}.`;
   if (command === "submit-for-vote") return `${institution.name}: ${title} was formally submitted and voting opened.`;
+  if (command === "call-vote") return `${detail.caller || "An eligible member"} called a formal vote on ${title} in ${institution.name}.`;
   if (command === "status") return `${institution.name}: ${title} moved to ${proposal.status}.`;
   if (command === "amendment") return `${institution.name}: amendment proposed for ${title}.`;
   if (command === "amendment-status") return `${institution.name}: amendment ${detail.amendmentId || ""} ${detail.status}.`;
@@ -868,6 +898,7 @@ export const applyInstitutionGovernanceCommand = ({
   if (type === "create") result = createInstitutionProposal({ ...common, proposal: command.proposal || command });
   else if (type === "lodge-proposal") result = lodgeInstitutionProposal({ ...common, proposal: command.proposal || command, proposer: command.proposer });
   else if (type === "submit-for-vote") result = submitInstitutionProposalForVoting({ ...common, proposalId: command.proposalId, requester: command.requester });
+  else if (type === "call-vote") result = callInstitutionProposalVote({ ...common, proposalId: command.proposalId, caller: command.caller });
   else if (type === "status") result = transitionInstitutionProposal({ ...common, proposalId: command.proposalId, status: command.status });
   else if (type === "amendment") result = addInstitutionProposalAmendment({ ...common, proposalId: command.proposalId, amendment: command.amendment || command, proposer: command.proposer });
   else if (type === "amendment-status") result = resolveInstitutionProposalAmendment({ ...common, proposalId: command.proposalId, amendmentId: command.amendmentId, status: command.status, requester: command.requester });
@@ -1026,9 +1057,6 @@ const activeInstitutionalMemberForPlayer = (world, institutionId, playerCountry)
   return { institution, member };
 };
 
-const isProposalSponsor = (proposal, polity) => lower(proposal?.createdBy) === lower(polity)
-  || list(proposal?.sponsorPolities).some((entry) => lower(entry) === lower(polity));
-
 export const commitInstitutionalPlayerProposal = async ({
   institutionId = "", playerCountry = "", date = "", expectedGameId = "", proposal = {},
 } = {}) => {
@@ -1066,10 +1094,18 @@ export const commitInstitutionalPlayerVoteRequest = async ({
     const { institution } = activeInstitutionalMemberForPlayer(world, institutionId, player);
     const proposal = institution?.proposals?.[slug(proposalId)];
     if (!proposal) throw new Error(`Unknown proposal ${clean(proposalId) || "<blank>"}.`);
-    if (!isProposalSponsor(proposal, player)) throw new Error("Only a current sponsor may submit this proposal for a formal vote.");
+    if (!institutionCanCallProposalVote(institution, player, proposal)) {
+      if (!institutionCanTableProposal(institution, player, proposal)) {
+        throw new Error(`${player} is not currently eligible to call a vote on ${proposal.title}.`);
+      }
+      const unresolvedAmendments = list(proposal.amendments)
+        .filter((entry) => lower(entry?.status || "proposed") === "proposed");
+      if (unresolvedAmendments.length) throw new Error("Proposal has unresolved amendments and cannot open voting yet.");
+      throw new Error("Proposal must be in debate/formalized state before you can call a vote.");
+    }
     result = applyInstitutionGovernanceCommand({
       world, chats, events, institutionId, playerCountry: player, date: date || game?.gameDate || "",
-      command: { type: "submit-for-vote", proposalId, requester: player },
+      command: { type: "call-vote", proposalId, caller: player },
     });
     return { world: result.world, chats: result.chats, events: result.events };
   }, { playerCountry, expectedGameId });
@@ -1279,6 +1315,49 @@ export const commitInstitutionalDiplomaticReply = async ({
 
 
 
+// A model occasionally gets the LEGAL decision right but drops the target id
+// from transport: `institution_resolve_amendment` with proposalId + decision,
+// but no amendmentId. Never guess among amendments. If the canonical proposal
+// has exactly one unresolved amendment, however, there is only one possible
+// target; native governance can safely restore that id and then apply the usual
+// sponsor/proposer authority checks. Zero or multiple unresolved amendments stay
+// fail-closed and require an exact id.
+const repairUnambiguousInstitutionChatAction = (action, institution) => {
+  if (action?.type !== "institution_invalid"
+      || lower(action?.rawType) !== "institution_resolve_amendment"
+      || !/requires amendmentId/i.test(clean(action?.validationError))) {
+    return { action: null, reason: clean(action?.validationError) || `${clean(action?.rawType) || "institution action"} is malformed.` };
+  }
+
+  const proposalId = clean(action?.proposalId);
+  const amendmentStatus = lower(action?.amendmentStatus);
+  if (!proposalId || !["accepted", "rejected", "withdrawn"].includes(amendmentStatus)) {
+    return { action: null, reason: clean(action?.validationError) || "institution_resolve_amendment is malformed." };
+  }
+  const proposal = proposalMap(institution)[slug(proposalId)];
+  if (!proposal) return { action: null, reason: `Unknown proposal ${proposalId}.` };
+  const unresolved = list(proposal.amendments)
+    .filter((entry) => lower(entry?.status || "proposed") === "proposed" && clean(entry?.id));
+  if (unresolved.length !== 1) {
+    return {
+      action: null,
+      reason: unresolved.length
+        ? `${proposal.title || proposal.id} has ${unresolved.length} unresolved amendments; an exact amendmentId is required.`
+        : `${proposal.title || proposal.id} has no unresolved amendment to resolve.`,
+    };
+  }
+  return {
+    action: {
+      type: "institution_resolve_amendment",
+      actorName: clean(action?.actorName),
+      proposalId: clean(proposal.id),
+      amendmentId: clean(unresolved[0].id),
+      amendmentStatus,
+    },
+    reason: "",
+  };
+};
+
 // Apply the formal-governance subset of Beta's one-request group-chat action
 // batch. Conversation remains conversation; only explicit institution_* actions
 // may touch the institution ledger. Each action is grounded and applied on its
@@ -1322,7 +1401,19 @@ export const applyInstitutionalChatGovernanceBatch = ({
 
   const applied = [];
   const rejected = [];
-  for (const action of list(formalActions)) {
+  for (const sourceAction of list(formalActions)) {
+    let action = sourceAction;
+    if (action?.type === "institution_invalid") {
+      const repair = repairUnambiguousInstitutionChatAction(
+        action,
+        resolveInstitutionRecord(world, institutionId) || institution,
+      );
+      if (!repair.action) {
+        rejected.push({ action, reason: repair.reason });
+        continue;
+      }
+      action = repair.action;
+    }
     const actorToken = clean(action?.actorName);
     const polity = actorByFold.get(lower(actorToken));
     if (!polity) {
@@ -1367,9 +1458,65 @@ export const applyInstitutionalChatGovernanceBatch = ({
       world = result.world;
       chats = result.chats;
       events = result.events;
-      applied.push({ action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null });
+      applied.push({
+        action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null,
+        ...(sourceAction !== action ? { repairedFrom: sourceAction } : {}),
+      });
     } catch (error) {
       rejected.push({ action, command, reason: clean(error?.message || error) || "formal institutional action was refused", ...(error?.code ? { code: error.code } : {}) });
+    }
+  }
+
+  // Formal state is the authority. If an actor's generated formal action was
+  // malformed or refused, do not keep that same turn's generated speech as if
+  // the legal act had succeeded. Drop only the current batch's messages from
+  // those actors and replace them with one native, explicit refusal notice.
+  // This is actor/action association, not prose parsing: arbitrary languages
+  // and phrasings cannot turn a rejected mutation into apparent canon.
+  if (rejected.length && list(chatEvents).length) {
+    const rejectedActors = new Map();
+    for (const entry of rejected) {
+      const actorName = clean(entry?.action?.actorName);
+      const actorKey = lower(actorName);
+      if (!actorKey) continue;
+      const row = rejectedActors.get(actorKey) || { name: actorName, reasons: [] };
+      const reason = clean(entry?.reason) || "formal action was refused";
+      if (!row.reasons.includes(reason)) row.reasons.push(reason);
+      rejectedActors.set(actorKey, row);
+    }
+    const rejectedMessageIds = new Set(list(chatEvents)
+      .filter((event) => rejectedActors.has(lower(event?.by)))
+      .map((event) => clean(event?.id))
+      .filter(Boolean));
+    if (rejectedMessageIds.size) {
+      chats = chats.map((chat) => clean(chat?.id) === clean(materialized.channel.id)
+        ? (normalizeChatEntry({
+          ...chat,
+          events: list(chat?.events).filter((event) => !rejectedMessageIds.has(clean(event?.id))),
+          messages: list(chat?.messages).filter((message) => !rejectedMessageIds.has(clean(message?.id))),
+        }) || chat)
+        : chat);
+    }
+    const groups = new Map();
+    for (const row of rejectedActors.values()) {
+      for (const reason of row.reasons) {
+        const names = groups.get(reason) || [];
+        if (!names.includes(row.name)) names.push(row.name);
+        groups.set(reason, names);
+      }
+    }
+    const parts = [...groups.entries()].slice(0, 4).map(([reason, names]) => {
+      const shown = names.slice(0, 4);
+      const actorText = `${shown.join(", ")}${names.length > shown.length ? ` +${names.length - shown.length} more` : ""}`;
+      return `${actorText}: ${reason}`;
+    });
+    if (parts.length) {
+      chats = appendInstitutionSystemMessage(
+        chats,
+        materialized.channel.id,
+        `Formal business was not recorded — ${parts.join("; ")}`,
+        date,
+      );
     }
   }
 

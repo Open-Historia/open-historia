@@ -14,12 +14,18 @@ test("institution agenda offers an explicit debate-first or immediate-vote path"
   assert.match(source, /onRequestCouncilTurn\?\.\(\{ institutionId, proposalId, kind: mode === "vote" \? "vote" : "debate"/);
 });
 
-test("a sponsor can call a native vote with an optional Council closing comment", () => {
+test("an eligible player member can call a native vote with an optional Council closing comment", () => {
   const source = read("./InstitutionsWorkspace.jsx");
+  const view = read("../../runtime/institutionalDiplomacyView.js");
+  const governance = read("../../runtime/institutionalGovernance.js");
   assert.match(source, /data-institution-call-vote="true"/);
+  assert.match(source, /proposal\.playerCanSubmitForVote/);
+  assert.match(view, /playerCanSubmitForVote: institutionCanCallProposalVote/);
   assert.match(source, /Closing comment before the vote \(optional\)/);
   assert.match(source, />Call vote<\/button>/);
   assert.match(source, /commitInstitutionalPlayerVoteRequest/);
+  assert.match(governance, /command: \{ type: "call-vote", proposalId, caller: player \}/);
+  assert.match(governance, /institutionCanCallProposalVote/);
   assert.match(source, /playerComment, source: "call-vote"/);
 });
 
@@ -44,6 +50,22 @@ test("background Council automation publishes its committed channel into the liv
   assert.match(source, /adoptInstitutionalResult\(\{ \.\.\.result, channel: result\?\.channel \|\| materialized\.channel \}\)/);
 });
 
+test("embedded Council renders the canonical background transcript instead of a stale local copy", () => {
+  const source = read("./chat.jsx");
+  assert.match(source, /make an embedded[\s\S]*Council CONTROLLED by its canonical `chat\.messages` prop/);
+  assert.match(source, /const canonicalEmbeddedMessages = embeddedInstitution[\s\S]*withoutUnseenMessages\(chat\.messages \?\? \[\], unseen\)/);
+  assert.match(source, /const presentedMessages = embeddedInstitution \? canonicalEmbeddedMessages : messages;/);
+  assert.match(source, /const shownEntries = presentedMessages[\s\S]*\.filter\(\(\{ msg \}\) => !unseen\.has/);
+  assert.match(source, /messagesRef\.current = saved;[\s\S]*if \(!embeddedInstitution\) setMessages\(saved\);/);
+});
+
+test("embedded Council follow-to-bottom tracks the transcript actually presented on screen", () => {
+  const source = read("./chat.jsx");
+  assert.match(source, /const presentedMessageCount = presentedMessages\.length;/);
+  assert.match(source, /messagesScrollRef\.current;[\s\S]*scroller\.scrollTo\(\{ top: scroller\.scrollHeight, behavior: "smooth" \}\);[\s\S]*\}, \[presentedMessageCount, isLoading, typingNext\]\);/);
+  assert.doesNotMatch(source, /\}, \[messages, isLoading, typingNext\]\);/);
+});
+
 test("accepted lifecycle cases can immediately hand their exact accession ballot to Council processing", () => {
   const source = read("./chat.jsx");
   const gameplay = read("../AI/gameplay.js");
@@ -64,4 +86,16 @@ test("gameplay separates opening debate from interactive native ballots and targ
   assert.match(source, /institutionBallotWorkForProposal\(bundle\.world, stored\.institutionId, institutionProposalId, player/);
   assert.match(source, /interactiveInstitutionBallotDirective\(autonomousBallotWork\)/);
   assert.match(source, /do NOT lodge a duplicate and do NOT submit it for voting yet/);
+});
+
+test("unresolved amendments explain why voting is blocked and let a member ask the sponsor to decide", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  const chat = read("./chat.jsx");
+  assert.match(source, /data-institution-vote-blocked-amendments="true"/);
+  assert.match(source, /Vote is waiting on \{proposal\.unresolvedAmendments\} unresolved amendment/);
+  assert.match(source, /data-institution-request-amendment-decision="true"/);
+  assert.match(source, />Ask sponsor to decide<\/button>/);
+  assert.match(source, /kind: "amendment", playerComment: comment, source: "resolve-amendment"/);
+  assert.match(chat, /kind === "amendment" \? "amendment" : "debate"/);
+  assert.match(chat, /playerMessage: mode === "amendment" \? comment : ""/);
 });

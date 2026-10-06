@@ -17,6 +17,7 @@
 
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { readWorldStateView } from "../../runtime/gameState.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 
 let modulePromise = null;
 
@@ -58,12 +59,25 @@ export const simulateTimelineJump = hostOnly(async (...args) => (await gameplay(
 export const simulateAutoJump = hostOnly(async (...args) => (await gameplay()).simulateAutoJump(...args));
 export const retryPendingJumpSegment = hostOnly(async (...args) => (await gameplay()).retryPendingJumpSegment(...args));
 export const retryPendingProjectsJump = hostOnly(async (...args) => (await gameplay()).retryPendingProjectsJump(...args));
+export const retryPendingChecksJump = hostOnly(async (...args) => (await gameplay()).retryPendingChecksJump(...args));
+export const retryHeldPlayerEvents = hostOnly(async (...args) => (await gameplay()).retryHeldPlayerEvents(...args));
+export const heldSkipToRerun = hostOnly(async (...args) => (await gameplay()).heldSkipToRerun(...args));
 export const applyParkedTurn = hostOnly(async (...args) => (await gameplay()).applyParkedTurn(...args));
 // A kept skip is the host's, in the host's own store: a page playing a shared
 // game is told there is none, and never takes one in or throws one away.
 export const loadParkedTurn = hostQuietly(async (...args) => (await gameplay()).loadParkedTurn(...args));
 export const discardKeptTurn = hostOnly(async (...args) => (await gameplay()).discardKeptTurn(...args));
-export const maybeGeneratePregameHistory = hostQuietly(async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args));
+export const maybeGeneratePregameHistory = async (...args) => {
+  // The backstory is the game's own record: on a page playing a shared game it
+  // is simply not done (hostQuietly, written out so the gate below reads plainly).
+  if (inSharedGame()) return null;
+  // This is the only production entry point for the automatic Round-Zero
+  // bootstrap. Gate it before importing the large gameplay chunk so an author
+  // who disables pre-game history spends no AI request and starts with exactly
+  // the canonical state already authored into the scenario.
+  if (!isActiveFeatureEnabled("pregameHistory")) return null;
+  return (await gameplay()).maybeGeneratePregameHistory(...args);
+};
 // A scenario's own pre-history, written in the Workshop: not the game being played.
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
@@ -104,6 +118,8 @@ export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
+// The agents' reports are the game's own record: written by the host.
+export const retryAgentReports = hostOnly(async (...args) => (await gameplay()).retryAgentReports(...args));
 // A stat sheet is the game's own record, so in a shared game the host writes
 // it, on the host's AI key: the page asks (the host answers once it is
 // written, which takes as long as the model does) and reads the sheet out of

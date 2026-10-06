@@ -9,11 +9,13 @@ import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, sameP
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
 import { normalizeApplicationReceipt } from "./applicationReceipt.js";
+import { normalizeFiledEvents } from "./filedEvents.js";
 import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.js";
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
@@ -1234,6 +1236,10 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     // The event that created or last moved this unit, so the popup can say what
     // put it there and click through to it.
     eventId: normalizeOptionalString(entry.eventId),
+    // The war the engine raised this formation for, when it was raised only so a
+    // war would have a counter (AI/nativeUnitDirector.js): it is disbanded when
+    // that war ends. Absent on every other unit.
+    ...(normalizeOptionalString(entry.raisedForWar) ? { raisedForWar: normalizeOptionalString(entry.raisedForWar) } : {}),
     source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
     orderId: normalizeOptionalString(entry.orderId),
     createdAt: normalizeOptionalString(entry.createdAt) || timestamp,
@@ -1319,6 +1325,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // delete every patrol the instant it was created. It ends by expiry
     // (untilRound, in advanceStandingOrders) or when its unit goes away.
     if (order.kind === "patrol") return true;
+    // A unit still on its way keeps its order until it arrives: a step that stops
+    // inside the radius but short of the destination is not an arrival. Dropping
+    // it there left a division 59 km short of its destination reading "moving" with
+    // nothing to move it. The radius is for a unit already standing near.
+    if (unit.status === "moving") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
@@ -1466,6 +1477,7 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
   const createdAt = normalizeOptionalString(entry.createdAt) || timestamp;
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
+  const approximate = normalizeApproximateMark(entry.approximate);
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
@@ -1482,7 +1494,21 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
+    ...(approximate ? { approximate } : {}),
   };
+};
+
+// A structure given an approximate placement because the place its event named is
+// not on the map (AI/placement.js): what was asked for, and where it went. The
+// player settles it with Accept or Move (structurePlacement.js).
+const normalizeApproximateMark = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const asked = normalizeOptionalString(value.asked);
+  const country = normalizeOptionalString(value.country);
+  // `unnamed`: the thing was given no place at all, so nothing was asked for.
+  const unnamed = value.unnamed === true;
+  if (!(asked || unnamed) || !country) return null;
+  return { asked, country, near: normalizeOptionalString(value.near), ...(unnamed ? { unnamed } : {}) };
 };
 
 export const normalizeMarkers = (markers) =>
@@ -2868,7 +2894,26 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         if (unit.id !== op.unitId) return unit;
         // Garrisons are fixed by definition — a move op on one is a mistake, not
         // an order (the same doctrine buildMilitaryFeasibilityText already states).
-        if (unit.type === "garrison") return unit;
+        // Except while it is still a player's pending deployment: the request asks
+        // the skip to "confirm it, reposition it, or reject it", and a move is how
+        // it answers the first two. It is being sited, not marched, so it goes
+        // straight to the spot and joins the order of battle. Ignoring it left a
+        // garrison the story had deployed three times a translucent counter.
+        if (unit.type === "garrison") {
+          if (unit.status !== "pending" || !Number.isFinite(op.toLng) || !Number.isFinite(op.toLat)) return unit;
+          dropOrder(unit.id);
+          return {
+            ...unit,
+            lng: op.toLng,
+            lat: op.toLat,
+            regionId: op.regionId || unit.regionId,
+            status: "idle",
+            posture: op.posture || unit.posture,
+            orderId: "",
+            ...(eventId ? { eventId } : {}),
+            updatedAt: stamp(),
+          };
+        }
 
         const budget =
           elapsedDays === null || elapsedDays === undefined
@@ -3136,17 +3181,27 @@ export const clearStaleUnitMotion = (world, { queuedUnitIds = [] } = {}) => {
 // move op cleared the status, a move on a garrison is ignored by design, and a
 // fleet the story says arrived was a translucent counter for the rest of the
 // campaign. `resolvedActions` are the planned actions this skip resolved.
-// Pure; returns the same world when there is nothing to confirm.
-export const confirmResolvedDeployments = (world, resolvedActions = []) => {
-  const requested = new Set(
-    normalizeArray(resolvedActions)
-      .map((action) => normalizeUnitRevert(action?.unitRevert))
-      .filter((revert) => revert?.remove)
-      .map((revert) => revert.unitId),
-  );
-  if (requested.size === 0) return world;
+//
+// `queuedActions`, when given, is the whole queue the skip started from. A
+// pending unit with no deploy request anywhere in it is an orphan: its request
+// was answered and cleared before this confirmation existed, so nothing can
+// ever answer it again, and a skip that resolved the queue takes it as
+// accepted too. Seen in a live game (2026-09-21): a garrison placed in 2016 was
+// still pending in 2019. Pure; returns the same world when there is nothing to
+// confirm.
+const deployRequestUnitIds = (actions) => new Set(
+  normalizeArray(actions)
+    .map((action) => normalizeUnitRevert(action?.unitRevert))
+    .filter((revert) => revert?.remove)
+    .map((revert) => revert.unitId),
+);
+export const confirmResolvedDeployments = (world, resolvedActions = [], { queuedActions = null } = {}) => {
+  const requested = deployRequestUnitIds(resolvedActions);
+  const stillRequested = queuedActions ? deployRequestUnitIds(queuedActions) : null;
+  if (requested.size === 0 && !stillRequested) return world;
   const units = normalizeUnits(world?.units);
-  const accepted = (unit) => unit.status === "pending" && requested.has(unit.id);
+  const accepted = (unit) => unit.status === "pending"
+    && (requested.has(unit.id) || Boolean(stillRequested && !stillRequested.has(unit.id)));
   if (!units.some(accepted)) return world;
   const stamp = new Date().toISOString();
   return {
@@ -3380,21 +3435,12 @@ const normalizeRenamedKind = (value) => {
   return text === "catalyst" ? "interactive" : text;
 };
 
-// Two things only the Event Editor (GameUI/cheats.jsx) puts on an event: a line
-// someone said, and whether one polity may react to the event
-// (processPendingEventOutreach, AI/gameplay.js) and what came of it. The
-// normalizer used to return a fixed set of fields without them, so every read
-// lost them: a quote vanished on save, and a queued reaction always found its
-// event "disabled" and was cancelled, so none ever fired.
-const normalizeEventQuote = (value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const text = normalizeOptionalString(value.text);
-  if (!text) return null;
-  const speaker = normalizeOptionalString(value.speaker);
-  const role = normalizeOptionalString(value.role);
-  return { text, ...(speaker ? { speaker } : {}), ...(role ? { role } : {}) };
-};
-
+// Whether one polity may react to an event (processPendingEventOutreach,
+// AI/gameplay.js) and what came of it: put on an event only by the Event Editor
+// (GameUI/cheats.jsx). The normalizer used to return a fixed set of fields
+// without it, so every read lost it: a queued reaction always found its event
+// "disabled" and was cancelled, so none ever fired. (The line someone said, the
+// Editor's other field, is read by eventQuote.js normalizeEventPresentation.)
 const normalizeEventNpcReaction = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const evaluatedAt = normalizeOptionalString(value.evaluatedAt);
@@ -3451,13 +3497,19 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
-  const quote = normalizeEventQuote(entry.quote);
+  const presentation = normalizeEventPresentation({
+    description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    quote: entry.quote,
+  });
   const npcReaction = normalizeEventNpcReaction(entry.npcReaction);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
-    description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    description: presentation.description,
+    ...(presentation.quote ? { quote: presentation.quote } : {}),
+    // Only when present, so an event without one saves exactly as before.
+    ...(npcReaction ? { npcReaction } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts),
     agency: normalizeEventAgency(entry.agency),
@@ -3480,9 +3532,6 @@ export const normalizeEventEntry = (entry, index = 0) => {
     )].slice(0, 8),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
-    // Only when present, so an event without them saves exactly as before.
-    ...(quote ? { quote } : {}),
-    ...(npcReaction ? { npcReaction } : {}),
   };
 };
 
@@ -3656,6 +3705,7 @@ const normalizeWorldStoryline = (entry, index = 0) => {
     nextReviewDate:
       status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
     state: normalizeTextLike(entry.state || entry.summary || entry.description),
+    ...(entry.canonicalIdentity === true ? { canonicalIdentity: true } : {}),
     sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
     createdRound:
       Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0
@@ -3681,6 +3731,7 @@ const normalizeWorldStorylines = (value) => {
   const statusRank = { active: 0, dormant: 1, resolved: 2 };
   return [...deduped.values()]
     .sort((a, b) =>
+      Number(b.canonicalIdentity === true) - Number(a.canonicalIdentity === true) ||
       (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
       String(b.lastUpdatedDate || b.accountedThroughDate || "").localeCompare(
         String(a.lastUpdatedDate || a.accountedThroughDate || ""),
@@ -3836,6 +3887,13 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
   const beneficiary = type === "guarantee"
     ? resolveWorldDiplomaticPolity(entry.beneficiary || parties[1], identityWorld)
     : "";
+  const reciprocalAccess = type === "military_access" && entry.reciprocalAccess === true;
+  const grantor = type === "military_access" && !reciprocalAccess
+    ? resolveWorldDiplomaticPolity(entry.grantor, identityWorld)
+    : "";
+  const grantee = type === "military_access" && !reciprocalAccess
+    ? resolveWorldDiplomaticPolity(entry.grantee, identityWorld)
+    : "";
   return {
     id,
     title: normalizeOptionalString(entry.title) || id,
@@ -3849,6 +3907,8 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
     terms: normalizeTextLike(entry.terms),
     ...(guarantor && beneficiary ? { guarantor, beneficiary } : {}),
+    ...(type === "military_access" && reciprocalAccess ? { reciprocalAccess: true } : {}),
+    ...(type === "military_access" && grantor && grantee ? { grantor, grantee, reciprocalAccess: false } : {}),
     sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
     updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
@@ -4154,11 +4214,15 @@ export const normalizeWorldState = (world) => {
         // Taken out of the spread so a malformed receipt is dropped, not kept raw;
         // and the scene a time skip used to propose (under either name), which
         // nothing reads since skips stopped proposing them.
-        const { receipt: _storedReceipt, interactive: _scene, catalyst: _formerScene, ...rest } = cloneValue(entry);
+        const { receipt: _storedReceipt, filedEvents: _storedFiled, interactive: _scene, catalyst: _formerScene, ...rest } = cloneValue(entry);
+        // Written but kept off the timeline, shown greyed under the turn
+        // (runtime/filedEvents.js). Bounded here like the receipt.
+        const filedEvents = normalizeFiledEvents(entry.filedEvents);
 
         return {
           ...rest,
           ...(receipt ? { receipt } : {}),
+          ...(filedEvents.length ? { filedEvents } : {}),
           date: normalizeOptionalString(entry.date),
           eventIds: normalizeActionParticipants(entry.eventIds),
           fallbackReason: normalizeOptionalString(entry.fallbackReason),

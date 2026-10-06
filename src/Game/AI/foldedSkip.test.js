@@ -197,7 +197,9 @@ test("a refused folded request is asked again the old way, and only a refusal is
 test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {
   const body = functionBody("finishTimelineJump");
   assert.match(body, /const folded = Boolean\(state\.folded && state\.requests\?\.saving\);/);
-  assert.match(body, /\? \(folded \? foldedTurnReview\(\{ context, merged, state \}\) : await runTurnReview\(\{ context, merged, signal, state \}\)\)\s*\n\s*: null;/);
+  // A review that has to be asked is one of the turn's checks (turnChecks.js):
+  // a failed one holds the turn. The folded one makes no request and cannot fail.
+  assert.match(body, /\? \(folded \? foldedTurnReview\(\{ context, merged, state \}\) : await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\)\)\s*\n\s*: null;/);
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);

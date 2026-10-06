@@ -13,15 +13,43 @@ import { campaignChanged } from "../../runtime/campaignGuard.js";
 // A counter, not a boolean: independent generators overlap.
 let activeSimulations = 0;
 
-// A jump held on a failed segment, a turn held at the Projects board, and a
+// A turn HELD for the player: generated, NOT written, waiting on Retry or
+// Discard. Keyed by kind so each retry finds its own. The kinds:
+//   segment  one segment of a split jump did not come back; the ones before it
+//            are in hand (gameplay.js runJumpSegments)
+//   board    the Projects & Operations board did not update (applySimulationResult)
+//   checks   a check after the events failed: the turn review, or with Save AI
+//            requests off one of the separate checks (turnChecks.js)
+//   events   with "Stop when my events fail" on, the player's own events were
+//            refused or their orders left without an outcome
+//            (AI/playerTurnFailures.js)
+// An error that holds a turn carries its kind as `heldKind`.
+//
+// Each belongs to the campaign it was generated for, one of each kind per
+// campaign, keyed by the campaign's id ("" when it could not tell). A hold is
+// only its campaign's business: it keeps THAT campaign busy and shows its
+// notice there, and another campaign opened meanwhile plays as usual. A
 // finished turn parked because another campaign was open when it was ready to
-// be written. Each belongs to the campaign it was generated for, one of each
-// kind per campaign, keyed by the campaign's id ("" when it could not tell).
-// A hold is only this campaign's business: it keeps THIS campaign busy and
-// shows its notice here, and another campaign opened meanwhile plays as usual.
-const pendingJumpSegments = new Map();
-const pendingProjectsJumps = new Map();
+// be written is kept the same way, beside them.
+export const HELD_TURN = Object.freeze({ segment: "segment", board: "board", checks: "checks", events: "events" });
+const heldTurns = new Map(Object.values(HELD_TURN).map((kind) => [kind, new Map()]));
 const parkedTurns = new Map();
+const DISCARD_NOTES = Object.freeze({
+  [HELD_TURN.segment]: "Held jump discarded; nothing was written and its finished segments are gone.",
+  [HELD_TURN.board]: "Held turn discarded; the board was never updated and nothing was written.",
+  [HELD_TURN.checks]: "Held turn discarded; a check after its events failed and nothing was written.",
+  [HELD_TURN.events]: "Held turn discarded; the player's events in it had failed and nothing was written.",
+});
+
+// The holds of one kind, by campaign.
+const holdsOf = (kind) => {
+  let holds = heldTurns.get(kind);
+  if (!holds) {
+    holds = new Map();
+    heldTurns.set(kind, holds);
+  }
+  return holds;
+};
 
 // Which campaign is open. gameplay.js supplies it (it reads the library), so
 // this file stays a leaf. Until it does, every hold counts wherever it is asked
@@ -78,14 +106,20 @@ export const endSimulation = () => {
   activeSimulations = Math.max(0, activeSimulations - 1);
 };
 
-export const getPendingJumpSegment = () => heldHere(pendingJumpSegments);
-export const setPendingJumpSegment = (value, campaignId) => {
-  setHold(pendingJumpSegments, value, campaignId);
+export const getHeldTurn = (kind) => heldHere(holdsOf(kind));
+export const holdTurn = (kind, value, campaignId) => {
+  setHold(holdsOf(kind), value, campaignId);
 };
 
-export const getPendingProjectsJump = () => heldHere(pendingProjectsJumps);
+// The two oldest kinds, by the names their callers know them by.
+export const getPendingJumpSegment = () => getHeldTurn(HELD_TURN.segment);
+export const setPendingJumpSegment = (value, campaignId) => {
+  holdTurn(HELD_TURN.segment, value, campaignId);
+};
+
+export const getPendingProjectsJump = () => getHeldTurn(HELD_TURN.board);
 export const setPendingProjectsJump = (value, campaignId) => {
-  setHold(pendingProjectsJumps, value, campaignId);
+  holdTurn(HELD_TURN.board, value, campaignId);
 };
 
 // A finished turn whose campaign was not open when it was ready to be written
@@ -133,15 +167,22 @@ export const subscribeChatGeneration = (listener) => {
   };
 };
 
-export const hasPendingJumpSegment = () => heldHere(pendingJumpSegments) !== null;
-export const hasPendingProjectsJump = () => heldHere(pendingProjectsJumps) !== null;
+export const hasPendingJumpSegment = () => getHeldTurn(HELD_TURN.segment) !== null;
+export const hasPendingProjectsJump = () => getHeldTurn(HELD_TURN.board) !== null;
+
+// Any kind of turn held for the open campaign.
+const anyHeldHere = () => {
+  for (const holds of heldTurns.values()) {
+    if (heldHere(holds) !== null) return true;
+  }
+  return false;
+};
 
 // A held jump counts as busy: the idle pulse checks this before it writes, so it
 // cannot write into a world that is about to be replaced by the held turn. Only
 // the open campaign's holds count.
 export const isSimulationBusy = () => activeSimulations > 0
-  || heldHere(pendingProjectsJumps) !== null
-  || heldHere(pendingJumpSegments) !== null
+  || anyHeldHere()
   || heldHere(parkedTurns) !== null;
 
 // What a player's edit to the world says instead of saving while a turn runs or
@@ -162,19 +203,46 @@ export const isChatGenerationLikely = () => chatGenerationInFlight;
 // Android app rests in the background on this (runtime/native/backgroundPause.js).
 export const isGenerating = () => activeSimulations > 0 || chatGenerationInFlight;
 
-// Both discards stay synchronous: time.jsx fires them next to a setState, and an
+// A retry takes its held turn out before the attempt, so a turn can never be
+// applied twice. A Cancel must put it back: the notice stays up offering Retry,
+// and without the turn behind it the next press found nothing ("There is no
+// turn waiting…") and the turn was lost. A failure that holds the turn again
+// holds it itself; anything else is an ordinary failure and the turn is gone.
+export const attemptHeldTurn = async (kind, held, attempt, { signal = null, onCancel = null } = {}) => {
+  // Taken out, and put back, under the campaign it was held for.
+  const holds = holdsOf(kind);
+  let campaignId = campaignOfHold(held);
+  for (const [key, hold] of holds) {
+    if (hold === held) campaignId = key;
+  }
+  if (!holds.delete(campaignId)) releaseHere(holds);
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!error?.heldKind && (signal?.aborted || error?.name === "AbortError")) {
+      onCancel?.();
+      holds.set(campaignId, held);
+    }
+    throw error;
+  }
+};
+
+// Discards stay synchronous: time.jsx fires them next to a setState, and an
 // async one would leave isSimulationBusy() true for a tick afterwards. Nothing
 // was written either way, so there is nothing to undo.
-export const discardPendingJumpSegment = () => {
-  const had = releaseHere(pendingJumpSegments);
-  if (had) logDebugEvent("turn", "Held jump discarded; nothing was written and its finished segments are gone.");
+export const discardHeldTurn = (kind) => {
+  const had = releaseHere(holdsOf(kind));
+  if (had) logDebugEvent("turn", DISCARD_NOTES[kind] ?? "Held turn discarded; nothing was written.");
   return had;
 };
 
-export const discardPendingProjectsJump = () => {
-  const had = releaseHere(pendingProjectsJumps);
-  if (had) logDebugEvent("turn", "Held turn discarded; the board was never updated and nothing was written.");
-  return had;
+export const discardPendingJumpSegment = () => discardHeldTurn(HELD_TURN.segment);
+export const discardPendingProjectsJump = () => discardHeldTurn(HELD_TURN.board);
+
+// Every turn held for the open campaign, when a new one starts: its notice
+// would offer buttons with nothing behind them.
+export const discardHeldTurns = () => {
+  for (const kind of Object.values(HELD_TURN)) discardHeldTurn(kind);
 };
 
 export const discardParkedTurn = () => {

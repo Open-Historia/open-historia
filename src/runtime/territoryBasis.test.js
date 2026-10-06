@@ -20,6 +20,7 @@ import {
   basisMovesTheMap,
   describeBasisAction,
   normalizeTerritoryBasis,
+  sameRegionChange,
   screenTerritoryBasis,
 } from "./territoryBasis.js";
 
@@ -146,4 +147,18 @@ test("the sentence names the event, the region, the receiver and what happened i
   );
   assert.match(refused, /^control of Danzig to Germany carried basis "raid"/);
   assert.match(refused, /nothing changed on the map/);
+});
+
+// Seen in a live check (2026-09-29): a Scene where Burkinabe troops captured
+// Djenne got a contest and a capture of Djenne from the territory Director, and
+// the region never changed hands. Both go to Burkina Faso, so the resolver kept
+// the first and dropped the capture as its duplicate. They are different changes.
+test("a contest and a capture of one region by one side are two changes, not a duplicate", () => {
+  const contest = { op: "contest", regionId: "3977", toCode: "Burkina Faso" };
+  const capture = { op: "control", regionId: "3977", toCode: "Burkina Faso" };
+  assert.equal(sameRegionChange(contest, capture), false);
+  assert.equal(sameRegionChange(capture, { ...capture, note: "again" }), true);
+  const treaty = { regionId: "3975", toCode: "Burkina Faso", basis: "treaty" };
+  assert.equal(sameRegionChange(treaty, { regionId: "3975", toCode: "burkina faso" }, (name) => name.toLowerCase()), true);
+  assert.equal(sameRegionChange(treaty, { ...treaty, toCode: "Mali" }), false);
 });

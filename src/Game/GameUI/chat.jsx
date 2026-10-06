@@ -4,11 +4,11 @@ import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimar
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dedupeByName } from "../../runtime/countryList.js";
+import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
-import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
@@ -32,6 +32,7 @@ import {
     getNationColors,
     getNationFlags,
     loadCountryNames as loadCachedCountryNames,
+    loadRegionCatalog,
     readJson,
 } from "../../runtime/assets.js";
 import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -247,6 +248,25 @@ const findCommunityFlagPost = (posts, { code, name }) => {
 // The read-only world view: resolvePolityFlag needs the polity records
 // (aliases, mapRefs, legacy flags) to find an authored flag by identity.
 const getWorldForFlags = () => readWorldStateView().catch(() => ({}));
+
+// Who holds land, read from the map each time a picker opens, so a country
+// absorbed a moment ago is already gone from it (countryList.js). Null until
+// read, and on any failure: the pickers then list everyone rather than hide a
+// country on a guess.
+const useLandHolders = (active) => {
+    const [state, setState] = useState({ holders: null, world: null });
+    useEffect(() => {
+        if (!active) return undefined;
+        let cancelled = false;
+        Promise.all([loadRegionCatalog(), readWorldStateView()])
+            .then(([regions, world]) => {
+                if (!cancelled) setState({ holders: landHolderNames(regions, world), world });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active]);
+    return state;
+};
 
 const resolveFlagImageUrl = ({ code, name } = {}) => {
     if (!code && !name) return Promise.resolve(null);
@@ -894,9 +914,9 @@ const InstitutionRecord = ({ msg }) => {
     const text = established ? raw.replace(/\s+institutional channel established\.?$/i, " council opened.") : raw;
     return (
         <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
-            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid rgba(139,92,246,.28)", background: "rgba(139,92,246,.065)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
-                <span aria-hidden="true" style={{ color: "#a78bfa", fontSize: ".72rem" }}>◇</span>
-                <span style={{ color: "#a78bfa", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
+            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
+                <span aria-hidden="true" style={{ color: "rgba(231,231,234,.72)", fontSize: ".72rem" }}>◇</span>
+                <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
                 <span>{text}</span>
             </div>
         </div>
@@ -934,7 +954,7 @@ const LifecycleThinkingBubble = ({ count = 0 }) => (
     <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
         {count > 1 ? `${count} invited governments` : "Invited government"}
     </span>
-    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(139,92,246,0.09)", border: "1px solid rgba(167,139,250,.14)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.035)", border: "1px solid var(--oh-grey-border)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
         <span>Considering membership</span><ThinkingDots />
     </div>
     </div>
@@ -945,7 +965,7 @@ const lifecycleOutcomePresentation = (entry = {}) => {
     if (status === "accepted") return { label: entry?.requestedStatus === "observer" ? "Observer accepted" : "Accepted", tone: "good" };
     if (status === "rejected") return { label: "Declined", tone: "bad" };
     if (status === "pending-approval") return { label: "Awaiting member approval", tone: "live" };
-    if (status === "negotiating") return { label: entry?.decision === "delay" ? "Decision delayed" : "Negotiating terms", tone: "purple" };
+    if (status === "negotiating") return { label: entry?.decision === "delay" ? "Decision delayed" : "Negotiating terms", tone: "neutral" };
     if (status === "resolved") return { label: "Resolved", tone: "good" };
     return { label: "Awaiting response", tone: "neutral" };
 };
@@ -953,13 +973,13 @@ const lifecycleOutcomePresentation = (entry = {}) => {
 const LifecycleOutcomePanel = ({ cases = [], institution = null, concluded = false, onViewInstitution = null }) => {
     if (!cases.length) return null;
     return (
-        <div data-lifecycle-outcome-panel="true" style={{ marginBottom: ".45rem", padding: ".55rem .62rem", border: `1px solid ${concluded ? "rgba(34,197,94,.2)" : "rgba(167,139,250,.16)"}`, borderRadius: 9, background: concluded ? "rgba(34,197,94,.045)" : "rgba(139,92,246,.045)" }}>
+        <div data-lifecycle-outcome-panel="true" style={{ marginBottom: ".45rem", padding: ".55rem .62rem", border: `1px solid ${concluded ? "rgba(34,197,94,.2)" : "var(--oh-grey-border)"}`, borderRadius: 9, background: concluded ? "rgba(34,197,94,.045)" : "rgba(255,255,255,.025)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 15rem", minWidth: 0 }}>
-                    <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "#ddd6fe" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
+                    <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "var(--oh-grey-text)" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
                     {concluded && institution?.status && <div style={{ marginTop: ".14rem", fontSize: ".51rem", color: "rgba(255,255,255,.4)" }}>{institution.name || "Institution"} is now {String(institution.status).replace(/[-_]/g, " ")}.</div>}
                 </div>
-                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ede9fe", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
+                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: ".3rem", marginTop: ".45rem" }}>
                 {cases.map((entry) => {
@@ -1147,6 +1167,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // ballots work, while still being a diplomatic negotiation rather than the
     // institution's permanent Council workspace.
     const isInstitutionCouncil = isInstitutional && !isLifecycleConversation;
+    // Ordinary multi-party diplomacy already has a canonical poll event log;
+    // expose it to the human too. Institution Councils use their separate formal
+    // governance/ballot system and lifecycle hearings are membership workflows,
+    // so neither gets this conversational vote control.
+    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;
     const playerLifecycleCase = useMemo(() => {
         if (!isLifecycleConversation || !playerCountry) return null;
         const wanted = new Set((Array.isArray(chat?.lifecycleCaseIds) ? chat.lifecycleCaseIds : []).map((id) => String(id || "").trim()));
@@ -1183,6 +1208,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
+    const [pollComposerOpen, setPollComposerOpen] = useState(false);
+    const [pollQuestion, setPollQuestion] = useState("");
+    const [pollOptionsText, setPollOptionsText] = useState("Yes\nNo\nAbstain");
+    const [pollError, setPollError] = useState("");
     const [speakingCountry, setSpeakingCountry] = useState(null);
     const [lifecycleCaseOverrides, setLifecycleCaseOverrides] = useState({});
     const [lifecycleRevealInProgress, setLifecycleRevealInProgress] = useState(false);
@@ -1234,6 +1263,29 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // vote the player cast in between is kept under it.
     const chatRef = useRef(chat);
     useEffect(() => { chatRef.current = chat; }, [chat]);
+
+    // A Council turn can be generated by the parent Institutions workspace, not
+    // by this ConversationView. The parent owns that canonical channel and can
+    // replace it while this embedded view stays mounted. Keep the local message
+    // state for ordinary chats and staged local turns, but make an embedded
+    // Council CONTROLLED by its canonical `chat.messages` prop for presentation.
+    // That removes a stale-local-state seam entirely: a committed background
+    // debate is visible on the render that receives the new channel, rather than
+    // waiting for an effect (or a tab remount) to copy the transcript into local
+    // state. `messagesRef` still follows the shown canonical transcript so a
+    // player message sent immediately afterwards continues from exactly what is
+    // on screen and never from the pre-debate copy.
+    const canonicalEmbeddedMessages = embeddedInstitution
+        ? withoutUnseenMessages(chat.messages ?? [], unseen)
+        : null;
+    const presentedMessages = embeddedInstitution ? canonicalEmbeddedMessages : messages;
+    const presentedMessageCount = presentedMessages.length;
+    useEffect(() => {
+        if (isLoading || lifecycleRevealInProgress || revealRef.current) return;
+        const saved = withoutUnseenMessages(chat.messages ?? [], unseen);
+        messagesRef.current = saved;
+        if (!embeddedInstitution) setMessages(saved);
+    }, [chat.messages, embeddedInstitution, isLoading, lifecycleRevealInProgress, unseen]);
 
     // DEMANDS, in the one-on-one thread between the player and their own
     // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
@@ -1340,6 +1392,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         setLifecycleCaseOverrides({});
         setLifecycleRevealInProgress(false);
         setStagedLifecycleSpeaker(null);
+        setPollComposerOpen(false);
+        setPollQuestion("");
+        setPollOptionsText("Yes\nNo\nAbstain");
+        setPollError("");
         lifecycleRevealTokenRef.current += 1;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chat.id]);
@@ -1374,7 +1430,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const scroller = messagesScrollRef.current;
             if (!scroller) return;
             scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-        }, [messages, isLoading, typingNext]);
+        }, [presentedMessageCount, isLoading, typingNext]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -1579,7 +1635,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // someone in, who calls a vote — instead of a separate speaker-selection
         // request followed by one request per leader. This is the only group-chat
         // response path; failure is surfaced rather than reviving the old sequence.
-        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "" } = {}) => {
+        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "", chatOverride = null } = {}) => {
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
@@ -1587,7 +1643,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const campaignId = activeCampaignNow();
             try {
                 const outcome = await runChatActionBatch({
-                    chat: { ...chat, messages: nextMessages, actionFeedback: actionFeedbackRef.current },
+                    chat: { ...(chatOverride || chat), messages: nextMessages, actionFeedback: actionFeedbackRef.current },
                     playerMessage: text,
                     playerCountry,
                     catchUp: asked?.catchUp || "",
@@ -1716,6 +1772,66 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
+        };
+
+        // A human-called vote in an ordinary group chat. The poll itself and the
+        // line calling it are written into the SAME canonical chat event log as
+        // AI-created polls, then the existing one-request group turn lets every
+        // AI participant answer/vote. This is conversational diplomacy only; it
+        // intentionally cannot mutate institution governance.
+        const handlePlayerCreatePoll = async () => {
+            if (!canCallChatVote || isLoading) return;
+            const options = pollOptionsText
+                .split(/\r?\n|,/)
+                .map((entry) => entry.trim())
+                .filter(Boolean);
+            const pollEvent = createPlayerPollEvent({
+                player: playerCountry,
+                question: pollQuestion,
+                options,
+                time: gameDate,
+                idFor: newThreadId,
+            });
+            if (!pollEvent) {
+                setPollError("Enter a question and at least two distinct options.");
+                return;
+            }
+            setPollError("");
+            cutIn();
+            const line = `I call a vote: ${pollEvent.question}`;
+            const current = chatRef.current ?? chat;
+            const existing = current.events?.length
+                ? current.events
+                : eventsFromLegacyChat({ ...current, messages: messagesRef.current });
+            const messageEvent = {
+                id: newThreadId("msg"), kind: "message", time: gameDate, by: playerCountry,
+                role: "user", text: line,
+            };
+            const events = [...existing, messageEvent, pollEvent];
+            const projected = projectChatThread(events);
+            const projectedMessages = viewMessagesOf(projected);
+            const updatedChat = {
+                ...current,
+                events,
+                messages: projectedMessages,
+                countries: projected.countries,
+                title: projected.title,
+                polls: projected.polls,
+                demands: projected.demands,
+            };
+            // Keep the in-flight turn on this exact poll-bearing snapshot even
+            // before the parent has had a React render to feed it back as props.
+            chatRef.current = updatedChat;
+            messagesRef.current = projectedMessages;
+            setMessages(projectedMessages);
+            onThreadUpdate?.(current.id, {
+                events, countries: projected.countries, title: projected.title,
+                polls: projected.polls, demands: projected.demands,
+            });
+            setPollComposerOpen(false);
+            setPollQuestion("");
+            setPollOptionsText("Yes\nNo\nAbstain");
+            await runGroupTurn(line, projectedMessages, { chatOverride: updatedChat });
         };
 
         // The player's own vote. Appended to the thread's log like any other
@@ -1948,7 +2064,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const typingSpeaker = stagedLifecycleSpeaker ?? speakingCountry ?? (!lifecycleGroupThinking && !ordinaryGroupThinking ? countries[0] : null);
         // What the reveal has reached, each with its place in the stored thread
         // (a retry replays the stored message at that index).
-        const shownEntries = messages
+        const shownEntries = presentedMessages
             .map((msg, index) => ({ msg, index }))
             .filter(({ msg }) => !unseen.has(String(msg?.eventId ?? "")));
         const visibleEntries = shownEntries.length > visibleMessageLimit
@@ -2003,7 +2119,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ["charter", "Charter"],
                         ["members", "Members"],
                         ["documents", "Documents"],
-                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(139,92,246,.95)" : "transparent"}`, background: "transparent", color: key === "council" ? "#ede9fe" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
+                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(231,231,234,.72)" : "transparent"}`, background: "transparent", color: key === "council" ? "var(--oh-grey-text)" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
                 </div>
                 {institutionPendingActions > 0 && <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
                     <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{institutionPendingBallots ? `${institutionPendingBallots} ballot${institutionPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{institutionPendingBallots && institutionPendingAmendments ? " · " : ""}{institutionPendingAmendments ? `${institutionPendingAmendments} amendment review${institutionPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
@@ -2118,19 +2234,33 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
-                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
+                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "rgba(231,231,234,.72)", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
                 </div>}
                 {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleTerminal || lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
-                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid rgba(167,139,250,.16)", borderRadius: 9, background: "rgba(139,92,246,.055)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
-                    <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "#ddd6fe" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
+                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "rgba(255,255,255,.03)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
                     {playerLifecycleCase ? <div data-player-lifecycle-chat-controls="true" style={{ display: "flex", gap: ".28rem", flexWrap: "wrap" }}>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
-                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ddd6fe", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
-                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                </div>}
+                {canCallChatVote && pollComposerOpen && <div data-player-chat-poll-composer="true" style={{ marginBottom: ".5rem", padding: ".55rem .62rem", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, background: "rgba(255,255,255,.03)" }}>
+                    <div style={{ fontSize: ".56rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>Call a conversational vote</div>
+                    <div style={{ marginTop: ".12rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>Recorded in this diplomatic thread. This does not create institutional law or a formal institution ballot.</div>
+                    <input value={pollQuestion} onChange={(event) => { setPollQuestion(event.target.value); setPollError(""); }} maxLength={500} placeholder="What should this group decide?" style={{ width: "100%", boxSizing: "border-box", marginTop: ".45rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".68rem" }} />
+                    <textarea value={pollOptionsText} onChange={(event) => { setPollOptionsText(event.target.value); setPollError(""); }} rows={3} maxLength={1200} placeholder={"One option per line\nYes\nNo"} style={{ width: "100%", boxSizing: "border-box", marginTop: ".38rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".64rem", fontFamily: "inherit", resize: "vertical" }} />
+                    {pollError && <div style={{ marginTop: ".3rem", color: "#fca5a5", fontSize: ".56rem" }}>{pollError}</div>}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: ".35rem", marginTop: ".42rem" }}>
+                        <button type="button" className="oh-tap-row" onClick={() => { setPollComposerOpen(false); setPollError(""); }} style={{ border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "transparent", color: "rgba(255,255,255,.58)", padding: ".3rem .48rem", fontSize: ".58rem", cursor: "pointer" }}>Cancel</button>
+                        <button type="button" className="oh-tap-row" onClick={handlePlayerCreatePoll} disabled={isLoading} style={{ border: "1px solid rgba(59,130,246,.35)", borderRadius: 8, background: "rgba(59,130,246,.13)", color: "#bfdbfe", padding: ".3rem .52rem", fontSize: ".58rem", fontWeight: 780, cursor: isLoading ? "wait" : "pointer" }}>Open vote</button>
+                    </div>
                 </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {canCallChatVote && (
+                        <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
+                    )}
                     {canDemand && (
                         <button
                         type="button"
@@ -2155,13 +2285,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     // quarter of the visible height (never under one line) and
                     // scrolls past that.
                     style={{ flex: 1, backgroundColor: isInstitutionCouncil ? "rgba(0,0,0,0.2)" : "rgba(9,9,12,.58)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", color: "white", fontSize: "0.875rem", padding: ".62rem .78rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", boxShadow: "inset 0 1px 0 rgba(255,255,255,.025)", transition: "border-color 0.2s, background-color .2s" }}
-                    onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(139,92,246,.65)" : "rgba(59,130,246,0.6)"}
+                    onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(255,255,255,.42)" : "rgba(59,130,246,0.6)"}
                     onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                     />
                     {/* An inline min-width beats the class's, so the icon-only
                         button is widened to a thumb here, not by oh-tap. */}
                     <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "rgba(91,33,182,.85)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(91,33,182,.28)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid rgba(167,139,250,.26)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
                 <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
@@ -2713,7 +2843,6 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
 
 const intelCard = ({ tone = "neutral" } = {}) => {
     const tones = {
-        purple: { bg: "rgba(139,92,246,.12)", border: "rgba(167,139,250,.28)", value: "#ddd6fe" },
         green: { bg: "rgba(34,197,94,.09)", border: "rgba(34,197,94,.25)", value: "#86efac" },
         amber: { bg: "rgba(245,158,11,.09)", border: "rgba(245,158,11,.25)", value: "#fde68a" },
         neutral: { bg: "rgba(255,255,255,.035)", border: "rgba(255,255,255,.09)", value: "rgba(255,255,255,.86)" },
@@ -2853,6 +2982,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [openedAssessments, setOpenedAssessments] = useState({});
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
+    const landHolders = useLandHolders(choosing);
     const [error, setError]           = useState("");
     const [section, setSection]       = useState("overview");
     const [countryQuery, setCountryQuery] = useState("");
@@ -2977,7 +3107,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
     }
 
-    const candidates = countryRows.filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
+    const candidates = pickableCountries(countryRows, landHolders)
+        .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
     const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
     const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
@@ -3053,14 +3184,14 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         <div data-intelligence-workspace="restored" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", gap: ".35rem", alignItems: "center", padding: ".65rem 1rem .55rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
                 {navItems.map(([key, label]) => (
-                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
+                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid rgba(231,231,234,.72)" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
                 ))}
             </div>
 
             {section === "overview" && (
                 <div data-intelligence-section="overview" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".8rem 1rem", display: "flex", flexDirection: "column", gap: ".75rem" }}>
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".55rem" }}>
-                        <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="purple" />
+                        <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="neutral" />
                         <IntelligenceStatCard label="Active networks" value={spies.length} hint={`${MAX_ACTIVE_SPIES - spies.length} field slots available`} tone="green" />
                         <IntelligenceStatCard label="Current reports" value={currentReportCount} hint="Latest political assessments retained" />
                         <IntelligenceStatCard label="Counterintel alerts" value={visibleForeign.length} hint="Detected or turned foreign agents" tone={visibleForeign.length ? "amber" : "neutral"} />
@@ -3096,7 +3227,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                                 const active = sameCountry(country.name, selectedCountryRecord?.name);
                                 const network = spies.some((spy) => sameCountry(spy.target, country.name));
                                 return (
-                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "rgba(167,139,250,.32)" : "transparent"}`, background: active ? "rgba(139,92,246,.12)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
+                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "var(--oh-grey-border-strong)" : "transparent"}`, background: active ? "var(--oh-grey-selected)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".68rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{country.name}</span>
                                         {network && <span title="Active intelligence network" style={{ width: ".38rem", height: ".38rem", borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />}
                                     </button>
@@ -3107,9 +3238,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                     <div style={{ ...panel, minHeight: 0, padding: ".8rem", overflowY: "auto", scrollbarWidth: "none" }}>
                         <IntelligenceCountryHeader country={selectedCountryRecord} subtitle={selectedSpy ? `Active network · since ${selectedSpy.deployedAt || "an earlier date"}` : "No active network · public sources only"} />
                         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".45rem", marginTop: ".75rem" }}>
-                            <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone={selectedSpy ? "purple" : "neutral"} />
-                            <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone={selectedKnowledge?.level !== "public" ? "purple" : "neutral"} />
-                            <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone={selectedSpy ? "purple" : "neutral"} />
+                            <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone="neutral" />
                             <IntelligenceStatCard label="Source" value={selectedSourceLabel} tone={selectedSourceLabel === "Low" ? "amber" : selectedSourceLabel === "None" ? "neutral" : "green"} />
                         </div>
                         <div style={{ ...panel, padding: ".65rem .7rem", marginTop: ".65rem" }}>
@@ -3122,7 +3253,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                                 {selectedInstitutionPortfolio.length ? selectedInstitutionPortfolio.slice(0, 10).map(({ institution, member, history, cases }) => (
                                     <div key={institution.id} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".38rem .45rem", borderRadius: 7, background: "rgba(255,255,255,.025)", border: "1px solid rgba(255,255,255,.05)" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.68)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{institution.name}</span>
-                                        <span style={{ fontSize: ".53rem", color: member ? "#c4b5fd" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
+                                        <span style={{ fontSize: ".53rem", color: member ? "rgba(231,231,234,.68)" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
                                         {cases?.length ? <span style={{ fontSize: ".49rem", color: "#fde68a" }}>{cases.length} pending</span> : null}
                                         {!member && history?.length ? <span style={{ fontSize: ".49rem", color: "rgba(255,255,255,.28)" }}>{history.at(-1)?.action || "history"}</span> : null}
                                     </div>
@@ -3139,7 +3270,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 
             {section === "operations" && (
                 <div data-intelligence-section="operations" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".75rem .8rem", display: "flex", flexDirection: "column", gap: ".65rem" }}>
-                    <div style={{ ...panel, padding: ".55rem .7rem", background: "rgba(139,92,246,.09)", borderColor: "rgba(167,139,250,.22)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ ...panel, padding: ".55rem .7rem", background: "rgba(255,255,255,.035)", borderColor: "var(--oh-grey-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <div><div style={{ fontSize: ".72rem", fontWeight: 750 }}>Field networks</div><div style={{ fontSize: ".58rem", color: "rgba(255,255,255,.35)" }}>Persistent HUMINT networks also appear as covert Projects.</div></div>
                         <div style={{ fontSize: ".7rem", fontWeight: 800 }}>{spies.length}/{MAX_ACTIVE_SPIES}</div>
                     </div>
@@ -3154,7 +3285,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                     <div style={{ ...subhead, marginTop: ".15rem" }}>Counterintelligence cases</div>
                     {visibleForeign.length ? visibleForeign.map(renderCounterintelCase) : <div style={{ ...panel, padding: ".7rem", fontSize: ".66rem", color: "rgba(255,255,255,.34)" }}>No detected foreign agents currently require action.</div>}
                     {error && <div style={{ fontSize: ".66rem", color: "#fca5a5" }}>{error}</div>}
-                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#e9d5ff", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
+                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
                 </div>
             )}
 
@@ -3505,9 +3636,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         };
     }, [isOpen, hasLoadedInitialData]);
 
+    const landHolders = useLandHolders(showSelector);
     const availableCountries = useMemo(
-        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
-                                       [countries, playerCountry]
+        () => pickableCountries(countries, landHolders).filter(country => !countryMatchesIdentity(country, playerCountry)),
+                                       [countries, landHolders, playerCountry]
     );
 
     // Retry for a list that could not be read: once it is, the chats begun
@@ -3602,7 +3734,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     } = {}) => {
         const id = String(institutionId || "").trim();
         const proposal = String(proposalId || "").trim();
-        const mode = kind === "vote" ? "vote" : "debate";
+        const mode = kind === "vote" ? "vote" : kind === "amendment" ? "amendment" : "debate";
         if (!id || !proposal) return null;
         const key = `${id}:${proposal}:${mode}`;
         if (institutionAutomationInFlight.current.has(key)) return null;
@@ -3644,6 +3776,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             adoptInstitutionalResult(materialized);
             const result = await runChatActionBatch({
                 chat: materialized.channel,
+                playerMessage: mode === "amendment" ? comment : "",
                 playerCountry,
                 time: gameDate,
                 institutionDebateRequested: mode === "debate",
@@ -3884,8 +4017,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ✕ off the top), less the insets top and bottom; a width that
                 leaves 0.5rem at the right, since it starts 1rem in (the dock's
                 0.5rem, then its own); and a 10rem floor, as 24rem is taller
-                than a phone held sideways. Every inset is 0 on a desktop. */}
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+                than a phone held sideways. Every inset is 0 on a desktop.
+                Beside an open Advisor/Country drawer the width also gives up the
+                drawer's live width (dragging its edge updates it in the same
+                frame), so the two meet with the same 0.5rem gap and never stack.
+                Nothing else is held back: the panel shrinks only once the drawer
+                would really reach it, not the moment the drawer opens. */}
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             {chatsLoadFailed ? (
@@ -3907,7 +4045,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: ".75rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
-                            <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#ddd6fe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
+                            <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
                             <div style={{ minWidth: 0 }}>
                                 <div style={{ fontSize: ".98rem", fontWeight: 800, lineHeight: 1.1 }}>Diplomacy</div>
                                 <div style={{ marginTop: ".13rem", fontSize: ".56rem", color: "rgba(255,255,255,.32)" }}>Conversations, institutions and statecraft</div>
@@ -3925,7 +4063,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                             ["institutions", "institutions", "Institutions", institutionUnreadCount],
                             ...(espionageOn ? [["spy", "intelligence", "Intelligence", 0]] : []),
                         ].map(([key, iconType, label, count]) => (
-                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,.07)"), background: currentView === key ? "rgba(139,92,246,0.20)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
+                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), background: currentView === key ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
                                 <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}><WorkspaceTabIcon type={iconType} size={13} /></span>
                                 <span>{label}</span>
                                 {Number(count) > 0 && <span style={{ minWidth: "1.05rem", height: "1.05rem", padding: "0 .25rem", borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: currentView === key ? "rgba(255,255,255,.14)" : "rgba(96,165,250,.16)", color: currentView === key ? "#fff" : "#93c5fd", fontSize: ".57rem", fontWeight: 800 }}>{count}</span>}
