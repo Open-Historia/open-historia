@@ -280,3 +280,48 @@ test("the share the jump is told is capped by what the player actually has going
   });
   assert.match(plentyText, /75%/, "with plenty going on the level's own share is what it asks for");
 });
+
+// --- A game that is not played in Latin letters ---
+// From a player's log (2026-10-05): the game in Russian, the orders, the
+// Projects and the events all in Cyrillic. Every rule above reads words, and
+// the words were folded to a-z0-9: there were none. A Project was never found
+// named, and a polity named in Cyrillic folded to no name at all, which the
+// Board reads as the player's own.
+
+const RUSSIA = "Российская Федерация";
+
+test("an event names the player, or happens in their territory, in any script", () => {
+  const isPlayerEvent = createPlayerEventTest({ playerNames: [RUSSIA], territoryNames: ["Севастополь", "Барнаул"] });
+  const event = (title, description = "") => ({ title, description });
+  assert.equal(isPlayerEvent(event("Российская Федерация открывает верфь")), true);
+  assert.equal(isPlayerEvent(event("Беспорядки на юге", "Толпы вышли на улицы: Севастополь перекрыт.")), true);
+  assert.equal(isPlayerEvent(event("Сеул и Пхеньян обмениваются огнём", "Корейский полуостров напряжён.")), false);
+  // Whole words still: a longer word that begins the same way is another word.
+  assert.equal(isPlayerEvent(event("Барнаульский завод закрыт")), false);
+  // A name in Chinese is found where punctuation sets it apart. It is still a
+  // whole word that is looked for, and a sentence written without spaces is
+  // one word: the engine does not cut Chinese or Japanese into words.
+  const chinese = createPlayerEventTest({ playerNames: ["中华人民共和国"] });
+  assert.equal(chinese(event("声明：中华人民共和国，将公布新的五年计划。")), true);
+  assert.equal(chinese(event("首尔消息：大韩民国，举行选举。")), false);
+  assert.equal(chinese(event("中华人民共和国宣布新的五年计划")), false);
+});
+
+test("a Project named in Cyrillic is the player's or another's by its owner, and is found in an event", () => {
+  const board = [
+    { id: "p-leviathan", name: "Проект Левиафан", ownerCode: "", status: "active", targetDate: "2014-06-01", milestones: [] },
+    { id: "p-fortress", name: "Проект Береговая Крепость", ownerCode: RUSSIA, status: "active", targetDate: "2014-05-15", milestones: [] },
+    { id: "p-kyiv", name: "Программа перевооружения", ownerCode: "Украина", status: "active", targetDate: "2014-05-20", milestones: [] },
+  ];
+  const material = collectPlayerMaterial({
+    projects: board, originDate: "2014-05-01", targetDate: "2014-06-01", playerNames: [RUSSIA], isPlayerEvent: () => false,
+  });
+  assert.deepEqual(
+    material.filter((item) => item.kind === "target").map((item) => item.id).sort(),
+    ["p-fortress", "p-leviathan"],
+    "Ukraine's programme is not the player's: its owner has a name",
+  );
+  const spare = createSpareTest(material);
+  assert.equal(spare({ title: "Проект Левиафан: установлен энергетический блок", impacts: {} }), true);
+  assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: {} }), false);
+});

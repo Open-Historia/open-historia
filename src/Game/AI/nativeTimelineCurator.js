@@ -48,12 +48,17 @@ const cloneValue = (value) => {
 const eventText = (event) =>
   `${normalizeString(event?.title)}\n${normalizeString(event?.description)}`.trim();
 
+// The letters, marks and digits of every script are kept. Folded to a-z0-9, an
+// event written in Cyrillic, Arabic or Chinese was nothing but the digits in
+// it: two different events of one day that each named the year were "the same
+// text", a storyline's name was no key at all, and none of them had a word to
+// be matched by. ASCII text reads as it always did.
 const normalizeText = (text) =>
   normalizeString(text)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -463,26 +468,11 @@ const retrievePriorMatches = (candidate, priorEvents) => {
 
 // ---- duplicate guard --------------------------------------------------------
 
-// What two events must share to be the same words: the letters, marks and
-// digits of every script, case and accents folded. normalizeText keeps a-z and
-// 0-9 only, which is right for the English cues above and wrong here: two
-// different events written in Russian, Arabic or Chinese on one date both came
-// out empty, or as the same stray digits, and the second was removed as a
-// word-for-word repeat of the first. English text gives the key it always did.
-const exactTextKey = (text) =>
-  normalizeString(text)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
 const deterministicNearDuplicate = (
   candidate,
   priorMatches,
 ) => {
-  const candidateText = exactTextKey(eventText(candidate));
+  const candidateText = normalizeText(eventText(candidate));
   const candidateDate = normalizeString(candidate?.date);
 
   for (const match of priorMatches) {
@@ -491,7 +481,7 @@ const deterministicNearDuplicate = (
       // A text with no letter or digit in it has no key, and repeats nothing.
       candidateText &&
       candidateDate === normalizeString(match.event?.date) &&
-      exactTextKey(eventText(match.event)) === candidateText
+      normalizeText(eventText(match.event)) === candidateText
     ) {
       return {
         duplicate: true,

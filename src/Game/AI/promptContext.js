@@ -1038,9 +1038,11 @@ const markerAttentionKey = (value) => normalizeString(value)
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase();
 
+// Words of any script: a structure the model named in Russian or Chinese used
+// to have no words here, and nothing the story said could bring it forward.
 const markerAttentionTokens = (value) => new Set(
   markerAttentionKey(value)
-    .split(/[^a-z0-9]+/)
+    .split(/[^\p{L}\p{M}\p{N}]+/u)
     .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
 );
 
