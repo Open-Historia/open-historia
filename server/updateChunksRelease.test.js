@@ -13,7 +13,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { buildUpdateChunks } from "../scripts/build-update-chunks.mjs";
-import { planPublish } from "../scripts/publish-update-chunks.mjs";
+import { planPublish, settledStale } from "../scripts/publish-update-chunks.mjs";
 
 const require = createRequire(import.meta.url);
 const { FORMAT, chunkAssetName, manifestAssetName, readHead, readManifest, sha256 } = require("../electron/payloadChunks.cjs");
@@ -129,6 +129,22 @@ test("asked to prune, the chunks and manifests no head leads to come off, and no
   assert.equal(plan.after, remote.length + 2 - 2);
 });
 
+test("pruning alone uploads nothing, and only what is old enough to be sure of comes off", () => {
+  const remote = [chunk("a"), chunk("b"), chunk("c"), manifestName("1"), manifestName("2"), "payload-win.json", "latest.json"];
+  // The one head leads to manifest 2, which names a and b.
+  const plan = planPublish({ local: [], remote, referenced: new Set([manifestName("2"), chunk("a"), chunk("b")]) });
+  assert.deepEqual([plan.upload, plan.heads], [[], []]);
+  assert.deepEqual(plan.stale, [chunk("c"), manifestName("1")]);
+  // A file uploaded in the last six hours may belong to a publish still under way.
+  const now = Date.parse("2026-10-07T12:00:00Z");
+  const born = new Map([[chunk("c"), "2026-10-07T09:30:00Z"], [manifestName("1"), "2026-10-01T00:00:00Z"]]);
+  assert.deepEqual(settledStale(plan.stale, born, now), [manifestName("1")]);
+  // And one whose age cannot be read is left where it is.
+  assert.deepEqual(settledStale([chunk("c")], new Map(), now), []);
+  // With no head to go by, nothing is known to be unneeded.
+  assert.deepEqual(planPublish({ local: [], remote, referenced: null }).stale, []);
+});
+
 test("a release that is nearly full stops the publish instead of failing halfway through it", () => {
   const remote = Array.from({ length: 940 }, (unused, index) => `c-${String(index).padStart(40, "0")}.bin`);
   const local = Array.from({ length: 30 }, (unused, index) => `c-${String(index + 5000).padStart(40, "f")}.bin`);
@@ -157,6 +173,10 @@ test("the app starts at the bootstrap, and the release workflows publish chunks 
     const step = text.slice(text.indexOf("- name: Cut the app's files into update chunks"), text.indexOf("- name: Upload as a build artifact"));
     assert.equal(step.match(/continue-on-error: true/g)?.length, 2, workflow);
     assert.ok(text.indexOf("- name: Publish the update chunks") < text.indexOf("- name: Attach to the"), `${workflow}: the chunks are up before the installers announce the build`);
+    // Old chunks come off in a job of their own, after every system's build, never beside a publish.
+    assert.match(text, /\n {2}prune-chunks:\n {4}needs: build\n {4}if: \$\{\{ !cancelled\(\) && \(/, workflow);
+    assert.match(text, /node scripts\/publish-update-chunks\.mjs --prune-only --tag "\$\{TAG\}-chunks" --repo "\$\{\{ github\.repository \}\}"/, workflow);
+    assert.doesNotMatch(text, /--prune-unreferenced/, `${workflow}: a publish never prunes`);
   }
 });
 
