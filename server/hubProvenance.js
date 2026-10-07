@@ -6,12 +6,18 @@
 // both read and write them through these functions, so the two never disagree.
 //
 // hubOrigin — the post this scenario was downloaded from:
-//   { postId, bundleUrl, syncedAt, title?, author?, editedAt? }
-//   bundleUrl is the exact file imported. GitHub gives every re-upload a new
-//   URL, so it is both the update signal and the original to compare against
-//   when the player suggests changes back. It used to be erased by the first
-//   local edit; now an edit only stamps editedAt, and the link stays until the
-//   player unlinks the scenario.
+//   { postId, bundleUrl, syncedAt, title?, author?, editedAt?, release? }
+//   bundleUrl is the post's file as the post names it. GitHub gives every
+//   re-upload a new URL, so it is both the update signal and the original to
+//   compare against when the player suggests changes back. It used to be
+//   erased by the first local edit; now an edit only stamps editedAt, and the
+//   link stays until the player unlinks the scenario.
+//   release is the copy that was downloaded: the hub checks every file and
+//   puts a checked copy of it in its releases, and that copy is the only thing
+//   the game downloads (src/runtime/hubFiles.js). A link without one is an old
+//   link, made when the game still downloaded the post's own attachment, which
+//   nobody had looked inside; its card asks for an Update
+//   (src/runtime/hubPosts.js hubUpdateReason).
 //
 // hubPublished — the post this player made of their own scenario:
 //   { key, publishedAt, postIds[], author?, title?, suggestions[], blocked?[], checkedAt?, commentCounts? }
@@ -49,11 +55,30 @@ export const normalizeHubKey = (value) => {
   return HUB_KEY_PATTERN.test(key) ? key : "";
 };
 
+// The one and only hub. Not configurable by design. Here rather than in the
+// page's hub modules (src/runtime/hubIssues.js hands these on) because the
+// stores check a link's release address against it too.
+export const HUB_OWNER = "Open-Historia";
+export const HUB_REPO = "Open-historia-scenarios";
+
+const MAX_HUB_URL = 600;
+
 // Only GitHub-hosted files are ever fetched (the hub proxy refuses the rest),
 // so a URL anywhere else is not one this record can point at.
 const hubFileUrl = (value) => {
   const url = String(value ?? "").trim();
-  return /^https:\/\/(?:github\.com|[a-z0-9-]+\.githubusercontent\.com)\//i.test(url) ? url.slice(0, 600) : "";
+  return /^https:\/\/(?:github\.com|[a-z0-9-]+\.githubusercontent\.com)\//i.test(url) ? url.slice(0, MAX_HUB_URL) : "";
+};
+
+// A checked copy's address: a file in the hub repository's own releases, and
+// nowhere else. "" for anything that is not one, a longer address included
+// (cut short it would name another file). The hub's index is read by the same
+// rule (src/runtime/hubFiles.js normalizeHubIndex), so whatever that file
+// says, a download never leaves the hub's releases for it.
+const HUB_RELEASE_PATTERN = new RegExp(`^https://github\\.com/${HUB_OWNER}/${HUB_REPO}/releases/download/[^\\s?#]+$`, "i");
+export const hubReleaseUrl = (value) => {
+  const url = String(value ?? "").trim();
+  return url.length <= MAX_HUB_URL && HUB_RELEASE_PATTERN.test(url) ? url : "";
 };
 
 export const normalizeHubOrigin = (raw) => {
@@ -64,6 +89,7 @@ export const normalizeHubOrigin = (raw) => {
   const title = text(raw.title, 200);
   const author = text(raw.author, 100);
   const editedAt = isoOrNull(raw.editedAt);
+  const release = hubReleaseUrl(raw.release);
   return {
     bundleUrl,
     postId,
@@ -71,6 +97,7 @@ export const normalizeHubOrigin = (raw) => {
     ...(title ? { title } : {}),
     ...(author ? { author } : {}),
     ...(editedAt ? { editedAt } : {}),
+    ...(release ? { release } : {}),
   };
 };
 
@@ -89,7 +116,9 @@ export const hubOriginAfterWrite = (current, updates = {}, { touch = true } = {}
 
 // The origin a game export may hand on as "fetch the map from the hub": only
 // while the copy is still the post's file. An edited copy has no other home,
-// so it has to travel inside the game's zip.
+// so it has to travel inside the game's zip. The post and its file are all it
+// names: the release copy a link records is the one this library downloaded,
+// and whoever fetches the map stamps the one they download.
 export const fetchableHubOrigin = (origin) => {
   const normalized = normalizeHubOrigin(origin);
   if (!normalized || normalized.editedAt) return null;
