@@ -16,6 +16,18 @@
 //      can, and only when none can does the call fail — before spending anything,
 //      with the message that says which model to pick.
 //
+// A LOCAL SERVER'S WINDOW IS A SETTING, so nothing learned from one is held
+// against it. LM Studio, llama.cpp and the like give a model the context length
+// the player loaded it with, and the player changes it by loading it again. A
+// player who loaded a model at 40,000 tokens, was refused, and loaded it again
+// at 128,000 was told for a month that "the model's window is 40K" and that the
+// request "was not sent", with nothing in the game to say otherwise. Asking
+// such a server again costs no quota and its refusal comes back at once with
+// the window it has now, so the caller passes `trustLearned: false` for an
+// entry on the player's own machine or network (localEndpoint.js): its refusal
+// is not remembered, and what an earlier build remembered is neither enforced
+// nor shown. A window the player DECLARED for it still counts.
+//
 // Sizes are estimated at four characters a token, the same rate the diagnostics
 // use. It is rough, so the preflight keeps a margin (CONTEXT_WINDOW_MARGIN) and
 // only ever refuses what is clearly too big: a request near the line is sent,
@@ -233,9 +245,12 @@ export const createContextWindowMemory = (storage, { now = Date.now } = {}) => {
     };
 
     // Why a request must not be sent to this entry — or "" when it may be.
-    const refusal = (key, requestTokens, { reserveTokens = DEFAULT_ANSWER_RESERVE_TOKENS } = {}) => {
+    // `trustLearned: false` is for a server whose window is a setting (see the
+    // top of this file): only a window the player declared counts there.
+    const refusal = (key, requestTokens, { reserveTokens = DEFAULT_ANSWER_RESERVE_TOKENS, trustLearned = true } = {}) => {
         const known = get(key);
         if (!known) return "";
+        if (!trustLearned && known.source !== "declared") return "";
         const age = now() - (Number(known.learnedAt) || 0);
         if (known.source !== "declared" && age > (known.source === "stated" ? STATED_LIMIT_TTL_MS : SEEN_LIMIT_TTL_MS)) return "";
         const tokens = Math.max(0, Number(requestTokens) || 0);
@@ -263,11 +278,13 @@ export const createContextWindowMemory = (storage, { now = Date.now } = {}) => {
 
     // What is remembered and still in force, for Settings → AI: null when
     // nothing is, or when what was learned has lapsed (refusal ignores it too).
-    // `until` is when a learned window lapses; a declared one does not.
-    const remembered = (key) => {
+    // `until` is when a learned window lapses; a declared one does not. With
+    // `trustLearned: false` a learned window is not in force, so it is not shown.
+    const remembered = (key, { trustLearned = true } = {}) => {
         const known = get(key);
         if (!known || !(known.limitTokens > 0 || known.tooBigTokens > 0)) return null;
         if (known.source === "declared") return { ...known, until: null };
+        if (!trustLearned) return null;
         const until = (Number(known.learnedAt) || 0) + (known.source === "stated" ? STATED_LIMIT_TTL_MS : SEEN_LIMIT_TTL_MS);
         return until > now() ? { ...known, until } : null;
     };
