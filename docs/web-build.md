@@ -90,7 +90,7 @@ There is no Express server. `installWebApiRouter()` (`router.js:138`) replaces `
 ### The two branches that are *not* pure IndexedDB
 
 - **`runtime/pmtiles/<key>`** (`router.js:51`): first ask `getScenarioPmtilesOverride(key, range)` (a scenario may carry its own pmtiles in IndexedDB); otherwise proxy `${VITE_OH_PMTILES_URL||/assets}/<key>.pmtiles` with the incoming `Range`/method.
-- **`hub/*`** (`router.js:108`): forward to `${VITE_OH_HUB_URL}/hub/<segments>`. For a bundle download (`hub/file?url=…`, GET) it **prefers the connected content node** (`getConnected()` → `node.url/oh/v1/hub`) to offload the central proxy, falling back to the Worker. `POST`s (import counters) attach `Authorization: Bearer <session>` when signed in so imports dedup by **account** instead of by IP.
+- **`hub/file`** (`router.js`): the one hub call there is, a download (`hub/file?url=…`, GET). It **prefers the connected content node** (`getConnected()` → `node.url/oh/v1/hub`) to offload the central proxy, falling back to `${VITE_OH_HUB_URL}/hub/file`. What is asked for is a checked copy in the hub's releases, or a suggestion's `.zip` the hub has checked (`src/runtime/hubFiles.js` decides). Anything else under `hub/` answers 404: the import counter's routes are gone, and with them the session that was attached to its `POST`s. The hub's index (its list of posts, its checked files, the import counts) is read straight from `raw.githubusercontent.com` and a post's comments from `api.github.com`; both send CORS and are not intercepted.
 
 ---
 

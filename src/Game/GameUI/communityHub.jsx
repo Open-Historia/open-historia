@@ -3,11 +3,13 @@
 // The Community tab of the scenario library, Netflix-style: a Pinned shelf at
 // the top (hub posts labeled "pinned" — the official/featured scenarios), then
 // horizontally scrolling rows for Most Installed (⬇ release-asset download
-// counts), Most Liked (👍) and Most Recent. Data comes straight from the public
+// counts), Most Liked (👍) and Most Recent. Data comes from the public
 // Scenario Hub — a GitHub
-// repo where every issue is a posted scenario — and bundles import through the
-// server's /api/hub proxy. Publishing exports the chosen scenario locally and
-// opens a prefilled hub post where the author drags the bundle in.
+// repo where every issue is a posted scenario — as the hub's own index lists
+// it: the posts whose file the hub has checked and released. Bundles import
+// from those checked copies, through the server's /api/hub proxy. Publishing
+// exports the chosen scenario locally and opens a prefilled hub post where the
+// author drags the bundle in.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -34,15 +36,16 @@ import {
   HUB_NEW_POST_URL,
   HUB_URL,
   SCENARIO_KEY_LINE,
-  downloadHubBundle,
+  downloadHubScenario,
   fetchHubPosts,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
-// two functions other modules have always imported from here stay exported.
-export { downloadHubBundle, fetchHubPosts };
+// post list, which the translator has always imported from here, stays
+// exported.
+export { fetchHubPosts };
 
 // How many of a scenario's custom flags are the author's OWN — i.e. worth
 // advertising to the hub. A flag installed from the Community tab is already
@@ -376,7 +379,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
-  // description. No extra network calls; the hub API is only ever hit by load().
+  // description. No extra network calls; the hub is only ever read by load().
   const [searchQuery, setSearchQuery] = useState("");
 
   // handleImport is async (network + import can take several seconds); by the
@@ -488,22 +491,17 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     setBusyId(post.id);
     clearBanners();
     try {
-      const bundle = await downloadHubBundle(post.bundleUrl);
-      // Provenance: which post and which exact bundle file this copy came from.
-      // The library's Scenarios tab compares this against the post's CURRENT
-      // bundle URL to offer an Update button while the copy is unedited; once
-      // the player edits it the link stays, marked edited, so they can suggest
-      // their changes back to the post (server/hubProvenance.js).
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // The checked copy of the post's file, from the hub's releases, stamped
+      // with its provenance: which post, which file of it, and which copy was
+      // downloaded (hubPosts.js downloadHubScenario). The library's Scenarios
+      // tab compares this against the post's CURRENT bundle URL to offer an
+      // Update button while the copy is unedited; once the player edits it the
+      // link stays, marked edited, so they can suggest their changes back to
+      // the post (server/hubProvenance.js).
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author });
+      // Nothing is reported anywhere: the download of the post's file from the
+      // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
-      // Best-effort: tell the server this import succeeded so it can count it
-      // (once per install) on the hub's self-hosted import counter. Never blocks
-      // or fails the import — fire and forget.
-      fetch("/api/hub/import-log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
-      }).catch(() => {});
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).

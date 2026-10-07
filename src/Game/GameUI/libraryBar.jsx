@@ -61,7 +61,7 @@ import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from 
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
-import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { downloadHubScenario, fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
@@ -1947,9 +1947,9 @@ const LibraryTopBar = () => {
     setIsBusy(true);
 
     try {
-      const { downloadHubBundle } = await import("./communityHub.jsx");
-      const bundle = await downloadHubBundle(post.bundleUrl);
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // The checked copy of the post's file, stamped with the link to renew:
+      // the post, its file, and the release copy that was downloaded.
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author });
       await updateScenarioFromBundle(scenario.id, bundle);
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
@@ -1985,8 +1985,10 @@ const LibraryTopBar = () => {
   };
 
   // When the menu opens, an author learns of new suggestions on their posts:
-  // one post list (cached five minutes) and a post's comments only when its
-  // comment count moved. Unauthenticated GitHub allows 60 requests an hour.
+  // one post list (the hub's index, kept five minutes, no API request) and a
+  // post's comments only when its comment count moved, or while a suggestion
+  // on it is still waiting for the hub's check (runtime/hubPosts.js
+  // refreshPublishedRecord). Unauthenticated GitHub allows 60 requests an hour.
   const suggestionsCheckedAtRef = useRef(0);
   useEffect(() => {
     if (!menuOpen || !loaded) return;
@@ -2224,6 +2226,7 @@ const LibraryTopBar = () => {
     // it rather than dropping the player into a blank world.
     const game = games.find((entry) => entry.id === gameId);
     if (game?.scenarioMissing) {
+      setMissingScenarioError("");
       setMissingScenarioGame(game);
       return;
     }
@@ -2331,19 +2334,26 @@ const LibraryTopBar = () => {
   // "Import & play" on the missing-map prompt: fetch the scenario the sender
   // recorded, import it, point the game at it, and go straight in. Offered only
   // when there is somewhere to fetch from — see handleGameActivate.
+  //
+  // What is fetched is the checked copy of the very file the game was played
+  // on, from the hub's releases. When the hub no longer offers that file (its
+  // post has a newer one, or was taken down) there is nothing to fetch: the
+  // post's newer file is another map, and the game is not opened on it. The
+  // reason is said in the prompt itself, which is all that is on screen then.
+  const [missingScenarioError, setMissingScenarioError] = useState("");
   const handleMissingScenarioImport = async (game) => {
     setEditorError(null);
+    setMissingScenarioError("");
     setIsBusy(true);
 
     try {
-      const { downloadHubBundle } = await import("./communityHub.jsx");
       const origin = game.importedScenarioOrigin;
-      const bundle = await downloadHubBundle(origin.bundleUrl);
-      // Stamp where it came from, exactly as the Community tab's own import does
-      // (communityHub.jsx). Without it the scenario looks editor-made to every
-      // later export, which would try to carry the whole map inside the next game
-      // exported from it — hundreds of megabytes, built in the page.
-      bundle.hubOrigin = { bundleUrl: origin.bundleUrl, postId: origin.postId, syncedAt: origin.syncedAt };
+      // Stamped with where it came from, exactly as the Community tab's own
+      // import is (hubPosts.js downloadHubScenario). Without it the scenario
+      // looks editor-made to every later export, which would try to carry the
+      // whole map inside the next game exported from it — hundreds of
+      // megabytes, built in the page.
+      const bundle = await downloadHubScenario({ postId: origin.postId, bundleUrl: origin.bundleUrl, syncedAt: origin.syncedAt });
       const imported = await importScenarioBundle(bundle);
       await saveGame(game.id, { scenarioId: imported.scenario.id });
       await refreshLibraryCatalog({ force: true });
@@ -2353,6 +2363,7 @@ const LibraryTopBar = () => {
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
+      setMissingScenarioError(nextError.message);
     } finally {
       setIsBusy(false);
     }
@@ -2687,6 +2698,10 @@ const LibraryTopBar = () => {
       } else {
         bundle = JSON.parse(new TextDecoder().decode(buffer));
       }
+      // A file never says for itself which post it came from: only a download
+      // of the game's own stamps that link (hubPosts.js downloadHubScenario),
+      // and one written into a file would pass for a checked copy of the hub's.
+      if (bundle && typeof bundle === "object") delete bundle.hubOrigin;
       const details = await importScenarioBundle(bundle);
       setActiveTab("scenarios");
       setMenuOpen(true);
@@ -3405,6 +3420,15 @@ const LibraryTopBar = () => {
                   ? " It's on the community hub, so it can be fetched now."
                   : " Ask whoever sent you the game for the scenario file, then import it from the Scenarios tab."}
               </div>
+              {/* Why Import & play did not work. Said here because no editor is
+                  open behind this prompt to show it, and one reason is not
+                  cured by a second press: the hub no longer offers the file
+                  the game was played on. */}
+              {missingScenarioError && (
+                <div role="alert" style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.34)", borderRadius: "12px", color: "#fecaca", fontSize: "0.8rem", lineHeight: 1.45, marginBottom: "0.8rem", padding: "0.6rem 0.75rem" }}>
+                  {missingScenarioError}
+                </div>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
                 {pending.importedScenarioOrigin && (
                   <button

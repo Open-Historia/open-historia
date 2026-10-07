@@ -3,10 +3,8 @@
 A scenario's import count is now **how many times its file has been downloaded from the
 community hub's releases**, as GitHub counts it. A workflow in the hub repository
 ([Open-Historia/Open-historia-scenarios](https://github.com/Open-Historia/Open-historia-scenarios))
-adds the downloads up and writes them to `index.json` on its `hub-index` branch. Builds of the
-game with `src/runtime/hubFiles.js` read that file themselves, download a post's file from the
-release, and report nothing. Builds without it still ask this Worker for the counts
-(`/api/hub/import-counts`) and report each import to it (`/api/hub/import-log`).
+adds the downloads up and writes them to `index.json` on its `hub-index` branch, and the game
+reads that file itself (`src/runtime/hubFiles.js`). Nothing is reported by the game any more.
 
 This Worker used to keep the counts in Cloudflare KV. Each import was a write and each read of
 `/counts` a KV `list()`, and the free plan's daily KV allowance was spent within hours of every

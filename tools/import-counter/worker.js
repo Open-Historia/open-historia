@@ -4,17 +4,15 @@
  * Counting moved to GitHub. A scenario's import count is now how many times its
  * file has been downloaded from the community hub's releases; a workflow in the
  * hub repository adds the downloads up and writes them to index.json on its
- * hub-index branch. Builds of the game with src/runtime/hubFiles.js read that
- * file themselves and never call this Worker.
+ * hub-index branch, and the game reads that file itself (src/runtime/hubFiles.js).
  *
  * This Worker used to keep the counts in KV, one write per import and one KV
  * list() per read of /counts, and the free plan's daily KV allowance was spent
  * within hours of every day ("KV list() limit exceeded for the day"), after
  * which every install saw no counts at all.
  *
- * Game builds from before the move still call it (server/server.js
- * /api/hub/import-counts and /api/hub/import-log), so it still answers them,
- * in the shapes they expect, from the hub's index, and stores nothing:
+ * Game builds from before the move still call it, so it still answers them, in
+ * the shapes they expect, from the hub's index, and stores nothing:
  *
  *   GET  /counts       -> { "<post number>": { count }, ... }
  *   GET  /count/<id>   -> { id, count }

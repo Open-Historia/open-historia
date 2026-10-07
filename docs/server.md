@@ -93,9 +93,9 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, and it replies `504` rather than hanging | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
-| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`) | `server/server.js` |
-| POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
-| GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
+| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check (`isAllowedHubUrl`, `server/security.js`: github.com and any `*.githubusercontent.com` host, which is where a release file redirects to); on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`). The page asks it for two things only: a checked copy in the hub's releases, and a suggestion's `.zip` the hub has checked (`src/runtime/hubFiles.js` decides, from the hub's index). The route itself still answers for any GitHub-hosted address, as the Worker and the content nodes that serve the website's `/api/hub/file` do | `server/server.js` |
+
+Imports are not reported from here any more: `/api/hub/import-log`, `/api/hub/import-counts` and `OH_IMPORT_COUNTER_URL` are gone. A scenario's import count is GitHub's count of its checked file's downloads, which the page reads from the hub's index ([runtime-services.md](runtime-services.md)).
 
 ### Map editor, flags, basemaps
 | Method | Path | Purpose | Handler |
@@ -323,7 +323,6 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `PORT` | `3000` | Listen port (`server/server.js:61`) |
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
-| `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
 | `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
 | `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |
 

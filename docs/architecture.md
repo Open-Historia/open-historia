@@ -118,7 +118,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `node-content/` + `server/node.js` | Content-node server (hash-addressed, read-only) — see [Content nodes](assets-and-data.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
-| `tools/import-counter/` | Cloudflare Worker: self-hosted scenario-import counter |
+| `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |
 | `dist/`, `dist-web/`, `dist-site/` | Build outputs (desktop, web, assembled site) |
 | `vite.config.ts`, `index.html`, `.env.web` | Build config + web-mode env |
@@ -202,7 +202,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/basemaps…`, `/api/flags…` | GET/POST/DELETE | `basemapStore.js`, `flagStore.js` |
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
-| `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |
+| `/api/hub/file` | GET | Community hub GitHub proxy (SSRF-guarded to GitHub hosts). The page asks it for the hub's checked copies only; the hub's list of posts and the import counts are read by the page from the hub's own index, not through the server |
 | `/api/server/shutdown` | POST | Exits the process (no button in the beta UI any more; scripts and the launcher) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 

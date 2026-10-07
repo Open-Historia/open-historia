@@ -5,6 +5,8 @@
 // author as a comment on the post with a small .zip attached. What has to hold:
 //   - the author's game recognises its own posts by the key Publish wrote, and
 //     a suggestion by its file or its marker line, never any other comment;
+//   - only a suggestion the hub has checked is kept or offered: one still
+//     waiting for its check appears once it has passed;
 //   - comments are read only for a post whose comment count moved;
 //   - the .zip carries only the changes, and reads back exactly (a cover image
 //     and a basemap travel as files of their own);
@@ -60,25 +62,28 @@ test("a post carries its publisher's key; a comment with a suggestion file is a 
   assert.equal(parseSuggestionComment({ id: 558, body: "Open-Historia-Suggestion: sug-1 but no file" }, 12), null);
 });
 
+// What the hub's index says it has checked on a post: { comment id -> its zip }
+// (hubFiles.js checkedSuggestionsOf, carried by each post as checkedSuggestions).
+const checkedBy = (comments) => Object.fromEntries(comments.map((comment) => [comment.id, comment.body.match(/https:[^\s)]+\.zip/)[0]]));
+
 test("the author's own posts are found by key, and comments read only when the count moved", async () => {
   const key = newPublishKey();
+  const suggestion = { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` };
   const posts = [
-    { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 2 },
+    { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 2, checkedSuggestions: checkedBy([suggestion]) },
     { id: 13, title: "Other", author: "carl", scenarioKey: "", comments: 5 },
   ];
   const calls = [];
   const fetchComments = async (postId) => {
     calls.push(postId);
-    return [
-      { id: 1, body: "Nice!" },
-      { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` },
-    ];
+    return [{ id: 1, body: "Nice!" }, suggestion];
   };
   const first = await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, posts, { fetchComments });
   assert.equal(first.changed, true);
   assert.deepEqual(first.published.postIds, [12]);
   assert.equal(first.published.author, "ann");
   assert.deepEqual(first.published.suggestions.map((ref) => ref.id), ["c2"]);
+  assert.deepEqual(first.published.commentCounts, { 12: 2 });
   assert.deepEqual(calls, [12]);
 
   const again = await refreshPublishedRecord(first.published, posts, { fetchComments });
@@ -86,14 +91,92 @@ test("the author's own posts are found by key, and comments read only when the c
   assert.deepEqual(calls, [12], "an unchanged post costs no request");
 
   // The suggester deleted their comment: the suggestion goes with it.
-  const later = await refreshPublishedRecord(first.published, [{ ...posts[0], comments: 1 }], { fetchComments: async () => [{ id: 1, body: "Nice!" }] });
+  const later = await refreshPublishedRecord(first.published, [{ ...posts[0], comments: 1, checkedSuggestions: {} }], { fetchComments: async () => [{ id: 1, body: "Nice!" }] });
   assert.deepEqual(later.published.suggestions, []);
+  assert.deepEqual(later.published.commentCounts, { 12: 1 });
 
   // A blocked contributor's new comments are never stored.
   const flood = Array.from({ length: 30 }, (_, index) => ({ id: 100 + index, user: { login: "spam-bot" }, body: `[x-suggestion.zip](https://github.com/user-attachments/files/${index}/x-suggestion.zip)` }));
   const blocked = { ...first.published, blocked: ["spam-bot"], commentCounts: {} };
-  const guarded = await refreshPublishedRecord(blocked, [{ ...posts[0], comments: 32 }], { fetchComments: async () => [...flood, { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` }] });
+  const crowded = { ...posts[0], comments: 32, checkedSuggestions: checkedBy([...flood, suggestion]) };
+  const guarded = await refreshPublishedRecord(blocked, [crowded], { fetchComments: async () => [...flood, suggestion] });
   assert.deepEqual(guarded.published.suggestions.map((ref) => ref.author), ["bob"]);
+  assert.deepEqual(guarded.published.commentCounts, { 12: 32 }, "every one of them was checked, so there is nothing to look again for");
+});
+
+test("only a suggestion the hub has checked is kept, and one still waiting appears once it has passed", async () => {
+  const key = newPublishKey();
+  const checked = { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` };
+  const waitingZip = "https://github.com/user-attachments/files/124/newer-suggestion.zip";
+  const waiting = { id: 3, user: { login: "carl" }, body: `[newer-suggestion.zip](${waitingZip})\n\nOpen-Historia-Suggestion: sug-5678` };
+  const comments = [{ id: 1, body: "Nice!" }, checked, waiting];
+  let calls = 0;
+  const fetchComments = async () => {
+    calls += 1;
+    return comments;
+  };
+  const post = { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 3, checkedSuggestions: checkedBy([checked]) };
+
+  // Carl's comment was posted a moment ago: the hub has not looked inside its
+  // file yet, so it is neither stored nor offered.
+  const first = await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, [post], { fetchComments });
+  assert.deepEqual(first.published.suggestions.map((ref) => ref.id), ["c2"]);
+  assert.equal(first.published.commentCounts, undefined, "the count is not recorded while a suggestion is waiting");
+
+  // Nothing has moved on the hub, and the comments are still read again: that
+  // is how the one that was waiting is found.
+  const still = await refreshPublishedRecord(first.published, [post], { fetchComments });
+  assert.equal(calls, 2);
+  assert.equal(still.changed, false, "with nothing new, nothing is written");
+
+  // A minute later the hub lists it. The comment count is what it was.
+  const passed = { ...post, checkedSuggestions: checkedBy([checked, waiting]) };
+  const second = await refreshPublishedRecord(still.published, [passed], { fetchComments });
+  assert.deepEqual(second.published.suggestions.map((ref) => ref.id), ["c2", "c3"]);
+  assert.deepEqual(second.published.commentCounts, { 12: 3 });
+  const settled = await refreshPublishedRecord(second.published, [passed], { fetchComments });
+  assert.equal(calls, 3, "and once nothing is waiting, an unchanged post is not read again");
+  assert.equal(settled.changed, false);
+
+  // The hub refused it instead: it deletes the comment, and nothing was ever stored.
+  const refused = await refreshPublishedRecord(first.published, [{ ...post, comments: 2 }], { fetchComments: async () => [{ id: 1, body: "Nice!" }, checked] });
+  assert.deepEqual(refused.published.suggestions.map((ref) => ref.id), ["c2"]);
+  assert.deepEqual(refused.published.commentCounts, { 12: 2 });
+});
+
+test("a suggestion already held is put away when the hub no longer lists it, or lists another file for it", async () => {
+  const key = newPublishKey();
+  const comment = { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` };
+  const post = { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 1, checkedSuggestions: checkedBy([comment]) };
+  const held = (await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, [post], { fetchComments: async () => [comment] })).published;
+  assert.deepEqual(held.suggestions.map((ref) => ref.id), ["c2"]);
+
+  // Stored by a build from before the hub checked suggestions, and never
+  // listed: put away, though the comment count has not moved.
+  let reads = 0;
+  const unlisted = await refreshPublishedRecord(held, [{ ...post, checkedSuggestions: {} }], { fetchComments: async () => { reads += 1; return [comment]; } });
+  assert.deepEqual(unlisted.published.suggestions, []);
+  assert.equal(reads, 1, "the comments are read again, to see what is there now");
+  assert.equal(unlisted.published.commentCounts, undefined, "and again later, while the comment is still waiting for its check");
+
+  // Bob edited his comment to carry another file. The hub has checked the new
+  // one: the old reference goes, and the new one is found without a new comment.
+  const editedZip = "https://github.com/user-attachments/files/125/old-world-suggestion.zip";
+  const edited = { ...comment, body: `[old-world-suggestion.zip](${editedZip})` };
+  const replaced = await refreshPublishedRecord(held, [{ ...post, checkedSuggestions: checkedBy([edited]) }], { fetchComments: async () => [edited] });
+  assert.deepEqual(replaced.published.suggestions.map((ref) => ref.zipUrl), [editedZip]);
+  assert.deepEqual(replaced.published.commentCounts, { 12: 1 });
+
+  // A bot's comment is never checked by the hub, so it is never waited for.
+  const bot = { id: 9, user: { login: "helper[bot]", type: "Bot" }, body: "[x-suggestion.zip](https://github.com/user-attachments/files/126/x-suggestion.zip)" };
+  const withBot = await refreshPublishedRecord(held, [{ ...post, comments: 2 }], { fetchComments: async () => [comment, bot] });
+  assert.deepEqual(withBot.published.suggestions.map((ref) => ref.id), ["c2"]);
+  assert.deepEqual(withBot.published.commentCounts, { 12: 2 });
+
+  // A post that is no longer on the hub's list: what is held is left alone.
+  const off = await refreshPublishedRecord(held, [], { fetchComments: async () => { throw new Error("not read"); } });
+  assert.deepEqual(off.published.suggestions.map((ref) => ref.id), ["c2"]);
+  assert.equal(off.changed, false);
 });
 
 const bundle = () => ({
