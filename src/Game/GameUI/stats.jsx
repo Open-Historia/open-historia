@@ -714,7 +714,7 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                         <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.14rem" }}>{facts.join(" · ")}</div>
                     )}
                     </div>
-                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#c084fc" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
+                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#d4d4d8" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
                     </div>
                     </div>
                 );
@@ -2440,7 +2440,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             {politicalTags.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
                     {politicalTags.map((tag) => (
-                        <span key={tag} style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.5)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
+                        <span key={tag} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--oh-grey-border)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
                     ))}
                 </div>
             )}

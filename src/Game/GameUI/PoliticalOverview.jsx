@@ -132,7 +132,7 @@ const PartyDonut = ({ slices, selectedId, hoveredId, onSelect, onHover, centerLa
   );
 };
 
-const Badge = ({ children, tone = "rgba(167,139,250,0.18)", border = "rgba(167,139,250,0.32)", color = "#ddd6fe" }) => (
+const Badge = ({ children, tone = "rgba(255,255,255,0.06)", border = "var(--oh-grey-border)", color = "var(--oh-grey-text)" }) => (
   <span style={{ background: tone, border: `1px solid ${border}`, borderRadius: "999px", color, fontSize: "0.58rem", fontWeight: 750, padding: "0.12rem 0.38rem" }}>
     {children}
   </span>
@@ -380,16 +380,16 @@ const IntelligenceAssessment = ({ intelligence }) => {
   const allFindings = Array.isArray(intelligence.findings) ? intelligence.findings : [];
   const findings = showAllFindings ? allFindings : allFindings.slice(0, FINDINGS_SHOWN);
   return (
-    <div style={{ ...card, background: "linear-gradient(180deg, rgba(124,58,237,0.095), rgba(124,58,237,0.045))", borderColor: "rgba(167,139,250,0.2)", marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
+    <div style={{ ...card, background: "rgba(255,255,255,0.025)", borderColor: "var(--oh-grey-border)", marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
       <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", justifyContent: "space-between" }}>
-        <div style={{ ...sectionLabel, color: "#c4b5fd" }}>🕵 Intelligence assessment</div>
+        <div style={{ ...sectionLabel, color: "var(--oh-grey-text)" }}>🕵 Intelligence assessment</div>
         {intelligence.confidence && <Badge>{intelligence.confidence} confidence</Badge>}
       </div>
       {intelligence.summary && <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.69rem", lineHeight: 1.48, marginTop: "0.48rem" }}>{intelligence.summary}</div>}
       {findings.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.46rem", marginTop: "0.58rem" }}>
           {findings.map((finding, index) => (
-            <div key={`${finding.topic || "finding"}-${index}`} style={{ borderLeft: "2px solid rgba(167,139,250,0.34)", paddingLeft: "0.55rem" }}>
+            <div key={`${finding.topic || "finding"}-${index}`} style={{ borderLeft: "2px solid rgba(255,255,255,0.22)", paddingLeft: "0.55rem" }}>
               {finding.topic && <div style={{ color: "rgba(221,214,254,0.72)", fontSize: "0.58rem", fontWeight: 800 }}>{finding.topic}</div>}
               <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.65rem", lineHeight: 1.43, marginTop: finding.topic ? "0.12rem" : 0 }}>{finding.text}</div>
             </div>

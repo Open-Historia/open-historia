@@ -275,13 +275,13 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
             Create institutions that already exist when the scenario begins. Political World generation may enrich membership and governance later, but it will preserve the identity and artwork you author here.
           </div>
         </div>
-        <button onClick={createNew} style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(139,92,246,0.38)", flex: "0 0 auto" }} type="button">
+        <button onClick={createNew} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">
           + Create institution
         </button>
       </div>
 
       {!rows.length && !selectedId && (
-        <div style={{ background: "rgba(124,58,237,0.07)", border: "1px solid rgba(167,139,250,0.18)", borderRadius: 12, color: "rgba(237,233,254,0.86)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}>
+        <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}>
           <strong>No institutions created yet.</strong> Add one manually if it must exist at scenario start, or leave this empty and let Political World generation establish relevant institutions later.
         </div>
       )}
@@ -295,8 +295,8 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                 key={institution.id}
                 onClick={() => chooseInstitution(institution)}
                 style={{
-                  background: selected ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.025)",
-                  border: `1px solid ${selected ? "rgba(139,92,246,0.42)" : "rgba(255,255,255,0.07)"}`,
+                  background: selected ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.025)",
+                  border: `1px solid ${selected ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.07)"}`,
                   borderRadius: "10px",
                   color: "#fff",
                   cursor: "pointer",
@@ -445,7 +445,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                 Delete institution
               </button>
             )}
-            <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: dirty ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.035)", borderColor: dirty ? "rgba(139,92,246,0.45)" : "rgba(255,255,255,0.07)", color: dirty ? "#fff" : "rgba(255,255,255,0.35)" }} type="button">
+            <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: dirty ? "var(--oh-grey-raised)" : "rgba(255,255,255,0.035)", borderColor: dirty ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.07)", color: dirty ? "#fff" : "rgba(255,255,255,0.35)" }} type="button">
               {busy ? "Saving..." : "Save institution"}
             </button>
           </div>

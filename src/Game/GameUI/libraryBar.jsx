@@ -4347,8 +4347,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   onClick={() => setActiveTab(tab)}
                   style={touchFit({
                     ...actionButtonStyle,
-                    background: activeTab === tab ? "rgba(109,66,217,0.34)" : "rgba(255,255,255,0.05)",
-                    borderColor: activeTab === tab ? "rgba(154,127,255,0.58)" : "rgba(255,255,255,0.08)",
+                    background: activeTab === tab ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
+                    borderColor: activeTab === tab ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
                     minWidth: isMobile ? "0" : "6.6rem",
                     padding: isMobile ? "0.55rem 0.6rem" : undefined,
                   }, touch)}

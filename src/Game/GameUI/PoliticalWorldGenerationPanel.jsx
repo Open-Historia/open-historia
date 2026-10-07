@@ -514,7 +514,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   const politicalWorldTone = politicalWorldAbsent
     ? { background: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)", color: "#fde68a" }
     : politicalWorldSparse
-      ? { background: "rgba(124,58,237,0.10)", border: "rgba(167,139,250,0.28)", color: "#ede9fe" }
+      ? { background: "rgba(255,255,255,0.035)", border: "var(--oh-grey-border)", color: "var(--oh-grey-text)" }
       : { background: "rgba(34,197,94,0.09)", border: "rgba(74,222,128,0.24)", color: "#bbf7d0" };
   const selectedCount = rows.filter((row) => row.status === "valid" && row.selected).length;
   const pipelineBlocked = (pipelineResult?.blockingErrors?.length ?? 0) > 0;
@@ -1421,7 +1421,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       </div>
 
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.55rem", marginTop: "0.85rem" }}>
-        <button disabled={busy || applying || dateMismatch} onClick={generatePoliticalWorld} style={{ ...buttonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(167,139,250,0.34)", minWidth: "11.5rem", opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">
+        <button disabled={busy || applying || dateMismatch} onClick={generatePoliticalWorld} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", minWidth: "11.5rem", opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">
           {busy && runKind === "political-world-v2" ? "Building Political World…" : (v2Checkpoint && !v2Ready ? "Resume Generation" : "Generate Political World")}
         </button>
         <button disabled={!applyReady || busy || applying || dateMismatch} onClick={applyPoliticalWorld} style={{ ...buttonStyle, background: "rgba(34,197,94,0.22)", borderColor: "rgba(74,222,128,0.34)", minWidth: "10.5rem", opacity: !applyReady || busy || applying || dateMismatch ? 0.5 : 1 }} type="button">
@@ -1494,7 +1494,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             <AiCallsTotal calls={progressInfo.modelCalls ?? 0} ceiling={progressInfo.totalModelCallCeiling} style={{ color: "rgba(255,255,255,0.52)" }} />
           </div>
           <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}>
-            <div style={{ background: "rgba(139,92,246,0.9)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressInfo.canonicalPercent ?? 0}%` }} />
+            <div style={{ background: "var(--oh-grey-text)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressInfo.canonicalPercent ?? 0}%` }} />
           </div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
             <LiveProgressCounts info={progressInfo} polityCount={polityCount} />
@@ -1516,7 +1516,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             role="progressbar"
             style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}
           >
-            <div style={{ background: "rgba(139,92,246,0.9)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressPercent}%` }} />
+            <div style={{ background: "rgba(231,231,234,0.72)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressPercent}%` }} />
           </div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
             <BatchProgressDetails info={progressInfo} etaMs={progressEtaMs} />
@@ -1543,9 +1543,9 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       )}
 
       {v2Checkpoint && !busy && runKind === "political-world-v2" && (
-        <div style={{ background: v2Ready ? "rgba(34,197,94,0.08)" : "rgba(124,58,237,0.09)", border: `1px solid ${v2Ready ? "rgba(74,222,128,0.24)" : "rgba(167,139,250,0.24)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
+        <div style={{ background: v2Ready ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.035)", border: `1px solid ${v2Ready ? "rgba(74,222,128,0.24)" : "var(--oh-grey-border)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
           <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
-            <div style={{ color: v2Ready ? "#bbf7d0" : "#ede9fe", fontSize: "0.78rem", fontWeight: 800 }}>Political World generation checkpoint</div>
+            <div style={{ color: v2Ready ? "#bbf7d0" : "var(--oh-grey-text)", fontSize: "0.78rem", fontWeight: 800 }}>Political World generation checkpoint</div>
             <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem" }}>{clean(v2Checkpoint.status) || "ready"}</div>
           </div>
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
@@ -1587,15 +1587,15 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         </div>
       )}
       {pipelineResult && !busy && runKind === "political-world-unified" && (
-        <div style={{ background: pipelineBlocked ? "rgba(127,29,29,0.12)" : "rgba(124,58,237,0.09)", border: `1px solid ${pipelineBlocked ? "rgba(248,113,113,0.28)" : "rgba(167,139,250,0.24)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
-          <div style={{ color: pipelineBlocked ? "#fecaca" : "#ede9fe", fontSize: "0.78rem", fontWeight: 800 }}>Political World review</div>
+        <div style={{ background: pipelineBlocked ? "rgba(127,29,29,0.12)" : "rgba(255,255,255,0.035)", border: `1px solid ${pipelineBlocked ? "rgba(248,113,113,0.28)" : "var(--oh-grey-border)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
+          <div style={{ color: pipelineBlocked ? "#fecaca" : "var(--oh-grey-text)", fontSize: "0.78rem", fontWeight: 800 }}>Political World review</div>
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
             Political Actors: {pipelineResult.politics?.generatedPolities ?? 0} accepted / {pipelineResult.politics?.failedPolities ?? 0} failed
             {pipelineResult.governingAlignment ? ` · Governing alignment: ${pipelineResult.governingAlignment.generatedPolities ?? 0} patch(es), ${pipelineResult.governingAlignment.governingAlignmentRepair?.nonPartisan?.length ?? 0} non-partisan, ${pipelineResult.governingAlignment.failedPolities ?? 0} failed` : ""}
             {pipelineResult.geopolitics ? ` · Geopolitics: ${pipelineResult.geopolitics.records?.length ?? 0} profiles, ${pipelineResult.geopolitics.institutionCatalog?.length ?? 0} institutions, ${pipelineResult.geopolitics.powerCalibration?.length ?? 0} power inputs, ${pipelineResult.geopolitics.agreements?.length ?? 0} agreements, ${pipelineResult.geopolitics.modelCalls ?? 0} AI call(s)` : ""}
           </div>
           {!!pipelineResult.geopolitics?.institutionCatalog?.length && (
-            <div style={{ color: "rgba(196,181,253,0.76)", fontSize: "0.66rem", lineHeight: 1.5, marginTop: "0.35rem" }}>
+            <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.66rem", lineHeight: 1.5, marginTop: "0.35rem" }}>
               Catalog sample: {pipelineResult.geopolitics.institutionCatalog.slice(0, 10).map((entry) => `${entry.shortName || entry.name} [${entry.id}]`).join(" · ")}{pipelineResult.geopolitics.institutionCatalog.length > 10 ? " …" : ""}
             </div>
           )}
