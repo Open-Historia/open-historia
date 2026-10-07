@@ -39,6 +39,7 @@ import {
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { endpointIsLocal } from "../AI/localEndpoint.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -520,7 +521,9 @@ const ContextWindowField = ({ entry }) => {
     const [, setRevision] = useState(0);
     if (!entry) return null;
     const key = contextWindowKey(entry);
-    const known = contextWindowMemory.remembered(key);
+    // Nothing learned from a server on this machine or network is in force
+    // (main.jsx windowIsLearned), so only the player's own figure is shown for it.
+    const known = contextWindowMemory.remembered(key, { trustLearned: !endpointIsLocal(entry.endpoint) });
     const changed = () => setRevision((value) => value + 1);
     return (
         <div>

@@ -179,6 +179,32 @@ test("Settings is told what is remembered, until when, and nothing once it lapse
     assert.equal(memory.refusal("k", 470000), "", "forgotten: the next request is sent");
 });
 
+test("a window learned from a server whose window is a setting is not held against it", () => {
+    // LM Studio, loaded at 40,000 tokens, refused a skip; the player loaded the
+    // model again at 128,000. An earlier build remembered the 40,000.
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => 1000 });
+    const key = "openai-compatible|http://localhost:1234/v1|qwen/qwen3.8-27b";
+    memory.learn(key, parseContextWindowError("the model is loaded with context length of only 40000 tokens"));
+    assert.match(memory.refusal(key, 38000), /38K tokens.*window is 40K/, "as a hosted model's would be");
+    assert.equal(memory.refusal(key, 38000, { trustLearned: false }), "", "sent: the server says what its window is now");
+    assert.equal(memory.remembered(key, { trustLearned: false }), null, "and Settings shows nothing in force");
+    assert.notEqual(memory.remembered(key), null);
+
+    // A size merely seen to fail is no more binding.
+    memory.learn("seen", { limitTokens: null, requestTokens: 38000 });
+    assert.notEqual(memory.refusal("seen", 38000), "");
+    assert.equal(memory.refusal("seen", 38000, { trustLearned: false }), "");
+    assert.equal(memory.remembered("seen", { trustLearned: false }), null);
+});
+
+test("a window the player declared counts on any server", () => {
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => 1000 });
+    memory.declare("local", 16000);
+    assert.match(memory.refusal("local", 38000, { trustLearned: false }), /window you set for this model is 16K/);
+    assert.equal(memory.refusal("local", 8000, { trustLearned: false }), "");
+    assert.deepEqual(memory.remembered("local", { trustLearned: false }), { limitTokens: 16000, source: "declared", learnedAt: 1000, until: null });
+});
+
 test("when nothing fits, the message names every entry and what to do", () => {
     const message = nothingFitsMessage([{ label: "small (Local)", reason: "this request is about 47K tokens and the model's window is 33K" }], 46901);
     assert.match(message, /about 47K tokens/);

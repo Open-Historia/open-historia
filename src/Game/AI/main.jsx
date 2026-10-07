@@ -23,6 +23,7 @@ import {
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
+import { endpointIsLocal, isLocalHostname } from "./localEndpoint.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
@@ -452,14 +453,7 @@ function endpointOrigin(url) {
 // not, which is the whole reason a local model appears "broken" on the website.
 function isLocalEndpoint(url) {
     try {
-        const host = new URL(url, typeof window !== "undefined" ? window.location.href : undefined).hostname;
-        if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
-        if (host.endsWith(".local")) return true;
-        if (/^127\./.test(host)) return true;
-        if (/^10\./.test(host)) return true;
-        if (/^192\.168\./.test(host)) return true;
-        if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-        return false;
+        return isLocalHostname(new URL(url, typeof window !== "undefined" ? window.location.href : undefined).hostname);
     } catch {
         return false;
     }
@@ -2435,9 +2429,20 @@ export async function callAI(systemPrompt, history, opts = {}) {
         tools: [providerOpts.tool, ...(Array.isArray(lookups?.tools) ? lookups.tools : [])].filter(Boolean),
     }));
     const answerReserve = Number(providerOpts.maxTokens) > 0 ? Number(providerOpts.maxTokens) : DEFAULT_ANSWER_RESERVE_TOKENS;
+    // A server on the player's machine or network has the window the player
+    // loaded the model with, and asking it again is free: its refusal is not
+    // remembered and nothing learned from it is held against it. Only a window
+    // the player declared for it counts (contextWindow.js says why).
+    const windowIsLearned = (entry) => !endpointIsLocal(entry?.endpoint);
     const rememberContextWindow = (entry, error) => {
         const failure = error?.providerFailure;
         if (failure?.kind !== "tooBig") return;
+        if (!windowIsLearned(entry)) {
+            logDebugEvent("ai", `${label}: ${entry.label} refused the request as too big for its context window. `
+                + "It is a server on this machine or network, where the window is a setting of the loaded model, so nothing is remembered and the next request is sent to it again.",
+                { reason: failure.reason, requestTokens }, { problem: true });
+            return;
+        }
         try {
             const stated = parseContextWindowError(failure.reason);
             const learned = contextWindows.learn(contextWindowKey(entry), {
@@ -2463,7 +2468,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
             store: fallbackStateStore,
             rateLimitPolicy: getRateLimitPolicy(),
             onChunk: providerOpts.onChunk,
-            canAttempt: (entry) => contextWindows.refusal(contextWindowKey(entry), requestTokens, { reserveTokens: answerReserve }),
+            canAttempt: (entry) => contextWindows.refusal(contextWindowKey(entry), requestTokens, { reserveTokens: answerReserve, trustLearned: windowIsLearned(entry) }),
             tooBigError: (refused) => providerFailureError(
                 nothingFitsMessage(refused.map(({ entry, reason }) => ({ label: entry.label, reason })), requestTokens),
                 { kind: "tooBig", reason: "no entry in the Fallback list can fit this request" },
