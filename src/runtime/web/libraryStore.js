@@ -471,7 +471,9 @@ const builtInCoarseRegionsText = () => {
 // ownership by) is too big to bundle, so fetch it once from the content origin
 // (the Worker proxy → GitHub Release) and cache it for the session. It is what
 // a scenario without a map of its own — and without the built-in stamp — renders on.
-const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+// `?.` because only a Vite build defines import.meta.env: the store's tests
+// load this module as it is (libraryStore.test.js).
+const CONTENT_BASE = (import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
 let defaultRegionsGeojsonPromise = null;
 const fetchDefaultRegionsGeojson = () => {
   if (!defaultRegionsGeojsonPromise) {
