@@ -12,7 +12,7 @@ import { handleBasemaps } from "./basemapStore.js";
 import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleTrash, handleRuntimeJson, handleRuntimeSnapshot, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
-import { getConnected } from "./nodeConnect.js";
+import { mapArchiveUrl } from "../worldFiles.js";
 
 let installed = false;
 
@@ -76,16 +76,14 @@ const route = async (request, url) => {
   const rangeHeader = request.headers.get("Range");
 
   // Runtime map tiles: a scenario may override the shared archive; otherwise
-  // serve the static archive from the canonical content origin. Defaults to
-  // same-origin /assets (local dev), but the hosted site sets VITE_OH_PMTILES_URL
-  // to the registry Worker's CORS+range proxy (Cloudflare Pages can't host the
-  // 60-100 MB pmtiles itself, so same-origin would 404 to the SPA fallback).
+  // it is the build's own copy under /assets, the z8 archive the desktop and
+  // the Android app read too (scripts/map-assets.web.json). The request's
+  // headers go with it, so a Range is answered by the host that serves the site.
   if (domain === "runtime" && segments[0] === "pmtiles") {
     const key = segments[1];
     const override = await getScenarioPmtilesOverride(key, rangeHeader);
     if (override) return method === "HEAD" ? new Response(null, { status: 200, headers: override.headers }) : override;
-    const base = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
-    return fetch(new Request(`${base}/${encodeURIComponent(key)}.pmtiles`, {
+    return fetch(new Request(mapArchiveUrl(key), {
       method: method === "HEAD" ? "HEAD" : "GET",
       headers: request.headers,
     }));
@@ -181,21 +179,13 @@ const route = async (request, url) => {
   if (domain === "hub") {
     const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
     // Community bundle downloads (/api/hub/file?url=…) are the only hub call
-    // there is: prefer the connected content node — it fetches the GitHub-hosted
-    // bundle server-side and returns it with CORS, offloading the central hub
-    // proxy — and fall back to the Worker if there's no node or it can't serve
-    // it. What is asked for is a checked copy in the hub's releases, or a
-    // suggestion's .zip the hub has checked (runtime/hubFiles.js decides, from
-    // the hub's own index, where the import counts are read from too); the
-    // Worker's import counter is no longer called.
+    // there is. The bundles are files on GitHub, which sends no CORS header on
+    // them, so a page cannot read one itself: the hub proxy fetches it and
+    // hands it back with the header. What is asked for is a checked copy in
+    // the hub's releases, or a suggestion's .zip the hub has checked
+    // (runtime/hubFiles.js decides, from the hub's own index, where the import
+    // counts are read from too); the Worker's import counter is no longer called.
     if (segments[0] !== "file" || method !== "GET") return errorResponse(`Unknown hub endpoint: ${url.pathname}`, 404);
-    const node = getConnected();
-    if (node && node.url && !node.origin) {
-      try {
-        const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
-        if (r.ok) return r;
-      } catch { /* node down/unsupported → fall through to the Worker */ }
-    }
     if (!base) return errorResponse("Community hub proxy is not configured.", 502);
     return fetch(`${base}/hub/file${url.search}`, { method });
   }

@@ -38,13 +38,13 @@ test("each string is looked up whole, with the English as the fallback", () => {
     setBootTranslations({
       "This is a demo of the game": "Ceci est une démo du jeu",
       "Everything is on this device": "Tout est sur cet appareil",
-      "Host a node": "   ",
+      "Privacy": "   ",
     });
     assert.equal(bootTranslated(), true);
     assert.equal(bootText("demoTitle"), "Ceci est une démo du jeu");
     assert.equal(bootText("demoPlay"), "Play the demo anyway", "a string the pack lacks stays English");
-    assert.equal(bootText("homeHostNode"), "Host a node", "an empty translation is no translation");
-    assert.equal(bootStatusText({ local: true }), "Tout est sur cet appareil", "the Android boot screen reads the same pack");
+    assert.equal(bootText("homePrivacy"), "Privacy", "an empty translation is no translation");
+    assert.equal(bootStatusText(true), "Tout est sur cet appareil", "the Android boot screen reads the same pack");
 
     setBootTranslations({});
     assert.equal(bootTranslated(), false, "an empty pack is English");

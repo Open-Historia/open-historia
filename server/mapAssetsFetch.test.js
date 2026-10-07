@@ -279,8 +279,8 @@ test("a stamp for other bytes than the manifest's is not trusted", async (t) => 
   assert.equal(stamps[install.target].sha256, install.asset.sha256);
 });
 
-test("the desktop downloads the same z8 map archives the Android app ships", () => {
-  const android = JSON.parse(fs.readFileSync(new URL("../mobile/map-assets.android.json", import.meta.url), "utf8"));
+test("the desktop downloads the same z8 map archives the website and the Android app carry", () => {
+  const android = JSON.parse(fs.readFileSync(new URL("../scripts/map-assets.web.json", import.meta.url), "utf8"));
   const pmtiles = (list) => Object.fromEntries(list.assets
     .filter((asset) => asset.path.endsWith(".pmtiles"))
     .map((asset) => [path.posix.basename(asset.path), { asset: asset.asset, bytes: asset.bytes, sha256: asset.sha256 }]));

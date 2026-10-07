@@ -14,29 +14,28 @@
 
 import GeoJSON from "ol/format/GeoJSON";
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
-import { fetchWorldFile, worldFileUrls } from "../runtime/worldFiles.js";
+import { worldFileUrl } from "../runtime/worldFiles.js";
 
-// Web build hosts the big seeds on the registry Worker /content proxy
-// (VITE_OH_PMTILES_URL); local/desktop leaves it unset → same-origin /assets
-// (public/assets/, fetched by scripts/fetch-map-assets.mjs). On Cloudflare Pages
-// /assets/*.geojson would return the SPA-fallback HTML (the seed isn't hosted
-// there), which parses to zero regions. Which name is asked for, and in what
-// order on the web, is runtime/worldFiles.js; this is the first of them.
-export const SEED_URL = worldFileUrls("seed")[0];
+// Every build reads the seed from its own /assets folder (runtime/worldFiles.js):
+// the desktop's is fetched at first launch (scripts/fetch-map-assets.mjs), the
+// website's and the Android app's are laid into the build
+// (scripts/stage-map-assets.mjs). A build without it answers with the SPA's
+// fallback page, which parses to zero regions.
+export const SEED_URL = worldFileUrl("seed");
 
 // Fetch + parse the seed FeatureCollection into OL features (EPSG:3857).
 // Returns [] and warns if the seed asset is missing (run the extract script).
 export const loadSeedFeatures = async ({ signal } = {}) => {
   let res;
   try {
-    res = await fetchWorldFile("seed", { signal });
+    res = await fetch(SEED_URL, { signal });
   } catch (err) {
     console.warn("[editor] failed to fetch region seed:", err);
     return [];
   }
   if (!res.ok) {
     console.warn(
-      `[editor] ${res.url || SEED_URL} not found (${res.status}). ` +
+      `[editor] ${SEED_URL} not found (${res.status}). ` +
         "Run: node scripts/extract-regions.mjs",
     );
     return [];

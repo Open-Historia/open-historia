@@ -47,7 +47,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated 5 October 2026</p>
+    <p class="tagline">Last updated 6 October 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them. It explains what the game keeps on your device, what it sends elsewhere and to whom, and what the project itself holds about you.</p>
     <p>"We" means Nicholas Krol, who runs the Open Historia project and its servers. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>.</p>
@@ -96,7 +96,7 @@
         <tbody>
           <tr><td>Website hosting (Cloudflare)</td><td>When you visit openhistoria.com</td><td>The pages and files you request</td></tr>
           <tr><td>Map imagery (Esri ArcGIS Online) and terrain (Amazon Web Services' open terrain tiles)</td><td>Whenever the map is shown</td><td>Which parts of the map you look at</td></tr>
-          <tr><td>World map data on the website (our server on Cloudflare, and volunteer content nodes)</td><td>Website only, while you play</td><td>The map files you load. See Content Nodes below</td></tr>
+          <tr><td>World map data on the website (the website itself, hosted on Cloudflare)</td><td>Website only, while you play</td><td>The map files you load, like every other file of the site. See The World Map below</td></tr>
           <tr><td>Community hub (GitHub)</td><td>When you open the Community, Flags or Basemaps browsers, and in the background when you have scenarios from the hub</td><td>Nothing beyond the request. Post images and avatars load from GitHub, and so do the files you import. See Import Counts below</td></tr>
           <tr><td>Update checks and downloads (GitHub; the website checks openhistoria.com)</td><td>At launch and every few minutes while the game is open; the desktop app also downloads the map from GitHub on its first launch</td><td>Nothing beyond the request</td></tr>
           <tr><td>Place search (Komoot's Photon)</td><td>When you type in the map's place search</td><td>The text you type</td></tr>
@@ -114,8 +114,8 @@
     <h3>Discord (desktop app)</h3>
     <p>When the Discord app is running on the same computer, the desktop app tells it what you are playing: the country you lead, the scenario and the in-game date. Discord shows this on your profile to people who can see your activity. This passes between the two apps on your computer; Discord's own privacy policy covers what it shows and keeps. To stop it, turn off activity sharing in Discord (User Settings → Activity Privacy).</p>
 
-    <h3>Content Nodes (website only)</h3>
-    <p>On the website, the world map comes from volunteer-run content nodes listed in a directory we sign. When the page opens, it measures its connection to each listed node, then stays connected to one, which it checks every 20 seconds. The nodes see your IP address and which map files you load (every file is checked against our published fingerprint, so a node can't alter the map). The node software keeps IP addresses only in memory, for a few minutes, to count players and limit abuse. The operators run it themselves, though, and could keep their own logs. The desktop and Android apps never contact nodes.</p>
+    <h3>The World Map (website only)</h3>
+    <p>On the website, the world map is part of the site itself: your browser loads the map files from openhistoria.com like every other file of the site, so Cloudflare, which hosts the site, sees your IP address and which files you load. The website no longer contacts volunteer-run content nodes, and no version of the game does.</p>
 
     <h3>Import Counts</h3>
     <p>The hub shows how many times each scenario's file has been downloaded. GitHub counts that itself when the game downloads the file from the hub, and the count is public. The game reports nothing of its own.</p>

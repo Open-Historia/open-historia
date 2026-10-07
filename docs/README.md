@@ -36,7 +36,7 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Languages & Translation](i18n.md) — Shipped language packs for the interface and the prompts' guidance, AI translation of content only, the pattern and run lookup, writing UI code that translates, regenerating the packs.
 
 ### Web & Mobile
-- [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, PMTiles Worker-proxy/content-node trust chain; saves stay in the browser and move by export/import.
+- [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, the map files the build carries under its own `/assets`; saves stay in the browser and move by export/import.
 - [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build.
 
 ### Delivery

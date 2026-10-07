@@ -1,11 +1,10 @@
-/*! Open Historia — web-mode home / connect screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The website's entry screen: it automatically connects the player to the best
-// available content node (lowest latency + free capacity) and enters the game.
+/*! Open Historia — web-mode home screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// The website's entry screen: the wordmark, what the game is, and the way in.
 // Injected as a full-screen overlay over the (already-mounted) game; web build
-// only, never in the local download.
+// only, never in the local download. There is nothing to connect to first: the
+// map is part of the site.
 
-import { connectBestNode } from "./nodeConnect.js";
-import { CONNECT_DEADLINE_MS, isNativeApp } from "./nativeBoot.js";
+import { isNativeApp } from "./nativeBoot.js";
 import { bootText, bootTranslated } from "./bootTexts.js";
 
 const ENTERED_KEY = "oh:entered";
@@ -57,19 +56,6 @@ const css = `
     .oh-rule{width:110px;height:2px;margin:20px auto;background:linear-gradient(90deg,transparent,var(--bronze),transparent)}
 
     /* connection panel */
-    .oh-conn{background:var(--marble2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;text-align:left;box-shadow:inset 0 1px 0 rgba(255,248,228,.05)}
-    .oh-conn-head{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:600;font-size:1.06rem;color:var(--ink)}
-    .oh-conn-title b{color:var(--bronze);font-weight:700;font-family:ui-monospace,Consolas,monospace;font-size:.94em}
-    .oh-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;background:var(--gold);box-shadow:0 0 0 3px rgba(201,147,47,.22);animation:ohpulse 1.15s ease-in-out infinite}
-    .oh-dot.ok{background:var(--green);box-shadow:0 0 0 3px rgba(93,145,73,.25);animation:none}
-    .oh-dot.origin{background:var(--bronze);box-shadow:0 0 0 3px rgba(201,147,47,.22);animation:none}
-    @keyframes ohpulse{0%,100%{opacity:.35}50%{opacity:1}}
-    .oh-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px}
-    .oh-stat{background:var(--marble);border:1px solid var(--line);border-radius:9px;padding:9px 10px}
-    .oh-stat-k{font-family:var(--display);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--sepia2)}
-    .oh-stat-v{font-size:1.12rem;font-weight:600;color:var(--ink);margin-top:2px}
-    .oh-bar{height:7px;margin-top:11px;background:var(--parch);border:1px solid var(--line);border-radius:99px;overflow:hidden}
-    .oh-bar>i{display:block;height:100%;background:var(--grad-gold);width:0;transition:width .5s ease}
     .oh-conn-sub{color:var(--sepia);font-size:.92rem;margin-top:12px;font-style:italic}
 
     /* buttons */
@@ -102,44 +88,7 @@ const css = `
 
       const el = (tag, props = {}, ...kids) => { const n = document.createElement(tag); Object.assign(n, props); for (const k of kids) if (k != null) n.append(k); return n; };
 
-      let overlay, connPanel, playBtn;
-
-      const statCell = (label, value) => el("div", { className: "oh-stat" },
-                                            el("div", { className: "oh-stat-k", textContent: label }),
-                                            el("div", { className: "oh-stat-v", textContent: value }));
-
-      const renderConnection = (c) => {
-        // Entering before a node is picked would start the game with no map source
-        // resolved, so the button stays disabled until the connection settles — either
-        // on a community node or on the origin fallback, both of which are playable.
-        if (playBtn) playBtn.disabled = !c;
-        if (!connPanel) return;
-        if (!c) {
-          connPanel.replaceChildren(
-            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot" }), el("span", { className: "oh-conn-title", textContent: bootText("homeFinding") })),
-                                    el("div", { className: "oh-conn-sub", textContent: bootText("homeFindingDetail") }),
-          );
-          return;
-        }
-        if (c.origin) {
-          connPanel.replaceChildren(
-            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot origin" }), el("span", { className: "oh-conn-title", textContent: bootText("homeOrigin") })),
-                                    el("div", { className: "oh-conn-sub", textContent: bootText("homeOriginDetail") }),
-          );
-          return;
-        }
-        const pct = Math.min(100, Math.round((c.users / Math.max(1, c.max)) * 100));
-        connPanel.replaceChildren(
-          // Anonymous node id only — never the operator's name — keeps hosters private.
-          el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot ok" }),
-             el("span", { className: "oh-conn-title" }, bootText("homeConnectedTo"), " ", el("b", { textContent: c.id || "—" }))),
-                                  el("div", { className: "oh-stats" },
-                                     statCell(bootText("homeRegion"), c.region || "—"),
-                                     statCell(bootText("homePlayers"), `${c.users}/${c.max}`)),
-                                  el("div", { className: "oh-bar" }, el("i", { style: `width:${pct}%` })),
-                                  el("div", { className: "oh-conn-sub", textContent: bootText("homeNodeDetail") }),
-        );
-      };
+      let overlay;
 
 // Remembered for the tab session, so a reload does not ask again. Exported
 // because the Android app never shows this screen at all (nativeBoot.js, wired
@@ -207,17 +156,10 @@ const demoAcknowledged = () => {
         }
         document.head.append(el("style", { textContent: css }));
 
-        connPanel = el("div", { className: "oh-conn" });
-        renderConnection(null); // initial "finding…" state
-        // Starts disabled: renderConnection enables it once a node (or the origin
-        // fallback) is settled, so nobody can enter a half-connected session.
         const play = el("button", { className: "oh-btn primary", textContent: `⚔  ${bootText("homeEnter")}`, onclick: () => showDemoNotice(enter) });
-        play.disabled = true;
-        playBtn = play;
         const foot = el("div", { className: "oh-foot" },
                         el("a", { href: "https://github.com/Open-Historia/open-historia", target: "_blank", rel: "noopener", textContent: "GitHub" }),
                         el("a", { href: "https://discord.gg/QaqAK7fQAg", target: "_blank", rel: "noopener", textContent: "Discord" }),
-                        el("a", { href: "https://github.com/Open-Historia/open-historia-node", target: "_blank", rel: "noopener", textContent: bootText("homeHostNode") }),
                         // The site root's page: the game itself is under /play/.
                         el("a", { href: "/privacy/", target: "_blank", rel: "noopener", textContent: bootText("homePrivacy") }),
         );
@@ -229,10 +171,7 @@ const demoAcknowledged = () => {
                         el("h1", { className: "oh-logo" }, "Open ", el("span", { className: "oh-grad", textContent: "Historia" })),
                         el("p", { className: "oh-tag", textContent: bootText("homeTagline") }),
                         el("div", { className: "oh-rule" }),
-                        connPanel,
-                        el("div", { className: "oh-rule" }),
                         play,
-                        el("div", { className: "oh-trust", textContent: bootText("homeTrust") }),
                         foot,
         );
         overlay = el("div", { className: "oh-home", id: "oh-home-root" }, card);
@@ -240,14 +179,6 @@ const demoAcknowledged = () => {
         if (bootTranslated()) overlay.setAttribute("data-no-translate", "");
         document.body.append(overlay); // up immediately — no flash of the game behind
 
-        // Connect to the best node in the background. Games live in this browser and
-        // the map falls back to the origin, so a connection that has not settled by
-        // the deadline must not keep the player out: show the origin, enable Enter,
-        // and let a node that answers later replace it.
-        let settled = false;
-        const deadline = setTimeout(() => { if (!settled) renderConnection({ origin: true }); }, CONNECT_DEADLINE_MS);
-        const settle = (connection) => { settled = true; clearTimeout(deadline); renderConnection(connection); };
-        connectBestNode().then(settle).catch(() => settle({ origin: true }));
       };
 
       // Whether the home page should be shown this load (skipped once the player has

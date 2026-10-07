@@ -15,24 +15,12 @@
 
 export const BOOT_TEXTS = Object.freeze({
   // The Android boot screen.
-  bootFinding: "Finding the closest community node…",
-  bootMainServer: "Connected to the main server",
   bootLocal: "Everything is on this device",
   bootPreparing: "Getting the world ready…",
   // The website's home page.
   homeBadge: "Free & open source · community-hosted alternative to Pax Historia",
   homeTagline: "An AI-driven alternate-history strategy game. Lead any nation on a living world map and reshape history.",
-  homeFinding: "Finding the nearest node…",
-  homeFindingDetail: "Locating the fastest community server with free capacity.",
-  homeOrigin: "Connected via the origin",
-  homeOriginDetail: "No community node is online right now — the world map streams from the project origin. You can play normally.",
-  homeConnectedTo: "Connected to node",
-  homeRegion: "Region",
-  homePlayers: "Players",
-  homeNodeDetail: "The world map streams from this verified community node — every byte checksum-checked.",
   homeEnter: "Enter Open Historia",
-  homeTrust: "Trust is in the checksum and the project signature — never in the node itself.",
-  homeHostNode: "Host a node",
   homePrivacy: "Privacy",
   // The website's demo notice.
   demoTitle: "This is a demo of the game",

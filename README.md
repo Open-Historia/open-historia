@@ -72,7 +72,7 @@ What the game keeps on your device, what it sends and to whom, and what the proj
 
 **[openhistoria.com](https://openhistoria.com)** — nothing to install. Games are saved in
 your browser, and you bring your own AI key (it goes straight to your provider, never to
-us). The world map is served by the community [content-node network](https://github.com/Open-Historia/open-historia-node).
+us). The world map is part of the site.
 
 Local AI (Ollama, LM Studio) needs one extra step in the browser: the server has to allow
 the site's origin, e.g. start Ollama with `OLLAMA_ORIGINS=https://openhistoria.com`. The
@@ -195,7 +195,8 @@ OH_HOST=192.168.1.20 node server/server.js # one interface only
 > hosted as [GitHub Release assets](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
 > and downloaded by `scripts/fetch-map-assets.mjs`. Run it once after cloning
 > (`node scripts/fetch-map-assets.mjs`); the desktop app runs it for you on first
-> launch — no Git LFS needed.
+> launch — no Git LFS needed. The website and the Android app carry their own web-sized
+> set, which their builds download themselves (`scripts/stage-map-assets.mjs`).
 
 ---
 
@@ -228,13 +229,13 @@ merge borders freehand, paint owners, import 70k cities, sign your map, then
 
 ## 🖥️ Host a server node
 
-Want to help the network? Run a **content node** on your own device to cache and serve
-the game's map data to nearby players so everyone loads faster. It's a one-click install
-and deliberately safe — a node only ever serves **read-only, checksum-verified** map
-files, and never touches anyone's games, accounts, AI keys, or code.
+The game no longer loads its map from content nodes, and nothing in it asks a node for
+anything. Every build has its own copy of the map: the website and the Android app carry
+it, and the desktop app downloads it from the
+[`map-data` release](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
+the first time it opens.
 
-➡️ **[Set up a node → Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node)**
-
-Your node registers itself and starts serving players once an admin accepts it. See the
-[node README](https://github.com/Open-Historia/open-historia-node#readme) for the full
-walkthrough (including a free Cloudflare Tunnel to put it online).
+The node software still exists as a separate project,
+[Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node).
+To host the game yourself, see [WEB-DEPLOY.md](WEB-DEPLOY.md) for the website, or the
+manual install above for a local server.

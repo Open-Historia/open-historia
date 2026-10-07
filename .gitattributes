@@ -3,13 +3,6 @@
 *.sh text eol=lf
 *.command text eol=lf
 
-# Signed documents: the detached .sig covers the exact LF bytes that were signed,
-# and the site serves public/ verbatim. A CRLF checkout (core.autocrlf on
-# Windows, where the site is built) would serve bytes the signature does not
-# cover, and every client would reject the manifest as bad-signature.
-public/content-manifest.json text eol=lf
-public/node-directory.json text eol=lf
-
 # The built-in flags (scripts/fetch-flags.mjs): stored exactly as flagcdn.com serves
 # them, so a checkout on any platform ships the same bytes.
 public/flags/** -text

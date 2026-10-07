@@ -15,7 +15,7 @@ import {
 } from "./util.js";
 import FALLBACK_COLORS from "./generated/fallbackColors.js";
 import { builtInMap as BUILT_IN_MAP, builtInRevision as BUILT_IN_REVISION, regionsUrl as BUILT_IN_REGIONS_URL } from "./generated/defaultScenarioMeta.js";
-import { fetchWorldFile } from "../worldFiles.js";
+import { worldFileUrl } from "../worldFiles.js";
 import {
   DEFAULT_SCENARIO_ID, DEFAULT_GAME_ID, EMPTY_FEATURE_COLLECTION, COVER_IMAGE_ASSET_KEY,
   JSON_ASSET_KEYS, STORAGE_JSON_ASSET_KEYS, OPTIONAL_JSON_ASSET_KEYS, RUNTIME_ONLY_JSON_ASSET_KEYS,
@@ -649,14 +649,14 @@ const builtInCoarseRegionsText = () => {
 };
 
 // The STOCK world (the GADM regions the hub's re-ownership presets key their
-// ownership by) is too big to bundle, so fetch it once from the content origin
-// (the Worker proxy → GitHub Release) and cache it for the session. It is what
-// a scenario without a map of its own — and without the built-in stamp — renders on.
-// Asked for by name, the deep-cleaned edition first (runtime/worldFiles.js).
+// ownership by) is not part of the script bundle: it is one of the map files a
+// web build carries under /assets (runtime/worldFiles.js), fetched once and
+// kept for the session. It is what a scenario without a map of its own — and
+// without the built-in stamp — renders on.
 let defaultRegionsGeojsonPromise = null;
 const fetchDefaultRegionsGeojson = () => {
   if (!defaultRegionsGeojsonPromise) {
-    defaultRegionsGeojsonPromise = fetchWorldFile("stock", { cache: "force-cache" })
+    defaultRegionsGeojsonPromise = fetch(worldFileUrl("stock"), { cache: "force-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .catch(() => null)
       .then((data) => {
@@ -1933,9 +1933,7 @@ export const getScenarioPmtilesOverride = async (key, rangeHeader) => {
 };
 
 // Whether the active scenario serves its own archive under
-// /api/runtime/pmtiles/<key> — bytes the signed content manifest cannot vouch
-// for, so contentTrust.js neither fetches them from the swarm nor holds them
-// to the manifest.
+// /api/runtime/pmtiles/<key>, in place of the build's own copy.
 export const hasScenarioPmtilesOverride = async (key) => {
   if (!PMTILES_ASSET_KEYS.includes(key)) return false;
   const row = await activeRuntimeScenarioRow(key);

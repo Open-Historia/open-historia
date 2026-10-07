@@ -29,13 +29,12 @@
 // Imports only the name folding and the distance, so it runs under bare node.
 
 import { distanceKm } from "./placement.js";
+import { worldFileUrl } from "../../runtime/worldFiles.js";
 import { foldRegionKey, foldRegionKeyOnce } from "./regionMatch.js";
 
 // Where the editor's importer and the prompt's city catalog read it from: the
-// content node on a web build, same-origin /assets on the desktop and inside
-// the Android app. import.meta.env is Vite-only; the optional chain keeps this
-// module importable by the node test runner.
-const WORLD_CITIES_URL = `${(import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "")}/cities-seed.json`;
+// build's own /assets folder, on every build (runtime/worldFiles.js).
+const WORLD_CITIES_URL = worldFileUrl("cities");
 
 // One town is on the list up to four times. The list was swept from map tiles
 // at four zoom levels (scripts/extract-cities.mjs), and each level rounds a

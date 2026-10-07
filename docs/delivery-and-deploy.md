@@ -13,12 +13,12 @@ Every delivery path starts with one of these npm scripts (`package.json`). The m
 | Script | Command | Output dir | Mode | Base | Purpose |
 |---|---|---|---|---|---|
 | `build` | `vite build` | `dist/` | *(default/desktop)* | `/` | The desktop/local app bundle. Served by the Express server (`server/server.js`) and copied into the Android app. |
-| `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`). Used by `WEB-DEPLOY.md`'s manual path. |
-| `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`. This is what actually deploys to production. |
+| `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` → `stage-map-assets.mjs dist-web` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`), with its map under `assets/`. Used by `WEB-DEPLOY.md`'s manual path. |
+| `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `stage-map-assets.mjs dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`, the map under `/play/assets/`. This is what actually deploys to production. |
 | `build:android` | `node scripts/seed-web-defaults.mjs && vite build --mode android --outDir dist-android --emptyOutDir` | `dist-android/` | `VITE_OH_WEB` + `VITE_OH_NATIVE` | `.env.android` | The Android app's bundle. `mobile/scripts/stage-www.mjs` then lays the verified map data under `www/assets`. |
-| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts`). |
+| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && stage-map-assets.mjs public --missing-only && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts`). `dev:web` first lays the web map files `public/` lacks, never overwriting a developer's desktop copies. |
 
-**The map-binary trap** (`vite.config.ts`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
+**The map-binary trap** (`vite.config.ts`): the desktop's pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants those copies there (the desktop streams its archives via `/api/runtime/pmtiles/:assetKey`; the web build carries its own, web-sized files). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the world files (`regions-seed.geojson`, `cities-seed.json`, `default-regions.geojson`) from the *web* build only. For a web build, `scripts/stage-map-assets.mjs` then lays the six files pinned in `scripts/map-assets.web.json` into the output under the same names (§8). This matters because Cloudflare Pages rejects any file over 25 MiB, and the desktop's `regions-seed.geojson` is 55 MB: the site must carry the staged files, never whatever a developer's `public/` holds. The trap "only fires on a machine that has actually played" (the desktop's files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
 
 ---
 
@@ -69,7 +69,7 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 | `desktop-beta` | `desktop-beta.yml` (§4.1) | `workflow_dispatch` from `beta` / `desktop-beta-v*` tag | The same set named `Open-Historia-Beta-*` | **yes** (`--prerelease`) | "Open Historia Beta", a second desktop app beside the stable one, with its own saves; it updates itself from here |
 | `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (the `appId` in `mobile/capacitor.config.json`); it self-updates from here |
 | `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (the stable id + `.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
-| `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
+| `map-data` | *manually uploaded* | — | The desktop's list: `regions-z8.pmtiles`, `countries-z8.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson`. The web builds' list: the same two archives, `cities.pmtiles` and `cities-seed.json`, plus `regions-seed-clean.geojson` and `default-regions-names-web-clean.geojson`. Earlier editions stay on the release | — | The world-map binaries, off Git LFS (§8) |
 
 The APK asset names are contractual — they, and the two Android application ids (the `appId` in `mobile/capacitor.config.json`, and the beta's, the same id + `.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from the project's earlier name to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
 
@@ -105,7 +105,7 @@ These replaced `app-bundle.yml`, which zipped the source, the map data and the `
 | Triggers | `workflow_dispatch` from `main` (from any other branch its first step fails: a dispatch from `beta` once published the beta's code as the stable app, build 14 on 2026-09-25); push tag `android-v*` |
 | Toolchain | Node 24, Temurin Java 21 |
 | Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode`/`versionName`; the update banner compares the bundle's number against `latest.json` |
-| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data, cached on the manifest hash) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
+| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data; `map-cache/` is cached on the hash of `scripts/map-assets.web.json`) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
 | Collect | copies the APK → `open-historia.apk` |
 | Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `latest.json` (`{ build, apk, notes }`) with `--clobber` |
 
@@ -132,22 +132,23 @@ The map data must be staged **before** `cap sync` copies `www/` into the native 
 |---|---|
 | Triggers | `workflow_dispatch`; push to `main` with `paths-ignore` for `**.md`, `mobile/**`, `.github/**` (docs/app can't change what the site serves) |
 | Concurrency | group `deploy-site`, `cancel-in-progress: true` — a newer push supersedes an in-flight deploy rather than racing it live |
-| Build | `npm ci` → `npm run build:site` |
+| Build | `npm ci` → restore `map-cache/` (`actions/cache`, keyed on the hash of `scripts/map-assets.web.json`) → `npm run build:site`, which fetches and verifies the six map files and lays them under `/play/assets/` |
 | Size guard | fails if any `dist-site` file exceeds 24 MiB (Pages rejects >25 MiB *after* reporting a green build) |
 | Deploy | `cloudflare/wrangler-action@v3` → `pages deploy dist-site --project-name=open-historia --branch=main`. `--branch=main` is what marks it the **production** deployment; without it Pages treats it as a preview and the live domain keeps the old build |
 | Secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 
-Why an Action rather than Git-connected Pages: the Pages project is direct-upload and Cloudflare can't convert those to Git-connected without a new project + domain move (downtime). CI is also "the one place the map-binary trap cannot fire" — a runner never has the gitignored pmtiles.
+Why an Action rather than Git-connected Pages: the Pages project is direct-upload and Cloudflare can't convert those to Git-connected without a new project + domain move (downtime). A runner has no map files to sweep in by accident: the desktop's are gitignored and never on it. The only ones in the site are the six `build:site` fetches, and the build fails if one cannot be had, so a site without its map is never deployed.
 
 ---
 
 ## 5. The website build pipeline (`build:site` → `assemble-site.mjs`)
 
-`build:site` runs three stages in order, then hands off to the assembler:
+`build:site` runs four stages in order, the last of them the assembler:
 
-1. `node scripts/seed-web-defaults.mjs` — bundles the built-in default scenario for the browser (§8).
+1. `node scripts/seed-web-defaults.mjs` — bundles the built-in default scenario for the browser (§10).
 2. `vite build --mode web --base /play/ --outDir dist-web` — the game, based at `/play/`.
-3. `node scripts/assemble-site.mjs` — stitches `site/` (landing page) + `dist-web/` (game) into `dist-site/`.
+3. `node scripts/stage-map-assets.mjs dist-web` — downloads the six map files pinned in `scripts/map-assets.web.json` into `map-cache/`, verifies each, and lays them into `dist-web/assets/` (§8).
+4. `node scripts/assemble-site.mjs` — stitches `site/` (landing page) + `dist-web/` (game, map included) into `dist-site/`, so the map is served at `/play/assets/`.
 
 ### `scripts/assemble-site.mjs`
 
@@ -175,7 +176,7 @@ The website is now deployed with a **button in the admin panel**, which runs on 
 `deploySite()` (`panel/lib/deploy-site.mjs`) never builds the maintainer's checkout. It maintains a **throwaway worktree pinned to `<remote>/main`** for three reasons (`deploy-site.mjs`):
 
 1. "Deploy from main" must mean *main* — the maintainer's `work-repo` usually sits on a feature branch.
-2. It sidesteps the map-binary trap for free — a freshly hard-reset worktree never has the gitignored pmtiles, so they can't be swept into `dist-site`.
+2. It sidesteps the map-binary trap for free — a freshly hard-reset worktree never has the desktop's gitignored map files in `public/`, so they can't be swept into `dist-site`. The six files the site does carry are fetched by `build:site` into the worktree's `map-cache/`, which is gitignored too.
 3. It leaves the maintainer's working tree and `node_modules` untouched.
 
 ### Configuration (env-overridable)
@@ -241,7 +242,7 @@ It takes effect when this `worker.js` is on `main` and the site is deployed (§6
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
-The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)).
+The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)). Nor does it call the `/content` map proxy or read the node directory: the website carries its own map (see [web-build.md §8](web-build.md)). The one route the game still calls is `/hub/file`, the community hub proxy, because community bundles are files on GitHub and a browser cannot read those itself.
 
 | Binding | Kind | Purpose |
 |---|---|---|
@@ -250,16 +251,16 @@ The web-mode control plane (source of truth: the admin repo). Serves the signed 
 | `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
-The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js`). No game rebuild is needed for a directory change.
+The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live (`panel/server.js`). The game no longer reads the directory, so a directory change does not reach players.
 
-The web game points at the registry through build-time env (`.env.web`):
+The web game points at the registry through build-time env (`.env.web`), for the hub proxy only:
 
 | `VITE_OH_*` flag | Value | Used for |
 |---|---|---|
 | `VITE_OH_WEB` | `1` | The compile-time web/desktop switch |
-| `VITE_OH_PMTILES_URL` | `…workers.dev/content` | Map tiles served/proxied by the registry |
-| `VITE_OH_DIRECTORY_URL` | `…/node-directory.json` | The signed content-node directory |
 | `VITE_OH_HUB_URL` | `…workers.dev` | Scenario hub proxy |
+
+`VITE_OH_PMTILES_URL` and `VITE_OH_DIRECTORY_URL` are gone from `.env.web`: the map is part of the site (§8).
 
 ---
 
@@ -271,8 +272,10 @@ The ~200 MB world-map binaries left Git LFS (whose free 1 GB/mo org-wide bandwid
 - **Fetcher:** `scripts/fetch-map-assets.mjs` makes the local tree match the manifest. Full run verifies SHA-256 and re-fetches anything missing or changed; `--ensure` hashes a right-size file only when it has not been verified since it last changed (`.map-assets-verified.json`), so a normal launch is a stat per file. **Best-effort — never exits non-zero**, so it can never block a launch or an update. Downloads to a `.download` temp then atomic-renames.
 - **Name namespaces:** the manifest maps a *versioned* release asset name to a *stable* local path — e.g. `regions-seed-z8-clean.geojson` (release) → `public/assets/regions-seed.geojson` (tree), and `default-regions-names-clean.geojson` → `server/data/stock/regions.geojson` (the stock world every scenario without a map of its own renders on; it used to be the built-in scenario's file). The client always reads the stable path. The built-in scenario's own map is not on the release at all: it ships in the app as `server/seed/default/regions.geojson` (see [Assets](assets-and-data.md) §3).
 - **Callers:** the desktop app on launch (`electron/main.cjs`, `--ensure`) and anyone running from a clone call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
+- **The web builds' list and stager:** the website and the Android app are the same bundle and carry the same six files, pinned in `scripts/map-assets.web.json` (each entry: `asset`, the release name; `path`, the stable name under the build; `bytes`; `sha256`): the z8 archives, `cities.pmtiles`, `cities-seed.json` and the web-sized world files, about 69 MB. `scripts/stage-map-assets.mjs` downloads them into `map-cache/` at the repo root (gitignored), verifies each, and lays them into a build: `dist-web/assets/` for `build:web` / `build:site`, the files `public/` lacks for `dev:web`, and `mobile/www/assets/` through `mobile/scripts/stage-www.mjs` (§9). Unlike the fetcher it **exits non-zero** when a file cannot be had. Every file must stay under Cloudflare Pages' 25 MiB a file. See [Assets](assets-and-data.md) §3.
+- **Why the website carries its copy:** a browser cannot read a GitHub release asset, because GitHub sends no `Access-Control-Allow-Origin` header on the download. The website used to go through a Worker proxy and community content nodes to get around that; it no longer does. See [web-build.md §8](web-build.md).
 
-When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`.
+When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`, and in `scripts/map-assets.web.json` when the web builds carry it. The desktop fetches the change at its next launch; the website and the Android app get it when they are next built.
 
 ---
 
@@ -282,8 +285,8 @@ The Android app has no server of its own: it is the `--mode android` web bundle,
 
 | Script | What it does |
 |---|---|
-| `stage-map-assets.mjs` (`npm run map`) | Downloads the six files in `mobile/map-assets.android.json` from the `map-data` release into `mobile/map-cache/` and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the 12.8 MB `default-regions.geojson`, `regions-seed.geojson` and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
-| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap, the signed node directory), and lays `map-cache/*` under `www/assets/`. |
+| `stage-map-assets.mjs` (`npm run map`) | A thin wrapper around `scripts/stage-map-assets.mjs` (§8): downloads the six files in `scripts/map-assets.web.json`, the list the website's build reads too, from the `map-data` release into `map-cache/` at the repo root and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the web-sized `default-regions.geojson` (13.1 MB, owners as country names) and `regions-seed.geojson` (13.1 MB), and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
+| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap), and lays the six files from `map-cache/` under `www/assets/` at their stable names. |
 
 `build.gradle` stores `*.pmtiles` uncompressed (`androidResources { noCompress 'pmtiles' }`) so a Range read never inflates from byte 0; `versionCode`/`versionName` come from `OH_ANDROID_BUILD`; the `release` type signs with `OH_ANDROID_KEYSTORE` when set and the debug key otherwise. See [mobile.md](mobile.md).
 
@@ -301,7 +304,7 @@ The Android app has no server of its own: it is the `--mode android` web bundle,
 
 The code→name country registry is not among them: the web store (`src/runtime/web/models.js`) reads the committed `src/runtime/generated/countryNames.js` that `scripts/generate-country-tables.mjs` writes from `server/country-names.json`, the same table the map editor uses.
 
-It reads only from `server/seed/default`, which **is** committed (map included) — so the website build (including CI) needs nothing from the `map-data` Release.
+It reads only from `server/seed/default`, which **is** committed (map included), so this step needs nothing from the `map-data` Release. The six map files the site carries do come from there: `scripts/stage-map-assets.mjs` fetches them later in the same build (§5).
 
 ---
 
@@ -316,15 +319,15 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
-| **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | Live, no rebuild |
-| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and staged into the APK by `mobile/scripts/stage-map-assets.mjs` | Downloaded on first run |
+| **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | None: the game no longer reads it |
+| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and laid into the website and the APK by `scripts/stage-map-assets.mjs` when they are built | Desktop: downloaded on first run. Website and Android: nothing, the map is part of the build |
 
 Key asymmetries a newcomer should internalize:
 
 - **A push to `main` or `beta` ships nothing to installed apps.** The desktop installers wait for a `workflow_dispatch` or a `desktop-v*` / `desktop-beta-v*` tag, the APKs for a dispatch or an `android-v*` / `android-beta-v*` tag, and the website for a maintainer to click 🚀 (or for `deploy-site.yml`, which a push to `main` still triggers).
 - **`alpha` ships nothing on its own** — it reaches users only once bridged into `beta`/`main`.
 - **Worker code and website move together** through the admin-panel deploy engine, precisely to stop merged worker code from sitting undeployed.
-- **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit.
+- **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit. The desktop fetches the change at its next launch; the website and the Android app carry the map, so they get it at their next build.
 
 ### 11.1 How an installed game updates
 
@@ -344,7 +347,7 @@ A build that fails at launch twice (a desktop download that fails; a website rel
 ## 12. Traps & invariants
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
-- **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts`, `deploy-site.yml`, `deploy-site.mjs`).
+- **Never let a file over 25 MiB into a Pages build** — the site carries its map, so every file in `scripts/map-assets.web.json` must stay under the limit (`SITE_FILE_LIMIT_BYTES` in the stager; `src/runtime/worldFiles.test.js` checks the list). The `oh-drop-map-binaries` plugin keeps the desktop's larger copies out, and both CI size guards and the local deploy engine's `findOversized` defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts`, `deploy-site.yml`, `deploy-site.mjs`).
 - **Neither Android application id may ever change** (the `appId` in `mobile/capacitor.config.json`; the beta's, the same id + `.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (from the project's earlier name to `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 and a build warning (`assembleSite` in `assemble-site.mjs`).
@@ -356,5 +359,5 @@ A build that fails at launch twice (a desktop download that fails; a website rel
 ### See also
 
 - [World state](world-state.md) — the `world.json` shape that scenarios and the web seed carry
-- [Web mode & content nodes](web-build.md) — how the browser build resolves map data from the signed directory
+- [Web build](web-build.md) — how the browser build carries and reads its map data
 - [Scenario hub](runtime-services.md) — the import flow that feeds the import counter

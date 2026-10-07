@@ -18,11 +18,11 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
 | Desktop / local server | Express 5 | `server/server.js` (inside Electron for the desktop app) |
-| Signing / trust | `@noble/ed25519` (content manifests, node directory) | `trust/`, `src/runtime/web/contentTrust.js` |
+| Signing tools | Ed25519 through Node's `crypto`. No build of the game uses them since the website stopped checking a signed manifest; `@noble/ed25519` is still listed in `package.json` and nothing imports it | `trust/`, `server/trust.js`, `scripts/sign-release.mjs` |
 | Optional tools (source checkouts only) | Azgaar Fantasy Map Generator (vendored by hand; no build ships it, and the Workshop hides its Generate tab without it) | `fmg/`, `scripts/fetch-fmg.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js` |
 
-The heavy map binaries (`regions.pmtiles`, ~21 MB as the z8 trim the desktop downloads, `countries.pmtiles`, `cities.pmtiles`, plus editor seed geojson) are **never bundled** — see [Map assets & PMTiles](assets-and-data.md). They live in `public/assets/`, are gitignored, and are fetched from a GitHub "map-data" Release on first launch. A Vite plugin (`dropMapBinaries`, `vite.config.ts`) deletes them from every build output so Cloudflare Pages' 25 MiB/file limit is never hit.
+The heavy map binaries (`regions.pmtiles`, ~21 MB as the z8 trim every build reads, `countries.pmtiles`, `cities.pmtiles`, plus the seed and stock-world geojson) are **never in Git** and never part of the script bundle — see [Map assets & PMTiles](assets-and-data.md). They are assets of a GitHub "map-data" Release, and every build reads its own copy from its own `/assets` folder (`src/runtime/worldFiles.js`). The desktop app fetches them on first launch (a checkout keeps them in `public/assets/`, gitignored). The website and the Android app carry six web-sized files, pinned in `scripts/map-assets.web.json` and laid into the build by `scripts/stage-map-assets.mjs`. A Vite plugin (`dropMapBinaries`, `vite.config.ts`) deletes whatever copies a developer's `public/assets/` holds from every build output, so a file over Cloudflare Pages' 25 MiB/file limit never reaches the site.
 
 ---
 
@@ -33,7 +33,7 @@ All three run the identical `src/` client. What changes is (a) the `VITE_OH_WEB`
 | Variant | Build command | `/api` backend | Asset storage | Distribution |
 |---|---|---|---|---|
 | **Desktop app** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/`, packaged with `server/` by electron-builder | Express server `server/server.js`, run inside the Electron process on `localhost:3000` | Files under the data directory (`server/data/` from a clone; the app's user-data folder in the installed app, via `OH_DATA_DIR`) | Installers on the `desktop-stable` release (`desktop-installer.yml`); see [delivery](delivery-and-deploy.md) §4.1 |
-| **Web build** (the hosted website `openhistoria.com/play/`) | `npm run build:web` / `build:site` → `dist-web/` | **No server** — a `fetch()` interceptor answers `/api/*` from IndexedDB | IndexedDB in the browser; map tiles from the registry Worker / content nodes | Cloudflare Pages |
+| **Web build** (the hosted website `openhistoria.com/play/`) | `npm run build:web` / `build:site` → `dist-web/` | **No server** — a `fetch()` interceptor answers `/api/*` from IndexedDB | IndexedDB in the browser; map data from the site's own `/play/assets/`, six files laid in when the site is built | Cloudflare Pages |
 | **Android app** | client from `dist-android/` (`npm run build:android`) inside the APK, with the world map under `www/assets` | None — the web backend (`src/runtime/web/*`) answers `/api/*` in the page | IndexedDB `open-historia-web`; map data read from the APK by HTTP Range | Capacitor APK (`mobile/`) — see [mobile.md](mobile.md) |
 
 ### How the compile-time flag selects the variant
@@ -45,7 +45,7 @@ The whole web branch hinges on one boolean literal, injected by Vite's `define`:
 ```
 
 - `vite build` (any mode ≠ `web`) → `VITE_OH_WEB` is `false`. Rollup dead-code-eliminates every `if (import.meta.env.VITE_OH_WEB)` branch **and the dynamically-imported web backend** (`src/runtime/web/*`), so the desktop bundle never pulls in IndexedDB stores or the web-only generated seed files. This is why a fresh desktop extract (which has never run a web build) still builds and boots.
-- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_PMTILES_URL`, `VITE_OH_HUB_URL`, `VITE_OH_DIRECTORY_URL`). See [Web build](web-build.md).
+- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_HUB_URL`, the community hub proxy; the map needs no setting). See [Web build](web-build.md).
 
 The one place the flag is read at boot is `src/main.jsx` (below). Because the web backend is behind a **dynamic `import()`**, the desktop build never even references the module.
 
@@ -54,10 +54,10 @@ The one place the flag is read at boot is `src/main.jsx` (below). Because the we
 | Script | Effect |
 |---|---|
 | `dev` | `vite` — desktop client on `:5173`, proxying `/api` → `http://localhost:3000` (`vite.config.ts`) |
-| `dev:web` | seeds web defaults, then `vite --mode web` |
+| `dev:web` | seeds web defaults, lays the map files `public/` lacks (`stage-map-assets.mjs public --missing-only`), then `vite --mode web` |
 | `build` | desktop client → `dist/` |
-| `build:web` | seeds, then `vite build --mode web --outDir dist-web` |
-| `build:site` | `build:web` with `--base /play/` + `scripts/assemble-site.mjs` (bolts the marketing `site/` around `/play/`) |
+| `build:web` | seeds, then `vite build --mode web --outDir dist-web`, then lays the map files into `dist-web/assets/` (`stage-map-assets.mjs dist-web`) |
+| `build:site` | `build:web` with `--base /play/` + `scripts/assemble-site.mjs` (bolts the marketing `site/` around `/play/`; the map is served at `/play/assets/`) |
 | `build:android` | `seed-web-defaults.mjs` + `vite build --mode android` → `dist-android/` (the Android app's bundle; `mobile/scripts/stage-www.mjs` adds the map data) |
 | `test` | `node --test "server/**/*.test.js" "src/**/*.test.js"` — server and client tests, each beside its module; a tested module and its imports must load under plain Node (see [conventions](conventions.md) §7) |
 
@@ -112,14 +112,15 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `src/` | The React client (all three variants share this) |
 | `server/` | Express server + on-disk stores (the desktop app and a self-hosted local server) |
 | `scripts/` | Build/seed/signing/asset tooling (`.mjs`) — see below |
-| `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, signed `content-manifest.json` / `node-directory.json`, marketing HTML (`guides/`, `how-to-play/`, …) |
+| `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
-| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, `map-assets.android.json`); no server of its own — see [mobile.md](mobile.md) |
+| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, which use the website's stager and list, `scripts/stage-map-assets.mjs` and `scripts/map-assets.web.json`); no server of its own — see [mobile.md](mobile.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
-| `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
+| `trust/` | The Ed25519 root public key + `pinned-key.js`, read by the signing tools (`scripts/sign-release.mjs`, `server/trust.js`). No build of the game reads it any more |
 | `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |
 | `dist/`, `dist-web/`, `dist-site/` | Build outputs (desktop, web, assembled site) |
+| `map-cache/` | The six map files a web build carries, downloaded and verified by `scripts/stage-map-assets.mjs` (gitignored) |
 | `vite.config.ts`, `index.html`, `.env.web` | Build config + web-mode env |
 
 ### `src/` layout
@@ -133,7 +134,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `src/Game/Selection/` | Click-target popups: `Regions.jsx`, `CountryPanel.jsx`, `Units.jsx`, `Features.jsx` | [Selection & popups](game-ui.md) |
 | `src/Game/AI/` | AI turn engine: `main.jsx` (provider chat), `gameplay.js`, `gameplayPrompts.js`, `gameplaySchemas.js`, `promptContext.js`, `providerConfig.js`, `defaultPrompts.json` | [AI system](ai-overview.md) |
 | `src/runtime/` | Client "kernel": asset/endpoint layer, game/world state, library catalog, preload, i18n, startup UI | below |
-| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, nodes, home page | [Web build](web-build.md) |
+| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, home page, the Android boot screen | [Web build](web-build.md) |
 | `src/Editor/` | OpenLayers map editor (author custom maps) | [Map editor](map-editor.md) |
 
 ### `src/runtime/` (the client kernel)
@@ -144,6 +145,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `library.js` | React store (`useSyncExternalStore`) for games/scenarios; wraps `/api/library`, `/api/games`, `/api/scenarios`; wires the active cache token + country-name overrides into `assets.js` |
 | `gameState.js` | `GAME_DEFAULTS` + `WORLD_DEFAULTS`; read/write of the per-game `game.json` and `world.json` runtime state | [World state](world-state.md) |
 | `preload.js` | The 8 startup warm tasks + progress model. §3c |
+| `worldFiles.js` | Where a build reads its map files: `ASSETS_BASE` (`/assets`; `/play/assets` on openhistoria.com), `worldFileUrl`, `mapArchiveUrl` |
 | `StartupScreen.jsx` / `ErrorBoundary.jsx` | Loading overlay; render-error recovery |
 | `countryLabels.js`, `countryFlags.js`, `countryTags.js`, `countryNames`/`polityNames.js` | Country flag/tag/name resolution from `countries.pmtiles` + overrides; the picker's coarse region shapes |
 | `communityBasemaps.js`, `communityFlags.js`, `basemapLibrary.js`, `flagLibrary.js` | Community/basemap/flag catalogs |
@@ -155,11 +157,12 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 
 | `scripts/*.mjs` | Purpose |
 |---|---|
-| `fetch-map-assets.mjs` / `map-assets.json` | Pull map binaries from the map-data Release |
+| `fetch-map-assets.mjs` / `map-assets.json` | Pull map binaries from the map-data Release (the desktop app and a local server) |
+| `stage-map-assets.mjs` / `map-assets.web.json` | Fetch + sha256-verify the six map files the website and the Android app carry into `map-cache/`, and lay them into a web build |
 | `seed-web-defaults.mjs` | Generate web-build seed data (default scenario) |
-| `mobile/scripts/stage-map-assets.mjs` | Fetch + sha256-verify the six map files the APK ships (`mobile/map-assets.android.json`) |
+| `mobile/scripts/stage-map-assets.mjs` | The Android build's wrapper around `stage-map-assets.mjs` (`npm run map` in `mobile/`): the same list and cache |
 | `extract-regions.mjs` / `extract-cities.mjs` / `build-default-map.mjs` | Build the PMTiles/geojson map data |
-| `build-content-manifest.mjs` / `sign-release.mjs` / `gen-signing-key.mjs` | Content-node manifest signing (Ed25519) |
+| `sign-release.mjs` / `gen-signing-key.mjs` | Ed25519 signing tools; no build of the game uses them any more |
 | `generate-country-*.mjs`, `generate-lang-packs.mjs`, `fetch-fmg.mjs` | Data/tooling generation |
 
 | `server/*.js` | Purpose |
@@ -169,7 +172,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `mapEditorStore.js`, `basemapStore.js`, `flagStore.js` | Editor docs, basemaps, "My flags" stores |
 | `dataDir.js` | Resolves the single writable `DATA_DIR` (`OH_DATA_DIR` or `server/data`) |
 | `security.js` | Cross-origin write policy, hub URL allowlist, byte-range parsing |
-| `ownerMigration.js`, `trust.js`, `country-names.json` | Owner code→name migration, trust helpers, data |
+| `ownerMigration.js`, `trust.js`, `country-names.json` | Owner code→name migration, signature checks for the signing tools, data |
 
 ---
 
@@ -211,7 +214,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | Backend | Entry | How it answers `/api/*` |
 |---|---|---|
 | Express (desktop app, self-hosted server) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`; the desktop app points `OH_DATA_DIR` at its user-data folder) |
-| Web (browser, and the Android app) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. The Android app is a host of this backend: the same code in a Capacitor WebView, with the map read from the APK (see [mobile.md](mobile.md)). |
+| Web (browser, and the Android app) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles are fetched from the build's own `/assets` folder (`src/runtime/worldFiles.js`); `/api/hub/file` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. The Android app is a host of this backend: the same code in a Capacitor WebView, with the map read from the APK (see [mobile.md](mobile.md)). |
 
 Because the web router keys on `url.origin === location.origin && pathname.startsWith("/api/")` (`router.js`), the client code (`library.js`, `assets.js`, editor IO, basemap library) is **byte-identical** across variants — it just calls `fetch("/api/…")`.
 
@@ -231,7 +234,7 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest. The node software lives only in that repository; this one holds just the client side (`src/runtime/web/nodeConnect.js`, `contentTrust.js`) | [Content nodes](assets-and-data.md) |
+| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server. The website used to load its map through these nodes. It now carries its own copy, and nothing in this repository talks to a node: the client side (`src/runtime/web/nodeConnect.js`, `contentTrust.js`) is removed | [Web build §8](web-build.md) |
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 

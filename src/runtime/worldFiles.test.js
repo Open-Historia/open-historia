@@ -1,125 +1,122 @@
 // Run: node --test src/runtime/worldFiles.test.js
 //
-// The editor's default world and the stock world are fetched by name. On the
-// website the name picks the bytes (the content origin serves only the names
-// in its own table), so the deep-cleaned edition has a name of its own and is
-// asked for first, with the name the origin has always known behind it.
+// Every build reads its map data from its own /assets folder under the same
+// stable names. The website and the Android app are one bundle and carry one
+// set of files, pinned in scripts/map-assets.web.json and laid into the build
+// by scripts/stage-map-assets.mjs.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { WORLD_FILES, fetchWorldFile, worldFileUrls } from "./worldFiles.js";
+import { ASSETS_BASE, WORLD_FILES, mapArchiveUrl, worldFileUrl } from "./worldFiles.js";
+import { SITE_FILE_LIMIT_BYTES, layMapAssets, readWebMapManifest } from "../../scripts/stage-map-assets.mjs";
 
-const ORIGIN = "https://origin.example/content";
 const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
 const readJson = (relative) => JSON.parse(read(relative));
 
-// An origin that has some names and answers 404 to the rest, as the registry
-// Worker does for a name its table does not hold.
-const originWith = (names) => {
-  const asked = [];
-  const fetchImpl = async (url, init) => {
-    asked.push({ url, init });
-    const name = url.slice(url.lastIndexOf("/") + 1);
-    return names.includes(name)
-      ? { ok: true, status: 200, url, name }
-      : { ok: false, status: 404, url, name };
-  };
-  return { asked, fetchImpl };
-};
-
-test("the website asks for the cleaned edition first and the older name second; a local build asks for its own copy", () => {
-  assert.deepEqual(worldFileUrls("seed", { base: ORIGIN }), [`${ORIGIN}/regions-seed-clean.geojson`, `${ORIGIN}/regions-seed.geojson`]);
-  assert.deepEqual(worldFileUrls("stock", { base: `${ORIGIN}/` }), [`${ORIGIN}/default-regions-names-clean.geojson`, `${ORIGIN}/default-regions.geojson`]);
-  // The desktop and the Android app: one stable name in their own folder.
-  assert.deepEqual(worldFileUrls("seed", { base: "" }), ["/assets/regions-seed.geojson"]);
-  assert.deepEqual(worldFileUrls("stock", { base: "" }), ["/assets/default-regions.geojson"]);
-  // This test runs with no content origin set, as those builds do.
-  assert.deepEqual(worldFileUrls("seed"), ["/assets/regions-seed.geojson"]);
-  assert.throws(() => worldFileUrls("tiles", { base: ORIGIN }), /unknown world file/);
+test("a world file and a map archive are asked of the build's own assets folder", () => {
+  // No base path here, as on the desktop and in the Android app. On
+  // openhistoria.com the build's base is /play/ and the folder follows it.
+  assert.equal(ASSETS_BASE, "/assets");
+  assert.equal(worldFileUrl("seed"), "/assets/regions-seed.geojson");
+  assert.equal(worldFileUrl("stock"), "/assets/default-regions.geojson");
+  assert.equal(worldFileUrl("cities"), "/assets/cities-seed.json");
+  assert.equal(mapArchiveUrl("regions"), "/assets/regions.pmtiles");
+  assert.throws(() => worldFileUrl("tiles"), /unknown world file/);
+  assert.ok(read("./worldFiles.js").includes("import.meta.env?.BASE_URL"), "the folder hangs off the build's base path");
 });
 
-test("an origin that does not know the newer name yet still serves the map, from the name before", async () => {
-  const old = originWith(["regions-seed.geojson", "default-regions.geojson"]);
-  const seed = await fetchWorldFile("seed", { cache: "force-cache" }, { base: ORIGIN, fetchImpl: old.fetchImpl });
-  assert.equal(seed.ok, true);
-  assert.equal(seed.name, "regions-seed.geojson");
-  assert.deepEqual(old.asked.map((row) => row.url), [`${ORIGIN}/regions-seed-clean.geojson`, `${ORIGIN}/regions-seed.geojson`]);
-  assert.deepEqual(old.asked.map((row) => row.init), [{ cache: "force-cache" }, { cache: "force-cache" }], "both are asked the way the caller asked");
-  const stock = await fetchWorldFile("stock", undefined, { base: ORIGIN, fetchImpl: old.fetchImpl });
-  assert.equal(stock.name, "default-regions.geojson");
-});
-
-test("an origin that knows the newer name is asked once", async () => {
-  const current = originWith(["regions-seed-clean.geojson", "regions-seed.geojson", "default-regions-names-clean.geojson", "default-regions.geojson"]);
-  const seed = await fetchWorldFile("seed", undefined, { base: ORIGIN, fetchImpl: current.fetchImpl });
-  const stock = await fetchWorldFile("stock", undefined, { base: ORIGIN, fetchImpl: current.fetchImpl });
-  assert.deepEqual([seed.name, stock.name], ["regions-seed-clean.geojson", "default-regions-names-clean.geojson"]);
-  assert.equal(current.asked.length, 2);
-});
-
-test("an origin with neither hands back its last answer; a request that fails outright is thrown once every name has failed", async () => {
-  const empty = originWith([]);
-  const missing = await fetchWorldFile("seed", undefined, { base: ORIGIN, fetchImpl: empty.fetchImpl });
-  assert.equal(missing.ok, false);
-  assert.equal(missing.status, 404);
-  assert.equal(missing.name, "regions-seed.geojson", "the caller reads the status of the last name asked");
-  let attempts = 0;
-  await assert.rejects(
-    fetchWorldFile("seed", undefined, { base: ORIGIN, fetchImpl: async () => { attempts += 1; throw new TypeError("offline"); } }),
-    /offline/,
-  );
-  assert.equal(attempts, 2, "offline, both names are tried and the last failure is the caller's");
-
-  // A self-hosted origin whose 404 carries no CORS headers: the browser
-  // reports a failed request for the name it lacks, and the older name loads.
-  const asked = [];
-  const bucket = async (url) => {
-    asked.push(url.slice(url.lastIndexOf("/") + 1));
-    if (url.endsWith("/regions-seed.geojson")) return { ok: true, status: 200, url };
-    throw new TypeError("Failed to fetch");
-  };
-  const served = await fetchWorldFile("seed", undefined, { base: ORIGIN, fetchImpl: bucket });
-  assert.equal(served.ok, true);
-  assert.deepEqual(asked, ["regions-seed-clean.geojson", "regions-seed.geojson"]);
-
-  // A request the caller called off is not retried under another name.
-  const controller = new AbortController();
-  controller.abort();
-  let afterAbort = 0;
-  await assert.rejects(fetchWorldFile("seed", { signal: controller.signal }, {
-    base: ORIGIN,
-    fetchImpl: async () => { afterAbort += 1; throw new DOMException("aborted", "AbortError"); },
-  }), { name: "AbortError" });
-  assert.equal(afterAbort, 1);
-  // A local build has one name: its answer is the answer.
-  const local = originWith([]);
-  await fetchWorldFile("stock", undefined, { base: "", fetchImpl: local.fetchImpl });
-  assert.deepEqual(local.asked.map((row) => row.url), ["/assets/default-regions.geojson"]);
-});
-
-test("the names are the ones pinned: the website's list holds the first of each, the Android list lays its files under the last", () => {
-  const web = readJson("../../scripts/map-assets.web.json").assets.map((entry) => entry.asset);
-  assert.ok(web.includes(WORLD_FILES.seed[0]), "the signed manifest describes the edition the site asks for first");
-  assert.ok(web.includes(WORLD_FILES.stock[0]));
-  const android = readJson("../../mobile/map-assets.android.json").assets;
-  for (const file of ["seed", "stock"]) {
-    const stable = WORLD_FILES[file][WORLD_FILES[file].length - 1];
-    const entry = android.find((row) => row.path === `assets/${stable}`);
-    assert.ok(entry, `the Android app carries ${stable}`);
-    assert.match(entry.asset, /-clean\.geojson$/, "and what it carries under that name is the cleaned edition");
+test("the web build's list lays a file under every name the app asks for", () => {
+  const { assets, release } = readWebMapManifest();
+  assert.equal(release, "map-data");
+  const paths = assets.map((entry) => entry.path).sort();
+  const asked = [
+    ...Object.values(WORLD_FILES).map((name) => `assets/${name}`),
+    ...["regions", "countries", "cities"].map((key) => `assets/${key}.pmtiles`),
+  ].sort();
+  assert.deepEqual(paths, asked);
+  for (const entry of assets) {
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/, `${entry.asset} is pinned by sha256`);
+    assert.ok(Number.isInteger(entry.bytes) && entry.bytes > 0, `${entry.asset} is pinned by size`);
   }
-  // The same file under one name is one file: the stock world the site asks
-  // for first is the one the desktop pins.
-  const desktop = readJson("../../scripts/map-assets.json").assets.find((entry) => entry.path === "server/data/stock/regions.geojson");
-  assert.equal(desktop.asset, WORLD_FILES.stock[0]);
 });
 
-test("both fetches go through this module, and nothing else spells the names", () => {
-  const editor = read("../Editor/regionImport.js");
-  assert.ok(editor.includes('res = await fetchWorldFile("seed", { signal });'));
-  assert.ok(!/regions-seed[a-z-]*\.geojson`/.test(editor), "the editor builds no URL of its own");
-  const store = read("./web/libraryStore.js");
-  assert.ok(store.includes('fetchWorldFile("stock", { cache: "force-cache" })'));
-  assert.ok(!store.includes("default-regions.geojson`"), "nor does the web store");
+test("every file the website carries fits its host's limit for one file", () => {
+  // Cloudflare Pages refuses a file over 25 MiB after reporting the deploy as a
+  // success; the deploy workflow checks the built site for one over 24.
+  assert.equal(SITE_FILE_LIMIT_BYTES, 25 * 1024 * 1024);
+  for (const entry of readWebMapManifest().assets) {
+    assert.ok(entry.bytes <= 24 * 1024 * 1024, `${entry.asset} is ${(entry.bytes / 1048576).toFixed(1)} MiB`);
+  }
+});
+
+test("the web build and the desktop pin the same z8 archives, and each its own cut of the world", () => {
+  const web = Object.fromEntries(readWebMapManifest().assets.map((entry) => [entry.path, entry]));
+  const desktop = Object.fromEntries(readJson("../../scripts/map-assets.json").assets.map((entry) => [entry.path.replace(/^public\//, ""), entry]));
+  for (const name of ["assets/regions.pmtiles", "assets/countries.pmtiles", "assets/cities.pmtiles", "assets/cities-seed.json"]) {
+    assert.equal(web[name].sha256, desktop[name].sha256, `${name} is one file on every build`);
+  }
+  // The editor's default world and the stock world are the deep-cleaned
+  // editions on both, in the size each can hold.
+  assert.match(web["assets/regions-seed.geojson"].asset, /-clean\.geojson$/);
+  assert.match(desktop["assets/regions-seed.geojson"].asset, /-clean\.geojson$/);
+  assert.notEqual(web["assets/regions-seed.geojson"].sha256, desktop["assets/regions-seed.geojson"].sha256);
+  // The stock world's owners are country names on both: the web-sized one is
+  // built from its seed by the script that builds the desktop's.
+  assert.match(web["assets/default-regions.geojson"].asset, /^default-regions-names-/);
+  const desktopStock = readJson("../../scripts/map-assets.json").assets.find((entry) => entry.path === "server/data/stock/regions.geojson");
+  assert.match(desktopStock.asset, /^default-regions-names-/);
+});
+
+test("the Android app carries the website's files: one list, one stager", () => {
+  assert.ok(!fs.existsSync(new URL("../../mobile/map-assets.android.json", import.meta.url)), "there is no second list to drift");
+  const mobile = read("../../mobile/scripts/stage-map-assets.mjs");
+  assert.ok(mobile.includes('from "../../scripts/stage-map-assets.mjs"'));
+  const scripts = readJson("../../package.json").scripts;
+  for (const name of ["build:web", "build:site"]) {
+    assert.ok(scripts[name].includes("node scripts/stage-map-assets.mjs dist-web"), `${name} lays the map into the site`);
+  }
+  assert.ok(scripts["build:site"].indexOf("stage-map-assets.mjs dist-web") < scripts["build:site"].indexOf("assemble-site.mjs"), "before the site is assembled from it");
+});
+
+test("the stager lays each file at its stable name, and can leave a folder's own copies alone", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oh-stage-"));
+  try {
+    const cache = path.join(root, "cache");
+    fs.mkdirSync(cache);
+    fs.writeFileSync(path.join(cache, "regions-z8.pmtiles"), "archive");
+    fs.writeFileSync(path.join(cache, "world-web.geojson"), "web world");
+    const staged = [
+      { asset: "regions-z8.pmtiles", path: "assets/regions.pmtiles", bytes: 7, file: path.join(cache, "regions-z8.pmtiles") },
+      { asset: "world-web.geojson", path: "assets/regions-seed.geojson", bytes: 9, file: path.join(cache, "world-web.geojson") },
+    ];
+    const out = path.join(root, "dist-web");
+    fs.mkdirSync(out);
+    assert.deepEqual(layMapAssets(staged, out), { laid: 2, bytes: 16 });
+    assert.equal(fs.readFileSync(path.join(out, "assets", "regions.pmtiles"), "utf8"), "archive");
+    assert.equal(fs.readFileSync(path.join(out, "assets", "regions-seed.geojson"), "utf8"), "web world");
+
+    // A developer's public/ holds the desktop's world under the same name.
+    const dev = path.join(root, "public");
+    fs.mkdirSync(path.join(dev, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(dev, "assets", "regions-seed.geojson"), "desktop world");
+    assert.deepEqual(layMapAssets(staged, dev, { missingOnly: true }), { laid: 1, bytes: 7 });
+    assert.equal(fs.readFileSync(path.join(dev, "assets", "regions-seed.geojson"), "utf8"), "desktop world");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("nothing in the app names a content origin or a node any more", () => {
+  for (const file of ["../Editor/regionImport.js", "../Editor/citiesImport.js", "./web/libraryStore.js", "./web/router.js", "./web/index.js", "./assets.js", "../Game/AI/worldCities.js", "../Game/AI/promptContext.js"]) {
+    const text = read(file);
+    assert.ok(!/VITE_OH_PMTILES_URL|VITE_OH_DIRECTORY_URL|contentTrust|nodeConnect|connectBestNode/.test(text), file);
+  }
+  assert.ok(read("../Editor/regionImport.js").includes('export const SEED_URL = worldFileUrl("seed");'));
+  assert.ok(read("./web/libraryStore.js").includes('fetch(worldFileUrl("stock"), { cache: "force-cache" })'));
+  assert.ok(read("./web/router.js").includes("return fetch(new Request(mapArchiveUrl(key), {"));
+  const env = read("../../.env.web");
+  assert.ok(!/^VITE_OH_PMTILES_URL=|^VITE_OH_DIRECTORY_URL=/m.test(env), "the website's build is given no content origin");
 });

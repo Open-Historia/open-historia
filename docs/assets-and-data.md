@@ -1,6 +1,6 @@
 # Map Data & Assets
 
-Open Historia paints the world from a handful of heavy, mostly-static binaries (three PMTiles vector archives, two GeoJSON seed/geometry files) plus small per-scenario JSON documents (colors, flags, tags, world state). This page traces where each asset physically lives (app bundle vs. the writable `OH_DATA_DIR` vs. a GitHub Release vs. a Cloudflare-hosted content swarm), how the server route layer resolves a scenario override on top of the shared default, and how the browser client (`src/runtime/assets.js`) caches, warms, primes, and memoizes everything without OOMing the tab. The single load-bearing rule: the big binaries are **never** in Git — they are downloaded from a GitHub Release named `map-data` on first launch, checksum-verified, and served locally.
+Open Historia paints the world from a handful of heavy, mostly-static binaries (three PMTiles vector archives, two GeoJSON seed/geometry files) plus small per-scenario JSON documents (colors, flags, tags, world state). This page traces where each asset physically lives (app bundle vs. the writable `OH_DATA_DIR` vs. a GitHub Release), how the server route layer resolves a scenario override on top of the shared default, and how the browser client (`src/runtime/assets.js`) caches, warms, primes, and memoizes everything without OOMing the tab. The single load-bearing rule: the big binaries are **never** in Git — they come from a GitHub Release named `map-data`, checksum-verified, and every build serves its own copy. The desktop app downloads them on first launch; the website and the Android app carry them, laid in when the build is made.
 
 ---
 
@@ -10,14 +10,14 @@ Every runtime asset the map depends on, with its physical filename, MIME, and ho
 
 | Asset | Key | File on disk | Source of truth | Served to client via | Notes |
 |---|---|---|---|---|---|
-| Regions vector tiles | `regions` | `regions.pmtiles` (~21.1 MB z8 trim on desktop/Android; ~105.8 MB z10 on the website) | `map-data` Release | `GET /api/runtime/pmtiles/regions` | GADM level-1 borders; the z0 tile is the region catalog; paints owners above z6.5. The website's z10 copy carries z9/z10, which the style never asks for — see `scripts/trim-pmtiles.mjs` |
-| Countries vector tiles | `countries` | `countries.pmtiles` (~12.6 MB z8 trim on desktop/Android; ~62.7 MB z10 on the website) | `map-data` Release | `GET /api/runtime/pmtiles/countries` | z0 tile is the country index + label source; warmed on **every** map; the website's z10 copy has the same unused z9/z10 |
+| Regions vector tiles | `regions` | `regions.pmtiles` (~21.1 MB, the z8 trim, on every build) | `map-data` Release | `GET /api/runtime/pmtiles/regions` | GADM level-1 borders; the z0 tile is the region catalog; paints owners above z6.5. The full z10 archive (~105.8 MB) carries z9/z10, which the style never asks for — see `scripts/trim-pmtiles.mjs` |
+| Countries vector tiles | `countries` | `countries.pmtiles` (~12.6 MB, the z8 trim, on every build) | `map-data` Release | `GET /api/runtime/pmtiles/countries` | z0 tile is the country index + label source; warmed on **every** map; the full z10 archive (~62.7 MB) has the same unused z9/z10 |
 | Cities vector tiles | `cities` | `cities.pmtiles` (~1.5 MB) | `map-data` Release | `GET /api/runtime/pmtiles/cities` | Modern-day city labels layer |
 | Custom regions geometry | `regionsGeojson` | `regions.geojson` (per-scenario) | Scenario dir, else the stock world below | `GET /api/runtime/json/regionsGeojson` | The scenario's own map (the built-in Modern Day has one, a hand-drawn world); a scenario without one renders on the stock world; **never cached client-side** |
-| Stock world geometry | — | `server/data/stock/regions.geojson` (~54.7 MB) | `map-data` Release (`default-regions-names-clean.geojson`) | via `regionsGeojson` for scenarios without a map | GADM level-1 regions with owner names — what the hub's re-ownership presets (keyed by GADM ids) and "Modern Day (classic map)" render on |
+| Stock world geometry | — | `server/data/stock/regions.geojson` (~54.7 MB) | `map-data` Release (`default-regions-names-clean.geojson`) | via `regionsGeojson` for scenarios without a map | GADM level-1 regions with owner names — what the hub's re-ownership presets (keyed by GADM ids) and "Modern Day (classic map)" render on. The website and the Android app carry the web-sized one as `assets/default-regions.geojson` (~13.1 MB; `default-regions-names-web-clean.geojson` on the release) |
 | Built-in scenario seed | — | `server/seed/default/` (`regions.geojson` ~5.6 MB, `cities.geojson`, `world.json`, `colors.json`, cover…) | the app bundle (committed) | copied into `server/data/scenarios/default` by the server | Modern Day's own map; `world.builtInMap` names the map generation (§3) |
 | Custom cities geometry | `citiesGeojson` | `cities.geojson` (per-scenario) | Scenario dir | `GET /api/runtime/json/citiesGeojson` | Era-accurate city points; rendered when `world.customCities`; **never cached client-side** |
-| Region seed | — | `regions-seed.geojson` (~55.3 MB) | `map-data` Release → `public/assets/` | `GET /assets/regions-seed.geojson` | Offline-produced seed the **map editor** imports; not a runtime map layer |
+| Region seed | — | `regions-seed.geojson` (~55.3 MB) | `map-data` Release → `public/assets/` | `GET /assets/regions-seed.geojson` | Offline-produced seed the **map editor** imports; not a runtime map layer. The website and the Android app carry the web-sized cut under the same name (~13.1 MB; `regions-seed-clean.geojson` on the release) |
 | City seed | — | `cities-seed.json` (~7.9 MB) | `map-data` Release → `public/assets/` | `GET /assets/cities-seed.json` | Consumed by the editor (`citiesImport.js`), AI prompt context (`promptContext.js`) and placing things by name (`worldCities.js`, read only when a phrase names a town the map lacks) |
 | Nation colors | `colors` | `colors.json` (~3.4 KB) | Scenario dir, else app palette | `GET /api/runtime/json/colors` | Owner-name → hex; falls back to immutable `public/assets/colors.json` |
 | Nation flags | `flags` | `flags.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/flags` | Owner code → PNG data URL; `{}` when absent |
@@ -32,16 +32,17 @@ The client-side URL and PMTiles-archive tables are declared in `src/runtime/asse
 
 ---
 
-## 2. Where assets come from — the four sources
+## 2. Where assets come from — the three sources
 
-An asset can be resolved from up to four places. Which one wins depends on the build (desktop/server vs. web) and whether the active scenario ships an override.
+An asset can be resolved from up to three places. Which one wins depends on the build (desktop/server vs. web) and whether the active scenario ships an override.
 
 | Source | What lives there | Which builds |
 |---|---|---|
-| **App bundle** (`public/assets/`, or `dist/assets/` in a built app; `www/assets/` inside the Android APK) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` (the Android app ships the z8 trims and the web-sized seeds, pinned in `mobile/map-assets.android.json`). The installed desktop app ships no map: it downloads it into the folder `OH_ASSETS_DIR` names | Server from a checkout / Termux / Android |
+| **App bundle** (`public/assets/`, or `dist/assets/` in a built app; `dist-web/assets/` on the website, served at `/play/assets/`; `www/assets/` inside the Android APK) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` (the website and the Android app carry the z8 trims and the web-sized world files, pinned in `scripts/map-assets.web.json`). The installed desktop app ships no map: it downloads it into the folder `OH_ASSETS_DIR` names | Server from a checkout / Termux / website / Android |
 | **`OH_DATA_DIR`** (`server/data/…`, or the desktop app's user-data folder) | Per-scenario overrides, per-game state | Every build that runs the Express server |
-| **`map-data` GitHub Release** | Canonical copies of every heavy binary, checksum-pinned | Fetched at install/update time |
-| **Cloudflare / content-node swarm** | Byte-identical pmtiles served over HTTP range requests, hash-verified | Web build only |
+| **`map-data` GitHub Release** | Canonical copies of every heavy binary, checksum-pinned | Fetched at first launch by the desktop app; fetched when the build is made for the website and the Android app |
+
+The website used to have a fourth source: a content origin (a Worker proxy in front of the release) and community content nodes, read at run time. It now carries its own copy like the other builds (§3, §7).
 
 ### `OH_DATA_DIR` and the data-dir resolver
 
@@ -83,7 +84,7 @@ The manifest that `fetch-map-assets.mjs` reads. Note the **name/namespace split*
 
 | `path` (stable client name) | `asset` (release name) | bytes | Why the names differ |
 |---|---|---|---|
-| `public/assets/regions.pmtiles` | **`regions-z8.pmtiles`** | 21 106 005 | the z8 trim (`trim-pmtiles.mjs` below); the full z10 `regions.pmtiles` stays on the release for the website |
+| `public/assets/regions.pmtiles` | **`regions-z8.pmtiles`** | 21 106 005 | the z8 trim (`trim-pmtiles.mjs` below); the full z10 `regions.pmtiles` stays on the release, and no current build fetches it |
 | `public/assets/countries.pmtiles` | **`countries-z8.pmtiles`** | 12 580 027 | the z8 trim, as above |
 | `public/assets/cities.pmtiles` | `cities.pmtiles` | 1 547 924 | same |
 | `public/assets/cities-seed.json` | `cities-seed.json` | 7 857 627 | same |
@@ -94,9 +95,9 @@ Root keys: `owner: "Open-Historia"`, `repo: "open-historia"`, `release: "map-dat
 
 **The `-clean` edition.** The z8 extract (`regions-seed-z8.geojson`, from `scripts/extract-regions.mjs`) carries the disagreements of the tiles it was stitched from: 24,661 cracks and 49,647 slivers up to 1.5 km wide between its 3,662 regions. The pinned files are that world with the Scenario Workshop's own save-time border cleanup (docs/map-editor.md §24) run over it at the deep clean's width until a freshly read file had nothing left to repair: 24,920 cracks filled and 49,659 slivers trimmed in 3,347 regions, every region still there under its own id with its own properties, coordinates at five decimals as a save writes them. No region gained or lost a fifth of its area; seven moved by more than a tenth, all districts of a few square kilometres (Saint George's in Bermuda the most, 14.6 to 17.1 km²). What the cleanup leaves alone it left alone here too: 321 holes inside a single region (water), 3 pairs that share more than a tenth of the smaller region, and 12 pairs of very large neighbours it never compares. The stock world is rebuilt from the cleaned seed by `scripts/build-default-map.mjs` (the script reproduces the previous stock file byte for byte from the previous seed). The entries before them stay on the release, and the manifest's `earlierBytes` on the stock entry keeps the previous size, by which an install from before the Modern Day redraw that still holds that file as its built-in map is recognised (`readStockRegionsSizes` in `server/libraryStore.js`).
 
-**The web-sized files.** The website's editor and the Android app use a lighter cut of the same world (`regions-seed.geojson`, 3,661 regions and 570,361 vertices in 12.7 MB), and it is cleaned the same way: `regions-seed-clean.geojson` (13,077,300 bytes), 14,619 cracks filled and 19,354 slivers trimmed, every region under its own id with its own properties. The cut is coarse enough that a crack 1.5 km wide is a large part of a small region: 49 regions moved by more than a tenth of their area and 15 by more than a fifth, every one a district of a few dozen square kilometres or less (Florida in Puerto Rico the most, 24.2 to 46.6 km²). A save of that world in the editor would do the same to them; the file only has it done already. Left alone there: 384 holes inside a single region and 91 pairs that share more than a tenth of the smaller region (the coarser the cut, the more of those). The Android app also carries a stock world of that cut, `default-regions-clean.geojson` (13,187,129 bytes): the same cleaned geometry in the layout and with the owners (country CODES) of the `default-regions.geojson` it replaces. `mobile/map-assets.android.json` pins both under the app's two stable paths. The website asks for its two world files by name, newest edition first (`src/runtime/worldFiles.js`): `regions-seed-clean.geojson`, then `regions-seed.geojson`; and for the stock world `default-regions-names-clean.geojson` (the z8 file above; the content origin has always answered `default-regions.geojson` with the z8 world keyed by names, not with the 12.8 MB release asset of that name), then `default-regions.geojson`. The registry Worker's `/content` proxy serves only the names in its own table (`MAP_ASSETS`), so until that table holds the two new names it answers 404 and the site loads the editions before, as it always has: adding the two names to the Worker is what switches the site over, with no build of the site, and neither order of the two deploys leaves it without a map. `scripts/map-assets.web.json` and the signed manifest name the first of each.
+**The web-sized files.** The website and the Android app use a lighter cut of the same world (`regions-seed.geojson`, 3,661 regions and 570,361 vertices in 12.7 MB), and it is cleaned the same way: `regions-seed-clean.geojson` (13,077,300 bytes), 14,619 cracks filled and 19,354 slivers trimmed, every region under its own id with its own properties. The cut is coarse enough that a crack 1.5 km wide is a large part of a small region: 49 regions moved by more than a tenth of their area and 15 by more than a fifth, every one a district of a few dozen square kilometres or less (Florida in Puerto Rico the most, 24.2 to 46.6 km²). A save of that world in the editor would do the same to them; the file only has it done already. Left alone there: 384 holes inside a single region and 91 pairs that share more than a tenth of the smaller region (the coarser the cut, the more of those). The stock world of that cut is `default-regions-names-web-clean.geojson` (13,128,553 bytes): the owners are country names, and it is built from the cleaned web-sized seed by `scripts/build-default-map.mjs` exactly as the desktop's stock world is built from the desktop's seed. The earlier `default-regions-clean.geojson`, with country codes as owners, stays on the release, unused. The website and the Android app carry the same two files, under `assets/regions-seed.geojson` and `assets/default-regions.geojson`; `scripts/map-assets.web.json` pins them (see "The web builds' list" below). The app asks for those two stable names and nothing else: no edition is tried first and none is a fallback.
 
-**Namespacing gotcha:** the client always requests the *stable* path (e.g. `regions-seed.geojson`), while the release stores a *versioned* name (`regions-seed-z8-clean.geojson`). The manifest is the only bridge. If a new zoom generation is uploaded under a new release name but the manifest's `sha256`/`bytes` aren't bumped, clients keep the old bytes; conversely a stable client name can silently point at a stale release generation. **When a map file changes: upload the new asset AND update its `sha256` + `bytes` in the manifest.**
+**Namespacing gotcha:** the client always requests the *stable* path (e.g. `regions-seed.geojson`), while the release stores a *versioned* name (`regions-seed-z8-clean.geojson`). The manifest is the only bridge. If a new zoom generation is uploaded under a new release name but the manifest's `sha256`/`bytes` aren't bumped, clients keep the old bytes; conversely a stable client name can silently point at a stale release generation. **When a map file changes: upload the new asset AND update its `sha256` + `bytes` in the manifest.** The three archives and `cities-seed.json` are pinned in the web builds' list too (`scripts/map-assets.web.json`, below), and `src/runtime/worldFiles.test.js` fails when the two lists disagree about them.
 
 ### The built-in scenario seed (`server/seed/default`)
 
@@ -110,7 +111,7 @@ The built-in Modern Day scenario is **not** on the release and not under `server
 
 To ship a new built-in map: open Modern Day's Workshop, import the map, Save, copy the resulting `regions.geojson`, `cities.geojson`, `world.json` and `colors.json` from the data directory into `server/seed/default/`, and change `world.builtInMap` to a new value. To ship new content on the same map (names, colours, claims, or the same regions with their borders cleaned — the region ids unchanged), raise `world.builtInRevision` instead: a new stamp would fork every campaign and, on the web, send every scenario carrying the old stamp back to the stock world. `server/builtInScenarioSeed.test.js` checks the seed's world matches its map and exercises every branch above.
 
-The web build bundles the same map: `scripts/seed-web-defaults.mjs` copies it beside the generated seed module and `src/runtime/web/generated/defaultScenarioMeta.js` exports its URL and stamp; `src/runtime/web/libraryStore.js` serves it for any scenario whose world carries the stamp (`usesBuiltInMap`) and keeps fetching the stock world from the content origin for every other scenario without a map. Its `ensureSeeded` runs the same fork-and-reset for a stored library that predates the redraw, and the same in-place refresh for one a revision behind (`defaultScenarioMeta.js` exports `builtInRevision` too).
+The web build bundles the same map: `scripts/seed-web-defaults.mjs` copies it beside the generated seed module and `src/runtime/web/generated/defaultScenarioMeta.js` exports its URL and stamp; `src/runtime/web/libraryStore.js` serves it for any scenario whose world carries the stamp (`usesBuiltInMap`) and fetches the stock world from the build's own assets folder (`worldFileUrl("stock")`, `src/runtime/worldFiles.js`) for every other scenario without a map. Its `ensureSeeded` runs the same fork-and-reset for a stored library that predates the redraw, and the same in-place refresh for one a revision behind (`defaultScenarioMeta.js` exports `builtInRevision` too).
 
 ### `scripts/fetch-map-assets.mjs`
 
@@ -146,21 +147,50 @@ A pure repack: tile bodies are copied across still compressed, byte for byte, so
 | `countries.pmtiles` | 62,739,546 | 12,580,027 | 50.2 MB |
 | `cities.pmtiles` | 1,547,924 | — | nothing; `-zg` already stopped it at z3 |
 
-That is **134.9 MB off the 288.7 MB** a player pulls on first launch. The trims are on the `map-data` release as `regions-z8.pmtiles` and `countries-z8.pmtiles`, and `scripts/map-assets.json` (desktop and local server) and `mobile/map-assets.android.json` pin them. An install that already has the z10 archives replaces them on its next launch: their size no longer matches, so the desktop setup check and `--ensure` both fetch the trims. Because a packaged beta shares the stable app's `public/assets`, the pins must change on every branch in the same release, or a tester with both apps re-downloads one or the other on every launch.
+That is **134.9 MB off the 288.7 MB** a player pulls on first launch. The trims are on the `map-data` release as `regions-z8.pmtiles` and `countries-z8.pmtiles`, and `scripts/map-assets.json` (desktop and local server) and `scripts/map-assets.web.json` (the website and the Android app) pin them. An install that already has the z10 archives replaces them on its next launch: their size no longer matches, so the desktop setup check and `--ensure` both fetch the trims. Because a packaged beta shares the stable app's `public/assets`, the pins must change on every branch in the same release, or a tester with both apps re-downloads one or the other on every launch.
 
-The website is unchanged: it fetches `regions.pmtiles` / `countries.pmtiles` (z10) by name through the Worker proxy, and `public/content-manifest.json` is built from its own list, `scripts/map-assets.web.json`. Moving it to the trims means serving the `-z8` bytes under the names it requests (or mapping the names in `router.js` and `contentTrust.js`), then rebuilding and re-signing the manifest and re-populating the nodes.
+The website reads the same trims. It used to fetch the z10 `regions.pmtiles` / `countries.pmtiles` by name through the registry Worker's proxy; it now carries `regions-z8.pmtiles` and `countries-z8.pmtiles` under its own `assets/` folder as `regions.pmtiles` and `countries.pmtiles`: 35 MB of archives instead of the 168 MB z10 ones. `src/runtime/worldFiles.test.js` and `server/mapAssetsFetch.test.js` check that the web list and the desktop list pin the same archives.
 
 Two things a trimmed archive still says about itself: the metadata blob is preserved verbatim, so `vector_layers[0].maxzoom` and `tilestats` still describe z10 (MapLibre reads the header, not these, so rendering is unaffected — `tippecanoe-decode` and friends would be misled), and `centerZoom` is carried across as it was.
 
+### The web builds' list (`scripts/map-assets.web.json`)
+
+The website and the Android app are the same bundle and carry the same six files, pinned in one list. Each entry has `asset` (the release name), `path` (the stable name under the build), `bytes` and `sha256`.
+
+| `path` (stable name under the build) | `asset` (release name) | bytes |
+|---|---|---|
+| `assets/regions.pmtiles` | `regions-z8.pmtiles` | 21 106 005 |
+| `assets/countries.pmtiles` | `countries-z8.pmtiles` | 12 580 027 |
+| `assets/cities.pmtiles` | `cities.pmtiles` | 1 547 924 |
+| `assets/cities-seed.json` | `cities-seed.json` | 7 857 627 |
+| `assets/regions-seed.geojson` | `regions-seed-clean.geojson` | 13 077 300 |
+| `assets/default-regions.geojson` | `default-regions-names-web-clean.geojson` | 13 128 553 |
+
+About 69 MB in all. The first four are the files the desktop reads; the two world files are the web-sized ones described above.
+
+One script, `scripts/stage-map-assets.mjs`, downloads the files from the `map-data` release into `map-cache/` at the repo root (gitignored), verifies each against its size and sha256, and lays them into a build at their stable names. A file already in the cache and correct is not downloaded again.
+
+| Command | What it does |
+|---|---|
+| `node scripts/stage-map-assets.mjs` | Download and verify into `map-cache/` |
+| `node scripts/stage-map-assets.mjs dist-web` | The same, then lay the files into `dist-web/assets/`. `npm run build:web` and `npm run build:site` run this after the Vite build; `build:site` then assembles the site, so the files are served at `/play/assets/` |
+| `node scripts/stage-map-assets.mjs public --missing-only` | The same, then lay only the files `public/` lacks, never overwriting a developer's desktop copies. `npm run dev:web` runs this before it starts Vite |
+
+Unlike `fetch-map-assets.mjs`, the stager exits non-zero when a file cannot be had: a site or an APK built without its map is not something to ship.
+
+Every file must stay under Cloudflare Pages' 25 MiB a file (`SITE_FILE_LIMIT_BYTES` in the stager), which is why this list holds the z8 trims and the web-sized world and not the desktop's 55 MB world files. `src/runtime/worldFiles.test.js` checks the list against the limit and against the names the app asks for, and the deploy workflow refuses a built site with a file over 24 MiB.
+
+The website cannot fetch the files from GitHub at run time as the desktop does, because a browser cannot read a GitHub release asset: neither the release download nor the API route sends an `Access-Control-Allow-Origin` header on the file. See [web-build.md §8](web-build.md) for the measurement and for what the site's host must support.
+
 ### Android variant
 
-The Android app ships its map data **inside the APK**: `mobile/scripts/stage-map-assets.mjs` downloads the six files pinned in `mobile/map-assets.android.json` from the same `map-data` release (the z8-trimmed archives, `cities.pmtiles`, the web-sized stock world and editor seed in their deep-cleaned editions, `default-regions-clean.geojson` and `regions-seed-clean.geojson`, laid under the stable names `default-regions.geojson` and `regions-seed.geojson`, and `cities-seed.json`), verifies each sha256, and `stage-www.mjs` lays them under `www/assets/`. The interceptor's `/api/runtime/pmtiles/<key>` becomes one whole-file read of `/assets/<key>.pmtiles` from Capacitor's local server, sliced in memory — that server ignores the end of a Range, so the app never sends one (`src/runtime/wholeFileSource.js`). Nothing is downloaded at first run and nothing is streamed from a content node.
+The Android app ships its map data **inside the APK**. `mobile/scripts/stage-map-assets.mjs` (`npm run map` in `mobile/`) is a thin wrapper around the stager above and uses the same list and the same `map-cache/`; `stage-www.mjs` lays the six files under `www/assets/`. `mobile/map-assets.android.json`, the app's own list, no longer exists. The interceptor's `/api/runtime/pmtiles/<key>` becomes one whole-file read of `/assets/<key>.pmtiles` from Capacitor's local server, sliced in memory — that server ignores the end of a Range, so the app never sends one (`src/runtime/wholeFileSource.js`). Nothing is downloaded at first run.
 
 ---
 
 ## 4. Server runtime routes
 
-The client talks only to these same-origin routes (`server/server.js`). In the **web build** there is no Express server — a `fetch()` interceptor in `src/runtime/web/router.js` answers the same paths from IndexedDB / a content CDN (§7).
+The client talks only to these same-origin routes (`server/server.js`). In the **web build** there is no Express server — a `fetch()` interceptor in `src/runtime/web/router.js` answers the same paths from IndexedDB and the build's own `/assets` folder (§7).
 
 | Route | Handler | Purpose |
 |---|---|---|
@@ -214,7 +244,7 @@ The token also gates the PMTiles cache rotation: dropping `binaryValueCache`, `b
 | Function | Role |
 |---|---|
 | `getPmtilesArchive(url)` | Return cached `PMTiles` or register a new one |
-| `warmPmtilesArchive(url)` | Download the full archive into `binaryValueCache`, then prime. **Web build** tries the hash-verified node swarm first (`contentTrust.js`), falls through to the origin |
+| `warmPmtilesArchive(url)` | Download the full archive into `binaryValueCache`, then prime. On every build the archive is the build's own copy: the desktop's local server, the Android app's APK, the website's own `/assets` |
 | `primePmtilesArchive(url, buffer)` | Store the ArrayBuffer and register a `MemorySource`-backed archive |
 | `registerPmtilesArchive(url)` | `new PMTiles(source, pmtilesCache)` + register on the `Protocol` |
 
@@ -259,12 +289,12 @@ The **web build** uses a parallel key namespace: `buildRuntimeCacheUrl(key)` →
 
 Under `import.meta.env.VITE_OH_WEB` there is no node server:
 
-- **Route interception:** `src/runtime/web/router.js` installs a `fetch` interceptor for same-origin `/api/*`. `/api/runtime/pmtiles/:key` (`router.js`) checks a scenario override in IndexedDB (`getScenarioPmtilesOverride`), else fetches `${VITE_OH_PMTILES_URL || "/assets"}/<key>.pmtiles`. The hosted site sets `VITE_OH_PMTILES_URL` to the **registry Worker's CORS+range proxy**, because Cloudflare Pages can't host the 60–100 MB archives directly (same-origin would 404 to the SPA fallback).
-- **Verified content swarm:** `warmPmtilesArchive` (`assets.js`) dynamically imports `src/runtime/web/contentTrust.js` and calls `fetchVerifiedBuffer(url)`. It maps the URL to a manifest asset id (`assetIdFromUrl`, `contentTrust.js`), fetches `<node>/oh/v1/content/<sha256>` from the vetted node swarm, and verifies **every byte** against the signed `content-manifest.json`. A bad/broken node can at worst force a retry — it can never deliver tampered bytes — and any failure falls through to the canonical origin, so a node outage is invisible. The signed node **directory** (`VITE_OH_DIRECTORY_URL`) is a deny-list/control doc; live addresses come from `nodes-live.json`. This whole block is stripped from the local download.
+- **Route interception:** `src/runtime/web/router.js` installs a `fetch` interceptor for same-origin `/api/*`. `/api/runtime/pmtiles/:key` (`router.js`) checks a scenario override in IndexedDB (`getScenarioPmtilesOverride`), else fetches `mapArchiveUrl(key)` (`src/runtime/worldFiles.js`): `<key>.pmtiles` in the build's own assets folder, `/assets` in the Android app and `/play/assets` on openhistoria.com. The request's headers go with it, so a `Range` is answered by the host that serves the site.
+- **The map is part of the build:** the three archives, the two world files and `cities-seed.json` are static files of the site, pinned in `scripts/map-assets.web.json` and laid in by `scripts/stage-map-assets.mjs` (§3). `warmPmtilesArchive` (`assets.js`) fetches an archive through `fetchWithPersistence`, as it does on the desktop. There is no node swarm to try first and no signed manifest to hold the bytes to: `src/runtime/web/contentTrust.js`, `nodeConnect.js` and `trust.js`, the signed `content-manifest.json` and the node directory are removed from the game.
 - **Worker fetches:** the `window.fetch` patch is invisible to workers — MapLibre's tile workers and the political-cartography worker (`src/Game/Map/vnext/polityBoundariesWorker.js`) fetch with their own global — so the scenario's regions GeoJSON is re-served to the `custom-regions-source` and the worker through a `blob:` URL: `prepareWorkerFetchableUrl(url)` (`assets.js`) fetches the runtime URL on the page and stages the bytes as a blob; `useWorkerFetchableUrl` (`src/Game/Map/useWorkerFetchableUrl.js`) hands that URL to `Nations.jsx`, which keeps the runtime URL as the identity for geometry epochs, catalog keys and readiness. MapLibre forwards a non-http(s) URL from its workers to the main thread, and a dedicated worker resolves a blob URL its page created. Copies are released (revoked after a grace period) when the token rotates or the asset is written. The desktop keeps the plain URL.
-- **Origin check:** the origin fallback in `warmPmtilesArchive` is held to the same signed manifest through `verifyOriginBuffer(url, buffer)` (`contentTrust.js`): `checked` is false — the bytes trusted as before — when the manifest is unsigned or missing, does not list the asset, or the active scenario serves its own archive under the runtime URL (`hasScenarioPmtilesOverride`, `libraryStore.js`); a scenario's own archive is never fetched from the swarm either. Only a signed hash that contradicts the bytes fails the archive.
+- **A scenario's own archive:** a scenario may serve its own archive under the runtime URL (`getScenarioPmtilesOverride`, `libraryStore.js`), in place of the build's copy. It is read from IndexedDB and nothing is fetched for it.
 
-See the [Node network](delivery-and-deploy.md) notes for the swarm/registry architecture.
+See [web-build.md §8](web-build.md) for why the site carries its own copy of the map, and [delivery-and-deploy.md](delivery-and-deploy.md) for how it is built and deployed.
 
 ---
 
@@ -276,14 +306,14 @@ See the [Node network](delivery-and-deploy.md) notes for the swarm/registry arch
 |---|---|---|---|---|---|
 | 1 | `state` | Syncing saves and runtime state | 12 | `game`,`prompts`,`colors`,`actions`,`chat`,`advisor`,`events`,`world` JSON | no |
 | 2 | `textures` | Warming world textures | 20 | ESRI basemap + AWS terrain raster tiles (global z0–2 + initial viewport) | **yes** — a custom `world.background` replaces the basemap entirely |
-| 3 | `countries` | Caching country geometry | 26 | `countries.pmtiles` (~62.7 MB) | **no** — needed for country names and bounds on every map |
+| 3 | `countries` | Caching country geometry | 26 | `countries.pmtiles` (~12.6 MB) | **no** — needed for country names and bounds on every map |
 | 4 | `country-index` | Building country index | 8 | `loadCountryNames()` | no |
 | 5 | `cities` | Caching city layer | 10 | `cities.pmtiles` (~1.5 MB) | no |
-| 6 | `regions` | Caching regional borders | 24 | `regions.pmtiles` (~105.8 MB) | **no** — paints owners above z6.5 even on custom maps |
+| 6 | `regions` | Caching regional borders | 24 | `regions.pmtiles` (~21.1 MB) | **no** — paints owners above z6.5 even on custom maps |
 
 There used to be a `country-labels` task that built the stock modern-country label atlas; no served world draws it (every world is a custom one), so it is gone, and the preload deletes the `country-labels-*` entries it left in Cache Storage (`deleteRuntimeJsonByPrefix`).
 
-**The ~162 MB prime:** warming tasks 3+5+6 pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — the code cites regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js`; on-disk manifest sizes total ~170 MB). This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further network I/O. The cost is that this ~162 MB must be **freed on scenario switch** — which is exactly what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does. See the [RAM & paint audit](architecture.md) notes for the broader memory backlog (the geojson double-store, pinned PMTiles).
+**The ~162 MB prime:** warming tasks 3+5+6 pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — the code cites regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js`; on-disk manifest sizes total ~170 MB). Those are the z10 archives' sizes: every build, the website included, now reads the z8 trims (§3), and the three come to about 35 MB. This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further network I/O. The cost is that this ~162 MB must be **freed on scenario switch** — which is exactly what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does. See the [RAM & paint audit](architecture.md) notes for the broader memory backlog (the geojson double-store, pinned PMTiles).
 
 Task results feed a weighted progress bar: `normalizeTaskResult` (`preload.js`) sums the `.size` of each warmed asset into `loadedBytes`, and `progress = completedWeight / TOTAL_WEIGHT`.
 
@@ -348,13 +378,15 @@ Scenarios and saves keep **storing** the flagcdn address (`flagImageUrlFromGid`,
 | `src/runtime/assets.js` | Client asset layer: read/write/warm/prime, caches, derived catalogs, basemap protocols |
 | `src/runtime/countryFlags.js` | Country codes, flag emoji, the flagcdn address of a built-in flag, and `bundledFlagUrl` (the shipped copy, §11) |
 | `src/runtime/preload.js` | 30 s startup warm sequence + progress model |
-| `src/runtime/web/router.js` | Web-build `fetch` interceptor for `/api/*` (pmtiles → `VITE_OH_PMTILES_URL`) |
-| `src/runtime/web/contentTrust.js` | Web-build hash-verified content-node fetch |
+| `src/runtime/web/router.js` | Web-build `fetch` interceptor for `/api/*` (pmtiles → the build's own `/assets`) |
+| `src/runtime/worldFiles.js` | Where a build reads its map files: `ASSETS_BASE`, `worldFileUrl`, `mapArchiveUrl` |
 | `scripts/fetch-map-assets.mjs` | Sync a local tree to the `map-data` Release (the desktop app runs it on launch; run it by hand after a clone) |
 | `scripts/map-assets.json` | The Release manifest (paths, versioned asset names, sha256, bytes) |
-| `mobile/scripts/stage-map-assets.mjs` | The Android build's variant → downloads the files in `mobile/map-assets.android.json` into `mobile/map-cache/` for the APK |
+| `scripts/map-assets.web.json` | The list of the six files the website and the Android app carry (stable paths, release asset names, sha256, bytes) |
+| `scripts/stage-map-assets.mjs` | Downloads and verifies those files into `map-cache/` and lays them into a web build |
+| `mobile/scripts/stage-map-assets.mjs` | The Android build's wrapper around that stager (`npm run map` in `mobile/`): the same list, the same `map-cache/` |
 | `server/server.js` | Express `/api/runtime/{json,pmtiles}` routes |
 | `server/libraryStore.js` | Server-side asset resolution (scenario override → data-dir → bundle) |
 | `server/dataDir.js` | `DATA_DIR` / `OH_DATA_DIR` resolver |
 
-Related pages: [World state](world-state.md) · [Node network](delivery-and-deploy.md) · [Performance / RAM](architecture.md)
+Related pages: [World state](world-state.md) · [Web build](web-build.md) · [Delivery & deploy](delivery-and-deploy.md) · [Performance / RAM](architecture.md)
