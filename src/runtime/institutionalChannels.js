@@ -35,11 +35,22 @@ export const institutionalChannelIdFor = (institutionInput) => {
 // tied to the ledger) and is often first in the list, so matching on
 // institutionId alone handed back the hearing: the post-turn ballots and the
 // player's debates then ran there, with the wrong governments, and no ballot
-// was cast.
-export const findInstitutionalChannel = (chats, institutionId) => {
-  const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
+// was cast. The hearing also carries lifecycleInstitutionId + lifecycleCaseIds,
+// and gameState.chatThreadIdentityKey deliberately gives that combination a
+// DIFFERENT identity: picked by the loose foreign key, a formal Council turn
+// was routed into the hearing and the visible Council transcript appeared to
+// reset to the invitation.
+//
+// One selector, two call shapes: (chats, institution) and
+// (chats, world, institution). The institution is an id or a record.
+export const findInstitutionalChannel = (chats, ...selector) => {
+  const [world, institutionInput] = selector.length > 1 ? selector : [undefined, selector[0]];
+  const canonicalId = canonicalInstitutionIdentity(
+    institutionInput && typeof institutionInput === "object" ? institutionInput : { id: institutionInput },
+  ).id;
   if (!canonicalId || !Array.isArray(chats)) return null;
-  return chats.find((chat) => chatThreadIdentityKey(chat) === `institution:${canonicalId}`) || null;
+  const institutionThreadKey = `institution:${canonicalId}`;
+  return chats.find((chat) => chatThreadIdentityKey(chat, world) === institutionThreadKey) || null;
 };
 
 const institutionalSystemMessage = (text, date = "") => ({
@@ -70,8 +81,7 @@ export const materializeInstitutionalChannel = ({
   // chat is the permanent Council. Otherwise an accepted invitation thread can
   // be adopted as the Council and then "vanish" when reconciliation correctly
   // restores its lifecycle identity.
-  const institutionThreadKey = `institution:${canonicalId}`;
-  const existingByInstitution = chats.find((chat) => chatThreadIdentityKey(chat, world) === institutionThreadKey);
+  const existingByInstitution = findInstitutionalChannel(chats, world, canonicalId);
   const conflictingId = chats.find((chat) => clean(chat?.id) === channelId && lower(chat?.institutionId) !== lower(canonicalId));
   if (conflictingId) {
     throw new Error(`Institutional channel id ${channelId} is already owned by another chat.`);
@@ -116,7 +126,7 @@ export const materializeInstitutionalChannel = ({
     ? chats.map((chat) => (clean(chat.id) === clean(existingByInstitution.id) ? channel : chat))
     : [channel, ...chats];
   const reconciled = reconcileChatsForPlayer(nextChats, world, playerCountry);
-  const finalChannel = reconciled.find((chat) => chatThreadIdentityKey(chat, world) === `institution:${canonicalId}`);
+  const finalChannel = findInstitutionalChannel(reconciled, world, canonicalId);
   if (!finalChannel) throw new Error(`Institutional channel for ${institution.name} vanished during reconciliation.`);
 
   return { world, chats: reconciled, channel: finalChannel, institution: institutions.byId[canonicalId] };
@@ -165,9 +175,10 @@ export const ensureInstitutionalChannel = async ({
     expectedGameId,
   });
   if (!result) throw new Error("Institutional channel was not committed.");
+  const committedChats = committed.chat || committed.chats || result.chats;
   const channel = findInstitutionalChannel(
-    reconcileChatsForPlayer(committed.chat || committed.chats || result.chats, committed.world, playerCountry || committed.game?.country || ""),
+    reconcileChatsForPlayer(committedChats, committed.world, playerCountry || committed.game?.country || ""),
     result.channel.institutionId,
   );
-  return { ...result, world: committed.world, chats: committed.chat || result.chats, channel: channel || result.channel };
+  return { ...result, world: committed.world, chats: committedChats, channel: channel || result.channel };
 };

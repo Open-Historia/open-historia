@@ -537,6 +537,28 @@ test("falling short of the destination still reads as moving", () => {
   assert.equal(result.units[0].status, "moving");
 });
 
+// Seen in a player's Game (2026-09-29): an armoured division sent 149 km
+// marched 90 km in a one-day skip and stopped 59 km short. Its order was pruned
+// as satisfied, being inside the arrival radius, and the division stood there
+// reading "moving" for good. Here, Glasgow to Stranraer: 118 km, 28 short. A unit still on its
+// way keeps its order until it gets there.
+test("a unit that stops inside the arrival radius but short of its destination keeps marching", () => {
+  const glasgow = { lng: -4.25, lat: 55.86 };
+  const stranraer = { lng: -5.03, lat: 54.9 };
+  let world = { units: [unit({ type: "armor", ...glasgow, status: "moving" })], pendingUnitOrders: [{ id: "o1", unitId: "unit-1", kind: "move", toLng: stranraer.lng, toLat: stranraer.lat }] };
+  world = advanceStandingOrders(world, { fromDate: "2016-02-14", toDate: "2016-02-15", round: 16 });
+  const short = haversineKm(world.units[0].lat, world.units[0].lng, stranraer.lat, stranraer.lng);
+  assert.ok(short > 0 && short < 60, `expected to stop inside the radius but short, got ${short} km`);
+  assert.equal(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 1, "the order to Stranraer was dropped short of it");
+
+  world = advanceStandingOrders(world, { fromDate: "2016-02-15", toDate: "2016-02-16", round: 17 });
+  assert.equal(world.units[0].lng, stranraer.lng);
+  assert.equal(world.units[0].lat, stranraer.lat);
+  assert.equal(world.units[0].status, "idle");
+  assert.equal(world.pendingUnitOrders.length, 0);
+});
+
 // ---- stale "moving" on old saves -------------------------------------------
 
 test("a unit left claiming to move with nothing moving it is repaired to idle", () => {
@@ -613,4 +635,47 @@ test("a pending deployment with no resolved request of its own stays pending", (
   const orders = [{ kind: "action", status: "planned", text: "Orders", unitRevert: { unitId: "other", lng: 1, lat: 2 } }];
   const next = confirmResolvedDeployments(world, orders);
   assert.equal(next, world, "nothing to confirm leaves the world untouched");
+});
+
+// ---- A pending garrison the skip sited ---------------------------------------
+//
+// Seen in a live game (2026-09-21): three skips in a row wrote the Falklands
+// garrison's deployment as a move op to Mount Pleasant, and every one was
+// ignored because a move on a garrison is ignored outright — so it stayed a
+// translucent pending counter where the player had first put it.
+
+const moveOp = (unitId, over = {}) => ({ op: "move", unitId, toLng: -58.86, toLat: -51.58, regionId: "116", posture: "holding", ...over });
+
+test("a move on a pending garrison sites it and confirms it", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "pending", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].status, "idle");
+  assert.equal(units[0].lng, -58.86);
+  assert.equal(units[0].lat, -51.58);
+  assert.equal(units[0].regionId, "116");
+  assert.equal(units[0].posture, "holding");
+});
+
+test("a move on a confirmed garrison is still ignored", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "idle", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].lng, -59.5);
+  assert.equal(units[0].lat, -51.7);
+});
+
+test("a pending unit whose deploy request is long gone is confirmed by a skip that resolved the queue", () => {
+  const world = { units: [unit({ id: "orphan", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [] });
+  assert.equal(next.units[0].status, "idle");
+});
+
+test("a pending unit whose request is still queued is not taken for an orphan", () => {
+  const world = { units: [unit({ id: "waiting", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [deployRequest("waiting")] });
+  assert.equal(next, world);
+});
+
+test("without the queue, an orphan is left alone", () => {
+  const world = { units: [unit({ id: "orphan", status: "pending" })] };
+  assert.equal(confirmResolvedDeployments(world, []), world);
 });

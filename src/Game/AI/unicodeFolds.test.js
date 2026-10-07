@@ -25,6 +25,14 @@ import assert from "node:assert/strict";
 
 import { foldName } from "./regionFocus.js";
 import { normalizePlaceText } from "../../runtime/placeSearch.js";
+import {
+    canonicalInstitutionIdentity,
+    institutionIdentityTokens,
+    INSTITUTION_MEMBER_STATUSES,
+    validateInstitutionTemporalBaseline,
+} from "../../runtime/institutions.js";
+import { stableAsciiId } from "../../runtime/stableId.js";
+import { checkGeneratedAgreementDates } from "./geopoliticalAgreementDates.js";
 
 const read = (file) => readFileSync(new URL(`../../../${file}`, import.meta.url), "utf8");
 
@@ -46,13 +54,19 @@ const asItWas = (code) => code
 const evaluate = (code, name, scope) => new Function(...Object.keys(scope), `${code}\nreturn ${name};`)(...Object.values(scope));
 
 const trimmed = (value) => String(value ?? "").trim();
+const cleaned = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+const lowered = (value) => cleaned(value).toLocaleLowerCase();
 
 // [file, the fold, what it reads from its file's scope, whether it folds accents away]
 const FOLDS = [
+    ["src/Game/AI/nativeDiplomaticDirector.js", "pregameTitleKey", { clean: cleaned }, true],
     ["src/Game/AI/nativeDiplomaticDirector.js", "diplomaticSearchText", {}, true],
+    ["src/Game/AI/nativeWarLedger.js", "pregameWarTitleKey", { normalizeString: trimmed }, true],
+    ["src/Game/AI/nativeWorldDirector.js", "pregameStorylineTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "storylineLinkText", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeTimelineCurator.js", "normalizeText", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldIntegrity.js", "normalizeInstitutionAuthorityPhrase", { normalizeString: trimmed }, true],
+    ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
     ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
     ["src/Game/AI/worldDirection.js", "fold", {}, true],
@@ -152,4 +166,137 @@ test("the two exported folds read the same way", () => {
     assert.equal(normalizePlaceText("  Санкт-Петербург! "), "санкт петербург");
     assert.equal(normalizePlaceText("São Paulo"), "sao paulo", "as before");
     assert.equal(normalizePlaceText("東京"), "東京");
+});
+
+// --- The world generator's ids ----------------------------------------------
+//
+// One of these folds made an id, not a comparison. At Round Zero the generator
+// reads the model's memberships and agreements, and where the model gives a
+// name or a title in place of an id, the id is made from that. It was made with
+// an a-z0-9 slug of the generator's own: no id at all for a name with no Latin
+// letter or digit in it. The catalog a membership is looked up in is built by
+// runtime/institutions.js, whose ids come from stableAsciiId: that same slug
+// for any name it gives one to, and a hash of the name for one it gives none.
+// The generator now makes the id the catalog has.
+//
+// geopoliticalWorldGenerator.js imports the request path (a .jsx file) and
+// cannot be loaded here, so its readers are cut out of it and run, as the folds
+// above are, beside themselves as they were.
+
+const GENERATOR = "src/Game/AI/geopoliticalWorldGenerator.js";
+
+// A function its file writes as a block: from `const name = ` to the first line
+// that is the closing brace alone.
+const blockOf = (file, name) => {
+    const source = read(file).replace(/\r\n/g, "\n");
+    const start = source.indexOf(`\nconst ${name} = `);
+    const end = start === -1 ? -1 : source.indexOf("\n};\n", start);
+    assert.ok(end !== -1, `${file} no longer defines ${name} as a block`);
+    return source.slice(start + 1, end + 3);
+};
+
+const SLUG_AS_IT_WAS = String.raw`const slug = (value) => lower(value).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72);`;
+
+const generatorReaders = (slugCode) => {
+    const base = { clean: cleaned, lower: lowered, array: (value) => (Array.isArray(value) ? value : []) };
+    const slug = evaluate(slugCode, "slug", { ...base, stableAsciiId });
+    const cut = (name, scope = {}) => evaluate(blockOf(GENERATOR, name), name, { ...base, slug, ...scope });
+    return {
+        slug,
+        catalogIndex: cut("buildCatalogIdentityIndex", { institutionIdentityTokens }),
+        membership: cut("normalizeMembership", { INSTITUTION_MEMBER_STATUSES, validateInstitutionTemporalBaseline }),
+        agreement: cut("normalizeAgreement", {
+            checkGeneratedAgreementDates,
+            canonicalPolity: cut("canonicalPolity", { resolvePolityIdentity: () => null }),
+        }),
+    };
+};
+const generatorNow = generatorReaders(statementOf(GENERATOR, "slug"));
+const generatorThen = generatorReaders(SLUG_AS_IT_WAS);
+
+test("the generator's id is the one it made for ASCII, and the catalog's for every name", () => {
+    // Any name the old slug made an id from keeps that id, which is the rule
+    // stableAsciiId keeps for the catalog: "Договор 1997 года" is still "1997".
+    for (const text of [...ASCII, ...fuzz, "Traité de Paris", "Śląsk Agreement", "Договор 1997 года"]) {
+        assert.equal(generatorNow.slug(text), generatorThen.slug(text), JSON.stringify(text));
+    }
+    for (const [script, [first, second]] of Object.entries(TITLES)) {
+        assert.equal(generatorThen.slug(first), "", `${script}: the old slug made an id; the test is not showing the fault`);
+        assert.match(generatorNow.slug(first), /^u-[a-z0-9]+$/, script);
+        assert.notEqual(generatorNow.slug(first), generatorNow.slug(second), script);
+        assert.equal(generatorNow.slug(first), canonicalInstitutionIdentity({ name: first }).id, `${script}: the id the catalog gives that name`);
+    }
+});
+
+test("a membership that names its institution in another script is found in the catalog", () => {
+    // The model is shown the catalog and answers with each polity's memberships.
+    // In a game played in Russian it may name an institution as the catalog
+    // names it, or by its short name, where the id was asked for. A membership
+    // that is not found costs the polity its whole answer, and the polity is
+    // asked about again.
+    const catalog = [
+        canonicalInstitutionIdentity({ name: "Евразийский экономический союз", shortName: "ЕАЭС", foundedDate: "2015-01-01" }),
+        canonicalInstitutionIdentity({ name: "African Union", shortName: "AU", foundedDate: "2002-07-09" }),
+    ];
+    const ask = (readers, row) => {
+        const warnings = [];
+        const membership = readers.membership(row, {
+            catalogById: new Map(catalog.map((entry) => [entry.id, entry])),
+            catalogByToken: readers.catalogIndex(catalog),
+            scenarioDate: "2016-01-01",
+            warnings,
+            polityKey: "Россия",
+        });
+        return { id: membership?.institutionId ?? null, warnings: warnings.join("\n") };
+    };
+    const eurasian = catalog[0].id;
+    assert.match(eurasian, /^u-[a-z0-9]+$/);
+    for (const row of [
+        { institutionId: "Евразийский экономический союз" },
+        { name: "Евразийский  экономический союз " },
+        { institutionId: "ЕАЭС" },
+        { institutionId: eurasian },
+    ]) {
+        assert.equal(ask(generatorNow, row).id, eurasian, JSON.stringify(row));
+    }
+
+    // As it was: found by the catalog's own id and by nothing the model would write.
+    assert.equal(ask(generatorThen, { institutionId: eurasian }).id, eurasian);
+    const lost = ask(generatorThen, { institutionId: "Евразийский экономический союз" });
+    assert.equal(lost.id, null);
+    assert.match(lost.warnings, /institution outside fixed catalog: <blank>/);
+
+    // An institution the catalog does not have is still refused, now by an id.
+    const unknown = ask(generatorNow, { institutionId: "Шанхайская организация сотрудничества" });
+    assert.equal(unknown.id, null);
+    assert.match(unknown.warnings, /institution outside fixed catalog: u-[a-z0-9]+\./);
+
+    // A name in ASCII is found the way it always was.
+    for (const readers of [generatorNow, generatorThen]) {
+        assert.equal(ask(readers, { institutionId: "African Union" }).id, "african-union");
+        assert.equal(ask(readers, { institutionId: "AU" }).id, "african-union");
+    }
+});
+
+test("an agreement the model gave a title in another script, and no id, is kept", () => {
+    const allowed = new Map([["россия", "Россия"], ["беларусь", "Беларусь"], ["france", "France"], ["russia", "Russia"]]);
+    const ask = (readers, row) => readers.agreement(row, {}, allowed, "2014-01-01", []);
+    const union = {
+        title: "Договор о создании Союзного государства", type: "alliance", parties: ["Россия", "Беларусь"],
+        startedDate: "1999-12-08", terms: "Общее экономическое и оборонное пространство.",
+    };
+    const friendship = { ...union, title: "Договор о дружбе, добрососедстве и сотрудничестве", type: "friendship_consultation", startedDate: "1995-02-21" };
+
+    assert.equal(ask(generatorThen, union), null, "as it was: no id could be made, and the agreement was dropped");
+    const kept = ask(generatorNow, union);
+    assert.match(kept.id, /^u-[a-z0-9]+$/);
+    assert.deepEqual([kept.title, kept.type, kept.parties, kept.startedDate], [union.title, "alliance", ["Россия", "Беларусь"], "1999-12-08"]);
+    assert.notEqual(ask(generatorNow, friendship).id, kept.id, "two titles, two agreements");
+    // With no title either, the parties are what it is known by.
+    assert.match(ask(generatorNow, { ...union, title: "" }).id, /^u-[a-z0-9]+$/);
+
+    // An agreement titled in ASCII is read exactly as before.
+    const ascii = { title: "Franco-Russian Alliance", type: "alliance", parties: ["France", "Russia"], startedDate: "1894-01-04", terms: "Mutual assistance." };
+    assert.deepEqual(ask(generatorNow, ascii), ask(generatorThen, ascii));
+    assert.equal(ask(generatorNow, ascii).id, "franco-russian-alliance");
 });

@@ -64,6 +64,17 @@ const ROUTINE_MILITARY_CUE_RE =
 const STRONG_MILITARY_CONSEQUENCE_RE =
   /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
 
+// A milestone reached: the one thing a routine-patrol card never reports.
+const CONCRETE_MILESTONE_RE =
+  /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
+
+// High-signal civilian/scientific titles must not be hidden because their body
+// happens to mention a patrol, reconnaissance, readiness or another routine
+// military word. This guard is deliberately title-scoped: a genuinely military
+// card can still be screened even if its description mentions politics/science.
+const CLEARLY_NON_MILITARY_TITLE_RE =
+  /\b(?:elections?|referendum|protests?|demonstrations?|parliament|legislature|court|judicial|scientific|research|spacecraft|satellite|lunar|moon|mars|lander|space mission|space probe)\b/i;
+
 // Material endogenous changes that can legitimately wake a deferred process even
 // when they do not yet carry a hard map/ledger impact. The associated storyline
 // update must ALSO move objective state (status/pressure/momentum); this regex alone
@@ -523,25 +534,8 @@ export const worldActorsEquivalent = (
   return Boolean(a && b && a === b);
 };
 
-const actorMentionedInText = (actor, text, world, gameCountry = "") => {
-  const target = normalizeString(actor);
-  if (!target) return true;
-
-  const haystack = ` ${normalizeString(text).toLowerCase()} `;
-  const record = polityAliasRecords(world, gameCountry)
-    .find((entry) => entry.canonical.toLowerCase() === target.toLowerCase());
-
-  const aliases = uniqueStrings([target, ...(record?.aliases || [])])
-    .sort((a, b) => b.length - a.length);
-
-  return aliases.some((alias) => {
-    const token = normalizeString(alias).toLowerCase();
-    if (!token || token.length < 3) return false;
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i")
-      .test(haystack);
-  });
-};
+const actorMentionedInText = (actor, text, world, gameCountry = "") =>
+  createWorldActorResolver(world, gameCountry).mentions(actor, text);
 
 const actorIsActiveBelligerent = (actor, world, records = polityAliasRecords(world)) => {
   const rawBelligerents = activeBelligerentSet(world);
@@ -1236,10 +1230,13 @@ export const deriveWorldExplorationAudit = (
   ];
   const ledgerText = JSON.stringify(ledgerValues);
   const outreachText = JSON.stringify(outreach);
-
   const entries = new Map();
   const claimedEventIndexes = new Set();
   const claimedStorylineIds = new Set();
+  // Build the actor catalogue once for this audit. Fire Rises-sized worlds can
+  // contain hundreds of polity aliases and thousands of ownership rows; rebuilding
+  // that catalogue inside every actor/text probe turns exploration validation into
+  // an accidental quadratic main-thread workload.
   const resolver = createWorldActorResolver(world, gameCountry);
 
   const claimEventForActor = (actor) => {
@@ -1710,11 +1707,20 @@ const falseNonBelligerentWartimeReason = (
 };
 
 const routineMilitaryNoDeltaReason = (event) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const title = normalizeString(event?.title);
+  const text = `${title} ${normalizeString(event?.description)}`;
 
+  if (CLEARLY_NON_MILITARY_TITLE_RE.test(title)) return "";
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
+  // The cue is single words, so it fires on a noun in passing: a drone
+  // programme's "unmanned surface patrol vessels" hid a Project milestone as
+  // "routine military activity". Something finished or brought into service is
+  // not a routine continuation, whatever it mentions on the way.
+  if (CONCRETE_MILESTONE_RE.test(text)) return "";
+  // The player's own news is left to the curator, which judges routine
+  // military continuation with the analyst's reading rather than a word list.
+  if (event?.playerRelated === true || normalizeString(event?.kind).toLowerCase() === "player") return "";
   // An event explicitly bound to a queued player Action is the order's
   // canonical answer. Hiding it here would make settleOrders carry the
   // same order over as overdue even though the simulator cited it exactly.
@@ -1913,6 +1919,56 @@ const resolveUniqueSemanticAuthority = (event, records, {
     return { match: null, scored, reason: "ambiguous-semantic-match" };
   }
   return { match: best, scored, reason: "unique-semantic-match" };
+};
+
+// One event can carry out several of the player's queued orders at once: an
+// advisor that queues "strike the bridge", "break the blockade" and "deploy air
+// defence" gets one event, "Britain launches strike operations and an air
+// defence shield", that answers all three. Measured one order at a time, each
+// covers only its own part of the event, so none reaches the threshold (or all
+// tie and the match is called ambiguous). Seen in a player's Game
+// (2026-09-30): such an event was then read as a ministry's routine work,
+// refused as delegated-routine, and dropped, taking the player's orders and
+// the fleet's move with it.
+//
+// So the orders the event names in impacts.actionIds, when they are CURRENT
+// queued orders, are also measured together, as one text, and at a lower bar
+// (CLAIMED_ORDER_THRESHOLD) than an order the event does not name. The ids are
+// never trusted alone: the event still has to share at least two distinctive
+// words with what the orders say (authoritySemanticScore caps anything less at
+// 0.24). The same went for a single order (2026-09-30): "Mobilize Project
+// Ironclad Survey Teams" answered by a long event about the survey teams'
+// deployment, refused for the same reason. Every contender is one of the
+// player's own orders, so the authority is the player's whichever it is; the
+// best one is the authorityRef.
+//
+// Only the named orders the event itself carries out are bound: each must, on
+// its own, share two distinctive words with the event (a score at the bar). An
+// event that answers one order but names three would otherwise settle all
+// three; the ones it does not carry out are returned as `unproven`, and their
+// ids are taken off the event (bindWorldEventAuthorityRefs).
+const CLAIMED_ORDER_THRESHOLD = 0.25;
+const resolvePlayerOrderAuthority = (event, records, { playerCanonical = "" } = {}) => {
+  const resolved = resolveUniqueSemanticAuthority(event, records, { playerCanonical, threshold: 0.34, margin: 0.1 });
+  const claimedIds = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
+  const claimed = resolved.scored.filter((entry) => claimedIds.has(entry.id));
+  const proven = claimed.filter((entry) => entry.score >= CLAIMED_ORDER_THRESHOLD);
+  // One order the event plainly answers: it, and the other named orders the
+  // event also carries out, are bound; the rest of what it names is not.
+  if (resolved.match) {
+    const matches = [resolved.match, ...proven.filter((entry) => entry.id !== resolved.match.id)];
+    const unproven = claimed.filter((entry) => !matches.some((match) => match.id === entry.id)).map((entry) => entry.id);
+    return { ...resolved, matches, unproven };
+  }
+
+  if (!proven.length) return { ...resolved, matches: [], unproven: [] };
+  const together = resolveUniqueSemanticAuthority(event, [{
+    id: proven[0].id,
+    text: proven.map((entry) => entry.text).join(" "),
+  }], { playerCanonical, threshold: CLAIMED_ORDER_THRESHOLD, margin: 0 });
+  if (!together.match) return { ...resolved, matches: [], unproven: [] };
+  const unproven = claimed.filter((entry) => !proven.includes(entry)).map((entry) => entry.id);
+  return { match: proven[0], matches: proven, unproven, scored: resolved.scored, reason: "named-player-orders-match" };
 };
 
 const mirrorPrimaryAgencyRow = (agency) => {
@@ -2117,6 +2173,8 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     }
 
     const boundActionIds = [];
+    // Named by the event but not carried out by it (resolvePlayerOrderAuthority).
+    const unprovenActionIds = new Set();
     rows = rows.map((row, rowIndex) => {
       const next = { ...row };
       const polity = normalizeString(row?.polity || row?.sovereignPolity);
@@ -2132,15 +2190,14 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       if (!isPlayer) return next;
 
       if (authority === "player-order") {
-        const semantic = resolveUniqueSemanticAuthority(eventWithAgency, actionRecords, {
-          playerCanonical,
-          threshold: 0.34,
-          margin: 0.1,
-        });
+        // The orders the event carries out, by what it says (one order, or the
+        // several it names); failing that, the one order it cites.
+        const semantic = resolvePlayerOrderAuthority(eventWithAgency, actionRecords, { playerCanonical });
         const resolved = semantic.match ? semantic : citedCurrentOrder(eventWithAgency, actionRecords) || semantic;
         next.authorityRef = resolved.match?.id || "";
+        for (const id of normalizeArray(resolved.unproven)) unprovenActionIds.add(id);
         if (resolved.match) {
-          boundActionIds.push(resolved.match.id);
+          boundActionIds.push(...resolved.matches.map((entry) => entry.id));
           applied += 1;
           bindings.push({
             eventIndex,
@@ -2248,7 +2305,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     const knownActionIds = currentActionIds(actions);
     const claimedActionIds = normalizeArray(eventWithAgency?.impacts?.actionIds)
       .map(normalizeString)
-      .filter((id) => id && knownActionIds.has(id));
+      .filter((id) => id && knownActionIds.has(id) && !unprovenActionIds.has(id));
     const boundActionIdList = [...new Set([...claimedActionIds, ...boundActionIds])];
     const existingImpacts = eventWithAgency?.impacts && typeof eventWithAgency.impacts === "object" && !Array.isArray(eventWithAgency.impacts)
       ? eventWithAgency.impacts
@@ -2500,7 +2557,9 @@ const citedCurrentOrder = (event, actionRecords) => {
   const cited = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
   const matches = normalizeArray(actionRecords).filter((entry) => cited.has(entry.id));
   if (matches.length !== 1) return null;
-  return { match: { ...matches[0], score: 1 }, scored: [], reason: "cited-current-order" };
+  const match = { ...matches[0], score: 1 };
+  // In the shape of resolvePlayerOrderAuthority: the one order is all it binds.
+  return { match, matches: [match], unproven: [], scored: [], reason: "cited-current-order" };
 };
 
 const nativeDomesticAgency = (event, playerCanonical, authority, resolver) => ({
@@ -2553,11 +2612,7 @@ const deriveNativeEventAgency = (event, {
   let actionMatch = null;
   let commitmentMatch = null;
   if (playerMentioned) {
-    actionMatch = resolveUniqueSemanticAuthority(event, actionRecords, {
-      playerCanonical,
-      threshold: 0.34,
-      margin: 0.1,
-    });
+    actionMatch = resolvePlayerOrderAuthority(event, actionRecords, { playerCanonical });
     if (!actionMatch.match) actionMatch = citedCurrentOrder(event, actionRecords) || actionMatch;
     commitmentMatch = resolveUniqueSemanticAuthority(event, commitmentRecords, {
       playerCanonical,
@@ -3349,6 +3404,39 @@ const playerSovereignChoiceReason = (event, verdict, actions) => {
   return `${verdict.reason}: the human-controlled polity makes a fresh sovereign choice that no queued order or player-authored message authorizes`;
 };
 
+// The rules that judge one event on its own, in the order the screen applies
+// them: a rejection (it cannot have happened) or a visibility rule (it happened,
+// but is too routine for the timeline). The batch rules — the low-trajectory
+// feed guard — need the whole segment and are not here. Shared with the live
+// preview (previewScreenedEvent), so a card marked while the model is still
+// writing is marked by exactly the rule that will judge it when the turn lands.
+// The screen hands in its one identity index for the batch (`resolver`); the
+// preview, judging one card, builds its own.
+const singleEventScreenVerdict = (event, { world = {}, game = {}, resolver = null } = {}) => {
+  const wartimeReason = falseNonBelligerentWartimeReason(event, world, normalizeString(game?.country), resolver);
+  if (wartimeReason) return { fate: "reject", route: "NON_BELLIGERENT_WARTIME_CAUSALITY", reason: wartimeReason };
+  const routineReason = routineMilitaryNoDeltaReason(event);
+  if (routineReason) return { fate: "hide", route: "ROUTINE_MILITARY_PRECURATION", reason: routineReason };
+  const administrativeReason = routineAdministrativeNoDeltaReason(event);
+  if (administrativeReason) return { fate: "hide", route: "ROUTINE_ADMINISTRATIVE_PROCESS", reason: administrativeReason };
+  return null;
+};
+
+// What the screen will do with one streamed event, before the turn lands: null
+// to keep it, or { fate, route, reason }. Quiet (the screen's log line is for
+// the real pass) and pure. Sanitized the way the screen sanitizes, since a no-op
+// control op stripped there is not an impact that could keep an event. The
+// segment's storyline tags are not known yet, so an event the model later ties
+// to a storyline can still be kept: this is a preview.
+export const previewScreenedEvent = (event, { world = {}, game = {} } = {}) => {
+  if (!event || typeof event !== "object") return null;
+  const sanitized = sanitizeNoOpRegionControlOps(
+    sanitizeDuplicatePolityUpdates(sanitizeProcessOnlyPolityUpdates(event).event, world).event,
+    world,
+  ).event;
+  return singleEventScreenVerdict(sanitized, { world, game });
+};
+
 export const screenGeneratedWorldEvents = ({
   events = [],
   priorEvents = [],
@@ -3442,34 +3530,20 @@ export const screenGeneratedWorldEvents = ({
       });
       continue;
     }
+    const verdict = singleEventScreenVerdict(event, { world, game, resolver });
 
-    const wartimeReason = falseNonBelligerentWartimeReason(
-      event,
-      world,
-      normalizeString(game?.country),
-      resolver,
-    );
-
-    if (wartimeReason) {
+    if (verdict?.fate === "reject") {
       dropped.push({
         id: normalizeString(event?.id),
         title: normalizeString(event?.title),
-        route: "NON_BELLIGERENT_WARTIME_CAUSALITY",
-        reason: wartimeReason,
+        route: verdict.route,
+        reason: verdict.reason,
       });
       continue;
     }
 
-    const routineReason = routineMilitaryNoDeltaReason(event);
-
-    if (routineReason) {
-      keepOffTimeline(event, "ROUTINE_MILITARY_PRECURATION", routineReason);
-      continue;
-    }
-
-    const administrativeReason = routineAdministrativeNoDeltaReason(event);
-    if (administrativeReason) {
-      keepOffTimeline(event, "ROUTINE_ADMINISTRATIVE_PROCESS", administrativeReason);
+    if (verdict?.fate === "hide") {
+      keepOffTimeline(event, verdict.route, verdict.reason);
       continue;
     }
 

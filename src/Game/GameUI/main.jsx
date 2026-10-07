@@ -48,6 +48,7 @@ const readAiSetup = () => {
 // localStorage, and clamped to a readable min and a max that keeps the HUD
 // in view.
 const ADVISOR_WIDTH_VAR = "--oh-advisor-width";
+const RIGHT_DRAWER_SAFE_OFFSET_VAR = "--oh-right-drawer-safe-offset";
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
 // The drawer may cover the map but not the HUD on its left. The tightest fit is
@@ -215,6 +216,8 @@ const Main = ({
   // Which workspace section the menu opens on; null is the quick menu. Set by
   // the AI setup prompt's Configure button, cleared whenever the menu closes.
   const [settingsInitialSection, setSettingsInitialSection] = useState(null);
+  // The main menu's Settings are for every game; a game's ☰ adds its own.
+  const [settingsScope, setSettingsScope] = useState("game");
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
@@ -467,12 +470,19 @@ const Main = ({
   // over the reply the player is reading in it; following the width variable
   // keeps them there through a drag. Not on a phone, where the drawer is the
   // whole screen.
+  //
+  // The same value serves the fixed workspaces that need to coexist with the
+  // drawer (the diplomacy workspace in chat.jsx). It points at
+  // --oh-advisor-width rather than copying pixels, so dragging the
+  // Advisor/Country edge updates consumers in the same frame without a React
+  // render.
+  const rightDrawerSafeOffset = rightDrawerOpen && !isMobile
+    ? `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`
+    : "0px";
   useLayoutEffect(() => {
-    document.documentElement.style.setProperty(
-      "--oh-right-drawer-safe-offset",
-      rightDrawerOpen && !isMobile ? `var(${ADVISOR_WIDTH_VAR}, 0px)` : "0px",
-    );
-  }, [rightDrawerOpen, isMobile]);
+    document.documentElement.style.setProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset);
+    return () => document.documentElement.style.removeProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR);
+  }, [rightDrawerSafeOffset]);
   // The country badge opens the drawer; on a phone, where the badge is hidden,
   // the country name in the date widget does.
   const toggleCountry = () => {
@@ -551,6 +561,7 @@ const Main = ({
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
       <LibraryTopBar onOpenSettings={() => {
+        setSettingsScope("app");
         setSettingsInitialSection("general");
         setIsSettingsOpen(true);
       }} />
@@ -659,6 +670,7 @@ const Main = ({
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();
+            setSettingsScope("game");
             setSettingsInitialSection("ai");
             setIsSettingsOpen(true);
           }}
@@ -668,6 +680,7 @@ const Main = ({
         topOffset={TOP_BAR_OFFSET}
         hidden={isSettingsOpen}
         onToggle={() => {
+          setSettingsScope("game");
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
         }}
@@ -685,6 +698,7 @@ const Main = ({
             date: activeGame?.currentDate || "",
           }}
           initialSection={settingsInitialSection}
+          scope={settingsScope}
           onClose={() => {
             setSettingsInitialSection(null);
             setIsSettingsOpen(false);

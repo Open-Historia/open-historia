@@ -246,6 +246,45 @@ test("a beat is written when an event near its date shares its particular words"
     assert.equal(beatIsWritten(beat, [{ date: "2014-07-25", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), false, "two months out is not this beat");
 });
 
+test("a generated selected outcome must remain anchored to its parent event context", () => {
+    const beat = {
+        date: "2026-01-02",
+        title: "Outcome A is selected",
+        text: "Outcome A is selected.",
+        parentText: "A major test event occurs in Latvia. This event exists only to test Conditional Scripted Events.",
+        textMode: "generated",
+    };
+    const wrongPolity = [{
+        date: "2026-01-02",
+        title: "Russian Federal Ministries Implement Outcome A Strategic Directives",
+        description: "Moscow ministries operationalize Outcome A and redirect Russian federal resources.",
+    }];
+    const anchored = [{
+        date: "2026-01-02",
+        title: "Latvia Selects Outcome A",
+        description: "Outcome A is selected in Latvia.",
+    }];
+    assert.equal(beatIsWritten(beat, wrongPolity), false, "matching the branch words alone cannot relocate the authored parent event to the player polity");
+    assert.equal(beatIsWritten(beat, anchored), true);
+
+    const repaired = ensureScriptedEvents(wrongPolity, [beat]);
+    assert.equal(repaired.inserted.length, 1, "the mis-anchored rewrite does not satisfy the scripted beat");
+    assert.equal(repaired.events.at(-1).description, `${beat.parentText}\n\n${beat.text}`, "the deterministic fallback keeps both parent context and selected outcome");
+});
+
+test("exact selected-outcome wording uses parent context for the prompt without adding it to visible prose", () => {
+    const beat = {
+        date: "2026-01-02",
+        title: "Outcome A is selected",
+        text: "Outcome A is selected.",
+        parentText: "A major test event occurs in Latvia.",
+        textMode: "exact",
+    };
+    assert.equal(beatIsWritten(beat, [{ date: beat.date, title: beat.title, description: beat.text }]), true, "exact visible wording need not repeat the parent context");
+    const { events } = ensureScriptedEvents([], [beat]);
+    assert.equal(events[0].description, beat.text, "exact fallback remains exactly the selected authored wording");
+});
+
 // A beat's words were split on a-z and 0-9 alone. One its author wrote in
 // Russian had none, so it was never found in the answer and the engine wrote it
 // again beside the model's own telling of it.
@@ -297,6 +336,61 @@ test("the period is told its beats, dated, and what happens to one it leaves out
     assert.match(text, /- 1914-06-28 — Archduke Franz Ferdinand is assassinated in Sarajevo\./);
     assert.match(text, /written by the engine/);
     assert.equal(buildScriptedEventsInstruction([]), "");
+});
+
+
+test("exact scripted wording replaces AI presentation but preserves canonical impacts", () => {
+    const beat = {
+        date: "2014-05-25",
+        title: "Author headline",
+        text: "These are the exact words the author wrote.",
+        textMode: "exact",
+    };
+    const answer = [{
+        date: "2014-05-25",
+        title: "AI rewrites the headline",
+        description: "The author wrote these exact words, but the AI padded them with extra prose.",
+        quote: { text: "Extra AI quote", speaker: "Someone" },
+        impacts: { politicalActorOps: [{ operation: "replace-leader", polityId: "X", leaderId: "Y" }] },
+    }];
+    const { events, written, inserted } = ensureScriptedEvents(answer, [beat]);
+    assert.equal(written.length, 1);
+    assert.equal(inserted.length, 0);
+    assert.equal(events[0].date, beat.date);
+    assert.equal(events[0].title, beat.title);
+    assert.equal(events[0].description, beat.text);
+    assert.equal(events[0].quote, undefined, "AI-added visible prose is removed in exact mode");
+    assert.deepEqual(events[0].impacts, answer[0].impacts, "canonical consequences survive the presentation lock");
+});
+
+test("generated scripted wording keeps the simulator's presentation", () => {
+    const beat = { date: "2014-05-25", title: "Author instruction", text: "A named reform passes in parliament.", textMode: "generated" };
+    const answer = [{ date: "2014-05-25", title: "Parliament passes the reform", description: "Lawmakers approve the named reform after debate.", impacts: {} }];
+    const { events } = ensureScriptedEvents(answer, [beat]);
+    assert.equal(events[0].title, answer[0].title);
+    assert.equal(events[0].description, answer[0].description);
+});
+
+test("the period tells the simulator which scripted beats have exact wording", () => {
+    const text = buildScriptedEventsInstruction([
+        { date: "2030-01-01", text: "AI may rewrite this.", textMode: "generated" },
+        { date: "2030-01-02", text: "Use exactly these words.", textMode: "exact" },
+    ]);
+    assert.match(text, /Ordinary entries are instructions: write their final event in your own words/);
+    assert.match(text, /\[EXACT WORDING\] Use exactly these words\./);
+    assert.match(text, /preserving those impacts/);
+});
+
+test("the period gives a selected branch both its parent event and its chosen outcome", () => {
+    const text = buildScriptedEventsInstruction([{
+        date: "2026-01-02",
+        text: "Outcome A is selected.",
+        parentText: "A major test event occurs in Latvia.",
+        textMode: "generated",
+    }]);
+    assert.match(text, /Parent event: A major test event occurs in Latvia\./);
+    assert.match(text, /Selected outcome: Outcome A is selected\./);
+    assert.match(text, /does not replace its people, places, actors or subject/);
 });
 
 // --- the map's tempo ---

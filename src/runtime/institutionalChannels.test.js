@@ -170,6 +170,31 @@ test("dissolved institution keeps historical channel but closes it", () => {
 });
 
 
+test("canonical Council lookup ignores a lifecycle hearing that shares institutionId", () => {
+  const world = makeWorld();
+  const chats = [{
+    id: "institution-invite-council-b-2000-01-02",
+    institutionId: "council",
+    lifecycleInstitutionId: "council",
+    lifecycleCaseIds: ["council-invitation-b-2000-01-02"],
+    countries: [{ polityKey: "B", code: "B", name: "B Republic" }],
+    messages: history("Invitation negotiation history."),
+  }, {
+    id: "institution-channel-council",
+    institutionId: "council",
+    countries: [
+      { polityKey: "B", code: "B", name: "B Republic" },
+      { polityKey: "C", code: "C", name: "C Republic" },
+    ],
+    messages: history("Persistent Council history."),
+    source: "institution",
+  }];
+
+  const found = findInstitutionalChannel(chats, world, "council");
+  assert.equal(found?.id, "institution-channel-council");
+  assert.equal(found?.messages?.[0]?.text, "Persistent Council history.");
+});
+
 test("lifecycle hearing with institutionId is never adopted as the permanent Council channel", () => {
   const world = makeWorld();
   const chats = [{

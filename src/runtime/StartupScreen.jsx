@@ -1,5 +1,8 @@
 /*! Open Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useState } from "react";
+// Cinzel + EB Garamond from the bundle rather than Google Fonts: no request to
+// Google on every start, and the right faces with no network.
+import "../assets/fonts/fonts.css";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
 import { translateNow } from "./translator.js";
 // Loading-screen artwork. The first is the original; the rest cycle in once the

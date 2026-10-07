@@ -39,6 +39,11 @@ import {
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
+import {
+    AI_REQUEST_CONTROL_EVENT,
+    cancelAllAiRequests,
+    getActiveAiRequestCount,
+} from "../AI/aiRequestControl.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
@@ -95,6 +100,11 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
+import {
+    APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
+    appUpdateCheckDescription,
+    requestAppUpdateCheck,
+} from "../../runtime/appUpdateManualCheck.js";
 
 const baseStyle = {
     position: "fixed",
@@ -1146,15 +1156,34 @@ const RequestBudgetSection = () => {
     const day = useRequestDay();
     const touch = useTouchPrimary();
     const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
+    const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
+    const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
 
+    useEffect(() => {
+        const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+    }, []);
+
     const apply = (message, write) => {
         write();
         logDebugEvent("setting", message);
         announceRequestBudgetChange();
+    };
+
+    const cancelActiveRequests = () => {
+        const cancelled = cancelAllAiRequests();
+        setActiveAiRequests(getActiveAiRequestCount());
+        setCancelNotice(cancelled
+            ? `Cancel requested for ${cancelled} active AI request${cancelled === 1 ? "" : "s"}.`
+            : "No AI requests are currently running.");
+        logDebugEvent("ai", cancelled
+            ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
+            : "Player pressed Cancel all AI requests, but none were active.");
     };
     // The most a skip is when function calling may add to it (Save AI requests off).
     const lookupCap = describeJumpCost({ lookups: true }).max;
@@ -1199,6 +1228,32 @@ const RequestBudgetSection = () => {
                         </div>
                     </details>
                 )}
+            </div>
+
+            <div style={{ border: "1px solid rgba(248,113,113,0.18)", borderRadius: "10px", background: "rgba(239,68,68,0.055)", marginBottom: "0.95rem", padding: "0.7rem 0.75rem" }}>
+                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 800 }}>Emergency AI stop</div>
+                        <div style={{ ...helperStyle, marginTop: "0.2rem" }}>
+                            Cancels all live AI generation requests the client can abort, including retries and fallback attempts. It does not undo finished work; an already-submitted provider batch job, or an Android native-LAN request already inside the native HTTP plugin, cannot be recalled.
+                        </div>
+                    </div>
+                    <button
+                    type="button"
+                    onClick={cancelActiveRequests}
+                    style={{
+                        ...smallButtonStyle,
+                        backgroundColor: activeAiRequests ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.06)",
+                        borderColor: activeAiRequests ? "rgba(248,113,113,0.4)" : "rgba(255,255,255,0.13)",
+                        color: activeAiRequests ? "#fecaca" : "rgba(255,255,255,0.72)",
+                        flexShrink: 0,
+                        fontWeight: 800,
+                    }}
+                    >
+                        Cancel all AI requests{activeAiRequests ? ` (${activeAiRequests})` : ""}
+                    </button>
+                </div>
+                {cancelNotice && <div role="status" style={{ ...helperStyle, color: "rgba(255,255,255,0.68)", marginTop: "0.45rem" }}>{cancelNotice}</div>}
             </div>
 
             <Toggle
@@ -2202,7 +2257,11 @@ const SettingsWorkspace = ({
     ratingOn,
     onToggleRating,
     context,
+    // "app": opened from the main menu, so only settings that apply to every
+    // game. "game" (in a game's own menu): those too, plus this game's own.
+    scope = "game",
 }) => {
+    const forGame = scope !== "app";
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
@@ -2359,7 +2418,11 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
-                    <PlayerFocusSetting />
+                    {forGame ? <PlayerFocusSetting /> : (
+                        <div style={{ ...helperStyle, marginBottom: "0.8rem" }}>
+                            Player focus is set for each game on its own: open the game, then ☰ → Settings → AI.
+                        </div>
+                    )}
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
@@ -2375,6 +2438,10 @@ const SettingsWorkspace = ({
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
+                    </div>
+                    <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
+                    <div style={settingsHelper}>
+                    Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.
                     </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
@@ -2455,10 +2522,12 @@ const SettingsWorkspace = ({
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
-                            {context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
+                            {forGame && context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
                         </div>
                         <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
+                            {forGame
+                                ? [context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"
+                                : "For every game. A game's own settings are in its ☰ menu."}
                         </div>
                     </div>
                     <button type="button" className="oh-tap" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
@@ -2559,10 +2628,14 @@ const SettingsMenu = ({
     // A workspace section to open on straight away (the AI setup prompt sends
     // the player to "ai"); null opens the quick menu.
     initialSection = null,
+    // "app" from the main menu: settings for every game, straight to the
+    // workspace, with no game menu behind it. "game" from a game's ☰.
+    scope = "game",
 }) => {
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
+    const [updateCheckResult, setUpdateCheckResult] = useState({ status: "idle" });
     // The small menu's card: measured when a section opens so the workspace can
     // grow out of it, and told the button's size so it can grow out of the
     // button (the --oh-grow-* ratios the CSS keyframes read). Coming back from
@@ -2599,6 +2672,7 @@ const SettingsMenu = ({
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
         // Ships ON too.
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
+        stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
     }));
 
@@ -2607,6 +2681,18 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+
+    useEffect(() => {
+        const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
+        window.addEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+        return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+    }, []);
+
+    const checkForUpdatesNow = () => {
+        if (updateCheckResult.status === "checking") return;
+        setUpdateCheckResult({ status: "checking" });
+        if (!requestAppUpdateCheck()) setUpdateCheckResult({ status: "unsupported" });
+    };
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
     // The field shows the keystrokes; the setting stores them trimmed. Storing
     // on every keystroke through setMapSettingValue's trim and echoing the
@@ -2665,9 +2751,10 @@ const SettingsMenu = ({
     if (activeSettingsSection) {
         return (
             <SettingsWorkspace
+            scope={scope}
             activeSection={activeSettingsSection}
             onSectionChange={setActiveSettingsSection}
-            onBack={backToMenu}
+            onBack={scope === "app" ? () => onClose?.() : backToMenu}
             fromRect={fromRect}
             closing={workspaceClosing}
             onClose={() => onClose?.()}
@@ -2720,6 +2807,13 @@ const SettingsMenu = ({
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
                     <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href={GUIDES_HREF} />
+                    <QuickAction
+                        title={updateCheckResult.status === "checking" ? "Checking for updates…" : "Check for updates"}
+                        description={appUpdateCheckDescription(updateCheckResult)}
+                        symbol="↻"
+                        tone="blue"
+                        onClick={checkForUpdatesNow}
+                    />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
                     <QuickAction title="Privacy" description="What the game keeps and sends" symbol="§" href={PRIVACY_HREF} />
                 </div>

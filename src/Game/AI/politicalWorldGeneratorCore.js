@@ -3572,8 +3572,9 @@ export const generatePoliticalWorldProposalsCore = async ({
   behaviorallyCompleteStandard = false,
   requireRepresentationCoverage = false,
   // v2 may deliberately perform one provider call per resumable work item.
-  // Carry native validation feedback across those external attempts so a retry
-  // is actually corrective instead of asking the model the same question again.
+  // Carry native validation feedback and field-level political-system locks
+  // across those external attempts so a retry is actually corrective instead
+  // of asking the model the same question again or losing a proven-valid field.
   retryErrorsByPolity = {},
   // The political-system fields that already passed validation on an earlier
   // external attempt, keyed by polity; returned again for polities still

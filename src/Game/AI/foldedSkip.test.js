@@ -281,7 +281,9 @@ test("the task runner says when a call ended on the connection, on its result an
 test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {
   const body = functionBody("finishTimelineJump");
   assert.match(body, /const folded = Boolean\(state\.folded\);/);
-  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await runTurnReview\(\{ context, merged, signal, state \}\);/);
+  // A review that has to be asked is one of the turn's checks (turnChecks.js):
+  // a failed one holds the turn. The folded one makes no request and cannot fail.
+  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\);/);
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);
@@ -293,9 +295,14 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   const finish = functionBody("finishTimelineJump");
   assert.equal(/runJsonTask\(/.test(finish), false, "the finish makes no request");
   assert.equal(/savingRequests\(\)|requests\?\.saving/.test(finish), false, "and reads no setting");
+  // The three Directors run in mapConsequences.js, each answered from the
+  // review's part (directorAnalyzers), which holds no request either.
+  const directors = functionBody("directorAnalyzers");
+  assert.equal(/runJsonTask\(|checks\.run\(/.test(directors), false, "a Director never asks");
   for (const part of ["units", "territory", "structures"]) {
-    assert.ok(finish.includes(`review.parts.${part} ??`), `the ${part} check is the review's part, or none`);
+    assert.ok(directors.includes(`review.parts.${part} ??`), `the ${part} check is the review's part, or none`);
   }
+  assert.match(finish, /analyze: directorAnalyzers\(\{ bundle, review, receipt: state\.receipt \}\),/);
   for (const gone of ["runStandaloneActionOutcomeReview", "refreshSpyIntercepts", "runJsonTask(\"unitDirector\"", "runJsonTask(\"territoryDirector\"", "runJsonTask(\"structureDirector\""]) {
     assert.equal(gameplaySource.includes(gone), false, `${gone} is gone`);
   }

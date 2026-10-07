@@ -62,6 +62,15 @@ test("ledger records bound only to discarded events go with them; baselines and 
     assert.deepEqual(result.relationUpdates, [], "bound by index to the fourth event");
     assert.deepEqual(result.puppetUpdates.map((update) => update.op), ["install"], "a kept event's puppet stays; a discarded one's goes");
     assert.equal(result.storylineUpdates.length, 1, "bound to a kept event as well as a discarded one");
+    // The same rule whatever the order of the rows: the later row is the kept one here.
+    const reordered = truncateTurn({
+        ...turn(),
+        puppetUpdates: [
+            { op: "install", overlord: "A", puppet: "C", eventIds: ["event-ai-r0002-20140510-003"] },
+            { op: "loyalty", overlord: "D", puppet: "E", eventIds: ["event-ai-r0002-20140425-001"] },
+        ],
+    }, 2, { originDate: "2014-04-21" });
+    assert.deepEqual(reordered.result.puppetUpdates.map((update) => update.op), ["loyalty"], "the install was bound to a discarded event");
 });
 
 test("a stop keeps at least one event and never more than the round has", () => {

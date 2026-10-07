@@ -262,4 +262,3 @@ export const resolveScenarioInstitutionMembershipHistory = (world = {}, { scenar
 
   return merged;
 };
-

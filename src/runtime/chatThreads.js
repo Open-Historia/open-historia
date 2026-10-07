@@ -197,6 +197,36 @@ export const normalizeChatEvent = (entry, index = 0) => {
     return pollId && optionId && base.by ? { ...base, pollId, optionId } : null;
 };
 
+// A poll explicitly opened by the human player. The chat event log is the
+// canonical owner of conversational polls, so the UI builds the same
+// `poll_created` record an AI action would have produced instead of maintaining
+// parallel component state. This is DIPLOMATIC conversation state only; it has
+// no institution-law authority (formal institutional ballots live elsewhere).
+export const createPlayerPollEvent = ({ player = "", question = "", options = [], time = "", idFor = mintId } = {}) => {
+    const by = asText(player);
+    const prompt = clip(asText(question), POLL_QUESTION_MAX_CHARS);
+    if (!by || !prompt || typeof idFor !== "function") return null;
+    const labels = [];
+    const seen = new Set();
+    for (const option of asArray(options)) {
+        const label = clip(asText(typeof option === "string" ? option : option?.label ?? option?.text), POLL_LABEL_MAX_CHARS);
+        const key = fold(label);
+        if (!label || seen.has(key)) continue;
+        seen.add(key);
+        labels.push(label);
+        if (labels.length >= POLL_OPTION_LIMIT) break;
+    }
+    if (labels.length < 2) return null;
+    const pollId = asText(idFor("poll"));
+    const id = asText(idFor("pollev"));
+    if (!pollId || !id) return null;
+    return {
+        id, kind: "poll_created", time: asText(time), by, pollId, question: prompt,
+        options: labels.map((label, index) => ({ id: `${pollId}-o${index + 1}`, label })),
+        allowCustom: false,
+    };
+};
+
 export const normalizeChatEvents = (events) => {
     const seen = new Set();
     const list = [];

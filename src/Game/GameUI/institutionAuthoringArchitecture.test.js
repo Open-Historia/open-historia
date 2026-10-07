@@ -18,6 +18,8 @@ test("scenario Politics editor exposes premade canonical institution and logo au
   assert.match(panel, /worldPatch:\s*\{\s*institutions:/);
   assert.match(panel, /Upload small logo/);
   assert.match(panel, /BUILTIN_INSTITUTION_LOGOS/);
+  assert.match(panel, /optionStyle/);
+  assert.match(panel, /<option key=\{kind\} style=\{optionStyle\}/);
   assert.match(core, /normalizeInstitutionRecord/);
   assert.match(core, /membersText/);
 });

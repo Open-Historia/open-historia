@@ -26,7 +26,9 @@ const blockProblems = (json, reason) => {
 
 // `allowedUnitTypes` is the scenario's world.allowedUnitTypes: a deployment of
 // any other type gets no button.
-export const parseAdvisorReply = (rawText, { allowedUnitTypes = null } = {}) => {
+// `streaming`: the reply is still arriving, so an open fence is hidden rather
+// than salvaged (advisorBlocks.js extractFencedJson).
+export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming = false } = {}) => {
   const { rest: chartRest, json: chartJson, reason: chartReason } = extractFencedJson(String(rawText ?? ""), "chart");
   const unclosedChart = !chartJson && !chartReason && UNCLOSED_CHART.test(chartRest);
   const afterChart = unclosedChart ? chartRest.replace(UNCLOSED_CHART, "") : chartRest;
@@ -36,11 +38,11 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null } = {}) => 
   const chart = chartJson
     ? validateChartConfig(chartJson)
     : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
-  const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
-  const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterActions, "senddraft");
-  const { rest: afterInstitutionDrafts, json: institutionDraftsRaw, reason: institutionDraftsReason } = extractFencedJson(afterDrafts, "institutiondraft");
-  const { rest: afterDeploy, json: deployRaw, reason: deployReason } = extractFencedJson(afterInstitutionDrafts, "deploy");
-  const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
+  const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions", { streaming });
+  const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterActions, "senddraft", { streaming });
+  const { rest: afterInstitutionDrafts, json: institutionDraftsRaw, reason: institutionDraftsReason } = extractFencedJson(afterDrafts, "institutiondraft", { streaming });
+  const { rest: afterDeploy, json: deployRaw, reason: deployReason } = extractFencedJson(afterInstitutionDrafts, "deploy", { streaming });
+  const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true, streaming });
 
   const draftProblems = blockProblems(draftsRaw, draftsReason);
   const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions, draftProblems) : null;

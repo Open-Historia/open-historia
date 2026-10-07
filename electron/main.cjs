@@ -13,6 +13,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem } = require("
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
 
@@ -365,6 +366,73 @@ const relocateLegacyStockMap = () => {
   } catch {
     // Best effort: the fetcher downloads the file if this could not move it.
   }
+};
+
+// A file's SHA-256, read a megabyte at a time: a map archive runs to 100 MB,
+// and this is the main process.
+const sha256OfFile = (file) => {
+  const hash = crypto.createHash("sha256");
+  const chunk = Buffer.allocUnsafe(1 << 20);
+  const fd = fs.openSync(file, "r");
+  try {
+    for (;;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read <= 0) break;
+      hash.update(chunk.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+
+// Until this build the fetcher resolved every manifest path against USER_ROOT,
+// so a packaged beta that has been through the setup download holds the whole
+// map under its OWN public/assets, where its server never looked. With the
+// check, the download and the server now agreed on the shared folder, that
+// install would be sent through the same 230 MB a second time. Each such file
+// is moved to where it is read instead, BEFORE the manifest is checked, as the
+// stock map is above.
+//
+// Only a file that is the published one, byte for byte: the folder it goes to
+// is the stable app's too, the setup check trusts a file's size, and a file of
+// the right length with other contents would be both apps' map from then on. A
+// file already in the shared folder at the right size stays, and so does ours.
+// Returns the release names of the files it moved.
+const relocateOwnFolderMap = () => {
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
+  } catch {
+    return [];
+  }
+  const moved = [];
+  for (const asset of manifest.assets ?? []) {
+    try {
+      const target = assetTarget(asset.path);
+      const own = path.join(USER_ROOT, String(asset.path));
+      // One folder: the stable build, a dev run, and what the beta keeps for itself.
+      if (path.resolve(own) === path.resolve(target)) continue;
+      if (fs.statSync(own).size !== asset.bytes) continue;
+      let inPlace = false;
+      try {
+        inPlace = fs.statSync(target).size === asset.bytes;
+      } catch {
+        inPlace = false;
+      }
+      if (inPlace || sha256OfFile(own) !== asset.sha256) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.renameSync(own, target);
+      moved.push(asset.asset);
+    } catch {
+      // Best effort, a file at a time: nothing of ours there, or it could not
+      // be moved, and the fetcher downloads it.
+    }
+  }
+  if (moved.length) {
+    logMain("info", "map.relocated", `Moved ${moved.length} map file(s) this app had downloaded into its own folder to the folder its server reads.`, { assets: moved });
+  }
+  return moved;
 };
 
 const missingAssets = () => {
@@ -734,6 +802,7 @@ const boot = async () => {
   // Quitting into the installer, which reopens the game on the new version.
   if (launchUpdate.installing) return;
   relocateLegacyStockMap();
+  relocateOwnFolderMap();
   let pending = missingAssets();
   while (pending.length) {
     await openSetupWindow();

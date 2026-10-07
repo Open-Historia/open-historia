@@ -41,3 +41,16 @@ test("group replies are staged with a fresh native 1-3 second delay and no extra
   assert.match(actions, /CHAT_REVEAL_MAX_PAUSE_MS = 3000/);
   assert.doesNotMatch(chat, /chooseNextDiplomaticSpeaker|runJsonTask\(["']nextSpeaker["']/);
 });
+
+test("ordinary multi-party diplomacy exposes a player-called conversational vote", () => {
+  const chat = read("./chat.jsx");
+  assert.match(chat, /createPlayerPollEvent/);
+  assert.match(chat, /const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation/);
+  assert.match(chat, /data-player-chat-poll-composer="true"/);
+  assert.match(chat, />Call a conversational vote<\/div>/);
+  assert.match(chat, />Vote<\/button>/);
+  assert.match(chat, /const handlePlayerCreatePoll = async/);
+  assert.match(chat, /kind: "poll_created"|createPlayerPollEvent\(\{/);
+  assert.match(chat, /await runGroupTurn\(line, projectedMessages, \{ chatOverride: updatedChat \}\)/);
+  assert.match(chat, /This does not create institutional law or a formal institution ballot/);
+});

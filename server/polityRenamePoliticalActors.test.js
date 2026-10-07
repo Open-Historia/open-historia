@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renamePolityInWorld } from "./polityRename.js";
+import { reconcileMapPolityAuthoringOps, removePoliticalActorFromWorld, renamePolityInWorld } from "./polityRename.js";
 
 const actorFixture = () => ({
   polityKey: "Old Republic",
@@ -123,4 +123,92 @@ test("polity rename keeps the source polity's keyed value over a stale same-name
   assert.equal(result.world.countryStats["Old Republic"], undefined);
   assert.deepEqual(result.world.countryStats["New Republic"], { population: 123, sentinel: "source" });
   assert.deepEqual(result.world.countryStats.Neighbor, { population: 456, sentinel: "unrelated" });
+});
+
+test("Political World profile deletion removes only the matching actor and preserves the rest of the world", () => {
+  const world = {
+    polityOverrides: {
+      "Old Republic": { code: "Old Republic", name: "Old Republic", aliases: [] },
+      Neighbor: { code: "Neighbor", name: "Neighbor", aliases: [] },
+    },
+    politicalActors: {
+      schemaVersion: 6,
+      byPolity: {
+        stale_internal_key: actorFixture(),
+        Neighbor: { polityKey: "Neighbor", name: "Neighbor", privateSentinel: { keep: true } },
+      },
+    },
+    wars: [{ id: "w1", sideA: ["Old Republic"], sideB: ["Neighbor"] }],
+    relations: [{ a: "Old Republic", b: "Neighbor", score: -20 }],
+  };
+  const before = structuredClone(world);
+
+  const result = removePoliticalActorFromWorld(world, "Old Republic");
+
+  assert.equal(result.removedKey, "stale_internal_key");
+  assert.equal(result.world.politicalActors.byPolity.stale_internal_key, undefined);
+  assert.deepEqual(result.world.politicalActors.byPolity.Neighbor, before.politicalActors.byPolity.Neighbor);
+  assert.deepEqual(result.world.polityOverrides, before.polityOverrides, "deleting a Political World profile must not delete the polity");
+  assert.deepEqual(result.world.wars, before.wars, "deleting a Political World profile must not rewrite unrelated canonical ledgers");
+  assert.deepEqual(result.world.relations, before.relations);
+  assert.deepEqual(world, before, "profile deletion returns a new world rather than mutating the input");
+});
+
+test("deleting a missing Political World profile is a no-op", () => {
+  const world = {
+    politicalActors: {
+      schemaVersion: 6,
+      byPolity: {
+        Neighbor: { polityKey: "Neighbor", name: "Neighbor" },
+      },
+    },
+  };
+  const result = removePoliticalActorFromWorld(world, "Missing Republic");
+  assert.equal(result.removedKey, "");
+  assert.equal(result.world, world);
+});
+
+test("Workshop polity authoring ops migrate an existing Political Actor instead of creating a second one", () => {
+  const world = {
+    polityOverrides: {
+      "Old Republic": { code: "Old Republic", name: "Old Republic", aliases: [] },
+      Neighbor: { code: "Neighbor", name: "Neighbor", aliases: [] },
+    },
+    politicalActors: {
+      schemaVersion: 6,
+      byPolity: {
+        "Old Republic": actorFixture(),
+        Neighbor: { polityKey: "Neighbor", name: "Neighbor" },
+      },
+    },
+    wars: [{ id: "w1", sideA: ["Old Republic"], sideB: ["Neighbor"] }],
+    relations: [{ a: "Old Republic", b: "Neighbor", score: -20 }],
+  };
+
+  const result = reconcileMapPolityAuthoringOps(world, [
+    { op: "rename", from: "Old Republic", to: "New Republic" },
+  ]);
+
+  assert.equal(result.politicalActors.byPolity["Old Republic"], undefined);
+  assert.equal(result.politicalActors.byPolity["New Republic"].polityKey, "New Republic");
+  assert.deepEqual(result.politicalActors.byPolity["New Republic"].privateSentinel, actorFixture().privateSentinel);
+  assert.deepEqual(result.wars[0].sideA, ["New Republic"]);
+  assert.equal(result.relations[0].a, "New Republic");
+});
+
+test("Workshop polity removal clears the stale Political World profile", () => {
+  const world = {
+    politicalActors: {
+      schemaVersion: 6,
+      byPolity: {
+        "Old Republic": actorFixture(),
+        Neighbor: { polityKey: "Neighbor", name: "Neighbor" },
+      },
+    },
+  };
+
+  const result = reconcileMapPolityAuthoringOps(world, [{ op: "remove", key: "Old Republic" }]);
+
+  assert.equal(result.politicalActors.byPolity["Old Republic"], undefined);
+  assert.ok(result.politicalActors.byPolity.Neighbor);
 });

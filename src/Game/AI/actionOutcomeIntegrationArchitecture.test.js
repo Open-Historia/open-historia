@@ -19,7 +19,8 @@ test("normal jump validation receives the live Action queue for exact actionId r
 test("saving-mode turn review can carry queued-order attribution and final events receive the validated associations before directors", () => {
   assert.match(source, /key: "actions"[\s\S]{0,350}?ACTION_OUTCOME_ASSOCIATION_SCHEMA/);
   const finish = source.indexOf("const finishTimelineJump");
-  const directors = source.indexOf("directGeneratedUnitOps", finish);
+  // The Directors run through mapConsequences.js, which a Scene outcome shares.
+  const directors = source.indexOf("applyMapConsequences(", finish);
   const apply = source.indexOf("applyActionOutcomeAssociations", finish);
   assert.ok(finish >= 0 && apply > finish && directors > apply, "association repair must happen before unit/territory/structure directors and final curation");
 });

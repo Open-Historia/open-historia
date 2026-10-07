@@ -38,6 +38,21 @@ test("scenario institution authoring generates stable ids for new institutions",
   assert.equal(institutionAuthoringId("  Baltic & Nordic Union  "), "baltic-nordic-union");
 });
 
+test("scenario institution authoring supports names written wholly in non-Latin scripts", () => {
+  const id = institutionAuthoringId("Европейский совет");
+  assert.match(id, /^u-[a-z0-9]+$/);
+
+  const result = upsertScenarioInstitution({ institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} } }, {
+    name: "Европейский совет",
+    shortName: "ЕС",
+    kind: "consultative_group",
+    membersText: "",
+  });
+  assert.equal(result.error, "");
+  assert.equal(result.institution.id, id);
+  assert.equal(result.institution.name, "Европейский совет");
+});
+
 test("authoring rows expose canonical institutions in name order", () => {
   const rows = institutionAuthoringRows(world());
   assert.equal(rows.length, 1);
@@ -175,4 +190,64 @@ test("on the stock map, where the drawn countries are not listed, no member is f
   const { ownerCodes: _unlisted, ...stock } = rosterWorld();
   assert.deepEqual(unmatchedInstitutionMembers(["France", "Latvija"], stock), []);
   assert.deepEqual(unmatchedInstitutionMembers(["France"], { ...stock, ownerCodes: [] }), []);
+});
+
+// Beta refused this save ("Unknown institution member"). Alpha's rule holds:
+// a member that names no polity in the scenario is kept as written and
+// flagged, never refused.
+test("scenario institution authoring keeps a member that is not in the scenario polity roster, and flags it", () => {
+  const source = {
+    polityOverrides: {
+      Latvia: { name: "Latvia" },
+      Estonia: { name: "Estonia" },
+    },
+    ownerCodes: ["Latvia", "Estonia"],
+    institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  };
+  const result = upsertScenarioInstitution(source, {
+    name: "Baltic Council",
+    shortName: "BC",
+    kind: "regional_bloc",
+    membersText: "Latvia\nAtlantis",
+  });
+  assert.equal(result.error, "");
+  assert.deepEqual(result.institution.members.map((member) => member.polity).sort(), ["Atlantis", "Latvia"]);
+  assert.deepEqual(unmatchedInstitutionMembers(["Latvia", "Atlantis"], source), ["Atlantis"]);
+});
+
+test("a stock-map scenario saves a member its partial roster does not list", () => {
+  const source = {
+    polityOverrides: { "Russian Federation": { name: "Russian Federation", aliases: ["Russia"] } },
+    institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  };
+  const result = upsertScenarioInstitution(source, {
+    name: "Entente",
+    kind: "security_alliance",
+    membersText: "France\nrussia",
+  });
+  assert.equal(result.error, "");
+  assert.deepEqual(result.institution.members.map((member) => member.polity).sort(), ["France", "Russian Federation"]);
+});
+
+test("a name the save turns into a polity's key is not flagged", () => {
+  assert.deepEqual(unmatchedInstitutionMembers(["russia", "RUSSIAN FEDERATION", "Rusia"], rosterWorld()), ["Rusia"]);
+});
+
+test("scenario institution authoring canonicalizes recognized polity aliases to stable scenario polity keys", () => {
+  const source = {
+    polityOverrides: {
+      ITA: { name: "Kingdom of Italy", aliases: ["Italy"] },
+      FRA: { name: "French Republic", aliases: ["France"] },
+    },
+    ownerCodes: ["ITA", "FRA"],
+    institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  };
+  const result = upsertScenarioInstitution(source, {
+    name: "Test Alliance",
+    shortName: "TA",
+    kind: "security_alliance",
+    membersText: "Italy\nFrench Republic",
+  });
+  assert.equal(result.error, "");
+  assert.deepEqual(result.institution.members.map((member) => member.polity).sort(), ["FRA", "ITA"]);
 });

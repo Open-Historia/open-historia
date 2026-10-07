@@ -12,6 +12,34 @@ const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => text(value).toLocaleLowerCase();
 const clip = (value, max) => text(value).slice(0, max);
 
+
+const institutionActionType = (entry) => lower(entry?.type ?? entry?.action ?? entry?.op);
+
+export const institutionChatActionValidationError = (entry) => {
+  const type = institutionActionType(entry);
+  if (!INSTITUTION_CHAT_ACTION_KINDS.includes(type)) return "";
+  const actorName = text(entry?.actorName ?? entry?.actor ?? entry?.speaker);
+  if (!actorName) return `${type} requires actorName.`;
+  if (type === "institution_lodge_proposal") {
+    if (!clip(entry?.title ?? entry?.proposalTitle, 240)) return "institution_lodge_proposal requires title.";
+    if (!clip(entry?.summary ?? entry?.content ?? entry?.text, 2400)) return "institution_lodge_proposal requires summary.";
+    return "";
+  }
+  const proposalId = clip(entry?.proposalId ?? entry?.proposal ?? entry?.targetProposalId, 160);
+  if (!proposalId) return `${type} requires proposalId.`;
+  if (type === "institution_amendment" && !clip(entry?.amendmentText ?? entry?.text ?? entry?.content, 4000)) return "institution_amendment requires amendmentText.";
+  if (type === "institution_resolve_amendment") {
+    if (!clip(entry?.amendmentId ?? entry?.amendment, 160)) return "institution_resolve_amendment requires amendmentId copied from the canonical proposal.";
+    const status = lower(entry?.amendmentStatus ?? entry?.status);
+    if (!["accepted", "rejected", "withdrawn"].includes(status)) return "institution_resolve_amendment requires amendmentStatus accepted, rejected, or withdrawn.";
+  }
+  if (type === "institution_vote") {
+    const vote = lower(entry?.voteChoice ?? entry?.choice ?? entry?.optionRef);
+    if (!["yes", "no", "abstain", "veto"].includes(vote)) return "institution_vote requires voteChoice yes, no, abstain, or veto.";
+  }
+  return "";
+};
+
 export const normalizeInstitutionChatAction = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   const type = lower(entry.type ?? entry.action ?? entry.op);
@@ -64,8 +92,28 @@ export const partitionInstitutionChatActions = (actions) => {
   const conversational = [];
   for (const entry of Array.isArray(actions) ? actions : []) {
     const normalized = normalizeInstitutionChatAction(entry);
-    if (normalized) formal.push(normalized);
-    else conversational.push(entry);
+    if (normalized) { formal.push(normalized); continue; }
+    const rawType = institutionActionType(entry);
+    if (INSTITUTION_CHAT_ACTION_KINDS.includes(rawType)) {
+      // Keep the harmless identity fields from a malformed formal action. Native
+      // governance may be able to repair transport-only omissions when the
+      // canonical target is unambiguous (for example a sponsor accepting the
+      // only unresolved amendment but omitting amendmentId). The invalid marker
+      // remains fail-closed authority: no repair is allowed without proving one
+      // exact canonical target and the normal governance command still validates
+      // the actor's authority.
+      formal.push({
+        type: "institution_invalid",
+        rawType,
+        actorName: text(entry?.actorName ?? entry?.actor ?? entry?.speaker),
+        proposalId: clip(entry?.proposalId ?? entry?.proposal ?? entry?.targetProposalId, 160),
+        amendmentId: clip(entry?.amendmentId ?? entry?.amendment, 160),
+        amendmentStatus: lower(entry?.amendmentStatus ?? entry?.status),
+        validationError: institutionChatActionValidationError(entry) || `${rawType} is malformed.`,
+      });
+      continue;
+    }
+    conversational.push(entry);
   }
   return { formal, conversational };
 };

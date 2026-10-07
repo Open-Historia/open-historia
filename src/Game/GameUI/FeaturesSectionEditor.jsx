@@ -1,9 +1,11 @@
 /*! Open Historia — the Features tab of the scenario and game editors © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
 import { useTouchPrimary } from "../../runtime/mobileUi.js";
+import ScriptedEventsEditor from "./ScriptedEventsEditor.jsx";
 import {
   FEATURE_DEFINITIONS,
   normalizeFeatureSettings,
+  normalizeScriptedEvents,
   resolveFeatures,
 } from "../../runtime/gameFeatures.js";
 import { reviewScriptedEvents } from "../AI/worldDirection.js";
@@ -47,7 +49,9 @@ const ScriptedEventsCheck = ({ text, currentDate, includeOrigin, isGame }) => {
 // `currentDate` is the game's date (the scenario's start in its own editor),
 // and `firstSkipAhead` says the next skip is the game's first, which covers
 // that day too: what the Scripted events check measures a beat against.
-const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, styles, currentDate = "", firstSkipAhead = true }) => {
+// `world` is the world a scripted event's conditions pick their polities and
+// institutions from (ScriptedEventsEditor).
+const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChange, styles, currentDate = "", firstSkipAhead = true }) => {
   const isGame = kind === "game";
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
@@ -120,6 +124,40 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                   {definition.settings.map((setting) => {
                     const overridden = isGame && override[setting.key] !== undefined;
                     const value = isGame ? (override[setting.key] ?? "") : effective[definition.key][setting.key];
+                    if (setting.type === "scripted-events") {
+                      const scenarioEvents = normalizeScriptedEvents(base[definition.key][setting.key]);
+                      const raw = features?.[definition.key]?.[setting.key];
+                      const shownEvents = Array.isArray(raw)
+                        ? raw
+                        : normalizeScriptedEvents(raw ?? (isGame ? scenarioEvents : value));
+                      const cloneScenario = () => scenarioEvents.map((event) => ({
+                        ...event,
+                        trigger: {
+                          ...(event.trigger || {}),
+                          conditions: Array.isArray(event.trigger?.conditions)
+                            ? event.trigger.conditions.map((condition) => ({ ...condition }))
+                            : event.trigger?.conditions,
+                        },
+                        outcomes: Array.isArray(event.outcomes) ? event.outcomes.map((outcome) => ({ ...outcome })) : event.outcomes,
+                      }));
+                      return (
+                        <div key={setting.key}>
+                          <label style={styles.fieldLabelStyle}>{setting.label}</label>
+                          <ScriptedEventsEditor
+                            value={shownEvents}
+                            scenarioValue={scenarioEvents}
+                            isGame={isGame}
+                            overridden={!isGame || overridden}
+                            world={world}
+                            styles={styles}
+                            onChange={(next) => setFeature(definition.key, { [setting.key]: next })}
+                            onUseScenarioDefault={() => setFeature(definition.key, { [setting.key]: undefined })}
+                            onStartOverride={() => setFeature(definition.key, { [setting.key]: cloneScenario() })}
+                          />
+                          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.3rem" }}>{setting.description}</div>
+                        </div>
+                      );
+                    }
                     // A choice of named levels (Player focus). One button per
                     // option, and on a game a "Scenario default" button beside
                     // them, exactly as the on/off row above reads.

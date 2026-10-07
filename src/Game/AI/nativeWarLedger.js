@@ -104,6 +104,182 @@ const normalizedWars = (world) =>
     .filter(Boolean)
     .slice(0, MAX_WARS);
 
+// Round-Zero baseline construction is intentionally separate from normal-turn
+// lifecycle verbs. The caller owns identity resolution; this helper owns the
+// canonical persisted war shape and its structural invariants. It is pure and
+// does not mutate/apply against world.wars.
+export const buildPregameWarBaselineRecord = ({
+  id = "",
+  title = "",
+  status = "active",
+  sideA = [],
+  sideB = [],
+  startedDate = "",
+  note = "",
+  sourceEventIds = [],
+  round = 1,
+} = {}) => {
+  const canonicalId = normalizeString(id);
+  const canonicalStatus = normalizeString(status).toLowerCase();
+  if (!canonicalId) return { record: null, error: "Round-Zero war baseline requires a native canonical id." };
+  if (!["active", "ceasefire"].includes(canonicalStatus)) {
+    return { record: null, error: `Round-Zero war ${canonicalId} must be active or ceasefire.` };
+  }
+  const start = normalizeString(startedDate);
+  if (start && !parseIsoDate(start)) {
+    return { record: null, error: `Round-Zero war ${canonicalId} has an invalid startedDate.` };
+  }
+  const normalized = normalizeWar({
+    id: canonicalId,
+    title: normalizeString(title),
+    status: canonicalStatus,
+    sideA,
+    sideB,
+    startedDate: start,
+    endedDate: "",
+    lastUpdatedDate: start,
+    cause: normalizeString(note),
+    note: normalizeString(note),
+    sourceEventIds: [...new Set(normalizeArray(sourceEventIds).map(normalizeString).filter(Boolean))].slice(-24),
+    storylineIds: [],
+    createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+  });
+  if (!normalized) {
+    return { record: null, error: `Round-Zero war ${canonicalId} requires two non-empty opposing sides.` };
+  }
+  return { record: normalized, error: "" };
+};
+
+// A war's title as it is compared: the letters, marks and digits of every
+// script, case, accents and punctuation folded away. Folded to a-z0-9, a title
+// in Cyrillic, Arabic or Chinese had no key at all, so two wars between the
+// same sides on the same date were one war whatever each was called, and no
+// such title could be told from a blank one. An ASCII title keeps its key.
+const pregameWarTitleKey = (value) => normalizeString(value)
+  .toLocaleLowerCase()
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+
+const pregameWarSideKey = (values) => uniquePolities(values)
+  .map((value) => polityKey(value))
+  .sort()
+  .join("|");
+
+const pregameWarSidePairKey = (sideA, sideB) =>
+  [pregameWarSideKey(sideA), pregameWarSideKey(sideB)].sort().join("<>");
+
+const samePregameSourceSet = (superset, required) => {
+  const values = new Set(normalizeArray(superset).map(normalizeString).filter(Boolean));
+  return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
+};
+
+// Resolve Day-One war identity conservatively. Sides and date say which war it
+// is; the title is how it is worded.
+//
+// ONE live war between the same two sides, with no conflicting known date, is
+// that war whatever the fact calls it: the same belligerents are not fighting
+// each other twice at once, and a model that restates canon writes the war's
+// name in the game's language. Such a fact used to be "ambiguous: the same live
+// sides/date already exist under a different canonical title", which refused
+// the whole Round-Zero answer; it is now the match, marked `restated`, and the
+// caller keeps the canonical title (see resolvePregameAgreementBaselineMatch,
+// where a player's game met this).
+//
+// MORE than one such war is still an error, marked `ambiguous` so the caller
+// can leave that fact out on its last attempt. So is a single one that another
+// fact of the same answer already resolved to (`claimedIds`), or that has no
+// title of its own to keep. Neither is permission to fork a second live war.
+export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null, claimedIds = null } = {}) => {
+  if (!candidate) return { match: null, error: "Round-Zero war resolver requires a candidate." };
+  const sides = pregameWarSidePairKey(candidate.sideA, candidate.sideB);
+  const title = pregameWarTitleKey(candidate.title);
+  const date = normalizeString(candidate.startedDate);
+  const live = normalizeArray(records)
+    .map((entry, index) => normalizeWar(entry, index))
+    .filter((entry) => entry && ["active", "ceasefire"].includes(entry.status))
+    .filter((entry) => pregameWarSidePairKey(entry.sideA, entry.sideB) === sides);
+
+  const dateCompatible = (entry) => {
+    const existing = normalizeString(entry.startedDate);
+    return !date || !existing || date === existing;
+  };
+  const possible = live.filter(dateCompatible);
+  const exact = possible.filter((entry) => pregameWarTitleKey(entry.title) === title);
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero war identity matches multiple canonical wars." };
+  if (exact.length === 1) return { match: exact[0], error: "" };
+  if (possible.length === 1 && pregameWarTitleKey(possible[0].title) && !claimedIds?.has(normalizeString(possible[0].id))) {
+    return { match: possible[0], restated: true, error: "" };
+  }
+  if (possible.length) {
+    return { match: null, ambiguous: true, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
+  }
+
+  const conflictingKnownDate = live.some((entry) =>
+    pregameWarTitleKey(entry.title) === title &&
+    date && normalizeString(entry.startedDate) && normalizeString(entry.startedDate) !== date
+  );
+  if (conflictingKnownDate) {
+    return { match: null, error: "Round-Zero war conflicts with a live war having the same sides/title but a different known start date." };
+  }
+  return { match: null, error: "" };
+};
+
+export const mergePregameWarBaselineRecord = ({ existing = null, incoming = null } = {}) => {
+  const prior = normalizeWar(existing);
+  const next = normalizeWar(incoming);
+  if (!prior || !next || normalizeString(prior.id) !== normalizeString(next.id)) {
+    return { record: null, error: "Round-Zero war merge requires the same valid canonical id." };
+  }
+  if (pregameWarSidePairKey(prior.sideA, prior.sideB) !== pregameWarSidePairKey(next.sideA, next.sideB)) {
+    return { record: null, error: `Round-Zero war ${prior.id} changes canonical belligerent identity.` };
+  }
+  if (pregameWarTitleKey(prior.title) !== pregameWarTitleKey(next.title)) {
+    return { record: null, error: `Round-Zero war ${prior.id} changes canonical title identity.` };
+  }
+  if (prior.status !== next.status) {
+    return { record: null, error: `Round-Zero war ${prior.id} conflicts on status (${prior.status} vs ${next.status}).` };
+  }
+  if (prior.startedDate && next.startedDate && prior.startedDate !== next.startedDate) {
+    return { record: null, error: `Round-Zero war ${prior.id} conflicts on known start date.` };
+  }
+  const startedDate = prior.startedDate || next.startedDate;
+  const sourceEventIds = [...new Set([...prior.sourceEventIds, ...next.sourceEventIds])].slice(-24);
+  return {
+    record: normalizeWar({
+      ...prior,
+      startedDate,
+      lastUpdatedDate: prior.lastUpdatedDate || next.lastUpdatedDate || startedDate,
+      note: prior.note || next.note,
+      cause: prior.cause || next.cause || prior.note || next.note,
+      sourceEventIds,
+      storylineIds: [...new Set([...prior.storylineIds, ...next.storylineIds])].slice(-12),
+      createdRound: prior.createdRound || next.createdRound,
+      updatedRound: Math.max(prior.updatedRound || 0, next.updatedRound || 0),
+    }),
+    error: "",
+  };
+};
+
+export const pregameWarBaselineCompatibilityError = (expected, actual) => {
+  const left = normalizeWar(expected);
+  const right = normalizeWar(actual);
+  if (!left || !right) return "war record is missing or invalid";
+  if (left.id !== right.id) return "war id changed";
+  if (pregameWarSidePairKey(left.sideA, left.sideB) !== pregameWarSidePairKey(right.sideA, right.sideB)) return "war sides changed";
+  if (pregameWarTitleKey(left.title) !== pregameWarTitleKey(right.title)) return "war title identity changed";
+  if (left.status !== right.status) return "war status changed";
+  if (left.startedDate !== right.startedDate) return "war start date was not conserved";
+  if (!samePregameSourceSet(right.sourceEventIds, left.sourceEventIds)) return "war provenance was not conserved";
+  for (const storylineId of left.storylineIds) {
+    if (!right.storylineIds.includes(storylineId)) return "war storyline linkage was not conserved";
+  }
+  return "";
+};
+
 const parseCsv = (value) =>
   uniquePolities(
     String(value ?? "")
@@ -169,6 +345,9 @@ const parseWarUpdateRecord = (line, index = 0) => {
     opponents: parseCsv(opponentsRaw),
     eventIndexes: parseEventNumbers(eventNumbersRaw),
     eventIds: [],
+    // Internal Round-Zero metadata only. The compact normal-turn line transport
+    // has no date field, so ordinary gameplay cannot set this accidentally.
+    baselineDate: "",
     note: normalizeString(noteRaw),
   };
 };
@@ -189,6 +368,7 @@ export const decodeWarUpdates = (value, { limit = MAX_WAR_UPDATES_PER_PASS } = {
             .filter((item) => Number.isInteger(item) && item >= 0)
             .slice(0, 16),
           eventIds: [...new Set(normalizeArray(entry.eventIds).map(normalizeString).filter(Boolean))].slice(0, 24),
+          baselineDate: normalizeString(entry.baselineDate),
           note: normalizeString(entry.note),
         };
       })
@@ -370,6 +550,13 @@ const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|sh
 // than evidence that two polities are fighting one another.
 const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
 const DIRECT_COMBAT_CONTEXT_RE = /\b(?:engag(?:e|es|ed|ing)|locked)\b.{0,80}\bcombat\b|\bcombat\b.{0,80}\b(?:against|between|with)\b|\bcombat operations?\b.{0,80}\b(?:against|targeting)\b/i;
+// Direct adversarial action is stronger evidence than a combat noun somewhere in
+// background prose. This catches real fighting such as "assaults on insurgent
+// positions" while leaving "assault plan", "battle tanks" and historical
+// references alone.
+const DIRECT_ADVERSARIAL_ACTION_RE = /\b(?:attack(?:s|ed|ing)?|assault(?:s|ed|ing)?|bombard(?:s|ed|ing)?|shell(?:s|ed|ing)?|raid(?:s|ed|ing)?)\b[^.!?;]{0,72}\b(?:on|against|at|targeting)\b/i;
+const HIGH_CONFIDENCE_COMBAT_TITLE_RE = /(?:\bbattle of\b|\binvasion of\b|\binvad(?:e|es|ed|ing)\b|\bamphibious assault\b|\b(?:air ?strikes?|bombard(?:s|ed|ment|ing)?|shell(?:s|ed|ing)?)\b|\b(?:army|armies|troops?|brigades?|battalions?|regiments?|military units?|warships?|aircraft)\b[^:;.!?]{0,64}\b(?:attack(?:s|ed|ing)?|assault(?:s|ed|ing)?|capture|captures|captured|seize|seizes|seized|storm|storms|stormed|overrun|overruns|overran)\b|\bsiege of\b)/i;
+const ORGANIZED_FORCE_CLASH_RE = /\b(?:army|armies|troops?|brigades?|battalions?|regiments?|military units?)\b[^.!?;]{0,80}\b(?:clash(?:es|ed)?|fight(?:s|ing)?|exchange(?:s|d)? fire|engag(?:e|es|ed|ing))\b/i;
 const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b/i;
 const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities)\b/i;
 const CEASEFIRE_RE = /\b(ceasefire (?:takes effect|begins|signed|agreed|declared)|armistice (?:takes effect|signed|agreed)|truce (?:takes effect|signed|agreed))\b/i;
@@ -434,7 +621,9 @@ const NON_BATTLEFIELD_OFFENSIVE_RE =
   /\b(?:diplomatic|charm|peace|political|media|public[- ]relations|propaganda|information|legal|lobbying|economic|trade|investment|marketing|publicity|messaging)\s+(?:counter[- ]?)?offensives?\b/gi;
 
 const combatSemanticText = (event) =>
-  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
+  [normalizeString(event?.title), normalizeString(event?.description)]
+    .filter(Boolean)
+    .join(". ")
     .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ")
     .replace(NON_BATTLEFIELD_ACTION_TERMS_RE, " military-exercise ")
     .replace(NON_BATTLEFIELD_OFFENSIVE_RE, " non-military-campaign ");
@@ -447,16 +636,25 @@ const combatSemanticText = (event) =>
 export const eventNarratesHardCombat = (event) => {
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   const text = combatSemanticText(event);
+  const title = combatSemanticText({ title: event?.title, description: "" });
   const military = normalizeString(event?.kind).toLowerCase() === "military";
+  const combatants = uniquePolities(event?.combatants, 8);
+  const hasOpposingActors = combatants.length >= 2;
   const hasControl = normalizeArray(impacts.regionControlOps)
     .some((op) => ["contest", "control"].includes(normalizeString(op?.op).toLowerCase()));
 
-  if (
-    UNAMBIGUOUS_COMBAT_RE.test(text) ||
-    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
-    ACTIVE_OFFENSIVE_RE.test(text)
-  ) return true;
-  if (military && HARD_COMBAT_RE.test(text)) return true;
+  // High-confidence causal evidence may stand on its own. Generic words such as
+  // "clashes", "fighting" or "battle" in background prose do not. If the
+  // title is not itself a battlefield claim, a military-tagged event needs two
+  // structured combatants before those weaker nouns can demand a canonical war.
+  if (HIGH_CONFIDENCE_COMBAT_TITLE_RE.test(title)) return true;
+  if (ORGANIZED_FORCE_CLASH_RE.test(text)) return true;
+  // Generic "attack/assault against" language is common in politics and law.
+  // Outside a high-confidence battlefield title, require military classification
+  // or at least two structured opposing combatants before it can demand a war.
+  if ((military || hasOpposingActors) && DIRECT_ADVERSARIAL_ACTION_RE.test(text)) return true;
+  if ((military || hasOpposingActors) && (DIRECT_COMBAT_CONTEXT_RE.test(text) || ACTIVE_OFFENSIVE_RE.test(text))) return true;
+  if (military && hasOpposingActors && UNAMBIGUOUS_COMBAT_RE.test(text)) return true;
   return hasControl && HARD_COMBAT_RE.test(text);
 };
 
@@ -502,9 +700,7 @@ const eventSupportsNewWarStart = (event) => {
   const text = combatSemanticText(event);
   return (
     WAR_START_RE.test(text) ||
-    UNAMBIGUOUS_COMBAT_RE.test(text) ||
-    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
-    ACTIVE_OFFENSIVE_RE.test(text) ||
+    eventNarratesHardCombat(event) ||
     WAR_START_EVIDENCE_RE.test(text)
   );
 };
@@ -555,15 +751,13 @@ const EXERCISE_REPORT_RE = /\b(?:exercises?|drills?|war ?games?|manoeuvres|maneu
 // the war and its two sides, so the question here is only whether its event
 // narrates fighting or a declaration at all, and it is asked more widely than
 // eventSupportsNewWarStart, which the engine also asks before it makes up a
-// war of its own from two names (reconcileCombatWarState) and which stays as
-// narrow as it was. Two things are added: the report of a war already being
-// fought (above), and every event the ledger itself calls hard combat. The
-// second was a trap: a military event that "raids" or "repulses" had to belong
-// to an active war (eventNarratesHardCombat) and could not open one, so no
-// answer the model gave for it could pass.
+// war of its own from two names (reconcileCombatWarState). One thing is added:
+// the report of a war already being fought (above). An exercise is reported
+// in a battle's own words ("simulates an attack on"), so short of a
+// declaration it opens nothing, whatever else its text matches.
 const eventCanOpenDeclaredWar = (event) => {
-  if (eventSupportsNewWarStart(event)) return true;
   const text = combatSemanticText(event);
+  if (WAR_START_RE.test(text) || WAR_START_EVIDENCE_RE.test(text)) return true;
   if (EXERCISE_REPORT_RE.test(text)) return false;
   return eventNarratesHardCombat(event) || WAR_FIGHTING_REPORT_RE.test(text);
 };
@@ -576,9 +770,16 @@ const eventTransitionExpectation = (event) => {
   return null;
 };
 
-const validateCombatantsAgainstWar = (event, war) => {
+const validateCombatantsAgainstWar = (event, war, { allowLinkedStartSides = false } = {}) => {
   const combatants = uniquePolities(event?.combatants, 8);
   if (combatants.length < 2) {
+    // The causal event that opens a war does not have to duplicate the same
+    // opposing sides already carried by its linked canonical start record.
+    // That start record has already been applied to `war` above, so its sideA /
+    // sideB membership is authoritative for this one event. Any explicit but
+    // incomplete combatants metadata still fails closed instead of being
+    // silently completed from the ledger.
+    if (allowLinkedStartSides && combatants.length === 0) return "";
     return `Combat event "${normalizeString(event?.title)}" must include event.combatants naming at least the two opposing belligerent polities.`;
   }
   const sideA = new Set(war.sideA.map(polityKey));
@@ -705,7 +906,13 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       if (!war || war.status !== "active") {
         return `Combat event "${normalizeString(event.title)}" cannot occur because canonical war ${warId} is ${war?.status || "missing"}, not active.`;
       }
-      const combatantError = validateCombatantsAgainstWar(event, war);
+      const linkedStart = eventUpdates.find((update) =>
+        normalizeString(update?.op).toLowerCase() === "start" &&
+        normalizeString(update?.id) === warId
+      );
+      const combatantError = validateCombatantsAgainstWar(event, war, {
+        allowLinkedStartSides: Boolean(linkedStart),
+      });
       if (combatantError) return combatantError;
     }
   }
@@ -1315,6 +1522,103 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
   return result;
 };
 
+// Round Zero is an as-of-start canonical baseline, not a replay of every
+// historical cause. A live war therefore does not need a duplicated event.warId
+// merely to exist. When a matching pre-game event is present we still preserve
+// that provenance; when it is absent, the structured war record stands on its
+// own and the lifecycle/sides remain fully validated.
+export const validatePregameWarBootstrap = ({
+  world = {},
+  updates = [],
+  events = [],
+  startDate = "",
+} = {}) => {
+  const normalizedEvents = normalizeEvents(events);
+  const decoded = bindWarUpdatesToEvents(updates, normalizedEvents);
+  const lastKnownDateByWar = new Map();
+
+  for (let index = 0; index < decoded.length; index += 1) {
+    const update = decoded[index];
+    const op = normalizeString(update?.op);
+    if (!["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"].includes(op)) {
+      return {
+        error: `$.warUpdates record ${index + 1} has the unsupported operation ${op || "<blank>"}.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+    const indexes = normalizeArray(update?.eventIndexes);
+    if (indexes.some((eventIndex) => eventIndex < 0 || eventIndex >= normalizedEvents.length)) {
+      return {
+        error: `$.warUpdates record ${index + 1} references a pre-game event outside $.events.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+
+    const baselineDate = normalizeString(update?.baselineDate);
+    if (baselineDate) {
+      if (!parseIsoDate(baselineDate)) {
+        return {
+          error: `$.warUpdates record ${index + 1} baseline date must be a valid game date or blank.`,
+          updates: decoded,
+          warProbe: null,
+        };
+      }
+      if (parseIsoDate(startDate) && compareGameDates(baselineDate, startDate) > 0) {
+        return {
+          error: `$.warUpdates record ${index + 1} baseline date must be on or before the Round-One date ${startDate}.`,
+          updates: decoded,
+          warProbe: null,
+        };
+      }
+    }
+
+    const effectiveDate = firstLinkedDate(update, normalizedEvents) || sortDate(baselineDate);
+    const warId = normalizeString(update?.id);
+    const priorKnownDate = lastKnownDateByWar.get(warId) || "";
+    if (effectiveDate && priorKnownDate && compareGameDates(effectiveDate, priorKnownDate) < 0) {
+      return {
+        error: `$.warUpdates record ${index + 1} for ${warId || "unnamed war"} predates an earlier transition in the same Round-Zero lifecycle.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+    if (effectiveDate && warId) lastKnownDateByWar.set(warId, effectiveDate);
+  }
+
+  // Do not pass startDate as a fallback event date. If the model supplied no
+  // provenance event and no known transition date, "unknown" is more honest
+  // than pretending the war began on the campaign's first playable day.
+  const warProbe = applyWarUpdates({
+    world,
+    updates: decoded,
+    events: normalizedEvents,
+    stopDate: "",
+    round: 1,
+  });
+  if (warProbe.appliedIds.length !== decoded.length) {
+    return {
+      error: "$.warUpdates contains an invalid Round-One war lifecycle sequence. Bootstrap only wars that actually survive into the start date, beginning with a valid start operation.",
+      updates: decoded,
+      warProbe,
+    };
+  }
+
+  for (const warId of new Set(decoded.map((update) => normalizeString(update?.id)).filter(Boolean))) {
+    const war = normalizeArray(warProbe.wars).find((entry) => normalizeString(entry?.id) === warId);
+    if (!war || !["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) {
+      return {
+        error: `$.warUpdates leaves ${warId} ${normalizeString(war?.status) || "missing"} at Round One. A war that ended before the campaign belongs only in the pre-game events, not the live war ledger.`,
+        updates: decoded,
+        warProbe,
+      };
+    }
+  }
+
+  return { error: "", updates: decoded, warProbe };
+};
+
 // `limit` as in the decoder: a merged turn passes Infinity, because the cap is
 // per model answer and each segment's answer was held to it already.
 export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0, limit } = {}) => {
@@ -1325,7 +1629,10 @@ export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", ro
 
   for (const update of decoded) {
     const linkedEvents = linkedEventsForUpdate(update, events);
-    const date = firstLinkedDate(update, events) || sortDate(stopDate);
+    // A Round-Zero baseline may be valid without a historical event card. In
+    // that one transport, gameplay.js carries the canonical transition date as
+    // baselineDate. Normal-turn records never have it and remain event-dated.
+    const date = firstLinkedDate(update, events) || sortDate(update?.baselineDate) || sortDate(stopDate);
     const result = applyUpdateToWarMap({ map, update, date, round, linkedEvents });
     if (result.error) {
       console.warn(`[OH war ledger] dropped invalid ${update.op} for ${update.id}: ${result.error}`);

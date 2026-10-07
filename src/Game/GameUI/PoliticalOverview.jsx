@@ -360,7 +360,7 @@ const InstitutionPortfolio = ({ rows = [] }) => {
               <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", lineHeight: 1.4, marginTop: "0.22rem" }}>
                 {[entry?.member?.sinceDate ? `since ${entry.member.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
               </div>
-              {pending.slice(0, 2).map((item) => <div key={item.id} style={{ color: "rgba(221,214,254,0.6)", fontSize: "0.56rem", marginTop: "0.24rem" }}>• {item.kind} · {item.status}{item.requestedStatus ? ` · ${item.requestedStatus}` : ""}</div>)}
+              {pending.slice(0, 2).map((item) => <div key={item.id} style={{ color: "var(--oh-grey-muted)", fontSize: "0.56rem", marginTop: "0.24rem" }}>• {item.kind} · {item.status}{item.requestedStatus ? ` · ${item.requestedStatus}` : ""}</div>)}
             </div>
           );
         })}
@@ -390,7 +390,7 @@ const IntelligenceAssessment = ({ intelligence }) => {
         <div style={{ display: "flex", flexDirection: "column", gap: "0.46rem", marginTop: "0.58rem" }}>
           {findings.map((finding, index) => (
             <div key={`${finding.topic || "finding"}-${index}`} style={{ borderLeft: "2px solid rgba(255,255,255,0.22)", paddingLeft: "0.55rem" }}>
-              {finding.topic && <div style={{ color: "rgba(221,214,254,0.72)", fontSize: "0.58rem", fontWeight: 800 }}>{finding.topic}</div>}
+              {finding.topic && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.58rem", fontWeight: 800 }}>{finding.topic}</div>}
               <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.65rem", lineHeight: 1.43, marginTop: finding.topic ? "0.12rem" : 0 }}>{finding.text}</div>
             </div>
           ))}

@@ -107,13 +107,18 @@ const DayOneRow = ({ row, onRemove, touch }) => {
   const sideB = row.sideB.join(", ");
   const title = row.title;
   const score = row.detail;
-  const line = row.family === "warUpdates"
+  // A lifecycle record is worded by its family; a semantic fact, whose family
+  // is the one list they all share, by its own kind.
+  const shape = row.family === "canonicalUpdates"
+    ? ({ war: "warUpdates", relation: "relationUpdates", agreement: "agreementUpdates", puppet: "puppetUpdates" }[row.kind] ?? "storylineUpdates")
+    : row.family;
+  const line = shape === "warUpdates"
     ? `War: ${sideA} against ${sideB}`
-    : row.family === "relationUpdates"
+    : shape === "relationUpdates"
       ? `Relations between ${sideA} and ${sideB}: ${score}`
-      : row.family === "agreementUpdates"
+      : shape === "agreementUpdates"
         ? `Agreement: ${title} (${sideA})`
-        : row.family === "puppetUpdates"
+        : shape === "puppetUpdates"
           ? `Subordination: ${sideA} over ${sideB}`
           : `Ongoing storyline: ${title}`;
   return (

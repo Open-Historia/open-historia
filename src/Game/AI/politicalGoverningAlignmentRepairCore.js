@@ -563,4 +563,3 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
     failedPolities: failures.length,
   };
 };
-

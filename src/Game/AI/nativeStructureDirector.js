@@ -53,8 +53,15 @@ const eventText = (event) =>
 
 export const eventNeedsStructureDirector = (event) => {
   if (!event || typeof event !== "object") return false;
-  const text = eventText(event);
-  return FACILITY_PATTERN.test(text) && CONSTRUCTION_CUE_PATTERN.test(text);
+  return event.ordered?.build === true || orderBuildsStructure(eventText(event));
+};
+
+// Text that builds or establishes something that stands in one place: an event's,
+// or a player's order's (mapConsequences.js markOrderedEvents), whose outcome
+// event is then the structure Director's to read however it is worded.
+export const orderBuildsStructure = (text) => {
+  const value = String(text ?? "");
+  return FACILITY_PATTERN.test(value) && CONSTRUCTION_CUE_PATTERN.test(value);
 };
 
 const isOrbital = (text) => ORBITAL_PATTERN.test(text) && !GROUND_SEGMENT_PATTERN.test(text);
@@ -123,7 +130,7 @@ export const buildStructureDirectorInput = ({ events = [], world = {}, playerCou
 // tests. Placement has already run: a structure with no coordinates by now
 // could not be placed and is dropped here, not left for the normalizer to lose
 // silently.
-export const sanitizeStructureOrders = ({ events, orders, world, makeId = makeStructureId }) => {
+export const sanitizeStructureOrders = ({ events, orders, world, playerCountry = "", makeId = makeStructureId }) => {
   const diagnostics = [];
   const acceptedByEvent = new Map();
   const links = [];
@@ -162,24 +169,44 @@ export const sanitizeStructureOrders = ({ events, orders, world, makeId = makeSt
       }
       if (budget <= 0) { reject(`over the ${STRUCTURE_BUILDS_PER_TURN} new structures a turn may build`); continue; }
 
+      // A structure credited to a polity that holds no land anywhere belongs to
+      // whoever holds the ground it stands on. Seen in a live game (2026-09-21):
+      // Egypt had been absorbed into the British Empire years earlier, the model
+      // still wrote Egypt's canal authority upgrading Port Said, and the control
+      // centre went on the map as Egypt's, inside the player's own territory.
+      // Placement (gameplay.js resolvePlacements, noteGround) says who holds the
+      // ground and whether the named owner holds any land. The player is never
+      // reassigned: a landless player is a deliberate scenario.
+      const groundOwner = normalizeString(raw?.groundOwner);
+      const landless = raw?.ownerHoldsLand === false && Boolean(groundOwner)
+        && nameKey(ownerCode) !== nameKey(playerCountry) && nameKey(ownerCode) !== nameKey(groundOwner);
+      const owner = landless ? groundOwner : ownerCode;
+
       const status = normalizeString(raw?.status).toLowerCase();
       const marker = {
         id: makeId(),
         name,
         kind,
-        ownerCode,
+        ownerCode: owner,
         status: BUILD_STATUSES.has(status) ? status : "active",
         lng,
         lat,
         note: normalizeString(raw?.note),
         foundedAt: normalizeString(event?.date),
+        // An approximate placement: its town is not on the map (AI/placement.js).
+        ...(raw?.approximate ? { approximate: raw.approximate } : {}),
       };
       budget -= 1;
       taken.add(nameKey(name));
       acceptedByEvent.set(eventIndex, [...(acceptedByEvent.get(eventIndex) ?? []), { op: "build", marker }]);
       const project = findProject(raw?.projectId);
       if (project) links.push({ markerId: marker.id, projectId: normalizeString(project.id) });
-      diagnostics.push({ eventIndex, name, action: "KEEP", reason: project ? `accepted, linked to ${normalizeString(project.name)}` : "accepted" });
+      const reasons = [
+        "accepted",
+        ...(landless ? [`${ownerCode} holds no land, so it goes to ${groundOwner}, who holds the ground`] : []),
+        ...(project ? [`linked to ${normalizeString(project.name)}`] : []),
+      ];
+      diagnostics.push({ eventIndex, name, action: "KEEP", reason: reasons.join("; ") });
     }
   }
   return { acceptedByEvent, links, diagnostics };
@@ -214,6 +241,7 @@ export const directGeneratedStructureOps = async ({
     events: sourceEvents,
     orders: payload.eventOrders,
     world,
+    playerCountry,
     ...(makeId ? { makeId } : {}),
   });
 

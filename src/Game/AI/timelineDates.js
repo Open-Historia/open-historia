@@ -109,9 +109,19 @@ export const clampTimelineDates = (candidate, { mode, originDate, targetDate }) 
 // fix, attempt 2 drops what cannot be placed instead of rejecting the turn.
 // Non-Gregorian scenarios ("1200 BCE") skip date checks entirely — the model
 // is told to match the scenario's own dating style and we take it at its word.
+// Every event also carries its own candidate-local ref, on either attempt and
+// whatever the dating style: the Day-One facts cite their events by it
+// (pregameBootstrapCompiler.js).
 export const validatePregameEvents = (candidate, { startDate, strict }) => {
   const events = normalizeArray(candidate?.events);
   if (events.length === 0) return "$.events must contain at least one pre-game event.";
+  const eventRefs = new Set();
+  for (let index = 0; index < events.length; index += 1) {
+    const ref = normalizeString(events[index]?.ref);
+    if (!ref) return `$.events[${index}].ref must be a non-blank candidate-local event ref.`;
+    if (eventRefs.has(ref)) return `$.events[${index}].ref duplicates candidate-local event ref ${ref}.`;
+    eventRefs.add(ref);
+  }
   if (!parseGameDate(startDate)) return "";
   if (strict) {
     let previous = "";

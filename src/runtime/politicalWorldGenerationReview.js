@@ -17,6 +17,7 @@ import {
   buildRoundZeroCanonContext,
   buildRoundZeroCanonContextText,
 } from "./roundZeroCanonContext.js";
+import { normalizeGameDate } from "./gameDates.js";
 
 export { collectScenarioPoliticalPolities } from "./scenarioPolities.js";
 
@@ -120,7 +121,7 @@ export const buildScenarioPoliticalRelevance = ({
 
 const scenarioDateFromDetails = (details) => {
   const game = details?.data?.game ?? {};
-  return clean(game.startDate || game.gameDate);
+  return normalizeGameDate(clean(game.startDate || game.gameDate));
 };
 
 const roundZeroContextFromDetails = (details) => {

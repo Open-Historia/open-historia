@@ -26,13 +26,17 @@ import {
     NEAR_KM,
     distanceKm,
     hashText,
+    homeWaters,
     interiorPoint,
     nearestInteriorPoint,
+    nearestSea,
     offsetPoint,
     pointInGeometry,
     readPlacement,
+    describeApproximatePlacement,
     resolvePlacement,
     resolveRegionPlacement,
+    seasForMap,
 } from "./placement.js";
 
 const box = (west, south, east, north) => ({ type: "Polygon", coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]] });
@@ -108,6 +112,250 @@ test("a phrase that finds nothing reports every place it could have been naming"
         ["between Nowhereshire and Elsewhere", "Nowhereshire", "Elsewhere"],
         "the whole phrase, then each end of it",
     );
+});
+
+// --- seas and oceans ---
+//
+// Seen in a player's Game (2026-09-30): a fleet sent to "Central Mediterranean,
+// Mediterranean Sea", "Ionian Sea, Eastern Mediterranean" and "Black Sea" could
+// be placed at none of them, because the map names no water, and it stopped.
+//
+// Modern Day's own map, as it ships: its regions are numbered ("2001"), not
+// GADM ids, and it is the map the fleet in that Game sailed on.
+const MODERN_DAY_REGIONS = JSON.parse(readFileSync(new URL("../../../server/seed/default/regions.geojson", import.meta.url), "utf8"))
+    .features.filter((feature) => feature?.geometry);
+const modernDayRegionAt = (point) => MODERN_DAY_REGIONS.find((feature) => pointInGeometry(point, feature.geometry)) ?? null;
+// The test map stands in for the real world here: its gazetteer is handed the
+// seas the real-world map has.
+const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionAt: modernDayRegionAt }) };
+const placeOnEarth = (phrase) => resolvePlacement(phrase, earthGazetteer);
+
+test("a named sea is open water in that sea, whatever words come with it", () => {
+    for (const [phrase, label] of [
+        ["Black Sea", "Black Sea"],
+        ["the Black Sea", "Black Sea"],
+        ["Ionian Sea, Eastern Mediterranean", "Ionian Sea"],
+        ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
+        ["in the South Atlantic", "South Atlantic"],
+        // A part of a sea is that sea, but a sea named for its part stays itself.
+        ["western Black Sea", "Black Sea"],
+        ["the north-western Black Sea, off Odessa", "Black Sea"],
+        ["eastern Mediterranean", "Eastern Mediterranean"],
+        ["North Sea", "North Sea"],
+        ["the open Atlantic", "Atlantic Ocean"],
+        // A sea, then a place in it the map does not know: the sea.
+        ["western Black Sea off Atlantis", "Black Sea"],
+    ]) {
+        const spot = placeOnEarth(phrase);
+        assert.equal(spot.error, undefined, phrase);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, label, phrase);
+        assert.equal(gazetteer.regionAt([spot.lng, spot.lat]), null, `${phrase} is at sea`);
+    }
+    assert.ok(distanceKm([placeOnEarth("Black Sea").lng, placeOnEarth("Black Sea").lat], [34, 43.2]) < 1);
+});
+
+test("Modern Day's own map, numbered regions and all, is the real world and has the real seas", () => {
+    assert.ok(MODERN_DAY_REGIONS.length > 1000);
+    assert.ok(!MODERN_DAY_REGIONS.some((feature) => /^[A-Z]{3}\.\d+/.test(String(feature.properties?.id))), "its ids are not GADM ids");
+    const seas = seasForMap({ regionAt: modernDayRegionAt });
+    assert.ok(seas.some((sea) => sea.name === "Black Sea"));
+    // Every real sea's point is open water on it, or near enough to find some.
+    for (const sea of seas) {
+        assert.ok(nearestSea(sea.point, { regionAt: modernDayRegionAt }), sea.name);
+    }
+});
+
+test("the real seas are the real-world map's only: a map of its own does not know the Black Sea", () => {
+    // The test map: a few regions, none where Earth's continents are.
+    const ownMap = seasForMap({ regionAt: gazetteer.regionAt });
+    assert.deepEqual(ownMap, []);
+    // A map that is land everywhere, or that has no geometry, is not Earth either.
+    assert.deepEqual(seasForMap({ regionAt: () => ({ id: "x" }) }), []);
+    assert.deepEqual(seasForMap({}), []);
+
+    const spot = resolvePlacement("Black Sea", { ...gazetteer, seas: ownMap });
+    assert.equal(spot.how, undefined);
+    assert.match(spot.error, /Black Sea/);
+    assert.match(place("Black Sea").error, /Black Sea/, "and a gazetteer with no seas at all knows none");
+});
+
+test("a map of its own places fleets in the seas its scenario declares", () => {
+    const seas = seasForMap({
+        regionAt: gazetteer.regionAt,
+        declared: [
+            { name: "Narrow Sea", aliases: ["the Narrows"], point: [36, 45] },
+            { name: "Sunset Sea", lng: 20, lat: 45 },
+            { name: "Nowhere Sea" },
+            { aliases: ["no name"], point: [1, 1] },
+        ],
+    });
+    assert.deepEqual(seas.map((sea) => sea.name), ["Narrow Sea", "Sunset Sea"], "an entry without a name or a point is skipped");
+    const own = { ...gazetteer, seas };
+    for (const phrase of ["Narrow Sea", "the Narrows", "into the Narrow Sea"]) {
+        const spot = resolvePlacement(phrase, own);
+        assert.equal(spot.how, "sea", phrase);
+        assert.equal(spot.label, "Narrow Sea", phrase);
+        assert.deepEqual([spot.lng, spot.lat], [36, 45], phrase);
+    }
+    assert.equal(resolvePlacement("Sunset Sea", own).how, "sea");
+
+    // On the real-world map too, and a scenario's own sea wins a shared name.
+    const earth = seasForMap({ regionAt: modernDayRegionAt, declared: [{ name: "Black Sea", point: [31, 44] }] });
+    assert.deepEqual(earth.find((sea) => sea.name === "Black Sea").point, [31, 44]);
+    assert.ok(earth.some((sea) => sea.name === "Ionian Sea"));
+});
+
+test("a place the map names is preferred to a sea of the same name", () => {
+    const named = resolvePlacement("Black Sea", { ...gazetteer, find: (name) => (fold(name) === "black sea" ? { kind: "marker", name: "Black Sea", point: [31, 51] } : null) });
+    assert.deepEqual([named.lng, named.lat], [31, 51]);
+});
+
+test("a region name written where the regionId goes still places the move", () => {
+    const spot = resolveRegionPlacement("Eastland South", gazetteer, { seedText: "u-1" });
+    assert.equal(spot.error, undefined);
+    assert.equal(spot.regionId, "el-s");
+});
+
+test("a point on land goes to the sea off that coast; a point at sea stays put", () => {
+    const off = nearestSea([36, 48.3], gazetteer);
+    assert.ok(off, "Eastland South has a southern shore");
+    assert.equal(gazetteer.regionAt(off), null);
+    assert.ok(distanceKm(off, [36, 48.3]) < 120, "and it is the water nearest the port");
+    assert.deepEqual(nearestSea([36, 45], gazetteer), [36, 45]);
+});
+
+test("a fleet put on land is moved to sea in the placement pass", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(body.includes('atSea: normalizeString(mover?.type).toLowerCase() === "naval"'), "a moving fleet is marked");
+    assert.ok(body.includes("entry.atSea && gazetteer.regionAt([lng, lat])") && body.includes("nearestSea([lng, lat], gazetteer"), "and taken off the land");
+    assert.ok(/was sent inland, too far from any sea for a fleet, and was not moved[\s\S]{0,200}delete target\[lngKey\]; delete target\[latKey\];/.test(body), "and with no sea in reach, not placed at all");
+});
+
+// --- a new fleet with no sea in reach ---
+//
+// A player's log (beta 0.0.66, 2026-10-05, the game played in Russian): "unitOps[1]
+// dropped — spawn has unusable coordinates (lng=undefined, lat=undefined)" for a
+// squadron of the Black Sea Fleet, type naval. Its place had not been read, so
+// it had been given the fallback an army gets, inland in its owner's country;
+// the fleet rule found no sea within 400 km of that and took its coordinates
+// away. A new fleet now goes to its owner's own waters instead.
+//
+//        0    2    4    6
+//   6    +----+----+----+
+//        | NW | N  | NE |
+//   4    +----+----+----+
+//        | W  | C  | E  |          (sea everywhere else)
+//   2    +----+----+----+
+//        | SW | S  | SE |
+//   0    +----+----+----+
+//
+// Inland holds C alone and has no coast. Longland holds C and E: its only shore
+// is E's east side. Rimland holds the other seven and has shore on every side.
+const GRID = [
+    ["nw", "North-West", "Rimland", 0, 4], ["n", "North", "Rimland", 2, 4], ["ne", "North-East", "Rimland", 4, 4],
+    ["w", "West", "Rimland", 0, 2], ["c", "Centre", "Inland", 2, 2], ["e", "East", "Rimland", 4, 2],
+    ["sw", "South-West", "Rimland", 0, 0], ["s", "South", "Rimland", 2, 0], ["se", "South-East", "Rimland", 4, 0],
+].map(([id, name, owner, west, south]) => ({ id, name, owner, geometry: box(west, south, west + 2, south + 2) }));
+const gridGazetteer = (owners = {}) => {
+    const regions = GRID.map((region) => ({ ...region, owner: owners[region.id] ?? region.owner }));
+    return {
+        regions,
+        regionAt: (point) => regions.find((region) => pointInGeometry(point, region.geometry)) ?? null,
+        find: (name) => {
+            const owned = regions.filter((region) => fold(region.owner) === fold(name));
+            return owned.length ? { kind: "polity", name: owned[0].owner, regions: owned } : null;
+        },
+    };
+};
+
+test("a new fleet's own waters are the sea off its owner's coast, the stretch nearest where it was put", () => {
+    const grid = gridGazetteer();
+    // Put in the middle of the map, just south of centre: Rimland's nearest shore is the south one.
+    const south = homeWaters("Rimland", grid, { near: [3, 1.9] });
+    assert.equal(south.how, "home waters");
+    assert.equal(south.label, "Rimland");
+    assert.equal(south.coast, "South");
+    assert.equal(grid.regionAt([south.lng, south.lat]), null, "at sea");
+    assert.ok(south.lat < 0, `south of the land, not ${south.lat}`);
+    assert.equal(south.regionId, "", "and in no region");
+    // The same fleet, put by the north edge instead.
+    assert.equal(homeWaters("Rimland", grid, { near: [3, 5.5] }).coast, "North");
+    // The same answer every time: a unit must not move when the save is read again.
+    assert.deepEqual(homeWaters("Rimland", grid, { near: [3, 1.9], seed: 12 }), homeWaters("Rimland", grid, { near: [3, 1.9], seed: 12 }));
+});
+
+test("the coast is the owner's own, even when another power's shore is nearer", () => {
+    // Longland: the centre and the box east of it. From the west of its land the
+    // nearest sea is past Rimland's West; its own shore is the far side of East.
+    const grid = gridGazetteer({ c: "Longland", e: "Longland" });
+    const waters = homeWaters("Longland", grid, { near: [2.2, 3] });
+    assert.equal(waters.coast, "East");
+    assert.ok(waters.lng > 6, `east of its own shore, not ${waters.lng}`);
+    assert.equal(grid.regionAt([waters.lng, waters.lat]), null);
+});
+
+test("with nowhere said, the coast nearest the middle of the owner's land", () => {
+    const grid = gridGazetteer({ c: "Longland", e: "Longland" });
+    assert.equal(homeWaters("Longland", grid).coast, "East");
+    assert.equal(homeWaters("Longland", grid, { near: [NaN, 3] }).coast, "East", "a point that is not one is no point");
+});
+
+test("an owner with no coast, or one the map does not know, has no waters of its own", () => {
+    const grid = gridGazetteer();
+    assert.equal(homeWaters("Inland", grid, { near: [3, 3] }), null);
+    assert.equal(homeWaters("Atlantis", grid, { near: [3, 3] }), null);
+    assert.equal(homeWaters("", grid), null);
+});
+
+// The map the squadron was raised on, with the land looked up by box first:
+// the plain scan above is too slow for a walk along a coast.
+const MODERN_DAY_ROWS = MODERN_DAY_REGIONS.map((feature) => {
+    const ring = feature.geometry.type === "Polygon" ? feature.geometry.coordinates.flat() : feature.geometry.coordinates.flat(2);
+    const lngs = ring.map((vertex) => vertex[0]); const lats = ring.map((vertex) => vertex[1]);
+    return {
+        id: String(feature.properties.id), name: feature.properties.name, owner: feature.properties.owner, geometry: feature.geometry,
+        box: [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
+    };
+});
+const modernDay = {
+    regionAt: ([lng, lat]) => MODERN_DAY_ROWS.find((row) => lng >= row.box[0] && lng <= row.box[2] && lat >= row.box[1] && lat <= row.box[3]
+        && pointInGeometry([lng, lat], row.geometry)) ?? null,
+    find: (name) => {
+        const owned = MODERN_DAY_ROWS.filter((row) => fold(row.owner) === fold(name));
+        return owned.length ? { kind: "polity", name: owned[0].owner, regions: owned } : null;
+    },
+};
+const MOSCOW = [37.596, 55.779];
+const SEVASTOPOL = [33.498, 44.583];
+
+test("Modern Day: a Russian fleet put by Moscow has no sea in reach, and is put to sea off Russia's own coast", () => {
+    assert.equal(nearestSea(MOSCOW, modernDay), null, "no open water within 400 km: the dead end the squadron met");
+    const waters = homeWaters("Russia", modernDay, { near: MOSCOW, seed: hashText("ru-bsf-squadron") });
+    assert.ok(waters, "Russia has a coast");
+    assert.equal(modernDay.regionAt([waters.lng, waters.lat]), null, "the point is open water");
+    const shore = MODERN_DAY_ROWS.find((row) => row.name === waters.coast && row.owner === "Russia");
+    assert.ok(shore, `${waters.coast} is a Russian region`);
+    assert.ok(distanceKm([waters.lng, waters.lat], MOSCOW) < 800, "the nearest of Russia's shores, not its far one");
+    // Told a place on its own coast, that is the coast it is off.
+    const home = homeWaters("Russia", modernDay, { near: SEVASTOPOL });
+    assert.ok(distanceKm([home.lng, home.lat], SEVASTOPOL) < 80, `off Sevastopol, not ${home.lng},${home.lat}`);
+    assert.equal(modernDay.regionAt([home.lng, home.lat]), null);
+});
+
+test("the placement pass sends a new fleet stranded in its own country to those waters", () => {
+    // What the pass then does with them is run in placementPass.test.js; this
+    // pins that the pass asks, and of whom.
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    const rule = body.slice(body.indexOf("if (entry.atSea && gazetteer.regionAt([lng, lat]))"), body.indexOf("// Clear of everything else"));
+    assert.match(
+        rule,
+        /const ownWaters = !offshore && entry\.spawn && entry\.owner\s*&& gazetteer\.samePolity\(gazetteer\.regionAt\(\[lng, lat\]\)\?\.owner, entry\.owner\)\s*\? homeWaters\(entry\.owner, gazetteer, \{/,
+        "a spawn with no sea in reach, in its owner's own country; never a move",
+    );
+    assert.match(rule, /near: \(homeland && !homeland\.error && gazetteer\.capitalOf\(entry\.owner\)\?\.point\) \|\| \[lng, lat\]/, "by the capital when it was given no place at all");
 });
 
 // --- geometry ---
@@ -472,6 +720,139 @@ test("the placing pass tells the reader whose thing it is", () => {
     assert.ok(body.includes("home: entry.owner || entry.home"), "a unit's owner, or the structure's");
 });
 
+// --- approximate placement: a place the map does not know ---
+//
+// Seen in a live game (2026-09-27): a base ordered at Djibo, Burkina Faso was
+// dropped because the Scenario's map has no Djibo. Now it goes near the capital
+// of the country the phrase names, or into the owner's own land, and says so.
+
+// Westmark's capital is Midburg; Eastland marks none.
+const CAPITALS = { westmark: { name: "Midburg", point: [32, 51] } };
+// Exact names only: the test map's loose matching would read "Nowhereville,
+// Westmark" as Westmark itself, which the real map does not.
+const mapped = {
+    ...gazetteer,
+    find: (name, options = {}) => gazetteer.find(name, { ...options, exact: true }),
+    capitalOf: (country) => CAPITALS[fold(country)] ?? null,
+    // The places an event's text names, in the order it names them, held by that
+    // country: the real gazetteer reads its regions and cities the same way.
+    placesNamedIn: (text, country) => [...REGIONS.map((region) => ({ name: region.name, region, owner: region.owner })),
+        ...CITIES.map((city) => ({ name: city.name, point: city.point, owner: gazetteer.regionAt(city.point)?.owner }))]
+        .map((place) => ({ ...place, at: fold(text).indexOf(fold(place.name)) }))
+        .filter((place) => place.at >= 0 && fold(place.owner) === fold(country))
+        .sort((a, b) => a.at - b.at),
+};
+const approx = (phrase, { owner = "", seedText = "Probe Base", context = "" } = {}) =>
+    resolvePlacement(phrase, mapped, { seedText, owner, approximate: true, context });
+const inRegion = (spot, id) => pointInGeometry([spot.lng, spot.lat], REGIONS.find((region) => region.id === id).geometry);
+const inCountry = (spot, owner) => REGIONS.some((region) => region.owner === owner && pointInGeometry([spot.lng, spot.lat], region.geometry));
+
+test("a place the map knows is placed exactly, never approximately", () => {
+    const spot = approx("Midburg");
+    assert.equal(spot.approximate, undefined);
+    assert.deepEqual([spot.lng, spot.lat], [32, 51]);
+});
+
+test("an unknown town in a named country goes near that country's capital", () => {
+    for (const phrase of ["Nowhereville, Westmark", "Nowhereville in Westmark", "Westmark's Nowhereville district"]) {
+        const spot = approx(phrase, { owner: "Eastland" });
+        assert.equal(spot.error, undefined, phrase);
+        assert.equal(inCountry(spot, "Westmark"), true, `${phrase}: ${spot.lng},${spot.lat} is not in Westmark`);
+        assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50, `${phrase}: too far from Midburg`);
+        assert.deepEqual(spot.approximate, { asked: phrase, country: "Westmark", near: "Midburg" }, phrase);
+    }
+});
+
+// Seen in a player's Game (2026-09-29): an unknown town beside a province
+// the map knows went near Cardiff, the first capital its country marks. The province the phrase names is where the thing goes.
+test("a known province in the phrase is where the thing goes when the town is unknown", () => {
+    const spot = approx("Nowhereville, Eastland North", { owner: "Westmark" });
+    assert.equal(inRegion(spot, "el-n"), true, `${spot.lng},${spot.lat} is not in Eastland North`);
+    assert.equal(spot.approximate.country, "Eastland");
+    assert.equal(spot.approximate.near, "Eastland North");
+});
+
+test("a known city in the phrase is where the thing goes, near it and in its country", () => {
+    const spot = approx("Nowhereville, Midburg", { owner: "Eastland" });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50);
+    assert.equal(spot.approximate.near, "Midburg");
+});
+
+// The same Game: the event named a province, and the phrase only the town and
+// its country. What the event itself names, in that country,
+// comes before the capital.
+test("a place the event names in that country comes before its capital", () => {
+    const spot = approx("Nowhereville, Westmark", { context: "The division completes its redeployment across Westmark South and arrives at Nowhereville." });
+    assert.equal(inRegion(spot, "wm-s"), true, `${spot.lng},${spot.lat} is not in Westmark South`);
+    assert.equal(spot.approximate.near, "Westmark South");
+});
+
+test("a place the event names in another country is not used", () => {
+    const spot = approx("Nowhereville, Westmark", { context: "Troops leave Eastland North for Nowhereville." });
+    assert.equal(spot.approximate.near, "Midburg");
+    assert.equal(inCountry(spot, "Westmark"), true);
+});
+
+test("a phrase that names no country goes into the owner's own land", () => {
+    const spot = approx("Nowhereville", { owner: "Westmark" });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.equal(spot.approximate.country, "Westmark");
+    assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50);
+});
+
+test("the same thing lands in the same spot every time", () => {
+    const first = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    const again = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    assert.deepEqual([first.lng, first.lat], [again.lng, again.lat]);
+});
+
+test("with no country named and an owner that holds no land, nothing is placed", () => {
+    const spot = approx("Nowhereville", { owner: "Atlantis" });
+    assert.match(spot.error ?? "", /is called "Nowhereville"/);
+    assert.equal(spot.approximate, undefined);
+});
+
+test("without the approximate option an unknown place is still an error", () => {
+    assert.match(resolvePlacement("Nowhereville", mapped, { owner: "Eastland" }).error ?? "", /is called/);
+});
+
+test("two things placed approximately in one country land in different spots", () => {
+    // Spacing (featureSpacing.js) keeps them clear once placed; the name already
+    // spreads them, so several bases do not start from one point.
+    const first = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    const second = approx("Elsewhere, Westmark", { seedText: "Dori Supply Depot" });
+    assert.notDeepEqual([first.lng, first.lat], [second.lng, second.lat]);
+});
+
+// Seen in a replayed turn (2026-09-29): the structure director built a forward
+// operating base with no `at`, and its event named nowhere the map knows. It
+// goes into its owner's land like an unknown town, marked as given no place.
+test("a thing given no place at all goes into its owner's land, marked unnamed", () => {
+    const spot = approx("", { owner: "Westmark", context: "Engineers break ground on a base at Nowhereville." });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.deepEqual(spot.approximate, { asked: "", country: "Westmark", near: "Midburg", unnamed: true });
+    assert.equal(
+        describeApproximatePlacement({ title: "A Base Is Begun", name: "Nowhereville Base", phrase: "", placed: spot }),
+        'Event "A Base Is Begun": Nowhereville Base was given no place. It was placed near Midburg, in Westmark instead. Give every new unit and structure `at`.',
+    );
+    assert.equal(approx("", { owner: "Atlantis" }).approximate, undefined, "no owner's land, nowhere to go");
+});
+
+test("the model is told what it named, and where the thing went instead", () => {
+    const placed = approx("Nowhereville, Westmark", { owner: "Eastland" });
+    assert.equal(
+        describeApproximatePlacement({ title: "A Base at Nowhereville", name: "Nowhereville Base", phrase: "Nowhereville, Westmark", reason: "not on this map", placed }),
+        'Event "A Base at Nowhereville": Nowhereville Base could not be placed at "Nowhereville, Westmark" — not on this map. '
+        + "It was placed near Midburg, in Westmark instead. Name a city or province this map knows to place it exactly.",
+    );
+    const province = approx("Nowhereville, Eastland North", { owner: "Westmark" });
+    assert.match(describeApproximatePlacement({ name: "Depot", phrase: "Nowhereville, Eastland North", placed: province }), /placed near Eastland North, in Eastland instead/);
+    const inside = approx("Nowhereville, Eastland", { owner: "Westmark" });
+    assert.match(describeApproximatePlacement({ name: "Depot", phrase: "Nowhereville, Eastland", placed: inside }), /placed in Eastland instead/);
+    assert.equal(describeApproximatePlacement({ placed: place("Midburg") }), "", "an exact placement is not reported");
+});
+
 // --- a town the map does not carry ---
 //
 // "Grand Forks, North Dakota": a real skip opened a depot there and lost it.
@@ -590,11 +971,14 @@ test("the world's list is asked only about a place the map does not have", () =>
     asked.length = 0;
     assert.ok(placeWith("Midburg facing Atlantis", { owner: "Eastland" }).error);
     assert.deepEqual(asked, ["Midburg facing Atlantis"], "the whole phrase is no name the map has; Midburg is");
-    // The same for an address, with a gazetteer that finds nothing loosely (the real one finds no "near Midburg").
+    // An address whose spot the map has, said with grammar, with a gazetteer that finds nothing loosely (the
+    // real one finds no "near Midburg"): the reading that takes the country off the name finds Midburg on
+    // the map, in Westmark, so it is beside the map's Midburg and the list is not asked.
     asked.length = 0;
     const exactOnly = { ...atlas, find: (name) => gazetteer.find(name, { exact: true }) };
-    assert.equal(resolvePlacement("near Midburg, Westmark", exactOnly, { owner: "Westmark" }).error, undefined);
-    assert.deepEqual(asked, ["near Midburg"]);
+    const beside = resolvePlacement("near Midburg, Westmark", exactOnly, { owner: "Westmark" });
+    assert.deepEqual([beside.error, beside.how], [undefined, "near"]);
+    assert.deepEqual(asked, []);
 });
 
 test("a gazetteer that throws on one of the list's towns costs that town, not the placement", () => {

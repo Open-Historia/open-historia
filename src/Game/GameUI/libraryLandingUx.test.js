@@ -19,15 +19,37 @@ test("desktop library chrome stays grouped and uses named icon actions", () => {
   assert.doesNotMatch(source, /Import game/);
 });
 
-test("library shelves use responsive desktop grids with section descriptions and dividers", () => {
+test("library landing uses one meaningful browse collection instead of duplicate sort shelves", () => {
+  // A shelf's heading can carry an action (Recently deleted's Empty), and
+  // keeps its divider.
   assert.match(source, /const MenuRow = \(\{ action, children, description, emptyText, icon, title \}\) =>/);
-  assert.match(source, /gridTemplateColumns: "repeat\(auto-fill, minmax\(min\(100%, 18\.75rem\), 20rem\)\)"/);
-  assert.match(source, /justifyContent: "start"/);
   assert.match(source, /linear-gradient\(90deg, rgba\(255,255,255,0\.12\), rgba\(255,255,255,0\.02\)\)/);
-  assert.match(source, /description="Continue where you left off\."/);
-  assert.match(source, /description="Your most active games\."/);
-  assert.match(source, /description="Your most active scenarios\."/);
+  assert.match(source, /const LibraryCollection = \(\{ children, controls, description, emptyText, title \}\) =>/);
+  assert.match(source, /const LIBRARY_GRID_TEMPLATE = "repeat\(auto-fill, minmax\(min\(100%, 16\.5rem\), 1fr\)\)"/);
+  assert.match(source, /gridTemplateColumns: LIBRARY_GRID_TEMPLATE/);
+  assert.doesNotMatch(source, /LIBRARY_GRID_MAX_WIDTH/);
+  assert.ok((source.match(/<section style=\{\{ marginBottom: isMobile \? "1\.75rem"/g) || []).length >= 2);
+  assert.match(source, /lastPlayedGames\.slice\(0, isMobile \? 5 : 6\)/);
+  assert.match(source, /title="Continue Playing"/);
+  assert.match(source, /title="All Games"/);
+  assert.match(source, /title="Recently Used"/);
+  assert.match(source, /title="Scenario Library"/);
+  assert.doesNotMatch(source, /title="Most Played"/);
+  assert.doesNotMatch(source, /title="Last Updated"/);
+  // Recently deleted stays under both libraries.
+  assert.match(source, /<RecentlyDeletedRow kind="game" onChanged=\{refreshTrash\} trash=\{trash\} \/>/);
+  assert.match(source, /<RecentlyDeletedRow kind="scenario" onChanged=\{refreshTrash\} trash=\{trash\} \/>/);
 });
+
+test("games and scenarios expose search, filters and in-place sorting", () => {
+  assert.match(source, /aria-label="Search games"/);
+  assert.match(source, /\[['"]active['"], ['"]Active['"]\]/);
+  assert.match(source, /<option value="turns">Most turns<\/option>/);
+  assert.match(source, /aria-label="Search scenarios"/);
+  assert.match(source, /\[['"]community['"], ['"]Community['"]\]/);
+  assert.match(source, /<option value="updated">Recently updated<\/option>/);
+});
+
 
 test("scenario cards deliberately strengthen contrast behind authored text", () => {
   assert.match(source, /const SCENARIO_CARD_TEXT_SHADOW = "0 1px 2px rgba\(0,0,0,0\.96\), 0 6px 18px rgba\(0,0,0,0\.82\), 0 16px 34px rgba\(0,0,0,0\.64\)"/);
@@ -55,9 +77,11 @@ test("a scenario's Update shows that it is working, and takes no second press", 
   assert.match(source, /\? <><ButtonIcon kind="working" \/> Updating…<\/>/);
   assert.match(source, /aria-busy=\{updating \|\| undefined\}/);
   assert.match(source, /disabled=\{updating\}/);
-  // The same scenario sits on up to three shelves: every card of it is told.
-  assert.equal(source.match(/onUpdate=\{handleScenarioUpdate\}/g)?.length, 3);
-  assert.equal(source.match(/updating=\{updatingScenarioIds\.has\(scenario\.id\)\}/g)?.length, 3);
+  // The same scenario can sit on both shelves (Recently Used and the Scenario
+  // Library): every card of it is told.
+  assert.equal(source.match(/onUpdate=\{handleScenarioUpdate\}/g)?.length, 2);
+  assert.equal(source.match(/updating=\{updatingScenarioIds\.has\(scenario\.id\)\}/g)?.length, 2);
+  assert.equal(source.match(/updateNote=\{scenarioUpdateNotes\.get\(scenario\.id\) \?\? ""\}/g)?.length, 2);
   // Which ones are updating is kept outside the component (a game started
   // meanwhile remounts it), a second press starts nothing, and a failed
   // update gives the button back.
@@ -81,12 +105,12 @@ test("a scenario's Update shows that it is working, and takes no second press", 
 test("a copy downloaded the old way asks for its Update in the open, and an edited one is asked before it is replaced", () => {
   // The link of a copy downloaded before the hub checked its files names no
   // release (runtime/hubPosts.js hubUpdateReason: "unchecked"). Its card says
-  // why it should be updated where it can be read, not only in a tooltip, on
-  // all three shelves.
+  // why it should be updated where it can be read, not only in a tooltip, in
+  // the Recently Used row and in the library's grid.
   assert.match(source, /^const UPDATE_UNCHECKED_NOTE = "This copy was downloaded before the community hub started checking its files\. [^"]+";$/m);
   assert.match(source, /\{updateReason === "unchecked" && !updating && \(/);
   assert.match(source, /<span style=\{\{ flex: "1 1 10rem" \}\}>\{UPDATE_UNCHECKED_NOTE\}<\/span>/);
-  assert.equal(source.match(/updateReason=\{scenarioUpdateReason\(scenario\)\}/g)?.length, 3);
+  assert.equal(source.match(/updateReason=\{scenarioUpdateReason\(scenario\)\}/g)?.length, 2);
   assert.match(source, /const scenarioUpdateReason = \(scenario\) =>\s+hubUpdateReason\(scenario, scenario\.hubOrigin \? hubPostById\?\.\[scenario\.hubOrigin\.postId\] : null\);/);
   // The posts are looked up for every scenario from the hub, edited or not.
   assert.match(source, /activeTab !== "scenarios" \|\| !scenarios\.some\(\(entry\) => entry\.hubOrigin\)\) return undefined;/);

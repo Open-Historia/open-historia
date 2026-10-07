@@ -20,11 +20,16 @@ test("Scenario Politics makes institution authoring guided instead of one raw fo
   const source = read("./InstitutionAuthoringPanel.jsx");
 
   assert.match(source, />Institutions<\/div>/);
-  assert.match(source, />Identity<\/div>/);
-  assert.match(source, />Members<\/div>/);
-  assert.match(source, />Visual identity<\/div>/);
-  assert.match(source, /Type a polity name/);
-  assert.match(source, /Bulk edit member list/);
+  assert.match(source, /Identity & lifecycle/);
+  assert.match(source, /Starting membership/);
+  assert.match(source, /Visual identity/);
+  assert.match(source, /Manage institutions/);
+  assert.match(source, /data-institution-authoring-manager="true"/);
+  // Members are suggested from the scenario's polities, and a name not among
+  // them is kept as written and flagged, never refused (institutionAuthoring.js).
+  assert.match(source, /<PolityMultiPicker allowUnlisted label="Type a polity name"/);
+  assert.match(source, /unmatchedInstitutionMembers\(memberNames, world\)/);
+  assert.match(source, /Advanced bulk edit member list/);
   assert.match(source, /Advanced details/);
 });
 
@@ -45,4 +50,24 @@ test("applying Political World preserves unrelated canonical world ledgers such 
 
   assert.match(source, /const freshWorld = freshDetails\?\.data\?\.world \?\? \{\}/);
   assert.match(source, /world:\s*\{\s*\.\.\.freshWorld,\s*politicalActors: application\.politicalActors/);
+});
+
+test("Political World generation recovery is plain-language and polity-oriented", () => {
+  const source = read("./PoliticalWorldGenerationPanel.jsx");
+
+  assert.match(source, /v2UnresolvedPolityKeys = \[\.\.\.new Set\(v2Unresolved\.map/);
+  assert.match(source, /generatePoliticalWorld\(\{ retryDeferred: v2NeedsRetry \}\)/);
+  assert.match(source, /"Continue Generation"/);
+  assert.match(source, /polities ready/);
+  assert.match(source, /AI request/);
+  assert.match(source, /Completed work is saved/);
+  assert.match(source, /Continue Generation retries only unfinished polities/);
+  assert.match(source, /Political World added to scenario -/);
+  assert.match(source, />Pause<\/button>/);
+  assert.match(source, /Progress is saved as you go\. You can pause and continue later\./);
+  assert.match(source, /width: `\$\{progressReadyPercent\}%`/);
+  assert.doesNotMatch(source, /Cancel pauses the run/);
+  assert.doesNotMatch(source, />Retry Deferred Targets</);
+  assert.doesNotMatch(source, /stubborn target\(s\)/);
+  assert.doesNotMatch(source, /AI call\(s\) total/);
 });

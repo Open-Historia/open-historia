@@ -200,6 +200,7 @@ export const AI_TASK_ROUTING = [
     { key: "turnReview", label: "After-skip checks", hint: "Rarely asked: the checks as one request, only when a provider refuses the single-request time skip", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
+    { key: "politicalClaimRepair", label: "Political claim repair", hint: "Mid/high-tier: reconcile generated political outcomes with Political World", group: "Simulation" },
     { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
     { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },

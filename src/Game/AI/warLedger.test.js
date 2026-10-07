@@ -14,6 +14,7 @@ import {
   reconcileCombatWarState,
   repairWarLedgerPayload,
   splitWarStartNote,
+  validatePregameWarBootstrap,
   validateWarLedgerPayload,
   warUpdateProseLines,
 } from "./nativeWarLedger.js";
@@ -77,6 +78,123 @@ test("a start's note can name the war; the rest of it is the cause", () => {
 
   assert.deepEqual(splitWarStartNote("title: Winter War"), { title: "Winter War", cause: "" });
   assert.deepEqual(splitWarStartNote("The title: a pretext"), { title: "", cause: "The title: a pretext" }, "only a leading Title: names the war");
+});
+
+test("Round-Zero baseline wars do not require a duplicate historical event link", () => {
+  for (const id of ["war-uac-apla", "sec-us-civil-war-apla", "russo-ukrainian-war"]) {
+    const result = validatePregameWarBootstrap({
+      world,
+      updates: [{
+        id,
+        op: "start",
+        actors: [id === "russo-ukrainian-war" ? "Russia" : "Union of America"],
+        opponents: [id === "russo-ukrainian-war" ? "Ukraine" : "American People's Liberation Army"],
+        eventIndexes: [],
+        eventIds: [],
+        baselineDate: id === "russo-ukrainian-war" ? "2022-02-24" : "2021-04-10",
+        note: "Already active when Round One begins.",
+      }],
+      events: [{
+        id: "history-1",
+        date: "2021-01-01",
+        title: "Background crisis deepens",
+        description: "The timeline records important context without duplicating the war id.",
+      }],
+      startDate: "2026-01-01",
+    });
+
+    assert.equal(result.error, "", id);
+    assert.deepEqual(result.warProbe.appliedIds, [id], id);
+    assert.equal(result.warProbe.wars[0].startedDate, id === "russo-ukrainian-war" ? "2022-02-24" : "2021-04-10", id);
+    assert.deepEqual(result.warProbe.wars[0].sourceEventIds, [], id);
+  }
+});
+
+test("Round-Zero preserves historical war provenance when a matching event exists", () => {
+  const events = [{
+    id: "e-war",
+    date: "2021-04-10",
+    title: "Second American Civil War erupts",
+    description: "Federal authority fractures as organized forces enter open conflict.",
+    warId: "sec-us-civil-war-apla",
+  }];
+  const result = validatePregameWarBootstrap({
+    world,
+    updates: [{
+      id: "sec-us-civil-war-apla",
+      op: "start",
+      actors: ["Union of America"],
+      opponents: ["American People's Liberation Army"],
+      eventIndexes: [0],
+      eventIds: [],
+      baselineDate: "2021-04-09",
+      note: "Civil war begins.",
+    }],
+    events,
+    startDate: "2021-07-18",
+  });
+
+  assert.equal(result.error, "");
+  assert.equal(result.warProbe.wars[0].startedDate, "2021-04-10", "linked event date outranks fallback baseline metadata");
+  assert.deepEqual(result.warProbe.wars[0].sourceEventIds, ["e-war"]);
+});
+
+test("Round-Zero does not fabricate the campaign start date for an undated unbound war", () => {
+  const result = validatePregameWarBootstrap({
+    world,
+    updates: [{
+      id: "war-unknown-start",
+      op: "start",
+      actors: ["A"],
+      opponents: ["B"],
+      eventIndexes: [],
+      eventIds: [],
+      baselineDate: "",
+      note: "The conflict predates the campaign, but its exact start is unknown.",
+    }],
+    events: [],
+    startDate: "2026-01-01",
+  });
+
+  assert.equal(result.error, "");
+  assert.equal(result.warProbe.wars[0].startedDate, "");
+  assert.equal(result.warProbe.wars[0].lastUpdatedDate, "");
+});
+
+test("Round-Zero still fails closed on invalid war baselines", () => {
+  const noOpponent = validatePregameWarBootstrap({
+    world,
+    updates: [{ id: "w", op: "start", actors: ["A"], opponents: [], baselineDate: "2020-01-01" }],
+    startDate: "2021-01-01",
+  });
+  assert.match(noOpponent.error, /invalid Round-One war lifecycle sequence/);
+
+  const ended = validatePregameWarBootstrap({
+    world,
+    updates: [
+      { id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2020-01-01" },
+      { id: "w", op: "end", actors: [], opponents: [], baselineDate: "2020-06-01" },
+    ],
+    startDate: "2021-01-01",
+  });
+  assert.match(ended.error, /leaves w ended at Round One/);
+
+  const future = validatePregameWarBootstrap({
+    world,
+    updates: [{ id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2022-01-01" }],
+    startDate: "2021-01-01",
+  });
+  assert.match(future.error, /baseline date must be on or before the Round-One date/);
+
+  const reversedDates = validatePregameWarBootstrap({
+    world,
+    updates: [
+      { id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2020-06-01" },
+      { id: "w", op: "ceasefire", actors: [], opponents: [], baselineDate: "2020-05-01" },
+    ],
+    startDate: "2021-01-01",
+  });
+  assert.match(reversedDates.error, /predates an earlier transition/);
 });
 
 test("a declaration with no matching warUpdates record is rejected", () => {
@@ -296,13 +414,10 @@ test("wars ended in the last two rounds are listed as ENDED, at most five", () =
   assert.equal(buildCanonicalWarContext(many, { round: 7 }).match(/\| ENDED /g).length, 5);
 });
 
-// A live run (2026-09-17) lost two real events to this: "Tragic Clashes and Fire
-// in Odessa" and "Explosion Rocks Regional Administration Building in Luhansk"
-// read as hard combat to the detector, named no two belligerents, and were
-// DELETED by the salvage path — and under salvage-first there is no second
-// attempt to correct them, so the player simply never saw them. What must fail
-// closed is the belligerency, not the event.
-test("an unbindable combat event is reported for unbinding, never for deletion", () => {
+// Civil unrest can contain violence without being a canonical war. A riot or
+// demonstration card must not enter the war ledger merely because the prose
+// contains "clashes" or "killed".
+test("street clashes are not canonical-war combat by vocabulary alone", () => {
   const riot = {
     id: "e1",
     date: "2014-05-02",
@@ -312,28 +427,120 @@ test("an unbindable combat event is reported for unbinding, never for deletion",
     combatants: [],
   };
   const candidate = { events: [riot], warUpdates: "" };
-  const outcome = reconcileCombatWarState(candidate, { world });
+  assert.equal(eventNarratesHardCombat(riot), false);
+  assert.deepEqual(reconcileCombatWarState(candidate, { world }).unresolved, []);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+});
 
-  assert.equal(outcome.unresolved.length, 1, "the engine cannot tie it to a war, and says so");
-  assert.equal(outcome.unresolved[0].index, 0);
-  // reconcileCombatWarState itself never removes an event: it reports, and the
-  // caller (gameplay.js validateGeneratedWorldChanges) unbinds rather than drops.
-  assert.equal(candidate.events.length, 1, "the event is still there after reconciliation");
-  assert.equal(candidate.events[0].title, "Tragic Clashes and Fire in Odessa");
 
-  // What the caller then does (gameplay.js validateGeneratedWorldChanges): strip
-  // the war metadata and keep the event. The ledger still complains that prose
-  // reading as combat carries no warId — a riot IS written like a battle — and
-  // that complaint is only ever logged: repairWarLedgerPayload, the last stage,
-  // strips bindings and drops records but NEVER removes an event. So the event
-  // reaches the player either way, with no belligerency invented for it.
-  candidate.events = candidate.events.map((event) => ({ ...event, warId: "", combatants: [] }));
-  const repair = repairWarLedgerPayload(candidate, { world });
-  assert.equal(candidate.events.length, 1, "the repair keeps the event");
-  assert.equal(candidate.events[0].warId, "", "and invents no war for it");
-  assert.deepEqual(candidate.events[0].combatants, []);
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates), [], "no war record was conjured either");
-  assert.match(repair.residual, /no event.warId/, "the residual complaint is about the ledger, and is only logged");
+test("reported non-combat events do not trip canonical war detection", () => {
+  const cases = [
+    {
+      kind: "diplomacy",
+      title: "UN-Backed Syrian Peace Talks Open in Geneva Amid Procedural Disputes",
+      description: "Delegates open negotiations after months of fighting while mediators argue over the agenda.",
+      combatants: [],
+    },
+    {
+      kind: "world",
+      title: "UN Working Group Issues Opinion on Julian Assange's Detention",
+      description: "A UN working group issues a legal opinion after a long political and legal battle over detention.",
+      combatants: [],
+    },
+    {
+      kind: "world",
+      title: "UK Queen's Speech Outlines Brexit Legislative Agenda in Parliament",
+      description: "The government sets out its legislative programme as parliamentary battles over Brexit continue.",
+      combatants: ["United Kingdom"],
+    },
+    {
+      kind: "world",
+      title: "Venezuela Elects Controversial Constituent Assembly Amid Domestic Turmoil and Foreign Boycotts",
+      description: "The vote proceeds amid protests and street clashes, but the event itself is an election rather than battlefield combat.",
+      combatants: ["Venezuela"],
+    },
+    {
+      kind: "military",
+      title: "Unified Army Forms 1st and 2nd Mechanized Infantry Divisions with T-72B Tanks",
+      description: "The army completes formation of two mechanized divisions and raises combat readiness without entering battle.",
+      combatants: ["Sudan"],
+    },
+    {
+      kind: "military",
+      title: "Ansar Allah Engineering Units Complete Interlocking Tihama Coastal Defenses",
+      description: "Engineering units complete fortifications designed to resist a possible amphibious assault; no attack occurs.",
+      combatants: ["Yemen"],
+    },
+    {
+      kind: "military",
+      title: "Ansar Allah Initiates Comprehensive Operational Planning and Force Staging for Adan",
+      description: "Commanders stage units and complete an assault plan for a possible future operation.",
+      combatants: ["Yemen"],
+    },
+    {
+      kind: "military",
+      title: "Ansar Allah Fortifies Adan Northern Gateway and Establishes Kill Zones",
+      description: "Engineering and defensive units fortify approaches and prepare kill zones for a possible future assault; no fighting occurs.",
+      combatants: ["Yemen"],
+    },
+    {
+      kind: "world",
+      title: "Great March of Return Protests Begin Along Gaza Border",
+      description: "Large demonstrations begin along the border while security forces deploy behind the fence.",
+      combatants: [],
+    },
+    {
+      kind: "world",
+      title: "Clashes Persist Along Gaza Border Amid Great March of Return Demonstrations",
+      description: "Demonstrators and security forces clash along the border during protests.",
+      combatants: [],
+    },
+  ];
+
+  for (const candidate of cases) {
+    assert.equal(eventNarratesHardCombat(candidate), false, candidate.title);
+    assert.equal(validateWarLedgerPayload({ events: [candidate], warUpdates: "" }, { world }), "", candidate.title);
+  }
+});
+
+test("political and labour attack language is not battlefield combat", () => {
+  const cases = [
+    { kind: "world", title: "Opposition Launches Political Attack Against Government Budget", description: "Opposition leaders mount a sustained political attack against the cabinet's fiscal record." },
+    { kind: "world", title: "Workers Strike Against Austerity Measures", description: "Transport unions begin a nationwide strike against planned wage cuts." },
+    { kind: "world", title: "Rights Group Mounts Legal Assault on Detention Law", description: "Lawyers challenge the statute in court and describe the filing as a legal assault on the measure." },
+  ];
+  for (const event of cases) {
+    assert.equal(eventNarratesHardCombat(event), false, event.title);
+    assert.equal(validateWarLedgerPayload({ events: [event], warUpdates: "" }, { world }), "", event.title);
+  }
+});
+
+test("direct battlefield actions still require canonical war state", () => {
+  const cases = [
+    {
+      kind: "military",
+      title: "Ansar Allah Launches Amphibious Assault on Mayyun Island Across Bab-el-Mandeb",
+      description: "Amphibious forces assault the island's defended positions.",
+      combatants: ["Yemen", "Southern Transitional Council"],
+    },
+    {
+      kind: "world",
+      title: "Syrian Army Advances in Northern Aleppo",
+      description: "Syrian units launch concerted assaults on insurgent strongholds near Azaz.",
+      combatants: ["Syria", "Syrian Opposition"],
+    },
+    {
+      kind: "military",
+      title: "Battle of the Frontiers",
+      description: "French and German armies clash along the border.",
+      combatants: ["France", "Germany"],
+    },
+  ];
+
+  for (const candidate of cases) {
+    assert.equal(eventNarratesHardCombat(candidate), true, candidate.title);
+    assert.match(validateWarLedgerPayload({ events: [candidate], warUpdates: "" }, { world }), /no event\.warId/, candidate.title);
+  }
 });
 
 // A player's log (a small local model answering in Russian): a month's
@@ -488,14 +695,20 @@ test("a deployment, an exercise or a charm offensive still opens no war, whateve
 });
 
 test("the engine still makes up no war of its own from the wider wording", () => {
-  // Two names and a raid, and no record from the model: reconcileCombatWarState
-  // asks the narrow question it always asked before it invents a war.
-  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "", ["Ethiopia", "Eritrea"]);
-  const candidate = { events: [raid], warUpdates: "" };
+  // Two names and a report of ground retaken, and no record from the model:
+  // reconcileCombatWarState asks its own question before it invents a war, and
+  // the wider wording is not part of it.
+  const retaken = ongoing("e1", "2016-01-02", "Iraqi Forces Secure Central Ramadi and Clear Anbar Pockets", "Government units retake the city centre and clear the last pockets in Anbar.", "", ["Iraq", "Islamic State"]);
+  assert.equal(eventNarratesHardCombat(retaken), false);
+  const candidate = { events: [retaken], warUpdates: "" };
   const outcome = quietly(() => reconcileCombatWarState(candidate, { world }));
   assert.equal(outcome.started, 0);
-  assert.equal(outcome.unresolved.length, 1);
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates), []);
+  // What the ledger itself calls hard combat between two named sides is the
+  // engine's to open: a raid by troops on the other's posts.
+  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "", ["Ethiopia", "Eritrea"]);
+  assert.equal(eventNarratesHardCombat(raid), true);
+  assert.equal(quietly(() => reconcileCombatWarState({ events: [raid], warUpdates: "" }, { world })).started, 1);
 });
 
 test("the last attempt's repair drops a war at a time: a refused start costs its own war only", () => {
@@ -516,14 +729,18 @@ test("the last attempt's repair drops a war at a time: a refused start costs its
 test("the repair keeps a sound war beside an event the ledger cannot place", () => {
   const strike = ongoing("e1", "2016-02-25", "Saudi Aircraft Bombard Houthi Positions Around Sanaa", "Coalition aircraft bombarded Houthi positions around Sanaa in the heaviest air strikes of the month.", "war-yemen-2015", ["Saudi Arabia", "Houthis"]);
   const start = "war-yemen-2015~start~Saudi Arabia~Houthis~1~title: Yemeni Civil War; the coalition's air campaign";
-  // A riot that reads like a battle and belongs to no war.
+  // A riot is not a battle: "clashes" between demonstrators, with no force and
+  // no two sides named, ask for no war at all.
   const riot = { id: "e2", date: "2016-02-27", title: "Tragic Clashes and Fire in Odessa", description: "Street clashes between rival demonstrators end with a building alight; dozens are killed.", kind: "world", warId: "", combatants: [] };
-  const withRiot = { events: [strike, riot], warUpdates: start };
-  assert.match(validateWarLedgerPayload(withRiot, { world }), /no event\.warId/);
-  const first = quietly(() => repairWarLedgerPayload(withRiot, { world }));
+  assert.equal(validateWarLedgerPayload({ events: [strike, riot], warUpdates: start }, { world }), "");
+  // Shelling nobody claims: fighting, and no war to put it in.
+  const shelling = ongoing("e2", "2016-02-27", "Artillery Shells Fall on Kilis", "Shelling from across the border hits the town; nobody claims it.", "", []);
+  const withShelling = { events: [strike, shelling], warUpdates: start };
+  assert.match(validateWarLedgerPayload(withShelling, { world }), /no event\.warId/);
+  const first = quietly(() => repairWarLedgerPayload(withShelling, { world }));
   assert.deepEqual(first.droppedIds, []);
-  assert.equal(withRiot.events[0].warId, "war-yemen-2015");
-  assert.match(first.residual, /Tragic Clashes and Fire in Odessa/, "the riot is still what the ledger remarks on, and it is only logged");
+  assert.equal(withShelling.events[0].warId, "war-yemen-2015");
+  assert.match(first.residual, /Artillery Shells Fall on Kilis/, "the shelling is still what the ledger remarks on, and it is only logged");
 
   // A battle of the war that names one side only: the war's record applies,
   // so the war is kept, and the remark is about the battle.

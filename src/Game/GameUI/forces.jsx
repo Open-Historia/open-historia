@@ -58,11 +58,13 @@ export const POSTURE_LABEL = {
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
   "admin-place": "Click the map to move this unit",
+  "structure-place": "Click the map where this structure really is",
 };
 // The same instruction where there is no mouse to click with.
 const TOUCH_MODE_HINT = {
   deploy: "Tap the map to place your unit",
   "admin-place": "Tap the map to move this unit",
+  "structure-place": "Tap the map where this structure really is",
 };
 
 const STATUS_LABEL = {

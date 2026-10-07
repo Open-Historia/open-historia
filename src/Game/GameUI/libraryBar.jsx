@@ -50,6 +50,7 @@ import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
 import PrehistoryPanel from "./PrehistoryPanel.jsx";
+const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
@@ -75,6 +76,7 @@ import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
 import { downloadHubScenario, fetchHubPosts, fetchPostComments, hubUpdateReason, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, missingBasemapOfBundle, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { reconcileMapPolityAuthoringOps } from "../../../server/polityRename.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
   ScenarioCommunityCard,
@@ -185,6 +187,10 @@ const actionButtonStyle = {
 };
 
 const APP_SHELL_MAX_WIDTH = "3000px";
+// Let the library rail follow the available shell width instead of targeting
+// one desktop class. auto-fill adds/removes columns as room changes, while the
+// min track keeps cards readable from ordinary laptops through ultrawide.
+const LIBRARY_GRID_TEMPLATE = "repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr))";
 const CARD_TEXT_SHADOW = "0 1px 2px rgba(0,0,0,0.9), 0 5px 16px rgba(0,0,0,0.72), 0 14px 30px rgba(0,0,0,0.55)";
 const SCENARIO_CARD_TEXT_SHADOW = "0 1px 2px rgba(0,0,0,0.96), 0 6px 18px rgba(0,0,0,0.82), 0 16px 34px rgba(0,0,0,0.64)";
 
@@ -1320,7 +1326,7 @@ const MenuRow = ({ action, children, description, emptyText, icon, title }) => {
   const hasChildren = React.Children.count(children) > 0;
 
   return (
-    <section style={{ marginBottom: isMobile ? "1.75rem" : "2rem" }}>
+    <section style={{ marginBottom: isMobile ? "1.75rem" : "2rem", width: "100%" }}>
       <div style={{ marginBottom: hasChildren ? "0.9rem" : "0.55rem" }}>
         <div style={{ alignItems: "center", display: "flex", gap: "0.85rem" }}>
           <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem" }}>
@@ -1341,7 +1347,7 @@ const MenuRow = ({ action, children, description, emptyText, icon, title }) => {
       {hasChildren ? (
         <div style={isMobile
           ? { display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }
-          : { display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18.75rem), 20rem))", justifyContent: "start" }}>
+          : { display: "grid", gap: "1rem", gridTemplateColumns: LIBRARY_GRID_TEMPLATE }}>
           {children}
         </div>
       ) : (
@@ -1459,6 +1465,53 @@ const RecentlyDeletedRow = ({ kind, onChanged, trash }) => {
         ))}
       </MenuRow>
     </>
+  );
+};
+
+const browseControlStyle = {
+  ...actionButtonStyle,
+  minHeight: "2.35rem",
+  padding: "0 0.85rem",
+};
+
+const BrowsePill = ({ active, children, onClick }) => (
+  <button
+    className="oh-tap-row"
+    onClick={onClick}
+    style={{
+      ...browseControlStyle,
+      background: active ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
+      borderColor: active ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
+      color: active ? "var(--oh-grey-text)" : "rgba(246,246,248,0.78)",
+    }}
+    type="button"
+  >
+    {children}
+  </button>
+);
+
+const LibraryCollection = ({ children, controls, description, emptyText, title }) => {
+  const isMobile = useIsMobile();
+  const hasChildren = React.Children.count(children) > 0;
+  return (
+    <section style={{ marginBottom: isMobile ? "1.75rem" : "2.3rem", width: "100%" }}>
+      <div style={{ alignItems: isMobile ? "stretch" : "flex-end", display: "flex", flexDirection: isMobile ? "column" : "row", flexWrap: isMobile ? undefined : "wrap", gap: "0.8rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.96)", fontSize: isMobile ? "1.08rem" : "1.22rem", fontWeight: 800, letterSpacing: "-0.025em" }}>{title}</div>
+          {description ? <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.86rem", marginTop: "0.28rem" }}>{description}</div> : null}
+        </div>
+        {controls}
+      </div>
+      {hasChildren ? (
+        <div style={isMobile
+          ? { display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }
+          : { display: "grid", gap: "1rem", gridTemplateColumns: LIBRARY_GRID_TEMPLATE }}>
+          {children}
+        </div>
+      ) : (
+        <div style={{ border: "1px dashed rgba(255,255,255,0.12)", borderRadius: "16px", color: "rgba(255,255,255,0.48)", fontSize: "0.86rem", padding: "1rem" }}>{emptyText || "Nothing here yet."}</div>
+      )}
+    </section>
   );
 };
 
@@ -1792,6 +1845,18 @@ const EditorDrawer = ({
               onDetailsChange={onDetailsChange}
             />
           </Suspense>
+          <Suspense
+            fallback={
+              <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem", color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>
+                Loading manual Political World editor...
+              </div>
+            }
+          >
+            <PoliticalWorldAuthoringPanel
+              details={details}
+              onDetailsChange={onDetailsChange}
+            />
+          </Suspense>
           <InstitutionAuthoringPanel
             details={details}
             onDetailsChange={onDetailsChange}
@@ -1814,6 +1879,7 @@ const EditorDrawer = ({
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
+          world={details?.data?.world ?? {}}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle, fieldLabelStyle, inputStyle }}
           currentDate={formState.gameDate}
@@ -1998,6 +2064,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     selectedScenarioId,
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
+  const [gameSearch, setGameSearch] = useState("");
+  const [gameSort, setGameSort] = useState("recent");
+  const [gameView, setGameView] = useState("active");
+  const [scenarioSearch, setScenarioSearch] = useState("");
+  const [scenarioSort, setScenarioSort] = useState("recent");
+  const [scenarioView, setScenarioView] = useState("all");
   const [menuOpen, setMenuOpenState] = useState(menuOpenDefault);
   // Whether the menu was opened from inside a game (⌂ Exit Game, or the game
   // menu's Game Management), so that a phone's Back can close it again and
@@ -2428,7 +2500,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const scenarioUpdateReason = (scenario) =>
     hubUpdateReason(scenario, scenario.hubOrigin ? hubPostById?.[scenario.hubOrigin.postId] : null);
 
-  // The scenarios being updated now: each one's cards (it can sit on all three
+  // The scenarios being updated now: each one's cards (it can sit on both
   // shelves) show it and cannot be pressed again until it lands or fails.
   const updatingScenarioIds = useSyncExternalStore(scenarioUpdates.subscribe, scenarioUpdates.running, scenarioUpdates.running);
   // And what each one's last Update left to say, when it did not simply work.
@@ -3428,11 +3500,22 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Returns the scenario's player country as saved, for Apply & Play.
   const writeMapToScenario = async (scenarioId, seed, renames) => {
     const details = await loadScenarioDetails(scenarioId);
-    // The countries renamed in the Workshop since its last save: the player
-    // country and the world's name-keyed records follow them before the map
-    // is written (playerCountryAfterSave.js scenarioAfterWorkshopRenames).
-    const { world: currentWorld, game: currentGame } = scenarioAfterWorkshopRenames(
-      details?.data?.world ?? {},
+    const currentWorld = details?.data?.world ?? {};
+    // The Workshop edits the polity registry, while Political World and several
+    // other canonical ledgers live outside its map document. Its identity
+    // operations are replayed onto the scenario's own world and game before the
+    // map is written, so a rename moves the existing actor/relations instead of
+    // leaving a stale actor behind and creating a second one later.
+    //
+    // First the polities it removed: each takes its Political World profile
+    // with it. The seed names them as this world still does (MapEditor.jsx
+    // removalsForScenario). Then the countries it renamed since its last save:
+    // the player country and the world's name-keyed records, the Political
+    // World profile among them, follow each rename (playerCountryAfterSave.js
+    // scenarioAfterWorkshopRenames). A rename is replayed once, there: a second
+    // replay is refused as a clash with the name the first one made.
+    const { world: reconciledWorld, game: currentGame } = scenarioAfterWorkshopRenames(
+      reconcileMapPolityAuthoringOps(currentWorld, seed.polityAuthoringOps),
       details?.data?.game ?? {},
       renames,
     );
@@ -3451,7 +3534,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
-        ...currentWorld,
+        ...reconciledWorld,
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
         // The Workshop is authoritative for the polity registry: it hydrated the
         // full current registry (landless polities included) before editing, so
@@ -3718,12 +3801,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     ? countryOptions.find((country) => country.code === difficultyPick.countryCode)
     : null;
 
-  // ---- Main-menu shelves ----------------------------------------------------
-  // The catalog's game order is already activation recency (activating unshifts),
-  // so games without a lastPlayedAt stamp (pre-feature saves) keep a sensible
-  // relative order behind the stamped ones.
-  // Archived games stay in the catalog (and keep their playCount and events) but
-  // leave the normal shelves, so a long library is the games you actually play.
+  // ---- Main-menu library ----------------------------------------------------
+  // Each section now answers a different question. "Continue Playing" is the
+  // short recency shelf; the browse grid below is the single canonical place
+  // for the rest of the library. Sorting no longer creates duplicate shelves.
   const visibleGames = useMemo(() => games.filter((game) => !game.archived), [games]);
   const archivedGames = useMemo(
     () => games
@@ -3731,50 +3812,99 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       .sort((a, b) => String(b.lastPlayedAt ?? "").localeCompare(String(a.lastPlayedAt ?? ""))),
     [games],
   );
-  // Sorting on lastPlayedAt alone sends a game that has never been played to the
-  // far right, behind every campaign the player has ever opened — which is where
-  // a game imported thirty seconds ago landed, the one place nobody thinks to
-  // look for something they just added. Importing counts as touching a game, so
-  // an import ranks by when it ARRIVED and turns up beside the current game.
-  //
-  // createdAt cannot be used for this: readGameMeta mints a fresh one on every
-  // read for a game that has none on disk, and real saves do exist without one,
-  // so such a game reads as newer than everything forever. A game nobody has
-  // played or imported keeps its place in the library's own order, which is
-  // what the stable sort below leaves it in.
-  //
-  // The current game stays first: this row is how the player gets back to it,
-  // and nothing newly added should displace it.
   const lastPlayedGames = useMemo(() => {
-    const touchedAt = (game) => String(game.lastPlayedAt || game.importedAt || "");
+    const touchedAt = (game) => String(game.lastPlayedAt || game.importedAt || game.updatedAt || game.createdAt || "");
     return [...visibleGames].sort((a, b) => {
       if (a.id === activeGameId) return -1;
       if (b.id === activeGameId) return 1;
       return touchedAt(b).localeCompare(touchedAt(a));
     });
   }, [visibleGames, activeGameId]);
-  const mostPlayedGames = useMemo(
-    () => [...visibleGames].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.round ?? 0) - (a.round ?? 0)),
-    [visibleGames],
+
+  const continueGames = useMemo(
+    () => lastPlayedGames.slice(0, isMobile ? 5 : 6),
+    [lastPlayedGames, isMobile],
   );
-  const mostPlayedScenarios = useMemo(
-    () => [...scenarios].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || (b.gameCount ?? 0) - (a.gameCount ?? 0)),
-    [scenarios],
-  );
+
+  const browsedGames = useMemo(() => {
+    const query = gameSearch.trim().toLowerCase();
+    const base = gameView === "archived"
+      ? archivedGames
+      : gameView === "all"
+        ? [...visibleGames, ...archivedGames]
+        : visibleGames;
+    const filtered = query
+      ? base.filter((game) => [game.name, game.heroTitle, game.scenarioName, game.country]
+        .some((value) => String(value || "").toLowerCase().includes(query)))
+      : [...base];
+    const touchedAt = (game) => String(game.lastPlayedAt || game.importedAt || game.updatedAt || game.createdAt || "");
+    if (gameSort === "turns") return filtered.sort((a, b) => (b.round ?? 0) - (a.round ?? 0) || touchedAt(b).localeCompare(touchedAt(a)));
+    if (gameSort === "played") return filtered.sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0) || touchedAt(b).localeCompare(touchedAt(a)));
+    if (gameSort === "name") return filtered.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    return filtered.sort((a, b) => {
+      if (a.id === activeGameId) return -1;
+      if (b.id === activeGameId) return 1;
+      return touchedAt(b).localeCompare(touchedAt(a));
+    });
+  }, [activeGameId, archivedGames, gameSearch, gameSort, gameView, visibleGames]);
+
   const lastUpdatedScenarios = useMemo(
     () => [...scenarios].sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))),
     [scenarios],
   );
-  // "Your Scenarios": ones the player made or edited themselves — no hubOrigin
-  // (made here, or unlinked), or a hub import they have edited (editedAt: the
-  // link stays, so they can suggest their changes back). The stock built-in
-  // only counts once it has actually been touched.
+  // "Yours", by the rule the old dedicated shelf used: scenarios the player
+  // made or edited themselves — no hubOrigin (made here, or unlinked), or a
+  // hub import they have edited (editedAt: the link stays, so they can suggest
+  // their changes back). The stock built-in only counts once it has actually
+  // been touched.
   const yourScenarios = useMemo(
     () => scenarios.filter(
       (scenario) => (!scenario.hubOrigin || scenario.hubOrigin.editedAt) && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
     ),
     [scenarios],
   );
+  const yourScenarioIds = useMemo(() => new Set(yourScenarios.map((scenario) => scenario.id)), [yourScenarios]);
+
+  const recentScenarios = useMemo(() => {
+    const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+    const seen = new Set();
+    const recent = [];
+    for (const game of lastPlayedGames) {
+      const scenario = byId.get(game.scenarioId);
+      if (!scenario || seen.has(scenario.id)) continue;
+      seen.add(scenario.id);
+      recent.push(scenario);
+      if (recent.length >= (isMobile ? 5 : 6)) break;
+    }
+    for (const scenario of lastUpdatedScenarios) {
+      if (seen.has(scenario.id)) continue;
+      seen.add(scenario.id);
+      recent.push(scenario);
+      if (recent.length >= (isMobile ? 5 : 6)) break;
+    }
+    return recent;
+  }, [isMobile, lastPlayedGames, lastUpdatedScenarios, scenarios]);
+
+  const browsedScenarios = useMemo(() => {
+    const query = scenarioSearch.trim().toLowerCase();
+    let base = scenarios;
+    if (scenarioView === "yours") base = scenarios.filter((scenario) => yourScenarioIds.has(scenario.id));
+    else if (scenarioView === "community") base = scenarios.filter((scenario) => Boolean(scenario.hubOrigin));
+    else if (scenarioView === "updates") base = scenarios.filter((scenario) => scenarioUpdateReason(scenario));
+    let filtered = query
+      ? base.filter((scenario) => [scenario.name, scenario.heroTitle, scenario.subtitle, scenario.description]
+        .some((value) => String(value || "").toLowerCase().includes(query)))
+      : [...base];
+    const recentRank = new Map(recentScenarios.map((scenario, index) => [scenario.id, index]));
+    if (scenarioSort === "name") return filtered.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    if (scenarioSort === "played") return filtered.sort((a, b) => (b.gameCount ?? 0) - (a.gameCount ?? 0) || (b.playCount ?? 0) - (a.playCount ?? 0));
+    if (scenarioSort === "updated") return filtered.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+    return filtered.sort((a, b) => {
+      const rankA = recentRank.has(a.id) ? recentRank.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const rankB = recentRank.has(b.id) ? recentRank.get(b.id) : Number.MAX_SAFE_INTEGER;
+      return rankA - rankB || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""));
+    });
+  }, [recentScenarios, scenarioSearch, scenarioSort, scenarioView, scenarios, yourScenarioIds]);
 
   // The countries the map open in the drawer offers: the scenario's, or the
   // game's own world (polities founded in play included).
@@ -4426,79 +4556,92 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     Start a new game from one of your scenarios, or grab new scenarios from the community first.
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "center" }}>
-                    <button
-                      type="button"
-                      style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.8rem", padding: "0 1.4rem" }}
-                      onClick={() => setActiveTab("scenarios")}
-                    >
+                    <button type="button" style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.8rem", padding: "0 1.4rem" }} onClick={() => setActiveTab("scenarios")}>
                       Start from a scenario
                     </button>
-                    <button
-                      type="button"
-                      style={{ ...actionButtonStyle, minHeight: "2.8rem", padding: "0 1.4rem" }}
-                      onClick={() => setActiveTab("community")}
-                    >
+                    <button type="button" style={{ ...actionButtonStyle, minHeight: "2.8rem", padding: "0 1.4rem" }} onClick={() => setActiveTab("community")}>
                       Browse community scenarios
                     </button>
                   </div>
                 </div>
               ) : (
                 <>
-                  <MenuRow description="Continue where you left off." icon="🕐" title="Last Played">
-                    {lastPlayedGames.map((game) => (
-                      <GameCard
-                        key={game.id}
-                        active={game.id === activeGameId}
-                        busy={isBusy}
-                        game={game}
-                        onActivate={handleGameActivate}
-                        onArchive={handleGameArchive}
-                        onClone={handleGameClone}
-                        onEdit={openGameEditor}
-                        onExport={handleGameExport}
-                      />
-                    ))}
-                  </MenuRow>
-                  <MenuRow description="Your most active games." icon="🔥" title="Most Played">
-                    {mostPlayedGames.map((game) => (
-                      <GameCard
-                        key={game.id}
-                        active={game.id === activeGameId}
-                        busy={isBusy}
-                        game={game}
-                        onActivate={handleGameActivate}
-                        onArchive={handleGameArchive}
-                        onClone={handleGameClone}
-                        onEdit={openGameEditor}
-                        onExport={handleGameExport}
-                      />
-                    ))}
-                  </MenuRow>
-                  {archivedGames.length > 0 && (
-                    <MenuRow description="Hidden or older campaigns, kept ready when you need them." icon="🗄️" title={`Archived (${archivedGames.length})`}>
-                      {archivedGames.map((game) => (
-                        <GameCard
-                          key={game.id}
-                          active={game.id === activeGameId}
-                          busy={isBusy}
-                          game={game}
-                          onActivate={handleGameActivate}
-                          onArchive={handleGameArchive}
-                          onClone={handleGameClone}
-                          onEdit={openGameEditor}
-                          onExport={handleGameExport}
-                        />
+                  {continueGames.length > 0 && (
+                    <MenuRow description="Pick up exactly where you left off." icon="▶" title="Continue Playing">
+                      {continueGames.map((game) => (
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onEdit={openGameEditor} onExport={handleGameExport} />
                       ))}
                     </MenuRow>
                   )}
+                  <LibraryCollection
+                    title="All Games"
+                    description="One library for every campaign. Search, sort or show archived saves without duplicating them into another shelf."
+                    emptyText={gameSearch ? "No games match your search." : "No games in this view."}
+                    controls={(
+                      <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
+                        <input aria-label="Search games" onChange={(event) => setGameSearch(event.target.value)} placeholder="Search games…" value={gameSearch} style={{ ...inputStyle, borderRadius: "999px", minHeight: "2.35rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
+                        {[['active', 'Active'], ['all', 'All'], ['archived', 'Archived']].map(([value, label]) => (
+                          <BrowsePill key={value} active={gameView === value} onClick={() => setGameView(value)}>{label}</BrowsePill>
+                        ))}
+                        <select aria-label="Sort games" onChange={(event) => setGameSort(event.target.value)} value={gameSort} style={{ ...inputStyle, borderRadius: "999px", minHeight: "2.35rem", padding: "0 0.85rem", width: "auto" }}>
+                          <option value="recent">Recently played</option>
+                          <option value="turns">Most turns</option>
+                          <option value="played">Most played</option>
+                          <option value="name">Name</option>
+                        </select>
+                      </div>
+                    )}
+                  >
+                    {browsedGames.map((game) => (
+                      <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onEdit={openGameEditor} onExport={handleGameExport} />
+                    ))}
+                  </LibraryCollection>
                 </>
               )}
               <RecentlyDeletedRow kind="game" onChanged={refreshTrash} trash={trash} />
               </>
             ) : (
               <>
-                <MenuRow description="Your most active scenarios." emptyText="No scenarios yet." icon="🔥" title="Most Played">
-                  {mostPlayedScenarios.map((scenario) => (
+                {recentScenarios.length > 0 && (
+                  <MenuRow description="The scenarios behind your latest games and edits." icon="🕐" title="Recently Used">
+                    {recentScenarios.map((scenario) => (
+                      <ScenarioCard
+                        key={scenario.id}
+                        onClone={handleScenarioClone}
+                        onEdit={openScenarioEditor}
+                        onPlay={handleScenarioPlay}
+                        onSelect={selectScenario}
+                        onUpdate={handleScenarioUpdate}
+                        scenario={scenario}
+                        selected={scenario.id === selectedScenarioId}
+                        updateReason={scenarioUpdateReason(scenario)}
+                        updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
+                        updating={updatingScenarioIds.has(scenario.id)}
+                      />
+                    ))}
+                  </MenuRow>
+                )}
+                <LibraryCollection
+                  title="Scenario Library"
+                  description="Everything you can start a new game from, in one place."
+                  emptyText={scenarioSearch ? "No scenarios match your search." : "No scenarios in this view."}
+                  controls={(
+                    <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
+                      <input aria-label="Search scenarios" onChange={(event) => setScenarioSearch(event.target.value)} placeholder="Search scenarios…" value={scenarioSearch} style={{ ...inputStyle, borderRadius: "999px", minHeight: "2.35rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
+                      {[['all', 'All'], ['yours', 'Yours'], ['community', 'Community'], ['updates', 'Updates']].map(([value, label]) => (
+                        <BrowsePill key={value} active={scenarioView === value} onClick={() => setScenarioView(value)}>{label}</BrowsePill>
+                      ))}
+                      <select aria-label="Sort scenarios" onChange={(event) => setScenarioSort(event.target.value)} value={scenarioSort} style={{ ...inputStyle, borderRadius: "999px", minHeight: "2.35rem", padding: "0 0.85rem", width: "auto" }}>
+                        <option value="recent">Recently used</option>
+                        <option value="updated">Recently updated</option>
+                        <option value="played">Most played</option>
+                        <option value="name">Name</option>
+                      </select>
+                    </div>
+                  )}
+                >
+                  {(scenarioView === "all" || scenarioView === "yours") && !scenarioSearch.trim() ? <CreateScenarioTile busy={isBusy} onCreate={handleCreateScenario} /> : null}
+                  {browsedScenarios.map((scenario) => (
                     <ScenarioCard
                       key={scenario.id}
                       onClone={handleScenarioClone}
@@ -4513,42 +4656,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       updating={updatingScenarioIds.has(scenario.id)}
                     />
                   ))}
-                </MenuRow>
-                <MenuRow description="Recently edited or imported scenarios." emptyText="No scenarios yet." icon="🕐" title="Last Updated">
-                  {lastUpdatedScenarios.map((scenario) => (
-                    <ScenarioCard
-                      key={scenario.id}
-                      onClone={handleScenarioClone}
-                      onEdit={openScenarioEditor}
-                      onPlay={handleScenarioPlay}
-                      onSelect={selectScenario}
-                      onUpdate={handleScenarioUpdate}
-                      scenario={scenario}
-                      selected={scenario.id === selectedScenarioId}
-                      updateReason={scenarioUpdateReason(scenario)}
-                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
-                      updating={updatingScenarioIds.has(scenario.id)}
-                    />
-                  ))}
-                </MenuRow>
-                <MenuRow description="Scenarios you created or customized yourself." icon="✦" title="Your Scenarios">
-                  <CreateScenarioTile busy={isBusy} onCreate={handleCreateScenario} />
-                  {yourScenarios.map((scenario) => (
-                    <ScenarioCard
-                      key={scenario.id}
-                      onClone={handleScenarioClone}
-                      onEdit={openScenarioEditor}
-                      onPlay={handleScenarioPlay}
-                      onSelect={selectScenario}
-                      onUpdate={handleScenarioUpdate}
-                      scenario={scenario}
-                      selected={scenario.id === selectedScenarioId}
-                      updateReason={scenarioUpdateReason(scenario)}
-                      updateNote={scenarioUpdateNotes.get(scenario.id) ?? ""}
-                      updating={updatingScenarioIds.has(scenario.id)}
-                    />
-                  ))}
-                </MenuRow>
+                </LibraryCollection>
                 <RecentlyDeletedRow kind="scenario" onChanged={refreshTrash} trash={trash} />
               </>
             )}

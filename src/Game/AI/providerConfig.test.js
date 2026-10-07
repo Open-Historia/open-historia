@@ -615,6 +615,14 @@ test("quick setup needs the provider's requirement, and a self-hosted one needs 
   assert.equal(config.isFallbackListConfigured(), true);
 });
 
+test("intelligence assessment is available for per-task model routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "intelligenceAssessment"));
+});
+
+test("Political World claim repair is available for per-task model routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalClaimRepair"));
+});
+
 test("Political World generation and verification keep independent/inherited task routing", () => {
   assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldGeneration"));
   assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldVerification"));

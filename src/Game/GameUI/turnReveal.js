@@ -314,7 +314,16 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
             lines.push({ kind: "structure", text: population ? `${name}: population now ${population}${note(op.note)}` : `${name}: population changed${note(op.note)}` });
         }
     }
-    return lines;
+    // Two ops that read the same are one change to the player. Events written
+    // before the unit director stopped adding a second move for a unit already
+    // moved (nativeUnitDirector.js opKey) carry both, a few hundred metres apart.
+    const seen = new Set();
+    return lines.filter((line) => {
+        const key = `${line.kind}\u0000${line.text}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 };
 
 // What the category column says, as a word the string extractor catalogues

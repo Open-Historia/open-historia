@@ -12,6 +12,8 @@ import test from "node:test";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
 
 const events = (...dates) => dates.map((date, index) => ({ date, title: `Event ${index + 1}` }));
+// A pre-game event also names itself: the Day-One facts cite it by its ref.
+const backstory = (...dates) => events(...dates).map((event, index) => ({ ref: `e${index + 1}`, ...event }));
 
 test("BC dates are ordered by the calendar, not as text", () => {
   const originDate = "-0300-01-01";
@@ -146,15 +148,15 @@ test("the clamp leaves a prose-dated answer alone", () => {
 
 test("pre-game history must sit before the start date, BC years included", () => {
   const startDate = "-0218-01-01";
-  assert.equal(validatePregameEvents({ events: events("-0300-06-01", "-0250-01-01", "-0219-12-31") }, { startDate, strict: true }), "");
+  assert.equal(validatePregameEvents({ events: backstory("-0300-06-01", "-0250-01-01", "-0219-12-31") }, { startDate, strict: true }), "");
   // "-0200" sorts before "-0218" as text, but 200 BC is after the start.
-  assert.match(validatePregameEvents({ events: events("-0200-01-01") }, { startDate, strict: true }),
+  assert.match(validatePregameEvents({ events: backstory("-0200-01-01") }, { startDate, strict: true }),
     /^\$\.events\[0\]\.date must be strictly before the game start date -0218-01-01/);
-  assert.match(validatePregameEvents({ events: events("-0218-01-01") }, { startDate, strict: true }),
+  assert.match(validatePregameEvents({ events: backstory("-0218-01-01") }, { startDate, strict: true }),
     /events\[0\]\.date must be strictly before/, "the start date itself is round one, not backstory");
-  assert.match(validatePregameEvents({ events: events("-0250-01-01", "-0300-01-01") }, { startDate, strict: true }),
+  assert.match(validatePregameEvents({ events: backstory("-0250-01-01", "-0300-01-01") }, { startDate, strict: true }),
     /events\[1\]\.date must not be earlier than the previous event/);
-  assert.match(validatePregameEvents({ events: events("long ago") }, { startDate, strict: true }),
+  assert.match(validatePregameEvents({ events: backstory("long ago") }, { startDate, strict: true }),
     /events\[0\]\.date must be a real YYYY-MM-DD date/);
   assert.equal(validatePregameEvents({ events: [] }, { startDate, strict: true }), "$.events must contain at least one pre-game event.");
 });
@@ -162,11 +164,11 @@ test("pre-game history must sit before the start date, BC years included", () =>
 test("the pre-game salvage drops what cannot be placed and orders the rest", () => {
   const candidate = {
     events: [
-      { date: "1913-05-01", title: "Later" },
-      { date: "1914-08-01", title: "On the start date" },
-      { date: "someday", title: "Undated" },
-      { date: "1912-10-08", title: "Earlier" },
-      { date: "1920-01-01", title: "After the start" },
+      { ref: "e1", date: "1913-05-01", title: "Later" },
+      { ref: "e2", date: "1914-08-01", title: "On the start date" },
+      { ref: "e3", date: "someday", title: "Undated" },
+      { ref: "e4", date: "1912-10-08", title: "Earlier" },
+      { ref: "e5", date: "1920-01-01", title: "After the start" },
     ],
   };
   assert.equal(validatePregameEvents(candidate, { startDate: "1914-08-01", strict: false }), "");
@@ -174,9 +176,22 @@ test("the pre-game salvage drops what cannot be placed and orders the rest", () 
 });
 
 test("a prose-dated scenario's backstory is taken at its word", () => {
-  const candidate = { events: events("The Second Age", "Year of the Long Winter") };
+  const candidate = { events: backstory("The Second Age", "Year of the Long Winter") };
   assert.equal(validatePregameEvents(candidate, { startDate: "1200 BCE", strict: true }), "");
   assert.equal(validatePregameEvents(candidate, { startDate: "1200 BCE", strict: false }), "");
   assert.deepEqual(candidate.events.map((event) => event.date), ["The Second Age", "Year of the Long Winter"]);
   assert.equal(validatePregameEvents({ events: [] }, { startDate: "1200 BCE", strict: false }), "$.events must contain at least one pre-game event.");
+});
+
+test("every pre-game event carries its own ref, whatever the attempt or the dating style", () => {
+  // The Day-One facts cite their events by ref, so a blank or a repeated one
+  // is refused on the strict attempt and on the salvage alike.
+  for (const startDate of ["1914-08-01", "1200 BCE"]) {
+    for (const strict of [true, false]) {
+      assert.equal(validatePregameEvents({ events: events("1913-05-01") }, { startDate, strict }),
+        "$.events[0].ref must be a non-blank candidate-local event ref.");
+      assert.equal(validatePregameEvents({ events: [{ ref: "e1", date: "1912-10-08", title: "Earlier" }, { ref: " e1 ", date: "1913-05-01", title: "Later" }] }, { startDate, strict }),
+        "$.events[1].ref duplicates candidate-local event ref e1.");
+    }
+  }
 });

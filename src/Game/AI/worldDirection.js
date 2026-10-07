@@ -19,6 +19,7 @@ import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
+const scriptedTextMode = (value) => (asText(value).toLowerCase() === "exact" ? "exact" : "generated");
 
 // --- Pace ---
 //
@@ -109,7 +110,7 @@ const readScriptedLine = (rawLine) => {
     if (!body) return { problem: "no-text" };
     // The title is the first sentence, or the whole beat when it is one.
     const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body } };
+    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body, textMode: "generated" } };
 };
 
 export const parseScriptedEvents = (text) => {
@@ -169,34 +170,63 @@ const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀
 // in Russian or Greek had no words, was never found in the answer, and was
 // written a second time by the engine beside the model's own telling of it.
 export const SCRIPTED_MATCH_DAYS = 7;
-export const beatIsWritten = (beat, events) => {
-    const needles = [...words(`${beat?.title} ${beat?.text}`)];
-    const beatDay = dateKey(beat?.date);
-    if (!needles.length || beatDay === null) return false;
+const sharesEnoughWords = (source, haystack) => {
+    const needles = [...words(source)];
+    if (!needles.length) return true;
     const needed = Math.min(3, Math.max(1, Math.ceil(needles.length / 3)));
+    let shared = 0;
+    for (const needle of needles) if (haystack.has(needle)) shared += 1;
+    return shared >= needed;
+};
+
+const sharesParentContextAnchor = (parentText, primaryText, haystack) => {
+    const primaryWords = words(primaryText);
+    const anchors = [...words(parentText)].filter((word) => !primaryWords.has(word));
+    if (!anchors.length) return true;
+    return anchors.some((word) => haystack.has(word));
+};
+
+export const beatIsWritten = (beat, events) => {
+    const beatDay = dateKey(beat?.date);
+    const primaryText = `${beat?.title || ""} ${beat?.text || ""}`;
+    if (![...words(primaryText)].length || beatDay === null) return false;
+    const parentText = asText(beat?.parentText);
+    const generatedBranch = Boolean(parentText) && scriptedTextMode(beat?.textMode) !== "exact";
     return asArray(events).some((event) => {
         const eventDay = dateKey(event?.date);
         if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
         const haystack = words(`${event?.title} ${event?.description}`);
-        let shared = 0;
-        for (const needle of needles) if (haystack.has(needle)) shared += 1;
-        return shared >= needed;
+        if (!sharesEnoughWords(primaryText, haystack)) return false;
+        // A generated branch must still belong to its parent event. Without this
+        // guard a generic outcome such as "Outcome A is selected" can be rewritten
+        // around the player polity and accepted even when the author anchored the
+        // parent event somewhere else. Exact wording is exempt because its visible
+        // body is intentionally only the author's selected branch text.
+        return !generatedBranch || sharesParentContextAnchor(parentText, primaryText, haystack);
     });
 };
 
 // The event the engine writes for a beat the answer left out: the author's own
 // words, on the author's date, marked as the world's and as worth stopping for.
-export const scriptedEventFor = (beat) => ({
-    date: beat.date,
-    title: beat.title,
-    description: beat.text,
-    importance: "major",
-    kind: "world",
-    tags: [],
-    notable: true,
-    playerRelated: false,
-    impacts: {},
-});
+export const scriptedEventFor = (beat) => {
+    const parentText = asText(beat?.parentText);
+    const description = parentText && scriptedTextMode(beat?.textMode) !== "exact"
+        ? `${parentText}
+
+${asText(beat?.text)}`
+        : beat.text;
+    return {
+        date: beat.date,
+        title: beat.title,
+        description,
+        importance: "major",
+        kind: "world",
+        tags: [],
+        notable: true,
+        playerRelated: false,
+        impacts: {},
+    };
+};
 
 // The answer with every beat of the period in it: the ones it wrote as they
 // are, the rest written by the engine. Pure; returns what was done.
@@ -205,8 +235,25 @@ export const ensureScriptedEvents = (events, beats) => {
     const written = [];
     const inserted = [];
     for (const beat of asArray(beats)) {
-        if (beatIsWritten(beat, list)) written.push(beat);
-        else { list.push(scriptedEventFor(beat)); inserted.push(beat); }
+        const matchIndex = list.findIndex((event) => beatIsWritten(beat, [event]));
+        if (matchIndex !== -1) {
+            written.push(beat);
+            if (scriptedTextMode(beat?.textMode) === "exact") {
+                // Exact wording freezes presentation, not consequences. Keep every
+                // structured effect the simulator supplied, but restore the author
+                // date/headline/body and remove any AI-added quotation.
+                const { quote: _quote, ...generated } = list[matchIndex] || {};
+                list[matchIndex] = {
+                    ...generated,
+                    date: beat.date,
+                    title: beat.title,
+                    description: beat.text,
+                };
+            }
+        } else {
+            list.push(scriptedEventFor(beat));
+            inserted.push(beat);
+        }
     }
     return { events: list, written, inserted };
 };
@@ -216,10 +263,25 @@ export const ensureScriptedEvents = (events, beats) => {
 export const buildScriptedEventsInstruction = (beats) => {
     const list = asArray(beats);
     if (!list.length) return "";
+    const hasExact = list.some((beat) => scriptedTextMode(beat?.textMode) === "exact");
+    const rows = list.map((beat) => {
+        const exact = scriptedTextMode(beat?.textMode) === "exact";
+        const parentText = asText(beat?.parentText);
+        if (!parentText) return `- ${beat.date} — ${exact ? "[EXACT WORDING] " : ""}${beat.text}`;
+        return [
+            `- ${beat.date} — Parent event: ${parentText}`,
+            `  Selected outcome: ${exact ? "[EXACT WORDING] " : ""}${beat.text}`,
+            "  The selected outcome refines this parent event; it does not replace its people, places, actors or subject.",
+        ].join("\n");
+    });
     return "[Scripted events this period — set by this scenario's author, checked by the engine]\n"
-        + "These happen in this period. Write each as its own event, dated as given, in your own words and with the impacts it implies, and let the rest of the period feel its consequences. "
+        + "These happen in this period. Write each as its own event, dated as given, with the impacts it implies, and let the rest of the period feel its consequences. "
+        + "Ordinary entries are instructions: write their final event in your own words. For a branched event, the selected outcome refines the parent event rather than replacing its context. "
+        + (hasExact
+            ? "An entry marked [EXACT WORDING] is different: copy its supplied text verbatim into the event description and do not add a quotation or extra prose to that event; still supply every canonical impact it implies. When an exact selected outcome has a parent event, use the parent only as context for those consequences, not as extra visible prose. The engine enforces the author's visible wording while preserving those impacts. "
+            : "")
         + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, without its impacts.\n"
-        + list.map((beat) => `- ${beat.date} — ${beat.text}`).join("\n");
+        + rows.join("\n");
 };
 
 // --- The territory tempo ---

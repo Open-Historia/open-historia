@@ -14,7 +14,7 @@ test("Advisor formal institution actions are typed drafts with an explicit playe
   assert.match(ai, /DRAFT ONLY/);
   assert.match(ai, /follow the charter's lifecycle/);
 
-  assert.match(reply, /extractFencedJson\(afterDrafts, "institutiondraft"\)/);
+  assert.match(reply, /extractFencedJson\(afterDrafts, "institutiondraft", \{ streaming \}\)/);
   assert.match(reply, /buildInstitutionDrafts\(institutionDraftsRaw, institutionDraftProblems\)/);
   assert.match(ui, /parseAdvisorReply\(msg\.text/);
   assert.match(ui, /AdvisorInstitutionDraftAction/);

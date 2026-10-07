@@ -12,7 +12,9 @@
 //     never does, and the problems say why an event cannot be saved yet;
 //   - a game applies only events dated before its start date, and a record with
 //     nothing left to apply is nothing;
-//   - the Day-one facts list as names, and one can be removed.
+//   - the Day-one facts list as names, and one can be removed;
+//   - a generation that answered in semantic facts keeps them, and the ref
+//     each event was given, so a game can compile them as it does an answer.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -113,6 +115,61 @@ test("the Day-one facts list as names, and one can be removed", () => {
   const without = withoutPrehistoryUpdate(RECORD, "relationUpdates", 0);
   assert.equal(without.updates.relationUpdates.length, 0);
   assert.equal(without.updates.warUpdates.length, 1, "the others stay");
+});
+
+// A generation made since the pre-game answer became semantic facts
+// (AI/pregameBootstrapCompiler.js): one list, each fact saying its own kind
+// and citing its events by the ref the answer gave them.
+const SEMANTIC = {
+  summary: "Europe arms itself.",
+  events: [
+    { ref: "e2", date: "1914-06-28", title: "Archduke shot in Sarajevo", description: "A Serbian nationalist kills the heir." },
+    { ref: "e1", date: "1908-10-06", title: "Bosnia annexed", description: "Austria-Hungary annexes Bosnia." },
+    { date: "1911-07-01", title: "Agadir Crisis", description: "Written by hand: no ref." },
+  ],
+  updates: {
+    canonicalUpdates: [
+      { ref: "f1", kind: "war", title: "The Balkan War", status: "active", sideA: ["Serbia"], sideB: ["Ottoman Empire"], sourceEventRefs: ["e1"] },
+      { ref: "f2", kind: "relation", a: "France", b: "German Empire", score: -55.4, summary: "Hostile since 1871." },
+      { ref: "f3", kind: "agreement", type: "guarantee", title: "Treaty of London", guarantor: "United Kingdom", beneficiary: "Belgium", terms: "Neutrality." },
+      { ref: "f4", kind: "puppet", overlord: "United Kingdom", puppet: "Egypt", puppetKind: "protectorate", loyalty: 60, secrecy: "open" },
+      { ref: "f5", kind: "storyline", processKind: "crisis", status: "dormant", title: "Balkan powder keg", participants: ["Serbia", "Austria-Hungary"], pressure: 70, momentum: 30, state: "Unresolved." },
+    ],
+  },
+};
+
+test("a generation's semantic facts and its events' refs are kept as written", () => {
+  const prehistory = normalizeScenarioPrehistory(SEMANTIC);
+  assert.deepEqual(prehistory.updates.canonicalUpdates, SEMANTIC.updates.canonicalUpdates, "the facts as the answer carried them");
+  assert.deepEqual(prehistory.updates.warUpdates, [], "and no lifecycle records beside them");
+  assert.deepEqual(prehistory.events.map((event) => event.ref), ["e1", undefined, "e2"], "oldest first, each with the ref it was given");
+  assert.equal("ref" in prehistory.events[1], false, "an event written by hand has none");
+  assert.equal(prehistoryHasContent({ updates: { canonicalUpdates: [SEMANTIC.updates.canonicalUpdates[1]] } }), true, "semantic facts alone are content");
+
+  // A game is handed the answer's own shape: the facts, and events that can
+  // still be cited. Sarajevo is after this start date; its ref goes with it.
+  const payload = prehistoryPayload(SEMANTIC, { startDate: "1914-06-01" });
+  assert.deepEqual(payload.events.map((event) => event.ref), ["e1", undefined]);
+  assert.deepEqual(payload.canonicalUpdates, SEMANTIC.updates.canonicalUpdates);
+  assert.deepEqual(payload.warUpdates, []);
+});
+
+test("semantic facts list by their own kind, and one can be removed", () => {
+  const rows = prehistoryUpdateRows(normalizeScenarioPrehistory(SEMANTIC));
+  assert.deepEqual(rows.map((row) => [row.family, row.index, row.kind]), [
+    ["canonicalUpdates", 0, "war"],
+    ["canonicalUpdates", 1, "relation"],
+    ["canonicalUpdates", 2, "agreement"],
+    ["canonicalUpdates", 3, "puppet"],
+    ["canonicalUpdates", 4, "storyline"],
+  ]);
+  assert.deepEqual(rows[0], { family: "canonicalUpdates", index: 0, kind: "war", title: "The Balkan War", sideA: ["Serbia"], sideB: ["Ottoman Empire"], detail: "active" });
+  assert.deepEqual(rows[1], { family: "canonicalUpdates", index: 1, kind: "relation", title: "", sideA: ["France"], sideB: ["German Empire"], detail: "-55" });
+  assert.deepEqual([rows[2].title, rows[2].sideA, rows[2].detail], ["Treaty of London", ["United Kingdom", "Belgium"], "guarantee"], "a guarantee names its two ends");
+  assert.deepEqual([rows[3].sideA, rows[3].sideB, rows[3].detail], [["United Kingdom"], ["Egypt"], "protectorate"]);
+  assert.deepEqual([rows[4].title, rows[4].sideA, rows[4].detail], ["Balkan powder keg", ["Serbia", "Austria-Hungary"], "dormant"]);
+  const without = withoutPrehistoryUpdate(SEMANTIC, "canonicalUpdates", 1);
+  assert.deepEqual(without.updates.canonicalUpdates.map((fact) => fact.ref), ["f1", "f3", "f4", "f5"]);
 });
 
 test("a record holds a bounded number of events, and no two share an id", () => {

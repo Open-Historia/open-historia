@@ -3,7 +3,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyDiplomaticUpdates, applyPuppetUpdates, bindPuppetUpdatesToEvents, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import {
+  applyDiplomaticUpdates,
+  applyPuppetUpdates,
+  bindPuppetUpdatesToEvents,
+  decodePuppetUpdates,
+  puppetUpdatesFromCanonical,
+  revealPuppetsToSpies,
+  validateDiplomaticLedgerPayload,
+} from "./nativeDiplomaticDirector.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
 import { PUPPET_COUP_LOYALTY } from "../../runtime/puppets.js";
 import { PUPPET_COUP_LOYALTY as WORKSHOP_COUP_LOYALTY } from "../../Editor/scenarioPuppets.js";
@@ -613,4 +621,100 @@ test("a skip's install line reaches world.puppets through the segment merge", ()
   assert.equal(world.puppets[0].overlord, "USSR");
   assert.equal(world.puppets[0].puppet, "Poland");
   assert.deepEqual(world.puppets[0].sourceEventIds, ["e1"]);
+});
+
+// A skip that forgets to tie an install to its event. Relations and agreements
+// have long been matched to the one event that names both parties; a Puppet was
+// thrown away instead. A British Empire session offered Nigeria a Dominion,
+// the model made it a protectorate with no event index, and Nigeria stayed
+// independent while the timeline said three times that it had joined.
+const dominionWorld = {
+  polityOverrides: {
+    "British Empire": { code: "British Empire", name: "British Empire" },
+    Nigeria: { code: "Nigeria", name: "Nigeria" },
+  },
+  regionOwnershipOverrides: { r1: "British Empire", r2: "Nigeria" },
+  relations: [],
+  agreements: [],
+  puppets: [],
+};
+const ratification = {
+  id: "event-nig-ratify-01",
+  date: "2019-08-18",
+  title: "Nigerian Parliament Formally Ratifies the Imperial Development Accord in Abuja",
+  description: "The Nigerian National Assembly ratified the accord that integrates Nigeria as a self-governing Dominion within the British Empire.",
+  kind: "diplomacy",
+};
+const fusionTrial = {
+  id: "event-helios-01",
+  date: "2019-08-20",
+  title: "Culham Facility Advances Project Helios Plasma Stabilization Trials",
+  description: "Researchers at Culham stabilized plasma density parameters.",
+  kind: "world",
+};
+const unboundInstall = () => [{
+  op: "install",
+  overlord: "British Empire",
+  puppet: "Nigeria",
+  kind: "protectorate",
+  loyalty: 85,
+  secrecy: "open",
+  eventIndexes: [],
+  eventIds: [],
+  note: "Integrated as a self-governing Dominion under the Imperial Development Accord.",
+}];
+
+// What a time skip does with its answer: validate (which repairs bindings),
+// then bind the lines to the events and apply them.
+const skipApplies = (candidate, { allowNativeBinding = true } = {}) => {
+  validateDiplomaticLedgerPayload(candidate, { world: dominionWorld, allowNativeBinding });
+  return applyPuppetUpdates({
+    world: dominionWorld,
+    updates: bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), candidate.events),
+    events: candidate.events,
+    stopDate: "2019-08-22",
+    round: 46,
+  });
+};
+
+test("a skip's install with no event is tied to the one event that names both countries", () => {
+  const merge = skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() });
+  assert.deepEqual(merge.dropped, []);
+  assert.equal(merge.world.puppets.length, 1);
+  assert.equal(merge.world.puppets[0].puppet, "Nigeria");
+  assert.equal(merge.world.puppets[0].kind, "protectorate");
+  assert.deepEqual(merge.world.puppets[0].sourceEventIds, ["event-nig-ratify-01"]);
+});
+
+test("compact lines with no event number are repaired the same way", () => {
+  const merge = skipApplies({
+    events: [fusionTrial, ratification],
+    puppetUpdates: "install~British Empire~Nigeria~protectorate~85~open~~Dominion accord",
+  });
+  assert.deepEqual(merge.world.puppets[0].sourceEventIds, ["event-nig-ratify-01"]);
+});
+
+test("when two events name both countries equally, the install is not guessed at", () => {
+  const twin = { ...ratification, id: "event-nig-ratify-02", title: "British Crown and Nigerian Parliament Ratify Imperial Accession Treaty" };
+  const merge = skipApplies({ events: [ratification, twin], puppetUpdates: unboundInstall() });
+  assert.deepEqual(merge.world.puppets, []);
+  assert.match(merge.dropped[0].reason, /tied to no event/);
+});
+
+test("no event naming both countries leaves the install unbound", () => {
+  const merge = skipApplies({ events: [fusionTrial], puppetUpdates: unboundInstall() });
+  assert.deepEqual(merge.world.puppets, []);
+});
+
+test("the GM preview stays fail-closed: an unbound install is not repaired", () => {
+  const merge = skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() }, { allowNativeBinding: false });
+  assert.deepEqual(merge.world.puppets, []);
+});
+
+test("an install the model already tied to an event keeps that event", () => {
+  const merge = skipApplies({
+    events: [ratification, fusionTrial],
+    puppetUpdates: "install~British Empire~Nigeria~protectorate~85~open~2~Tied by the model",
+  });
+  assert.deepEqual(merge.world.puppets[0].sourceEventIds, ["event-helios-01"]);
 });

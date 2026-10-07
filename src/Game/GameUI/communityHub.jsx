@@ -1,9 +1,9 @@
 /*! Open Historia — Scenario Hub (community tab) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// The Community tab of the scenario library, Netflix-style: a Pinned shelf at
-// the top (hub posts labeled "pinned" — the official/featured scenarios), then
-// horizontally scrolling rows for Most Installed (⬇ release-asset download
-// counts), Most Liked (👍) and Most Recent. Data comes from the public
+// The Community tab of the scenario library: featured/pinned posts get one
+// dedicated shelf, while every other scenario lives in a single searchable
+// browse grid that can be sorted by installs, likes or recency. Data comes
+// from the public
 // Scenario Hub — a GitHub
 // repo where every issue is a posted scenario — as the hub's own index lists
 // it: the posts whose file the hub has checked and released. Bundles import
@@ -83,6 +83,10 @@ const countPublishableFlags = async (flagsData) => {
 // Never wider than the phone it is on: at 320 px a 19rem card pushed the
 // search results sideways off the screen.
 const CARD_WIDTH = "min(19rem, calc(100vw - 2rem))";
+// Discovery follows the available page rail at every desktop width. auto-fill
+// grows from a few readable columns on smaller screens to more columns on wide
+// displays instead of stopping at a resolution-specific max width.
+const COMMUNITY_GRID_TEMPLATE = "repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr))";
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
   border: "1px solid rgba(255,255,255,0.09)",
@@ -218,9 +222,13 @@ const LibraryBadge = ({ status }) => {
 const importLabel = (busy, status, armed) =>
   busy ? "Importing…" : !status ? "Import" : armed ? "Import a second copy" : "Import again";
 
-const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status, armed }) => (
+const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status, armed, fillWidth = false }) => (
   <div
-    style={{ ...cardSurface, cursor: "pointer" }}
+    style={{
+      ...cardSurface,
+      cursor: "pointer",
+      ...(fillWidth ? { flex: "1 1 auto", maxWidth: "none", width: "100%" } : {}),
+    }}
     onClick={() => onSelect(post)}
   >
     <ScenarioCover post={post} />
@@ -302,15 +310,15 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status,
 
 const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile, libraryOf, armedId }) => (
   <div style={{ marginBottom: "1.15rem" }}>
-    <div style={rowTitleStyle}>{title}</div>
+    {title ? <div style={rowTitleStyle}>{title}</div> : null}
     {posts.length === 0 ? (
       <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.8rem", padding: "0.3rem 0 0.6rem" }}>
         {emptyText || "Nothing here yet."}
       </div>
     ) : layout === "grid" ? (
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", paddingBottom: "0.35rem" }}>
+      <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: COMMUNITY_GRID_TEMPLATE, paddingBottom: "0.35rem" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} fillWidth />
         ))}
       </div>
     ) : (
@@ -480,6 +488,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
   // Client-side filter over the already-fetched posts — title, author and
   // description. No extra network calls; the hub is only ever read by load().
   const [searchQuery, setSearchQuery] = useState("");
+  const [browseSort, setBrowseSort] = useState("installs");
 
   // handleImport is async (network + import can take several seconds); by the
   // time it resolves the user may have navigated to a different post or back
@@ -576,22 +585,25 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
     return weighted.map((entry) => entry.post);
   }, [filteredPosts, searchQuery]);
 
-  // Netflix-style shelves. A post can appear in several rows — that's intended.
+  // Featured posts get one dedicated shelf. Everything else lives in one
+  // browse grid whose ordering changes in place, so popular scenarios do not
+  // repeat across three nearly identical leaderboards.
   const rows = useMemo(() => {
     if (!filteredPosts) return null;
     const pinned = filteredPosts.filter((post) => post.pinned);
-    // Installs (real download counts) rank first; posts GitHub can't count
-    // (attachment bundles) fall back to likes, then recency.
-    const byInstalls = [...filteredPosts].sort(
-      (a, b) =>
+    const browse = filteredPosts.filter((post) => !post.pinned);
+    if (browseSort === "likes") {
+      browse.sort((a, b) => b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
+    } else if (browseSort === "recent") {
+      browse.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    } else {
+      browse.sort((a, b) =>
         (b.installs ?? -1) - (a.installs ?? -1) ||
         b.upvotes - a.upvotes ||
-        b.createdAt.localeCompare(a.createdAt),
-    );
-    const byLikes = [...filteredPosts].sort((a, b) => b.upvotes - a.upvotes || b.createdAt.localeCompare(a.createdAt));
-    const byRecent = [...filteredPosts].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { pinned, byInstalls, byLikes, byRecent };
-  }, [filteredPosts]);
+        b.createdAt.localeCompare(a.createdAt));
+    }
+    return { pinned, browse };
+  }, [browseSort, filteredPosts]);
 
   const handleImport = async (post, { play = false } = {}) => {
     if (!post.bundleUrl || busyId) return;
@@ -770,7 +782,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           touch={touch}
         />
       ) : (
-        <>
+        <div style={{ width: "100%" }}>
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
               Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
@@ -851,11 +863,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
               />
             ) : (
               <>
-                {/* A shelf with nothing on it is not a shelf: with no pinned posts the
-                    page starts at Most Installed. */}
                 {rows.pinned.length > 0 && (
                   <ScenarioRow
-                    title="📌 Pinned"
+                    title="📌 Featured"
                     posts={rows.pinned}
                     busyId={busyId}
                     onImport={handleImport}
@@ -866,12 +876,47 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
                     armedId={armedId}
                   />
                 )}
-                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />
-                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />
-                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} libraryOf={libraryOf} armedId={armedId} />              </>
+                <div style={{ alignItems: isMobile ? "stretch" : "flex-end", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.7rem", justifyContent: "space-between", margin: "1.4rem 0 0.8rem" }}>
+                  <div>
+                    <div style={{ color: "rgba(255,255,255,0.96)", fontSize: "1.08rem", fontWeight: 800, letterSpacing: "-0.02em" }}>Browse Community</div>
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", marginTop: "0.25rem" }}>One catalog, sorted the way you want.</div>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    {[['installs', 'Most Installed'], ['likes', 'Most Liked'], ['recent', 'Newest']].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className="oh-tap-row"
+                        onClick={() => setBrowseSort(value)}
+                        style={touchFit({
+                          ...pillButton,
+                          background: browseSort === value ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.06)",
+                          borderColor: browseSort === value ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.1)",
+                          color: browseSort === value ? "var(--oh-grey-text)" : "rgba(255,255,255,0.78)",
+                        }, touch)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <ScenarioRow
+                  title=""
+                  posts={rows.browse}
+                  busyId={busyId}
+                  onImport={handleImport}
+                  onSelect={selectPost}
+                  emptyText="No community scenarios in this view."
+                  layout="grid"
+                  touch={touch}
+                  isMobile={isMobile}
+                  libraryOf={libraryOf}
+                  armedId={armedId}
+                />
+              </>
             )
           )}
-        </>
+        </div>
       )}
     </div>
   );
