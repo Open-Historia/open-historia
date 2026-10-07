@@ -28,9 +28,13 @@ const clean = (value) => String(value ?? "").trim();
 // dropped here. So is an op on a unit that is not there, and a garrison "move"
 // the applier would refuse, so the sighting never reports what did not happen.
 // The player's units are the ones enforceUnitVolume (gameState.js) exempts.
+// `player` is the player's polity, or every polity people play in a shared
+// game (runtime/humanPolities.js humanCountriesOf).
 export const idlePulseUnitOps = (world, unitOps, player) => {
-  const playerName = toCountryName(clean(player)).toLowerCase();
-  const isPlayers = (ownerCode) => Boolean(playerName) && toCountryName(clean(ownerCode)).toLowerCase() === playerName;
+  const playerNames = new Set((Array.isArray(player) ? player : [player])
+    .map((name) => toCountryName(clean(name)).toLowerCase())
+    .filter(Boolean));
+  const isPlayers = (ownerCode) => playerNames.has(toCountryName(clean(ownerCode)).toLowerCase());
   const units = new Map((Array.isArray(world?.units) ? world.units : []).map((unit) => [clean(unit?.id), unit]));
   return (Array.isArray(unitOps) ? unitOps : [])
     .filter((op) => {

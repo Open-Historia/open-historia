@@ -24,9 +24,12 @@
     "dist:linux": "node scripts/stamp-channel.mjs stable && npm run build && electron-builder --linux",
     "dist:win:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --win --config electron-builder.beta.yml",
     "dist:mac:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --mac --config electron-builder.beta.yml",
-    "dist:linux:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --linux --config electron-builder.beta.yml"
+    "dist:linux:beta": "node scripts/stamp-channel.mjs beta && npm run build && electron-builder --linux --config electron-builder.beta.yml",
+    "dist:win:multiplayer": "node scripts/stamp-channel.mjs multiplayer && npm run build && electron-builder --win --config electron-builder.multiplayer.yml"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/curves": "^2.4.0",
     "@noble/ed25519": "^2.3.0",
     "@noble/hashes": "^2.4.0",
     "@turf/area": "^7.3.5",

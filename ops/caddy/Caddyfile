@@ -1,0 +1,47 @@
+# Open Historia — TLS in front of the public multiplayer server © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
+#
+# Caddy gets and renews the certificate for MP_DOMAIN by itself (Let's
+# Encrypt, which needs ports 80 and 443 open), terminates TLS, and passes the
+# WebSocket (/ws) and the listing (/api/...) to server-mp. Nothing else is
+# served; plain HTTP on port 80 is redirected to HTTPS.
+#
+# server-mp runs with TRUST_PROXY=true and takes each client's address from
+# the LAST X-Forwarded-For entry. Caddy writes that header itself and, with no
+# trusted_proxies set, ignores whatever a client sent in it, so the last entry
+# is always the address Caddy saw. That only holds while clients connect to
+# Caddy directly: a CDN or another proxy in front would make every player look
+# like that proxy to server-mp's per-address limits.
+
+{
+	servers {
+		timeouts {
+			# A client that trickles its request headers is cut off early.
+			read_header 10s
+		}
+	}
+}
+
+{$MP_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	@server path /ws /api/*
+	handle @server {
+		reverse_proxy server-mp:8787 {
+			transport http {
+				# server-mp drops an idle keep-alive connection after 5 s; Caddy
+				# lets go of it first, so it never sends a request down a
+				# connection that is just being closed.
+				keepalive 4s
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

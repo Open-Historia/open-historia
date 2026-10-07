@@ -78,6 +78,7 @@ import {
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
+import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 dayjs.extend(advancedFormat);
 
@@ -726,9 +727,10 @@ const FiledEventsSection = ({ events }) => {
             <FiledNote fate={event.fate} note={event.note} />
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.75rem 1rem 0.85rem" }}>
             {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
-            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
-            {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
-            <EventQuotation quote={event.quote} compact />
+            {/* The AI wrote these in the player's language: the interface translator leaves them alone. */}
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
+            {event.description && <div data-no-translate style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            <div data-no-translate><EventQuotation quote={event.quote} compact /></div>
             </div>
             </div>
         ))}
@@ -1313,7 +1315,7 @@ const HeldFailureList = ({ failures }) => {
         <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {events.map((event) => (
             <li key={`event-${event.title}`}>
-            <span style={{ fontWeight: 600 }}>{event.title}</span>
+            <span data-no-translate style={{ fontWeight: 600 }}>{event.title}</span>
             <span style={{ color: "rgba(253,230,138,0.72)" }}> — {event.reason}</span>
             </li>
         ))}
@@ -2646,6 +2648,13 @@ const DateWidget = ({
         if (!gameData || days == null || isLoading || jumpAbortRef.current) {
             return;
         }
+        // A shared game's rounds are the host's (multiplayer/): each ends on the
+        // host's timer, or sooner when enough players are ready.
+        if (inSharedGame()) {
+            setPanel("skip");
+            setError("In a shared game the host's timer ends each round, or enough players pressing Ready on the round bar at the top.");
+            return;
+        }
 
         // Nothing in the Fallback list can answer — every model Spent or
         // Unusable: say when the first comes back, or what to fix, rather than
@@ -3409,6 +3418,30 @@ const DateWidget = ({
         setVisibleEventCount(Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, skipInFlight]);
+
+    // A shared game's round is resolved by the host and reaches this page as a
+    // new view (multiplayer/). The Events panel opens on it, as it does on a
+    // skip this page ran itself; and once the player has read the round
+    // through, the host is told, so planning begins when everyone has.
+    const openPanelOnRoundRef = React.useRef(null);
+    openPanelOnRoundRef.current = () => setPanel("history");
+    useEffect(() => {
+        const onLanded = () => { if (inSharedGame()) openPanelOnRoundRef.current?.(); };
+        window.addEventListener(SHARED_ROUND_LANDED, onLanded);
+        return () => window.removeEventListener(SHARED_ROUND_LANDED, onLanded);
+    }, []);
+    const toldHostRevealedRef = React.useRef("");
+    useEffect(() => {
+        const id = latestTurnRecord?.id || "";
+        if (!inSharedGame() || skipInFlight || !id || toldHostRevealedRef.current === id) return;
+        // What is still unseen is the record's own (runtime/unseenEvents.js),
+        // not this render's count, which is the round before's for one render.
+        const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+        if (unseenEvents.unseenInTurn(ids).size > 0) return;
+        toldHostRevealedRef.current = id;
+        void requestFromHost("revealed", { round: Number(latestTurnRecord?.round) || 0 });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [latestTurnRecord?.id, writtenEventCount, visibleEventCount, skipInFlight]);
 
     // Half of what the camera needs to turn the names an event carries
     // ("Ireland", "Donetsk") into a place on the map: the half that only moves

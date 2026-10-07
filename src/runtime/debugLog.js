@@ -654,13 +654,22 @@ export const subscribeToDebugLog = (listener) => {
 // entry is a jank source, and flushed on pagehide so the last entries before a
 // reload or a close are not the ones that are lost.
 
+// A second window of the same app shares this storage: a shared game's hidden
+// engine window (multiplayer/host/engineMain.js). It sends its entries to the
+// first window's log and keeps no stored copy of its own, or each window would
+// write over the other's.
+let persistenceEnabled = true;
+export const setDebugLogPersistence = (enabled) => {
+    persistenceEnabled = Boolean(enabled);
+};
+
 const persistNow = () => {
     persistTimer = null;
     if (typeof localStorage === "undefined") return;
     // Nothing is written while logging is off — the disable path already removed
     // the key, and a stray flush (pagehide, the error boundary) must not put it
     // back after the player said no.
-    if (!loggingEnabled) return;
+    if (!loggingEnabled || !persistenceEnabled) return;
     try {
         let payload = JSON.stringify({ version: 1, context, entries });
         // Backstop for the estimate in entryCost: if the serialized form is still

@@ -9,15 +9,16 @@
 // interrupted at the wrong moment leaves the repo's package.json stripped of its
 // scripts. Not a risk worth running to pass one string.
 //
-//   node scripts/stamp-channel.mjs beta     -> the beta build
-//   node scripts/stamp-channel.mjs stable   -> removes the stamp (the default)
+//   node scripts/stamp-channel.mjs beta          -> the beta build
+//   node scripts/stamp-channel.mjs multiplayer   -> the multiplayer build
+//   node scripts/stamp-channel.mjs stable        -> removes the stamp (the default)
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const target = path.join(here, "..", "electron", "channel.json");
-const channel = process.argv[2] === "beta" ? "beta" : "stable";
+const channel = ["beta", "multiplayer"].includes(process.argv[2]) ? process.argv[2] : "stable";
 
 if (channel === "stable") {
   // Deleting rather than writing {"channel":"stable"} keeps the stable build

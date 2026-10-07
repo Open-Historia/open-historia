@@ -59,6 +59,7 @@ import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGov
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -1942,6 +1943,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
+            // In a shared game the host keeps every thread and answers for the AI
+            // governments: the line is sent to it, and the thread comes back in the
+            // next view. A thread started here reaches the host with its first line.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("say", chat.pendingShared
+                    ? { thread: null, to: countries.map((country) => country.name).filter(Boolean).slice(0, 8), text }
+                    : { thread: String(chat.id), to: [], text });
+                if (!answer.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
+                    return;
+                }
+                if (chat.pendingShared) onBack?.();
+                return;
+            }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
@@ -2959,6 +2974,11 @@ const WorkspaceTabIcon = ({ type, size = 14 }) => {
     return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>;
 };
 
+// Two names for one country, however they are cased or spaced. Outside the
+// component: the country list below is memoized on it, and a function made anew
+// on every render is a dependency no list can name.
+const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
@@ -3010,7 +3030,6 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [storyDraft, setStoryDraft] = useState({});
     const [savedFlash, setSavedFlash] = useState("");
 
-    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
     const countryByName = (name) => countries.find((country) => sameCountry(country.name, name)) || { name };
     const countryRows = useMemo(() => countries
         .filter((country) => !sameCountry(country.name, playerCountry))
@@ -3025,6 +3044,13 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     // Refused while a turn runs: the turn writes back the world it read, and a
     // deployed, expelled or recalled agent would be undone when it landed. Every
     // caller shows the error.
+    // In a shared game an agent's order is asked of the host, which keeps every
+    // player's agents and holds each order to the same rules
+    // (multiplayer/host/agents.js); the change comes back in the next view.
+    const askHostForAgent = async (fields) => {
+        const answer = await requestFromHost("agent", { target: "", spy: "", story: "", ...fields });
+        if (!answer.ok) throw new Error(answer.error || "The host did not take the order.");
+    };
     const commitSpies = async (next) => {
         assertNoTurnRunning();
         const fresh = await readWorldState({ force: true });
@@ -3038,16 +3064,25 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 
     const handleExpel = async (spy) => {
         setError("");
-        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "expel", spy: spy.id });
+            else await commitSpies(expelSpy(world, spy.id, { date: gameDate }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleTurn = async (spy) => {
         setError("");
-        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "turn", spy: spy.id, story: String(storyDraft[spy.id] || "").slice(0, 300) });
+            else await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleStory = async (spy) => {
         setError("");
         try {
-            await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
+            if (inSharedGame()) await askHostForAgent({ op: "story", spy: spy.id, story: String(storyDraft[spy.id] ?? spy.coverStory ?? "").slice(0, 300) });
+            else await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
             setSavedFlash(spy.id);
             setTimeout(() => setSavedFlash((current) => (current === spy.id ? "" : current)), 1800);
         } catch (err) { setError(err?.message || String(err)); }
@@ -3056,8 +3091,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         setChoosing(false); setError("");
         const target = selected?.[0]?.name;
         try {
-            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
-            await commitSpies(next);
+            if (inSharedGame()) await askHostForAgent({ op: "deploy", target: String(target || "") });
+            else await commitSpies(deploySpy(world, target, { date: gameDate, playerPolity: playerCountry }));
             setSelectedCountry(target || "");
             setSection("countries");
             void ensureCountryAssessed(target, { reason: "agent deployed" });
@@ -3065,7 +3100,10 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     };
     const handleRecall = async (spy) => {
         setError("");
-        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "recall", spy: spy.id });
+            else await commitSpies(recallSpy(world, spy.id));
+        } catch (err) { setError(err?.message || String(err)); }
     };
 
     if (open) {
@@ -3793,6 +3831,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     const handleStartChat = (selected) => {
+        // In a shared game a thread is the host's to open, with its first line
+        // (ConversationView's submitPlayerText); until then it lives only here.
+        if (inSharedGame()) {
+            setShowSelector(false);
+            setActiveChat({ id: `pending-${Date.now()}`, countries: selected, messages: [], status: "open", pendingShared: true });
+            return;
+        }
         const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
         setChats(prev => { const u = [newChat, ...prev]; persistChats(u); return u; });
         setShowSelector(false);

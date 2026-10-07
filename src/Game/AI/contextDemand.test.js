@@ -57,6 +57,8 @@ test("the Game Master is built the Projects board its directive tells it to copy
 
 const gameplaySource = fs.readFileSync(path.join(here, "gameplay.js"), "utf8").replace(/\r\n/g, "\n");
 const promptContextSource = fs.readFileSync(path.join(here, "promptContext.js"), "utf8").replace(/\r\n/g, "\n");
+// A task set gameplay.js imports is read where it is declared.
+const sharedGameDirectiveSource = fs.readFileSync(path.join(here, "sharedGameDirective.js"), "utf8").replace(/\r\n/g, "\n");
 
 const functionBody = (name) => {
   const start = gameplaySource.indexOf(`const ${name} = `);
@@ -65,9 +67,11 @@ const functionBody = (name) => {
 };
 const quotedWords = (text) => [...text.matchAll(/"([A-Za-z0-9_]+)"/g)].map((match) => match[1]);
 const setMembers = (name) => {
-  const start = gameplaySource.indexOf(`const ${name} = new Set([`);
-  assert.notEqual(start, -1, `${name} is gone from gameplay.js; this guard needs updating`);
-  return quotedWords(gameplaySource.slice(start, gameplaySource.indexOf("]);", start)));
+  for (const source of [gameplaySource, sharedGameDirectiveSource]) {
+    const start = source.indexOf(`const ${name} = new Set([`);
+    if (start !== -1) return quotedWords(source.slice(start, source.indexOf("]);", start)));
+  }
+  return assert.fail(`${name} is gone from gameplay.js; this guard needs updating`);
 };
 
 // The variables a piece of code reads, following a (variables) helper one level.

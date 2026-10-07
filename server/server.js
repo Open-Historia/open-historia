@@ -664,6 +664,39 @@ app.post("/api/app-update/restart", (req, res) => {
   updater.restart();
 });
 
+// A shared game's hidden engine window (electron/main.cjs), desktop only: the
+// host's page opens it when the host shares its game, and closes it when the host
+// stops. Like the updater, the handle is on globalThis because this server runs
+// inside the desktop app's own process; everywhere else there is none.
+const sharedGameEngine = () => globalThis.__ohSharedGameEngine || null;
+
+app.get("/api/multiplayer/engine", (req, res) => {
+  const engine = sharedGameEngine();
+  res.json(engine ? { supported: true, ...engine.status() } : { supported: false });
+});
+
+app.post("/api/multiplayer/engine/open", async (req, res) => {
+  const engine = sharedGameEngine();
+  if (!engine) {
+    res.status(404).json({ error: "Only the desktop app can host a shared game." });
+    return;
+  }
+  try {
+    res.json(await engine.open());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/multiplayer/engine/close", (req, res) => {
+  const engine = sharedGameEngine();
+  if (!engine) {
+    res.status(404).json({ error: "Only the desktop app can host a shared game." });
+    return;
+  }
+  res.json(engine.close());
+});
+
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));
