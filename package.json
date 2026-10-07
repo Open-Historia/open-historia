@@ -85,7 +85,7 @@
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3"
   },
-  "main": "electron/main.cjs",
+  "main": "electron/bootstrap.cjs",
   "build": {
     "appId": "io.github.arkniem.openhistoria",
     "productName": "Open Historia",
