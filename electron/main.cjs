@@ -15,27 +15,20 @@ const fs = require("node:fs");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
+const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
+const { createLayeredUpdater } = require("./layeredUpdate.cjs");
+const { createPayloadUpdater } = require("./payloadUpdate.cjs");
+const payloadBoot = require("./payloadBoot.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the beta build (`npm run dist:win:beta` and the beta release workflow); the
 // stable build ships no such file, reads "stable", and every branch below is the
 // behaviour it has always had. OH_CHANNEL overrides it for `npm run electron`,
-// which is the only way to exercise the beta paths unpackaged.
-const CHANNEL = (() => {
-  if (process.env.OH_CHANNEL) return String(process.env.OH_CHANNEL);
-  try {
-    const stamp = fs.readFileSync(path.join(__dirname, "channel.json"), "utf8");
-    return String(JSON.parse(stamp).channel || "stable");
-  } catch {
-    return "stable"; // no stamp: the stable build, or a dev run
-  }
-})();
+// which is the only way to exercise the beta paths unpackaged. Read in
+// electron/channel.cjs, with the beta's name (BETA_APP_NAME): the bootstrap
+// needs both before this file runs, and the two must agree.
+const CHANNEL = readChannel(__dirname);
 const IS_BETA = CHANNEL === "beta";
-// One name for the beta: its Chromium profile, its save library, its window title
-// and the Start Menu shortcut the installer creates. It has to match `productName`
-// in electron-builder.beta.yml, because that is the name the player sees, and
-// nothing derives one from the other.
-const BETA_APP_NAME = "Open Historia Beta";
 
 // Electron derives userData — the Chromium profile, and with it the single-instance
 // lock — from the app name, which for both builds would otherwise be package.json's
@@ -207,7 +200,10 @@ const setUpdateState = (patch) => {
   if (patch.state === "error") logMain("warn", "updater.failed", updateState.error);
 };
 
-const setupAutoUpdater = () => {
+// The installer's updater: the whole app again, about 140 MB, run in place. It
+// is what replaces the Electron runtime, and what an update falls back to when
+// it cannot be made of chunks (setupAutoUpdater, below).
+const setupInstallerUpdater = () => {
   // A dev run has no app-update.yml inside it, so electron-updater would only
   // ever error; an unpackaged app also cannot be replaced by an installer.
   if (!AUTO_UPDATE_SUPPORTED || !app.isPackaged) return null;
@@ -243,6 +239,71 @@ const setupAutoUpdater = () => {
   // If they download but never press Restart, it installs on the next quit
   // instead of being thrown away.
   autoUpdater.autoInstallOnAppQuit = true;
+  return autoUpdater;
+};
+
+// An update made of the chunks that changed (electron/payloadUpdate.cjs). A
+// release publishes the app's own files (everything inside app.asar) cut into
+// chunks, each a file of its own on a release beside the installers', with a
+// manifest per system. The app fetches the chunks it cannot make from the
+// files it already has, puts the newer set together in the player's data
+// folder, and the next start runs from it (electron/bootstrap.cjs). Typically
+// a few megabytes where the installer is about 140, and it works where the
+// installer cannot run in place at all (macOS, unsigned).
+const PAYLOAD_FEED = `https://github.com/Open-Historia/open-historia/releases/download/${IS_BETA ? "desktop-beta-chunks" : "desktop-stable-chunks"}/`;
+const PAYLOAD_PLATFORM = { win32: "win", darwin: "mac", linux: "linux" }[process.platform] || "";
+// OH_PAYLOAD_FEED points a packaged build at a release served from this
+// machine, for testing an update end to end. From this machine only: the feed
+// is where the app's code comes from.
+const payloadFeed = () => {
+  const override = String(process.env.OH_PAYLOAD_FEED || "");
+  if (/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//.test(override)) return override.endsWith("/") ? override : `${override}/`;
+  return PAYLOAD_FEED;
+};
+const setupPayloadUpdater = () => {
+  const build = String(process.env.OH_DESKTOP_BUILD || "");
+  // An unstamped build is nobody's release: nothing published is its update.
+  if (!app.isPackaged || !PAYLOAD_PLATFORM || !build) return null;
+  return createPayloadUpdater({
+    feed: payloadFeed(),
+    manifestName: `payload-${PAYLOAD_PLATFORM}.json`,
+    payloadDir: path.join(USER_ROOT, payloadBoot.PAYLOAD_FOLDER),
+    // The files that are running: app.asar, or the set an earlier update made.
+    currentRoot: APP_ROOT,
+    currentBuild: build,
+    shell: payloadBoot.shellOf(),
+    log: (level, message) => logMain(level, "updater.chunks", message),
+  });
+};
+
+// The version of the files that are running, which after an update made of
+// chunks is newer than the installed ones electron-updater compares against.
+const runningVersion = () => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(APP_ROOT, "package.json"), "utf8")).version || "");
+  } catch {
+    return "";
+  }
+};
+
+// The one updater everything else drives: chunks first, the installer behind
+// them (electron/layeredUpdate.cjs has the rules). It has electron-updater's
+// shape, so the launch screen and the banner's routes drive either.
+const setupAutoUpdater = () => {
+  const installer = setupInstallerUpdater();
+  const payload = setupPayloadUpdater();
+  if (!installer && !payload) return null;
+  const autoUpdater = createLayeredUpdater({
+    installer,
+    payload,
+    runningVersion: runningVersion(),
+    // Nothing to install: the files are in place, and a new start runs them.
+    relaunch: () => {
+      app.relaunch();
+      app.exit(0);
+    },
+    log: (level, message) => logMain(level, "updater", message),
+  });
   autoUpdater.on("checking-for-update", () => setUpdateState({ state: "checking", error: "" }));
   autoUpdater.on("update-available", (info) => setUpdateState({ state: "available", percent: 0, version: String(info?.version || ""), error: "" }));
   autoUpdater.on("update-not-available", () => setUpdateState({ state: "none", percent: 0 }));
@@ -585,7 +646,13 @@ const createMainWindow = () => {
   });
   attachEditingContextMenu(win);
   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    win.show();
+    // The game's window is up. When these files are a set an update put
+    // together, that is what says they start (electron/bootstrap.cjs counts a
+    // start that never gets here, and gives the set up after two).
+    globalThis.__ohPayload?.confirm?.();
+  });
   return win;
 };
 
@@ -673,6 +740,10 @@ const startServer = async () => {
 };
 
 const boot = async () => {
+  // Which copy of the app's files this start runs: the installed ones, or a
+  // set an update put together (electron/bootstrap.cjs decided, and says why).
+  const files = globalThis.__ohPayload;
+  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`);
   const updater = installAutoUpdater();
   // Opening the game installs a waiting update before anything else starts
   // (electron/launchUpdate.cjs); the banner is for one found while it is open.

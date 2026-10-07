@@ -85,7 +85,11 @@ test("the beta is a different application from the stable build", () => {
   assert.match(productName, /^[-_+0-9a-zA-Z .]+$/, "productName would not be used as the install folder name");
   // The running app renames itself to match, which is what gives the beta its own
   // Chromium profile and its own save library.
-  assert.equal(mainCjs.match(/BETA_APP_NAME\s*=\s*"([^"]+)"/)?.[1], productName);
+  // The name is in electron/channel.cjs: the bootstrap needs it before main.cjs
+  // runs, to find the beta's own data folder, and both take it from there.
+  assert.equal(read("electron/channel.cjs").match(/BETA_APP_NAME\s*=\s*"([^"]+)"/)?.[1], productName);
+  assert.match(mainCjs, /const \{ BETA_APP_NAME, readChannel \} = require\("\.\/channel\.cjs"\);/);
+  assert.match(read("electron/bootstrap.cjs"), /if \(readChannel\(__dirname\) === "beta"\) app\.setName\(BETA_APP_NAME\);/);
 
   assert.notEqual(
     tagOf(value(block(builderYml, "publish"), "url")),
