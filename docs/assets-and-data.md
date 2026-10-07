@@ -285,6 +285,13 @@ The `v1` → `v2` cache-name bump exists because `v1` had no freshness check and
 
 The **web build** uses a parallel key namespace: `buildRuntimeCacheUrl(key)` → `…/__runtime-cache/<key>.json`, read/written by `readRuntimeJson` / `writeRuntimeJson` which are keyed by *asset key* (not URL) and therefore cleared wholesale on a token change (they'd otherwise serve the previous game's state).
 
+**What is kept, and for how long.** Every world file's address carries `?v=<token>`, and the token names the game, its last save and its scenario's last save, so each sitting of each game is a new address. The cache used to keep every one of them: about 215 MB a time (the regions archive is 101 MB), never deleted, which is the `Service Worker/CacheStorage` folder players found grown to 20-30 GB. Two rules now, both in `assets.js`:
+
+- **Nothing served by this machine's own server is kept** (`isLoopbackHost`, `servedFromThisMachine`). In the desktop app the "download" a copy saves is a read of this disk through localhost. `fetchWithPersistence` and `writeJson` neither read nor write the cache there.
+- **A copy is swept when the token moves on** (`isStalePersistedCopy`, `sweepPersistedCopies`, called from `setRuntimeAssetEndpoints`): on the website that is every entry whose `v` is not the current token; on this machine's own server it is every server file, which is also what empties an install that grew before the sweep existed. `__runtime-cache/` payloads are computed here and are never swept by it.
+
+Cache Storage is kept per origin, and each port is its own origin, so the page cannot reach what an earlier launch stored under another port. The desktop app clears those from the main process before the page loads (`electron/staleCaches.cjs`, `clearOtherPortsCaches`: every port of the launch's search span except its own, Cache Storage only). Tests: `src/runtime/assets.persistedCopies.test.js`, `server/staleCaches.test.js`.
+
 ---
 
 ## 7. Web build differences

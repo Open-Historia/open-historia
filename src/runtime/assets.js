@@ -380,8 +380,77 @@ const invalidateDerivedCachesForWrite = (url, { emitEvents = true } = {}) => {
 };
 let vectorTileModulesPromise = null;
 
+// A server file kept in Cache Storage is a second copy, made to save a download.
+// Two things were wrong with how the game kept them, and together they were the
+// folder players found grown to 20-30 GB (Service Worker/CacheStorage in the
+// desktop app's data, the site's storage in a browser):
+//
+//   * Every world file's address carries ?v=<token>, and the token names the
+//     game, its last save and its scenario's last save. So each sitting of each
+//     game stored the whole world again under a new address (the regions
+//     archive is 101 MB; with the countries archive and the regions GeoJSON
+//     about 215 MB a time) and nothing deleted the copies before it. One month
+//     of light play measured 5.6 GB: 26 identical copies of the one archive.
+//   * In the desktop app the download being saved is a read of this machine's
+//     own disk through localhost. The copy saved nothing at all.
+//
+// So nothing served by this machine's own server is kept, and what is kept
+// elsewhere (the website) is swept when the token moves on.
+export const isLoopbackHost = (hostname) =>
+  /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$/i.test(String(hostname ?? "").trim());
+
+const servedFromThisMachine = (() => {
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+})();
+
+// Whether a persisted entry is a copy nothing will read again.
+export const isStalePersistedCopy = (
+  entryUrl,
+  { token = runtimeAssetToken, local = servedFromThisMachine } = {},
+) => {
+  let url;
+  try {
+    url = new URL(String(entryUrl ?? ""), origin || "https://open-historia.local");
+  } catch {
+    return false;
+  }
+  // Payloads computed here (writeRuntimeJson) are keyed by their own version.
+  if (url.pathname.startsWith("/__runtime-cache/")) return false;
+  if (local) return true;
+  // Until the library has answered there is no token to compare with.
+  if (!token) return false;
+  const version = url.searchParams.get("v");
+  if (version === null) return url.pathname.startsWith("/api/runtime/");
+  return version !== token;
+};
+
+// Delete those copies. Best-effort, as the cache's writes are; resolves to how
+// many entries went.
+export const sweepPersistedCopies = async (options) => {
+  if (typeof caches === "undefined") return 0;
+  let removed = 0;
+  try {
+    const cache = await caches.open(PRELOAD_CACHE_NAME);
+    for (const request of await cache.keys()) {
+      // Decided entry by entry, at the moment of deleting: the token may have
+      // moved again while the list was being walked.
+      if (!isStalePersistedCopy(request?.url, options)) continue;
+      if (await cache.delete(request)) removed += 1;
+    }
+  } catch {
+    // A cache that cannot be opened or listed keeps its entries until the next sweep.
+  }
+  return removed;
+};
+let persistedCopiesSwept = false;
+
 export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   const nextToken = String(token ?? "").trim();
+  const tokenMoved = nextToken !== runtimeAssetToken;
 
   // Every JSON_URL carries ?v=<token>, and the value caches are keyed by that
   // full URL with no eviction, no cap and no TTL anywhere. When the token changes
@@ -438,6 +507,14 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   }
 
   runtimeAssetToken = nextToken;
+  // The copies on disk rotate with the token as the ones in memory do above:
+  // the old addresses cannot be rebuilt, so nothing would ever read or replace
+  // them. Also once per page load, which is what clears an install that grew
+  // before this sweep existed.
+  if (tokenMoved || !persistedCopiesSwept) {
+    persistedCopiesSwept = true;
+    void sweepPersistedCopies().catch(() => {});
+  }
 
   JSON_URLS.advisor = withRuntimeToken("/api/runtime/json/advisor");
   JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
@@ -566,7 +643,9 @@ const fetchWithPersistence = async (
   url,
   { bypassPersistentCache = false, signal } = {},
 ) => {
-  if (!bypassPersistentCache) {
+  // No second copy of a file this machine's own server reads off this disk.
+  const persistent = !bypassPersistentCache && !servedFromThisMachine;
+  if (persistent) {
     const cached = await readPersistedResponse(url);
     if (cached) {
       // Updates replace assets on disk; a cached copy must not outlive them.
@@ -602,7 +681,7 @@ const fetchWithPersistence = async (
     throw error;
   }
 
-  if (!bypassPersistentCache) {
+  if (persistent) {
     persistResponse(url, response.clone());
   }
   return { response, fromCache: false };
@@ -1011,7 +1090,7 @@ export const writeJson = async (
 
   primeJson(url, saved, { clone: cacheClone });
   invalidateDerivedCachesForWrite(url, { emitEvents: emitDerivedEvents });
-  if (!isMutableRuntimeJsonUrl(url)) {
+  if (!isMutableRuntimeJsonUrl(url) && !servedFromThisMachine) {
     persistResponse(
       url,
       new Response(savedPayload, {

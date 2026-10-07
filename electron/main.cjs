@@ -20,6 +20,7 @@ const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
+const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the beta build (`npm run dist:win:beta` and the beta release workflow); the
@@ -830,12 +831,16 @@ const findFreePort = async (start, attempts = 20) => {
   throw new Error(`No free port found in ${start}-${start + attempts - 1}.`);
 };
 
+// The port this launch asked for, before the search moved on from a taken one.
+let requestedPort = 3000;
+
 // Starting the server is importing it: server.js calls app.listen() at module
 // scope. It reads OH_DATA_DIR / OH_ASSETS_DIR / PORT, all set before the import.
 const startServer = async () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(ASSETS_DIR, { recursive: true });
   const requested = Number(process.env.PORT) || 3000;
+  requestedPort = requested;
   const port = await findFreePort(requested);
   if (port !== requested) {
     console.log(`Port ${requested} is in use — starting Open Historia on ${port} instead.`);
@@ -913,6 +918,13 @@ const boot = async () => {
   await startServer();
   mainWindow = createMainWindow();
   const port = process.env.PORT || 3000;
+  // Not awaited: these are other origins than the one about to load, and
+  // deleting gigabytes must not hold the window up.
+  clearOtherPortsCaches(mainWindow.webContents.session, { port: Number(port), requested: requestedPort })
+    .then((cleared) => {
+      if (cleared.failed) logMain("warn", "cache.otherPorts", `${cleared.failed} of ${cleared.origins} other ports' caches could not be cleared.`);
+    })
+    .catch(() => {});
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
