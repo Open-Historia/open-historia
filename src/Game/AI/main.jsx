@@ -15,18 +15,22 @@ import {
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
+import { requestActivity } from "./requestActivity.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
+    LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
     estimateTokens,
     nothingFitsMessage,
+    outputLimitFor,
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
+import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
-import { isRelayRefusal, withRelayCutoffHint } from "./relayResponse.js";
+import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
@@ -46,22 +50,31 @@ import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
     classifyProviderFailure,
+    connectionClosedError,
     contextWindowMessage,
+    couldNotBeReached,
     describeHtmlErrorPage,
     errorPayloadText,
+    extractErrorMessage,
+    isBrokenBodyError,
     isBusyErrorPayload,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
+    isCutOffJsonBody,
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isUnreachableError,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
+    stoppedAtOutputLimit,
     TOOL_CALL_INSISTENCE,
     toolStreamRefusalError,
+    unreachableServerError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
+import { unmarkedEndVerdict } from "./toolResponsePayload.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
@@ -84,14 +97,16 @@ import {
     readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 import {
+    answerLookupCalls,
+    answeredLookupKeys,
     anthropicMessagesFromHistory,
     appendLookupRound,
     carriedRoundCount,
     carryLookupRound,
     createLookupCarry,
-    describeLookupCall,
     flattenLookupRounds,
     geminiContentsFromHistory,
+    lookupCallKey,
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
     lookupCallsFromOpenAI,
@@ -148,6 +163,36 @@ const settingsStorage = {
 };
 export const contextWindows = createContextWindowMemory(settingsStorage);
 export const temperatureRefusals = createTemperatureMemory(settingsStorage);
+// Which endpoints are KoboldCpp servers (koboldCpp.js), kept the same way: the
+// one server that is sent an output limit when nobody named one.
+export const koboldCppServers = createKoboldCppMemory(settingsStorage);
+
+// One answer's word on what is serving an endpoint (koboldCpp.js
+// saysKoboldCpp): a whole body, the envelope a stream was rebuilt into, a chunk
+// of a chat's stream, or the model a request is about to name. Logged when it
+// changes what is remembered, which for most installs is once.
+const noteKoboldCpp = (endpoint, payload) => {
+    const change = koboldCppServers.note(endpoint, payload);
+    if (change === "learned") {
+        logDebugEvent("ai", `KoboldCpp recognised at ${endpointOriginOf(endpoint)} and remembered: a call that starts from here on sends it max_tokens ${LOCAL_OUTPUT_LIMIT_TOKENS} when neither the task nor the entry names a limit.`, {
+            model: String(payload?.model ?? ""),
+        });
+    } else if (change === "forgotten") {
+        logDebugEvent("ai", `${endpointOriginOf(endpoint)} no longer answers as KoboldCpp: a call that starts from here on sends it no output limit of the game's.`, {
+            model: String(payload?.model ?? ""),
+        });
+    }
+};
+// The same for a chat's stream, which is read chunk by chunk (streamTextSSE):
+// the first chunk that says anything is the one heard.
+const koboldCppChunkNoter = (endpoint) => {
+    let heard = false;
+    return (chunk) => {
+        if (heard || saysKoboldCpp(chunk) === null) return;
+        heard = true;
+        noteKoboldCpp(endpoint, chunk);
+    };
+};
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
 
@@ -213,20 +258,15 @@ async function readErrorPayload(response) {
     }
 }
 
-function extractErrorMessage(payload, fallback) {
-    if (!payload) return fallback;
-    if (typeof payload === "string" && payload.trim()) return describeHtmlErrorPage(payload, fallback) || payload.trim();
-    if (payload.error?.message) return payload.error.message;
-    if (payload.message) return payload.message;
-    if (typeof payload.rawText === "string" && payload.rawText.trim()) {
-        return describeHtmlErrorPage(payload.rawText, fallback) || payload.rawText.trim();
-    }
-    return fallback;
-}
+// extractErrorMessage (what a failed response's body says) lives in
+// providerErrors.js with the rest of the error reading, where it is tested.
 
 // The body of a reply that claimed success. A 200 carrying a web page (a gateway
 // landing page, a proxy's error screen) used to surface as JSON.parse's
 // "Unexpected token '<', "<!doctype "... is not valid JSON" — true, and no help.
+// And a body that stops partway, or never starts, is the connection closing
+// before the answer was all there: said as that, not as "Unexpected end of
+// JSON input", and marked like the same thing seen in a stream.
 async function readJsonAnswer(response, providerLabel) {
     const text = await response.text();
     try {
@@ -234,9 +274,40 @@ async function readJsonAnswer(response, providerLabel) {
     } catch (error) {
         const page = describeHtmlErrorPage(text, `${providerLabel} request failed (${response.status})`);
         if (page) throw new Error(page);
+        if (isCutOffJsonBody(text)) throw connectionClosedError(error);
         throw error;
     }
 }
+
+// A stream that stopped before the provider said it had finished
+// (streamAssembly.js marks the rebuilt envelope `closedEarly`): no finish
+// reason, no [DONE], no error frame. For a structured answer that is a
+// connection that closed, and it used to be read as a whole answer: half a tool
+// call failed to parse, the task told the model its JSON was invalid and paid
+// for a second request. It fails here instead, as the transport failure it is
+// and marked like one.
+//
+// Unless what did arrive is a whole answer (toolResponsePayload.js
+// unmarkedEndVerdict: the output function's call, or text holding one complete
+// JSON payload), which is then used as it always was.
+const failIfClosedEarly = (data, answerText = "", toolInput = null) => {
+    if (data?.closedEarly && unmarkedEndVerdict({ structured: true, answerText, toolInput }) === "closed") throw connectionClosedError();
+};
+
+// The same ending under a reply in words: a conversation's, or a task's that
+// answers in text. Words have no shape to be held to, and some gateways end
+// every stream this way, with neither a finish reason nor [DONE]: failing here
+// would fail every reply they send, where a reply that really was cut is at
+// worst visibly cut short. So what arrived is the reply, as it was before the
+// ending was looked at, and callAI is told so that the call's log says how the
+// stream ended (`onUnmarkedEnd`). With nothing to keep, it is the closed
+// connection it looks like. A body that breaks while it is read never gets
+// this far: that throws, and fails as it did (asUnreachable).
+const keepProseClosedEarly = (closedEarly, text, onUnmarkedEnd) => {
+    if (!closedEarly) return;
+    if (unmarkedEndVerdict({ structured: false, answerText: text }) === "closed") throw connectionClosedError();
+    try { onUnmarkedEnd?.(); } catch { /* a listener must not cost the reply */ }
+};
 
 // Settings (per provider): an escape hatch for request-body fields the built-in
 // UI doesn't expose (e.g. reasoning budget/effort limits). Shallow-merged last
@@ -253,9 +324,11 @@ function parseCustomParams(raw, providerLabel) {
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             return parsed;
         }
-        console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
+        if (providerLabel) console.warn(`${providerLabel} custom parameters must be a JSON object; ignoring.`);
     } catch (error) {
-        console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
+        // No label: a second reading of the same field (the request's log
+        // line), which the provider path has already warned about.
+        if (providerLabel) console.warn(`${providerLabel} custom parameters are not valid JSON; ignoring.`, error);
     }
 
     return {};
@@ -552,6 +625,11 @@ function isLocalEndpoint(url) {
 // relay refuses this device outright, the endpoint is no longer pinned to it,
 // so the next call tries direct again rather than going straight back to a
 // refusal (the model may allow this site by then; or the relay may).
+//
+// And when the relay could not connect to the endpoint at all, that is thrown
+// here as the failure it is, the way fetch() itself fails on a server that is
+// not there: the relay's 502 used to reach the provider paths as a busy
+// gateway's, and each waited fifteen seconds to ask a dead server again.
 const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) => {
     const response = await fetch("/api/ai/relay", {
         method: "POST",
@@ -560,6 +638,9 @@ const relayFetch = async (url, { method = "POST", headers = {}, payload, signal 
         signal,
     });
     if (isRelayRefusal(response)) relayOnlyOrigins.delete(endpointOrigin(url));
+    if (isRelayUnreachable(response)) {
+        throw unreachableServerError(endpointOrigin(url), (await relayUnreachableReason(response)) || String(response.status));
+    }
     return withRelayCutoffHint(response, signal);
 };
 
@@ -727,7 +808,20 @@ async function retryOrFailByStatus(response, { attempt, retries, retryDelay, dea
     await sleep(wait, signal);
 }
 
-async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
+// A frame that says the reply is over, in each provider's words: a finish
+// reason (OpenAI-style, Gemini), Anthropic's stop reason or message_stop, or
+// the provider saying why there is none (an error, a prompt Gemini refused).
+const frameEndsReply = (json) => Boolean(
+    json?.choices?.[0]?.finish_reason
+    || json?.candidates?.[0]?.finishReason
+    || json?.promptFeedback?.blockReason
+    || json?.delta?.stop_reason
+    || json?.type === "message_stop"
+    || json?.type === "error"
+    || json?.error,
+);
+
+async function streamTextSSE(response, extractDelta, onChunk, onFrame = null, onUnmarkedEnd = null) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -741,21 +835,26 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
     let finishReason = "";
     let frames = 0;
     let streamError = null;
+    // The provider said the reply was over (frameEndsReply, or the [DONE] line).
+    let finished = false;
     const sample = [];
     try {
         for (;;) {
             const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
+            // The last line is read even when no newline follows it: it can be
+            // the frame with the finish reason, or the [DONE] itself.
+            buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop() ?? "";
+            buffer = done ? "" : (lines.pop() ?? "");
             for (const line of lines) {
                 if (!line.startsWith("data:")) continue;
                 const payload = line.slice(5).trim();
+                if (payload === "[DONE]") finished = true;
                 if (!payload || payload === "[DONE]") continue;
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
                 frames += 1;
+                if (frameEndsReply(json)) finished = true;
                 // A chat that may call a lookup function (chatLookupsFor) hands
                 // every frame to the reducer assembling those calls as well.
                 if (onFrame) { try { onFrame(json); } catch { /* a collector must not break the stream */ } }
@@ -775,6 +874,7 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
                 if (reasoningDelta) reasoning += reasoningDelta;
                 if (contentDelta) { full += contentDelta; try { onChunk(contentDelta, full); } catch { /* UI callback must not break the stream */ } }
             }
+            if (done) break;
         }
     } finally {
         try { reader.releaseLock(); } catch { /* already closed */ }
@@ -784,8 +884,20 @@ async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
     // shows them; strip them from what is RETURNED, which is what gets persisted
     // and re-read on reload. An unclosed block means the stream was cut
     // mid-thought and there is no answer in there at all.
+    const text = stripThinking(full);
+
+    // The stream just stopped: the provider never said the reply was over, nor
+    // why it was not. What arrived is kept as the reply all the same, and the
+    // call's log says how the stream ended; with nothing to keep, the call
+    // fails as a closed connection (keepProseClosedEarly has the reasons).
+    // Thinking with no answer after it counts as something that arrived: it
+    // goes back to the caller like any other reply with no answer in it, and
+    // the caller does what it always did with one (the OpenAI-style caller
+    // gives the model more room and asks once more).
+    keepProseClosedEarly(!finished, text || reasoning, onUnmarkedEnd);
+
     return {
-        text: stripThinking(full),
+        text,
         reasoning: reasoning.trim(),
         finishReason,
         frames,
@@ -880,10 +992,8 @@ const waitingCannotFix = (failure) => failure.kind === "unusable" || failure.kin
 
 // A server the browser could not reach at all (a local model that is not
 // running, the network down) is busy for the Fallback list: worth skipping for a
-// minute, and worth trying again after. Matched on the browsers' own wording, so
-// a TypeError from a bug in this file is never mistaken for one.
-const UNREACHABLE_TEXT = /failed to fetch|fetch failed|networkerror|load failed|network request failed/i;
-const isUnreachableError = (error) => error instanceof TypeError && UNREACHABLE_TEXT.test(String(error.message));
+// minute, and worth trying again after. isUnreachableError and isBrokenBodyError
+// (providerErrors.js) read the browsers' own wording for it.
 
 // An entry that is missing what its provider needs cannot answer until the
 // player edits it — the same as a rejected key.
@@ -952,7 +1062,7 @@ async function resolveConfiguredModel(provider, { entrySettings, endpoint = "", 
         // with no models needs the player.
         throw providerFailureError(
             `Could not auto-detect a model for ${providerLabel}. Enter a model manually in **settings**.`,
-            isUnreachableError(error) ? { kind: "busy", reason: "could not be reached" } : { kind: "unusable", reason: "no model found on the server" },
+            isUnreachableError(error) ? couldNotBeReached() : { kind: "unusable", reason: "no model found on the server" },
         );
     }
 }
@@ -1022,8 +1132,11 @@ async function callGemini(systemPrompt, history, {
     maxTokens = 8192,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -1146,7 +1259,7 @@ async function callGemini(systemPrompt, history, {
                 );
             }
             const callState = chatTools.length && !requireOutputTool ? createGeminiStreamState() : null;
-            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, callState ? (frame) => applyGeminiFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, callState ? (frame) => applyGeminiFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromGemini(finishGeminiStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -1192,6 +1305,9 @@ async function callGemini(systemPrompt, history, {
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
             ...(jsonAnswer ? { responseMimeType: "application/json" } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1275,7 +1391,7 @@ async function callGemini(systemPrompt, history, {
         // or proxy that ignored alt=sse still answers plain JSON, and that must
         // keep working exactly as it did.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream)
+            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Gemini");
         onUsage?.(data);
         if (tool) {
@@ -1289,6 +1405,7 @@ async function callGemini(systemPrompt, history, {
             if (jsonInput) return { rawText: jsonText, toolInput: jsonInput, answeredAsText: true };
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
+            failIfClosedEarly(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
             // Not the answer but a question: the model called lookup functions.
             // Handed back to callAI, which answers them and asks again.
             if (lookupDeclarations.length) {
@@ -1325,6 +1442,7 @@ async function callGemini(systemPrompt, history, {
             return { rawText: streamedText, toolInput: null };
         }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         if (!text) {
             throw new Error("Gemini response did not contain text.");
@@ -1369,8 +1487,11 @@ async function callOpenAIStyleChatCompletions({
     tool,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     allowJsonSchemaFallback = false,
     configuredStructuredMode = "auto",
@@ -1380,7 +1501,13 @@ async function callOpenAIStyleChatCompletions({
     lookupTools,
     taskKey = "",
     requireOutputTool = false,
+    // callAI's word that this entry is a KoboldCpp server (entryOutputLimit):
+    // decided once per attempt, where the request's log line is written.
+    koboldCpp = false,
 }) {
+    // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
+    // into the entry or found there a moment ago (resolveConfiguredModel).
+    if (isKoboldCppModelName(model)) noteKoboldCpp(endpoint, { model });
     // Lookup functions (lookupTools.js) beside the output function. On the
     // round that must end in an answer they are left out altogether: with one
     // tool declared, tool_choice "required" IS the forcing, on every gateway
@@ -1449,6 +1576,8 @@ async function callOpenAIStyleChatCompletions({
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
             : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
+        const outputLimit = outputLimitFor({ maxTokens, customParams: requestCustomParams, koboldCpp });
+        const koboldCppLimit = outputLimit.source === "koboldcpp" ? outputLimit.tokens : 0;
         // Every call streams unless a gateway has refused to. Three things need it:
         // Cancel is only PHYSICAL on a local server while tokens are being written
         // (see streamAssembly.js); the advisor/chat path (onChunk) shows tokens as
@@ -1464,6 +1593,9 @@ async function callOpenAIStyleChatCompletions({
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
@@ -1499,6 +1631,13 @@ async function callOpenAIStyleChatCompletions({
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
                     : {}),
+                // The exception: KoboldCpp. With no limit in the request it
+                // applies its own default and cuts a turn's JSON off there
+                // (contextWindow.js LOCAL_OUTPUT_LIMIT_TOKENS says why this
+                // number and no more, koboldCpp.js how the server is known).
+                // Only where neither the caller nor the entry named one, and
+                // to no other server: the rest read no limit as none.
+                ...(koboldCppLimit ? { [tokenLimitField]: koboldCppLimit } : {}),
                 ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
@@ -1647,7 +1786,11 @@ async function callOpenAIStyleChatCompletions({
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length ? createOpenAIStreamState() : null;
-            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, callState ? (frame) => applyOpenAIFrame(callState, frame) : null);
+            const hearKoboldCpp = koboldCppChunkNoter(endpoint);
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, (frame) => {
+                hearKoboldCpp(frame);
+                if (callState) applyOpenAIFrame(callState, frame);
+            }, onUnmarkedEnd);
             const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
             const chatCalls = callState ? lookupCallsFromOpenAI(finishOpenAIStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamed, lookupCalls: chatCalls };
@@ -1698,9 +1841,11 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream)
+            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, providerLabel);
         onUsage?.(data);
+        // The answer names its server: a KoboldCpp is remembered for one.
+        noteKoboldCpp(endpoint, data);
         const text = extractOpenAIMessageText(data);
 
         // Some gateways put "the request does not fit the context window" in a
@@ -1715,6 +1860,7 @@ async function callOpenAIStyleChatCompletions({
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
             if (toolInput) return { rawText: text, toolInput };
+            failIfClosedEarly(data, (structuredMode === "tool" && extractOpenAIToolRaw(data, tool)) || text);
             // Not the answer but a question: the model called lookup functions.
             if (structuredMode === "tool" && lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromOpenAI(data, tool.name);
@@ -1794,6 +1940,7 @@ async function callOpenAIStyleChatCompletions({
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
         }
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from a gateway that answered buffered.
         if (!tool && chatTools.length) {
@@ -1948,8 +2095,11 @@ async function callAnthropic(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -2056,6 +2206,9 @@ async function callAnthropic(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
             method: "POST",
             headers,
@@ -2118,7 +2271,7 @@ async function callAnthropic(systemPrompt, history, {
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -2142,12 +2295,13 @@ async function callAnthropic(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Anthropic");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            failIfClosedEarly(data, extractAnthropicText(data));
             // Not the answer but a question: the model called lookup functions.
             if (lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
@@ -2178,6 +2332,7 @@ async function callAnthropic(systemPrompt, history, {
             return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2201,8 +2356,11 @@ async function callAnthropicCompatible(systemPrompt, history, {
     maxTokens,
     onActivity,
     onChunk,
+    onReceived,
     onRequest,
+    onSend,
     onToolStream,
+    onUnmarkedEnd,
     onUsage,
     rateLimitPolicy = "next",
     retries = 3,
@@ -2334,6 +2492,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
+        // The request goes out now: the skip's progress row starts its count
+        // from here, again on every retry (requestActivity.js).
+        onSend?.();
         const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
         onRequest?.(response.status);
 
@@ -2388,7 +2549,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
             const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null, onUnmarkedEnd);
             const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
             if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
@@ -2412,12 +2573,13 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // nothing downstream can tell the difference. Branch on what actually
         // arrived, so an endpoint that ignored stream:true still works.
         const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream)
+            ? await readAnthropicStreamedResponse(response, onActivity, onToolStream, onReceived)
             : await readJsonAnswer(response, "Anthropic Compatible");
         onUsage?.(data);
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            failIfClosedEarly(data, extractAnthropicText(data));
             // Not the answer but a question: the model called lookup functions.
             if (lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
@@ -2464,6 +2626,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             return { rawText: anthropicText, toolInput: null };
         }
         const text = extractAnthropicText(data);
+        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
 
         // The advisor's lookup functions, from an endpoint that answered buffered.
         if (!tool && chatTools.length && !requireOutputTool) {
@@ -2525,6 +2688,28 @@ const conversationShape = (systemPrompt, history) => ({
 
 const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 
+// Whether an entry's server is KoboldCpp (koboldCpp.js): its endpoint has
+// answered as one, or the model it is set to is one of KoboldCpp's. Only an
+// OpenAI-compatible endpoint can be.
+const entryIsKoboldCpp = (entry) => entry?.provider === "openai-compatible"
+    && koboldCppServers.isKoboldCpp({ endpoint: normalizeEndpoint(entry.endpoint), model: entry.model });
+
+// The output limit a request to this entry carries and whose it is
+// (contextWindow.js outputLimitFor). callAI settles both once per attempt,
+// writes the limit in the request's log line and hands `koboldCpp` to the
+// provider path, so the line and the request cannot disagree: a server
+// recognised while the call is in the air changes the next call, not this one.
+// Only the OpenAI-style paths take a limit from the entry's custom parameters
+// as it stands.
+const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
+    const openAiStyle = entry?.provider === "openai" || entry?.provider === "openai-compatible";
+    return outputLimitFor({
+        maxTokens,
+        customParams: openAiStyle ? parseCustomParams(entry.customParams) : null,
+        koboldCpp,
+    });
+};
+
 // Lookup rounds (lookupTools.js, toolTurns.js). A structured task may hand
 // callAI `lookups: { tools, execute, maxRounds?, onRound? }`: the lookup
 // functions are declared beside the task's output function, and when the model
@@ -2550,7 +2735,13 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 // Answered rounds are kept on `carry` (toolTurns.js): the next attempt — the
 // next Fallback entry, or the task's retry — starts with them and only the rest
 // of the round budget, rather than asking again what was already answered.
-async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null }) {
+//
+// A lookup the model repeats, with the arguments it already had answered, is
+// not answered a second time (toolTurns.js answerLookupCalls): it is told its
+// answer is above, and every request of the task after that offers only the
+// output function, this attempt's and the next one's (`carry.outputOnly`).
+// `outputToolName` is named in what the repeat is told; a chat has none.
+async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
     const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
@@ -2560,9 +2751,12 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
         logDebugEvent("ai-call", `${label}: ${provider} starts with ${carried} lookup round${carried === 1 ? "" : "s"} already answered.`, undefined, { verbose: true });
     }
     let conversation = withCarriedRounds(baseHistory, carry);
+    // Every call this task has already had answered, on this attempt or an earlier one.
+    const answeredKeys = answeredLookupKeys(carry?.rounds);
+    let outputOnly = carry?.outputOnly === true;
     let roundStartedAt = Date.now();
     for (let round = 0; ; round += 1) {
-        const requireOutputTool = carried + round >= maxRounds;
+        const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
         const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
@@ -2579,33 +2773,25 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
             return answer;
         }
         const elapsedMs = Date.now() - roundStartedAt;
-        const results = [];
-        const answered = [];
-        for (const call of calls) {
-            const startedAt = Date.now();
-            let response;
-            try {
-                response = await lookups.execute(call.name, call.args);
-            } catch (error) {
-                response = { error: String(error?.message || error) };
-            }
-            if (response == null || typeof response !== "object" || Array.isArray(response)) response = { result: response ?? null };
-            results.push({ id: call.id, name: call.name, response });
-            answered.push({
-                name: call.name,
-                args: call.args,
-                label: describeLookupCall(call),
-                response: JSON.stringify(response),
-                ms: Date.now() - startedAt,
-                error: typeof response.error === "string" && response.error.length > 0,
-            });
-        }
+        const { results, answered, repeated } = await answerLookupCalls(calls, {
+            execute: lookups.execute,
+            answeredKeys,
+            outputToolName,
+        });
+        for (const call of calls) answeredKeys.add(lookupCallKey(call));
         // Always logged: the calls and what they cost, one line. The full
         // arguments and answers ride along only in detailed mode.
         logDebugEvent("ai-call", `${label}: lookup round ${round + 1} on ${provider}: ${answered.map((entry) => entry.label).join("; ")}.`, {
-            answers: answered.map((entry) => `${entry.name} ${entry.error ? "ERROR " : ""}${entry.response.length} chars`).join("; "),
+            answers: answered.map((entry) => (entry.repeated
+                ? `${entry.name} REPEATED, not answered again`
+                : `${entry.name} ${entry.error ? "ERROR " : ""}${entry.response.length} chars`)).join("; "),
             modelMs: elapsedMs,
         });
+        if (repeated && !outputOnly) {
+            outputOnly = true;
+            if (carry && typeof carry === "object") carry.outputOnly = true;
+            logDebugEvent("ai-call", `${label}: ${provider} asked a lookup it already had the answer to; from here it is offered only ${outputToolName || "its answer"}.`);
+        }
         logDebugEvent("ai-call", `${label}: lookup round ${round + 1} in full.`, answered.map((entry) => ({
             call: entry.label, args: entry.args, response: entry.response,
         })), { verbose: true });
@@ -2621,10 +2807,19 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
 }
 
 // A call that failed without the provider saying why, because it never reached
-// the provider at all (isUnreachableError).
+// the provider at all (isUnreachableError), or lost it partway through the
+// answer. The second reads as what it is: "network error" told the player
+// nothing, and the same break seen through the relay keeps the relay's own
+// words (relayResponse.js) and gets the same mark.
 const asUnreachable = (error, signal) => {
     if (error?.providerFailure || signal?.aborted || error?.name === "AbortError") return error;
-    if (isUnreachableError(error)) error.providerFailure = { kind: "busy", reason: "could not be reached" };
+    if (isBrokenBodyError(error)) return connectionClosedError(error);
+    if (error?.message === RELAY_CUT_OFF_MESSAGE) {
+        error.providerFailure = couldNotBeReached();
+        error.connectionClosed = true;
+    } else if (isUnreachableError(error)) {
+        error.providerFailure = couldNotBeReached();
+    }
     return error;
 };
 
@@ -2687,11 +2882,6 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // skip reports what it cost): both are for the request budget below.
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
-        // Developer/evaluation harness hooks. They are stripped here and never
-        // reach a provider. __forceEntryId pins one exact Fallback-list entry so
-        // paired A/B runs cannot silently compare different models. __capture
-        // receives the exact request/response metrics even when telemetry is off.
-        __capture: capture = null, __forceEntryId: forceEntryId = "",
         requestKind = PLAYER_REQUEST, onRequest: observeRequest = null,
         ...providerOpts
     } = opts;
@@ -2702,32 +2892,12 @@ export async function callAI(systemPrompt, history, opts = {}) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
 
-    const resolvedRouting = resolveTaskFallbackEntries(providerOpts.taskKey);
-    let entries = resolvedRouting.entries;
-    let preferredEntryId = resolvedRouting.preferredEntryId;
-    const pinnedId = String(forceEntryId ?? "").trim();
-    if (pinnedId) {
-        const pinned = entries.find((entry) => entry.id === pinnedId);
-        if (!pinned) throw new Error(`The selected AI entry (${pinnedId}) is no longer in the Fallback list.`);
-        entries = [pinned];
-        preferredEntryId = pinned.id;
-    }
+    const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
     const firstChoice = entries.find((entry) => entry.id === preferredEntryId) ?? entries[0];
     const provider = firstChoice?.provider ?? "(none)";
     const label = logLabel || "AI call";
     const startedAt = Date.now();
-    if (capture && typeof capture === "object") {
-        capture.startedAt = startedAt;
-        capture.taskKey = providerOpts.taskKey ?? (logLabel || "direct");
-        capture.requestedEntryId = pinnedId || preferredEntryId || firstChoice?.id || "";
-        capture.systemPrompt = systemPrompt;
-        capture.history = Array.isArray(history)
-            ? history.map((entry) => ({ role: entry?.role, parts: Array.isArray(entry?.parts) ? entry.parts.map((part) => ({ text: String(part?.text ?? "") })) : [] }))
-            : [];
-        capture.userMessage = Array.isArray(history) ? String(history.at(-1)?.parts?.[0]?.text ?? "") : "";
-        capture.requests = [];
-    }
     // Telemetry (Settings → AI debug console): one record per call — prompt,
     // answer, model, usage, latency — in memory and, while recording is on, in
     // IndexedDB. A task-runner call is judged by its validator afterwards, so
@@ -2764,13 +2934,17 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // The timer wraps the caller's own onActivity (runJsonTask passes the idle
     // watchdog's note()), so it observes the first chunk without displacing it.
     const timer = createFirstByteTimer(providerOpts.onActivity);
+    // What each request of this call is doing while it is open, for the line
+    // under a skip's spinner (requestActivity.js). Only the calls a player may
+    // be watching a spinner for: a conversation shows its own reply as it
+    // arrives, and nobody waits on a background call or a translation.
+    const showsActivity = languageMode !== "chat" && requestKind !== BACKGROUND_REQUEST;
     // The request budget (requestBudget.js): every response any provider path
     // gets is one request against the player's daily allowance, so it is counted
     // HERE, under the lookup rounds, the retries and the Fallback list, rather
     // than per call — one callAI can be many requests. The ledger must never
     // cost a call its answer.
     const noteRequest = (status) => {
-        if (capture && typeof capture === "object") capture.requests?.push(status);
         try {
             // The generation's own count, for the AI debug console.
             attachRequestOutcome(record, status);
@@ -2791,6 +2965,17 @@ export async function callAI(systemPrompt, history, opts = {}) {
     let roundUsage = null;
     let lookupRounds = 0;
     let lookupCalls = 0;
+    // The answer handed back was cut at the model's output limit
+    // (providerErrors.js stoppedAtOutputLimit), read off the same envelope the
+    // usage is: the last one read is the one whose answer is returned.
+    let answerCutAtLimit = false;
+    // The output limit the attempt in hand was given (entryOutputLimit): the
+    // last attempt is the one that answered.
+    let attemptLimit = { tokens: 0, source: "" };
+    // The reply handed back came off a stream that ended without saying it had
+    // (keepProseClosedEarly). Set by the request whose reply is returned: each
+    // request starts it afresh.
+    let endedUnmarked = false;
 
     // The context preflight (contextWindow.js). How big this request is, in
     // tokens as near as four characters a token can say; an entry whose window
@@ -2843,31 +3028,56 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ),
             attempt: (entry, { canFallBack, onChunk }) => {
                 if (record) record.provider = entry.provider;
-                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, callShape, { verbose: true });
-                return runWithLookups(lookups, history, (roundHistory, roundOpts) => dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
-                    ...providerOpts,
-                    ...roundOpts,
-                    onChunk,
-                    entrySettings: entry,
-                    canFallBack,
-                    rateLimitPolicy: getRateLimitPolicy(),
-                    onActivity: timer.note,
-                    onRequest: noteRequest,
-                    onUsage: (data) => {
-                        const reported = normalizeUsage(data);
-                        if (!reported) return;
-                        roundUsage = reported;
-                        usage = sumUsage(usage, reported);
-                    },
-                    // The model the provider actually resolved (overrides, discovery).
-                    onModel: (model) => {
-                        if (record) record.model = String(model ?? "");
-                        if (capture && typeof capture === "object") capture.model = String(model ?? "");
-                    },
-                }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
+                // The output limit is the entry's as much as the call's: its
+                // custom parameters can name one, and KoboldCpp is given one
+                // where nobody did (entryOutputLimit). Settled here, once for
+                // the attempt, so this line says what its requests carry.
+                const koboldCpp = entryIsKoboldCpp(entry);
+                const limit = entryOutputLimit(entry, providerOpts.maxTokens, koboldCpp);
+                attemptLimit = limit;
+                logDebugEvent("ai-call", `${label}: request to ${entry.label} [${entry.provider}] (~${requestTokens} tokens).`, {
+                    ...callShape,
+                    maxTokens: limit.source === "koboldcpp" ? `${limit.tokens} (the game's limit for KoboldCpp)`
+                        : limit.source === "custom" ? `${limit.tokens} (the entry's custom parameters)`
+                        : callShape.maxTokens,
+                }, { verbose: true });
+                return runWithLookups(lookups, history, (roundHistory, roundOpts) => {
+                    // Open from here until this round's answer is in or has
+                    // failed: one request, or several when the provider path
+                    // asks again (it says so with onSend).
+                    const live = showsActivity ? requestActivity.open({ label: `${label} → ${entry.label}` }) : null;
+                    endedUnmarked = false;
+                    return dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
+                        ...providerOpts,
+                        ...roundOpts,
+                        onChunk,
+                        entrySettings: entry,
+                        canFallBack,
+                        rateLimitPolicy: getRateLimitPolicy(),
+                        koboldCpp,
+                        onActivity: timer.note,
+                        onSend: live?.sent,
+                        onReceived: live?.received,
+                        onUnmarkedEnd: () => { endedUnmarked = true; },
+                        onRequest: noteRequest,
+                        onUsage: (data) => {
+                            answerCutAtLimit = stoppedAtOutputLimit(data);
+                            const reported = normalizeUsage(data);
+                            if (!reported) return;
+                            roundUsage = reported;
+                            usage = sumUsage(usage, reported);
+                        },
+                        // The model the provider actually resolved (overrides, discovery).
+                        onModel: (model) => { if (record) record.model = String(model ?? ""); },
+                    }).catch((error) => {
+                        rememberContextWindow(entry, error);
+                        throw asUnreachable(error, providerOpts.signal);
+                    }).finally(() => live?.close());
+                }, {
                     label,
                     provider: entry.provider,
                     carry: lookupCarry,
+                    outputToolName: providerOpts.tool?.name || "",
                     onRound: ({ round, calls, elapsedMs }) => {
                         lookupRounds = round;
                         lookupCalls += calls.length;
@@ -2889,29 +3099,39 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(timer.firstByteMs === null ? {} : { firstByteMs: timer.firstByteMs }),
             ...(usage ?? {}),
         }, { verbose: true });
+        // The model ran into its output limit, so the answer may stop partway.
+        // It is handed back all the same: text holding a whole JSON payload is
+        // still used. The task runner is told through its sink, and when it
+        // finds nothing usable it stops there instead of asking the same
+        // question under the same limit (gameplay.js runJsonTask). Always
+        // logged: it is the first thing to look for when a turn comes up short.
+        if (answerCutAtLimit) {
+            if (debugSink && typeof debugSink === "object") debugSink.stoppedAtOutputLimit = true;
+            logDebugEvent("ai-call", `${label}: ${answeredBy.label} stopped at its output limit; the answer may be cut short.`, {
+                replyChars: typeof result === "string" ? result.length : String(result?.rawText ?? "").length,
+                // What the attempt was given, not what the entry would be
+                // given now: this very answer can be the one KoboldCpp was
+                // recognised by.
+                maxTokens: attemptLimit.tokens || "(the call named none)",
+                ...(usage?.outputTokens ? { outputTokens: usage.outputTokens } : {}),
+            });
+        }
+        // The reply came off a stream that ended without saying it had: no
+        // finish reason, no [DONE], no error. A reply in words is kept all the
+        // same (keepProseClosedEarly), and this is the line to look for when
+        // one reads as cut short. It carries no detail, so a gateway that ends
+        // every stream this way folds into one entry with a count while its
+        // replies come close together.
+        if (endedUnmarked) {
+            logDebugEvent("ai-call", `${label}: ${answeredBy.label}'s stream ended without an end marker (no finish reason, no [DONE]); the reply is kept as it arrived.`);
+        }
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
-        const capturedRawResponse = typeof result === "string"
-            ? result
-            : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : "");
         finishAiRecord(record, {
             ok: true,
-            rawResponse: capturedRawResponse,
+            rawResponse: typeof result === "string"
+                ? result
+                : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : ""),
         });
-        if (capture && typeof capture === "object") {
-            capture.ok = true;
-            capture.endedAt = Date.now();
-            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
-            capture.firstByteMs = timer.firstByteMs;
-            capture.provider = answeredBy?.provider || firstChoice?.provider || "";
-            capture.entryId = answeredBy?.id || firstChoice?.id || "";
-            capture.entryLabel = answeredBy?.label || firstChoice?.label || "";
-            capture.model = capture.model || answeredBy?.model || firstChoice?.model || "";
-            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
-            capture.lookupRounds = lookupRounds;
-            capture.lookupCalls = lookupCalls;
-            capture.rawResponse = capturedRawResponse;
-            capture.viaToolCall = Boolean(result?.toolInput);
-        }
         return result;
     } catch (error) {
         // NOT verbose-only. A call that failed is the thing a bug report is most
@@ -2927,14 +3147,6 @@ export async function callAI(systemPrompt, history, opts = {}) {
             { verbose: cancelled });
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
-        if (capture && typeof capture === "object") {
-            capture.ok = false;
-            capture.endedAt = Date.now();
-            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
-            capture.firstByteMs = timer.firstByteMs;
-            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
-            capture.error = cancelled ? "cancelled" : String(error?.message || error);
-        }
         throw error;
     } finally {
         requestScope.finish();
@@ -3461,55 +3673,25 @@ async function buildAdvisorSystemPrompt() {
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
-    // Evaluation-only seams. stateOverride must already be the player-visible
-    // frozen snapshot; politicalWorldOverride is read ONLY by the Political
-    // Decision Context projection, so sensitivity tests cannot accidentally
-    // change unrelated world-summary inputs. Normal gameplay passes neither.
-    stateOverride = null,
-    politicalContextMode = "normal",
-    politicalWorldOverride = null,
-    promptCapture = null,
     decisionFocusText = "",
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
     // "- [object Object]", and every leader was told that was the table.
     const participantList = countries.map(participantName).filter(Boolean).map((name) => `- ${name}`).join("\n");
-    let savedGame;
-    let actionData;
-    let savedChats;
-    let savedWorld;
-    let savedEvents;
-    let advisorData;
-    let gameData;
-    let chatData;
-    let worldData;
-    let eventData;
-    if (stateOverride && typeof stateOverride === "object") {
-        savedGame = stateOverride.game || {};
-        actionData = Array.isArray(stateOverride.actions) ? stateOverride.actions : [];
-        savedChats = Array.isArray(stateOverride.chats) ? stateOverride.chats : [];
-        savedWorld = stateOverride.world || {};
-        savedEvents = Array.isArray(stateOverride.events) ? stateOverride.events : [];
-        advisorData = Array.isArray(stateOverride.advisor) ? stateOverride.advisor : [];
-        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = {
-            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
-        });
-    } else {
-        [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
-            readJson(JSON_URLS.game, { defaultValue: {} }),
-            readJson(JSON_URLS.actions, { defaultValue: [] }),
-            readJson(JSON_URLS.chat, { defaultValue: [] }),
-            readJson(JSON_URLS.world, { defaultValue: {} }),
-            readJson(JSON_URLS.events, { defaultValue: [] }),
-            readJson(JSON_URLS.advisor, { defaultValue: [] }),
-        ]);
-        // A leader answering the player mid-reveal speaks from the world the player
-        // has been shown (runtime/unseenEvents.js), not the one the turn finished.
-        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
-            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
-        }));
-    }
+    const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
+        readJson(JSON_URLS.game, { defaultValue: {} }),
+        readJson(JSON_URLS.actions, { defaultValue: [] }),
+        readJson(JSON_URLS.chat, { defaultValue: [] }),
+        readJson(JSON_URLS.world, { defaultValue: {} }),
+        readJson(JSON_URLS.events, { defaultValue: [] }),
+        readJson(JSON_URLS.advisor, { defaultValue: [] }),
+    ]);
+    // A leader answering the player mid-reveal speaks from the world the player
+    // has been shown (runtime/unseenEvents.js), not the one the turn finished.
+    const { game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
+        game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
+    });
 
     // A leader only knows the conversations they are actually in. The leader
     // prompt carries the recent chat history, and this used to hand it EVERY
@@ -3586,24 +3768,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         playerCountry: playerCountry || gameData?.country || "",
         decisionFocusText,
     });
-    const basePoliticalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
-    const evaluationPoliticalDecision = politicalWorldOverride
-        ? buildDiplomaticPoliticalContext({
-            world: politicalWorldOverride,
-            speakingAs: speaker,
-            playerCountry: playerCountry || gameData?.country || "",
-            decisionFocusText,
-        })
-        : null;
-    const politicalSection = politicalContextMode === "omit"
-        ? ""
-        : evaluationPoliticalDecision?.text
-            ? `\n\n${evaluationPoliticalDecision.text}`
-            : basePoliticalSection;
-    if (promptCapture && typeof promptCapture === "object") {
-        promptCapture.politicalContextText = politicalSection;
-        promptCapture.speaker = speaker;
-    }
+    const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
     // When the player leads a group rather than a country (runtime/groups.js), the
     // leader answering it knows what it is dealing with. Not while groups are
@@ -3898,8 +4063,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 }
 
 // Build the exact one-off diplomatic request without sending it or touching the
-// module-level live-chat history. The Political World A/B lab uses this so both
-// arms see one frozen transcript and differ only in the bounded political block.
+// module-level live-chat history.
 export async function buildDiplomaticEvaluationRequest({
     playerMessage,
     speakingAs,
@@ -3907,17 +4071,9 @@ export async function buildDiplomaticEvaluationRequest({
     playerCountry,
     priorMessages = [],
     chatId = "",
-    stateOverride = null,
-    politicalContextMode = "normal",
-    politicalWorldOverride = null,
 } = {}) {
-    const promptCapture = {};
     const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
         chatId,
-        stateOverride,
-        politicalContextMode,
-        politicalWorldOverride,
-        promptCapture,
         decisionFocusText: playerMessage,
     });
 
@@ -3943,8 +4099,6 @@ export async function buildDiplomaticEvaluationRequest({
     return {
         systemPrompt,
         history: historyWithInstruction,
-        politicalContextText: promptCapture.politicalContextText || "",
-        speaker: promptCapture.speaker || speakingAs || "",
     };
 }
 

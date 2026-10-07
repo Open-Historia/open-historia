@@ -371,6 +371,21 @@ test("a low-pressure programme may ease while its event 'deploys' hardware; a cr
   assert.match(validate(65), /lowers pressure/i, "the same drop on a crisis-level storyline is still refused");
 });
 
+// What a small model writes where it has nothing to report: a heading and a
+// sentence where the prompt asks for an empty string. A line with no ~ in it is
+// not a record; read as one it had an id and no status, and "record 1 status
+// must be active, dormant, or resolved" refused the whole answer.
+test("a line with no separator is prose, not a storyline record", async () => {
+  const mod = await import("../src/Game/AI/nativeWorldDirector.js");
+  const prose = "### Сюжетные линии:\nНет изменений. Ни один процесс не сдвинулся.";
+  assert.deepEqual(mod.decodeWorldStorylineUpdates(prose), []);
+  assert.deepEqual(mod.decodeWorldStorylineUpdates(prose.split("\n")), [], "nor as members of a list");
+  const records = mod.decodeWorldStorylineUpdates(`${prose}\nstoryline-c~active~40~30~2020-01-01~crisis~Title~Armenia,Azerbaijan~1,2~A settled state.`);
+  assert.deepEqual(records.map((record) => record.id), ["storyline-c"], "around a real record it costs the record nothing");
+  // A line with the separator and nothing else right is still a record, for the validator to refuse.
+  assert.equal(mod.decodeWorldStorylineUpdates("storyline-x~sleeping").length, 1);
+});
+
 // The same player's round-53 answer wrote every storyline record two empty
 // fields short — seven separators where the contract has nine — so each state
 // landed in participantsCSV and the jump fell back on "record 1 must describe

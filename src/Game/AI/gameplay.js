@@ -27,6 +27,7 @@ import {
   mergeReceipts,
   noteMalformedImpacts,
   noteReceipt,
+  quoteReceiptIds,
   renderLastTurnReceipt,
   tallyAppliedEvents,
   withReceiptDraft,
@@ -168,7 +169,9 @@ import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventRe
 import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
-import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { OUTPUT_LIMIT_MESSAGE, isUnreachableError } from "./providerErrors.js";
+import { isCancelAllAbort } from "./aiRequestControl.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -184,6 +187,7 @@ import {
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
@@ -194,12 +198,14 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
-import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
-import { createLookupCarry } from "./toolTurns.js";
+import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
 import {
   BACKGROUND_REQUEST,
+  SKIP_SPENDERS,
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
@@ -248,11 +254,15 @@ import {
 } from "./promptContext.js";
 import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
 import {
+  HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
+  buildSkipHistoryJob,
   countWords,
   deferredConsolidationStillDue,
+  judgeSkipHistoryAnswer,
   planHistoryConsolidation,
+  seedHistoryDocumentText,
 } from "./historyConsolidation.js";
 import {
   expandBakedRegionsForRename,
@@ -321,7 +331,6 @@ import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import {
   ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-  ACTION_OUTCOME_ASSOCIATION_TOOL,
   applyActionOutcomeAssociations,
   buildActionOutcomeAssociationPlan,
   normalizeActionOutcomeAssociationAnswer,
@@ -341,6 +350,7 @@ import {
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
   validateWarLedgerPayload,
+  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -406,7 +416,7 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill, isVotingRuleUnspecified } from "./institutionGovernanceRetry.js";
 import {
   autonomousInstitutionBallotDirective,
@@ -424,7 +434,6 @@ import {
 import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
-  applyInstitutionLifecycleChatBatchCore,
   applyInstitutionLifecycleImpactBatchCore,
   buildInstitutionLifecycleDecisionContext,
   commitInstitutionLifecycleChatBatch,
@@ -487,6 +496,7 @@ import {
   EMPTY_RESPONSE_BODY_NOTE,
   HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
+  RESPONSE_CUT_SHORT_REMARK,
   assertNoTurnRunning,
   attemptHeldTurn,
   beginSimulation,
@@ -778,6 +788,15 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     }
   });
 
+  // Prose where war records go (a heading, "No changes.") is not a record and
+  // never reaches the ledger (nativeWarLedger.js parseWarUpdateRecord). Said
+  // here, once for the answer and before anything rewrites the field. It is
+  // not a rejection and not a note for the next turn: such a line names no war.
+  const warProse = warUpdateProseLines(candidate?.warUpdates);
+  if (warProse.length) {
+    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
+  }
+
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
   // explicit opposing combatants; anything ambiguous comes back as an error.
@@ -863,11 +882,13 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       residual: repair.residual,
     });
     if (repair.droppedIds.length || repair.strippedEvents) {
+      // The ids are quoted short (quoteReceiptIds): a malformed record's "id" is
+      // whatever the model wrote there, and this note is read by it next turn.
       noteReceipt(
         receipt,
         "dropped",
         `War ledger: ${repair.droppedIds.length} war record(s) were dropped`
-          + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
+          + `${repair.droppedIds.length ? ` (${quoteReceiptIds(repair.droppedIds)})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
           + `because the records could not be tied to their events — ${firstComplaintLine(first)}`,
         repair.droppedIds.length
           ? countedNote(repair.droppedIds.length, "warRecordsOne", "warRecordsMany")
@@ -1443,15 +1464,15 @@ const JUMP_LEVERS = [
 ].join("\n");
 
 // ---- The folded skip's own rules -------------------------------------------------
-// While requests are being saved a skip is ONE request (requestBudget.js): no
-// second request reconciles its events with the units, the fronts, the
-// structures or the board afterwards, so the simulator is told to finish each
-// event itself. These are the rules the separate checks carried (the unit,
-// territory and structure directors' templates, the curator's, in
-// defaultPrompts.json), said once, in the simulator's own terms. Built at call
-// time, like the levers above: a campaign's frozen templates never see an edit
-// to defaultPrompts.json, and with saving off the checks still run as requests
-// of their own, where this block would be untrue.
+// A skip is ONE request (requestBudget.js): no second request reconciles its
+// events with the units, the fronts, the structures or the board afterwards, so
+// the simulator is told to finish each event itself. These are the rules the
+// separate checks carried (the unit, territory and structure directors'
+// templates, the curator's, in defaultPrompts.json), said once, in the
+// simulator's own terms. Built at call time, like the levers above: a
+// campaign's frozen templates never see an edit to defaultPrompts.json, and the
+// one skip that is not folded (a provider refused the folded request, so its
+// checks follow as a request of their own) must not be told nothing checks it.
 const FOLDED_SKIP_CONSEQUENCES = [
   "[Every Event Carries Its Consequences]",
   "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
@@ -1589,6 +1610,11 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // with its passes was measured at 23 requests where the player expected three.
 // The full prompt costs more characters and no extra request, which on a free
 // key is the right way round. The toggle takes effect once saving is off.
+//
+// Inside a time skip the rounds are the skip's own budget's to give
+// (requestBudget.js, runJsonTask below): two for an ordinary skip, so the skip
+// is three requests at most, and that function calling is the only thing that
+// makes it more than one.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 
 // audience: who is asking (audience.js). Every task that carries lookups today is
@@ -1789,6 +1815,23 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
 // It runs where region names are resolved — at validation — because the runtime
 // layer that APPLIES operations has no geometry (see buildOwnerFootprint in
 // gameState.js) and must go on receiving plain coordinates.
+
+// The world's towns (worldCities.js), for a phrase naming one this map does
+// not carry: Grand Forks, on a map of 2,527 cities. Null until a placing pass
+// first wants them, because the list is 7.9 MB and most skips name only places
+// the map has. What comes back is a compact index, kept for the session. A
+// list that could not be read stays null (loadWorldCities says why) and is
+// asked for again by a later pass.
+let worldCities = null;
+const readWorldCities = async () => {
+  if (worldCities) return worldCities;
+  worldCities = await loadWorldCities();
+  if (worldCities) {
+    logDebugEvent("turn", `Placement: the world city list was read for a place this map does not carry (${worldCities.towns} towns under ${worldCities.names} names).`, undefined, { verbose: true });
+  }
+  return worldCities;
+};
+
 const buildPlacementGazetteer = (context, world) => {
   const fold = (value) => foldRegionKey(value);
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
@@ -2011,7 +2054,29 @@ const buildPlacementGazetteer = (context, world) => {
   // the scenario declares (placement.js seasForMap).
   const seas = seasForMap({ regionAt, declared: world?.seas });
 
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, holdsLand, capitalOf, placesNamedIn, samePolity };
+  // Where each town of that name stands in the wider world, for placement.js
+  // to test against this map (resolveWorldTown). While the list is not here
+  // the answer is none, and that a name went unanswered is remembered: the
+  // placing pass then asks for the list, once, and reads its phrase again.
+  let unanswered = false;
+  let asked = false;
+  const worldCitiesNamed = (name) => {
+    if (worldCities) return worldCities.find(name);
+    unanswered = true;
+    return [];
+  };
+  // True once, when a name went unanswered and the list is here now.
+  const worldCitiesArrived = async () => {
+    if (!unanswered) return false;
+    if (!worldCities && !asked) {
+      asked = true;
+      await readWorldCities();
+    }
+    if (!worldCities) return false;
+    unanswered = false;
+    return true;
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, holdsLand, capitalOf, placesNamedIn, samePolity, worldCities: worldCitiesNamed, worldCitiesArrived };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2060,7 +2125,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
       // `owner`: the polity building it, which decides which Montana "Montana" is.
       // `home`: whose structure it is, for an address the map cannot check
-      // (placement.js resolveAddress).
+      // (placement.js addressSpot) and a town it does not carry
+      // (resolveWorldTown).
       placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, context, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
@@ -2096,7 +2162,12 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     // operation that gives only an id it is the whole answer. It used to be
     // ignored, so such an operation was dropped for having no coordinates: the
     // exact move a model reaches for after being told its `at` was not on the map.
-    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home }) : null;
+    const readPhrase = () => resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home });
+    let byPhrase = entry.phrase ? readPhrase() : null;
+    // A phrase naming a place this map does not carry is read a second time
+    // with the world's towns to hand. They are fetched here, the first time a
+    // pass wants them, and never by a skip whose places the map all has.
+    if (byPhrase && await gazetteer.worldCitiesArrived()) byPhrase = readPhrase();
     const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
       ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
       : null;
@@ -2220,17 +2291,44 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     // its regionId, it was given a point inside that land, and sailed about on
     // it (a player's Game, 2026-09-30). It goes to the water off that coast.
     if (entry.atSea && gazetteer.regionAt([lng, lat])) {
-      const offshore = nearestSea([lng, lat], gazetteer, { seed: placementHash(entry.id || entry.name) });
+      const seaSeed = placementHash(entry.id || entry.name);
+      const offshore = nearestSea([lng, lat], gazetteer, { seed: seaSeed });
+      // A NEW fleet inland in its owner's own country, with no sea in reach,
+      // goes to its owner's own waters (placement.js homeWaters), as a new army
+      // nothing places is raised in its owner's own land. The inland point is
+      // usually the engine's own: a place the map could not read is put near
+      // the capital, a unit given no place in the middle of its country, and
+      // for Russia, India or Brazil neither is within reach of a sea. Seen in a
+      // player's Game (2026-10-05): a Black Sea Fleet squadron was raised that
+      // way and then dropped here, so the event's formation never reached the
+      // map. Off the coast nearest where it was put; nearest the capital when
+      // it was given no place at all. A fleet put inland in another power's
+      // country is not sent home to a coast an ocean away: it is dropped, below.
+      const ownWaters = !offshore && entry.spawn && entry.owner
+        && gazetteer.samePolity(gazetteer.regionAt([lng, lat])?.owner, entry.owner)
+        ? homeWaters(entry.owner, gazetteer, {
+          near: (homeland && !homeland.error && gazetteer.capitalOf(entry.owner)?.point) || [lng, lat],
+          seed: seaSeed,
+        })
+        : null;
       if (offshore) {
         noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed on land and was moved to the sea off its coast. Place fleets with "off <port>" or the name of a sea.`);
         lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = "";
+      } else if (ownWaters) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was put to sea off ${ownWaters.coast || entry.owner}, on ${entry.owner}'s own coast, instead. Place fleets with "off <port>" or the name of a sea.`);
+        lng = ownWaters.lng; lat = ownWaters.lat;
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
       } else {
         // Inland, with no sea within reach: there is nowhere for a fleet to go,
-        // so the placement is dropped (a move with no destination is not made)
-        // rather than leaving it sailing on land.
-        noteReceipt(receipt, "dropped", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        // so the placement is dropped (a move with no destination is not made;
+        // a new fleet with no waters of its own to go to is not raised) rather
+        // than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", entry.spawn
+          ? `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was left off the map. Place fleets with "off <port>" or the name of a sea.`
+          : `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
         delete target[lngKey]; delete target[latKey];
         target.regionId = "";
         continue;
@@ -2484,6 +2582,10 @@ ${brief}`);
   // And the agents whose reports are due ride on it (prepareFoldedSkip).
   const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
   if (agentReports) blocks.push(agentReports);
+  // The history document's fold, when one is due, is a job of its own inside
+  // its fences (historyConsolidation.js buildSkipHistoryJob). It goes at the
+  // very end of the prompt, below, where nothing of the skip's follows it.
+  const historyJob = foldedSkip ? normalizeString(variables.foldedHistoryJob) : "";
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
   // orders (playerFocus.js): each order's id is what an event cites in actionIds.
@@ -2515,6 +2617,7 @@ ${brief}`);
   }
 
   if (Array.isArray(lookups?.tools) && lookups.tools.length) blocks.push(LOOKUP_DIRECTIVE);
+  if (historyJob) blocks.push(historyJob);
 
   return blocks.filter(Boolean).join("\n\n");
 };
@@ -3130,27 +3233,21 @@ const runJsonTask = async (taskKey, {
   // saved: it keeps strict-then-retry. For something asked once per campaign and
   // built on for the rest of it, not for anything asked every turn.
   strictFirst = false,
+  // The opposite, whatever the setting: the first answer is repaired in place
+  // and a flaw the schema names is cut out, never sent back. A time skip passes
+  // it, because a skip is one request in every mode (requestBudget.js) and being
+  // told to redo it is a second one.
+  salvage = false,
   // The answer's events as the model writes them (streamedEvents.js): every
   // complete event this attempt has produced, and an empty list when an attempt
   // begins. A preview only, through no validator. Only a time skip passes it.
   onPartialEvents = null,
-  // Evaluation harness: pin every attempt to one exact Fallback-list entry and
-  // expose the assembled prompt plus per-attempt transport metrics. Ordinary
-  // gameplay leaves both unset.
-  forceEntryId = "",
-  capture = null,
   // The prompt pack, when it is not the active game's: a scenario's, for a task
   // run in the Workshop (generateScenarioPrehistory).
   promptPack = null,
 }) => {
   const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
-  if (capture && typeof capture === "object") {
-    capture.taskKey = taskKey;
-    capture.systemPrompt = systemPrompt;
-    capture.userMessage = String(userMessage ?? "");
-    capture.attempts = [];
-  }
 
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
@@ -3265,6 +3362,21 @@ const runJsonTask = async (taskKey, {
   // carried through the task runner so a valid-but-unreconciled canonical turn
   // can be held by the jump instead of being replaced by deterministic filler.
   let noFallbackError = null;
+  // The task ended on a connection that closed while the answer was arriving
+  // (providerErrors.js connectionClosedError): the report below says that, not
+  // that the request never got an answer.
+  let connectionClosed = false;
+  // The task ended on the connection either way: that, or a server that could
+  // not be reached at all (providerErrors.js couldNotBeReached). Handed back
+  // with the result, so a caller that asks again differently when the provider
+  // REFUSED the request does not take this for a refusal (a folded time skip:
+  // foldedSkip.js providerRefusedContract).
+  let transportFailure = false;
+  // The call was stopped by "Cancel all AI requests" (Settings → AI requests;
+  // aiRequestControl.js). That stop reaches the request through callAI's own
+  // scope and leaves the `signal` this task was handed untouched, so without
+  // this it is one more failed call and takes the fallback below.
+  let cancelledAll = null;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3272,7 +3384,7 @@ const runJsonTask = async (taskKey, {
   // made only when there is nothing usable to keep. The model still learns what
   // was dropped or changed — the jump's application receipt tells it at the top
   // of the next turn — it just does not cost the player a request to say so.
-  const salvageFirst = savingRequests() && !strictFirst;
+  const salvageFirst = (salvage || savingRequests()) && !strictFirst;
   // What schema salvage cut out of the answer that was finally taken.
   let removedFromAnswer = [];
   // Lookup rounds answered on one attempt, for the next (toolTurns.js).
@@ -3289,11 +3401,23 @@ const runJsonTask = async (taskKey, {
       // means the skip has nothing left for this task at all; a refused retry
       // leaves whatever the first answer can still give (the salvage pass below).
       if (budget && !budget.take(outputAttempt === 1 ? (spender || taskKey) : `${spender || taskKey}Retry`)) {
-        const spent = `this time skip has used its ${budget.cap} requests`;
+        // Refused for the cap, or because a skip does not spend on this at all.
+        const spent = budget.allows?.(spender || taskKey) === false
+          ? "a time skip makes no request of its own for this"
+          : `this time skip has used its ${budget.cap} requests`;
         failureReason = outputAttempt === 1 ? `Not asked: ${spent}.` : `${failureReason} Not asked again: ${spent}.`;
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} not made: ${spent}.`, { spends: budget.log }, { verbose: true });
         break;
       }
+      // Function calling inside a time skip is the skip's budget's to give: every
+      // round of questions is a whole request, so this attempt may ask only as
+      // many as the budget has free once every segment has kept its own (two
+      // for an ordinary skip, which makes three requests the most a skip is).
+      // Rounds an earlier attempt already had answered are carried, not asked
+      // again, so they count toward the limit without costing anything now.
+      const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
+        ? carriedRoundCount(lookupCarry) + budget.free
+        : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
       // Observational only, and off unless enabled from DevTools: measures the
       // exact prompt about to be sent; never filters or reorders it.
@@ -3328,8 +3452,6 @@ const runJsonTask = async (taskKey, {
       // Telemetry: the record for THIS attempt comes back through the sink, so
       // the validation outcome below lands on the call that produced it.
       const attemptSink = {};
-      const transportCapture = {};
-      if (capture && typeof capture === "object") capture.attempts.push(transportCapture);
       // One reader per attempt: a rejected attempt's events leave the panel when the next starts.
       const streamed = [];
       const eventReader = typeof onPartialEvents === "function"
@@ -3373,7 +3495,17 @@ const runJsonTask = async (taskKey, {
           // carry is the task's, so the retry starts with the rounds already
           // answered instead of paying for them again.
           lookups: Array.isArray(lookups?.tools) && lookups.tools.length
-            ? { ...lookups, carry: lookupCarry, onRound: () => { idle.cancel(); idle.start(); } }
+            ? {
+              ...lookups,
+              ...(lookupRounds === null ? {} : { maxRounds: Number.isInteger(lookups.maxRounds) ? Math.min(lookups.maxRounds, lookupRounds) : lookupRounds }),
+              carry: lookupCarry,
+              onRound: () => {
+                idle.cancel();
+                idle.start();
+                // The request this round is about to make is one of the skip's.
+                budget?.take(`${spender || taskKey}Lookup`);
+              },
+            }
             : null,
           // Names this call in the ai-call transport entries, so a task's own
           // entries and the request/response pair underneath them line up.
@@ -3387,8 +3519,6 @@ const runJsonTask = async (taskKey, {
           staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
-          __capture: transportCapture,
-          __forceEntryId: forceEntryId,
           ...(requestKind ? { requestKind } : {}),
           ...(typeof onRequest === "function" ? { onRequest } : {}),
           // The arguments as they assemble (streamAssembly.js). A lookup round's
@@ -3441,6 +3571,28 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // A time skip's answer ends with its riders, the agents' reports and the
+      // history fold, each of which fails open by itself. One that broke the
+      // JSON, or was cut off when the answer ran out of room, must not cost the
+      // turn written in full before it: the answer is read again without them
+      // (jsonSalvage.js parseWithoutTrailingFields). Asking again would be a
+      // second request for a turn already in hand. Before the output-limit
+      // check below, so a cut that fell inside a rider is not a lost turn.
+      if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
+        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD]);
+        if (rescued) {
+          parsed = rescued.value;
+          console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
+          logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: the answer's ${rescued.dropped.join(" and ")} could not be read (broken or cut off) and ${rescued.dropped.length === 1 ? "was" : "were"} left out; the turn before ${rescued.dropped.length === 1 ? "it" : "them"} is kept.`, {
+            responseChars: rawText.length,
+            tail: rawText.slice(-240),
+          }, { problem: true });
+        }
+      }
+      // The model stopped at its output limit (main.jsx callAI says so through
+      // the sink) and nothing in what arrived parses. Whatever does parse is
+      // judged below like any other answer.
+      const cutAtLimitUnusable = !parsed && attemptSink.stoppedAtOutputLimit === true;
       let pregameDecodedTransportSections = null;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
@@ -3667,7 +3819,7 @@ const runJsonTask = async (taskKey, {
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
           : validateGameplayPayload(taskKey, parsed))
-        : { valid: false, error: "Response did not contain parseable JSON or tool arguments." };
+        : { valid: false, error: cutAtLimitUnusable ? OUTPUT_LIMIT_MESSAGE : "Response did not contain parseable JSON or tool arguments." };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
         const contractError = validateStatContract(taskKey, parsed, statContract);
@@ -3803,6 +3955,13 @@ const runJsonTask = async (taskKey, {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
       }
+      // Cut at the output limit with nothing to keep: the same request under
+      // the same limit would be cut at the same place, and asking costs the
+      // player a second request to find that out. A player's log has a local
+      // server's answers stopping mid-sentence at 4,171 and then 4,173
+      // characters, one request each. The task ends here with that reason, and
+      // its fallback (or the caller's hold) takes it from there.
+      if (cutAtLimitUnusable) break;
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
@@ -3835,6 +3994,9 @@ const runJsonTask = async (taskKey, {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
     if (shouldPreventDeterministicFallback(actualError)) noFallbackError = actualError;
+    connectionClosed = actualError?.connectionClosed === true;
+    transportFailure = connectionClosed || isUnreachableError(actualError);
+    if (isCancelAllAbort(actualError)) cancelledAll = actualError;
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -3849,7 +4011,7 @@ const runJsonTask = async (taskKey, {
     // report is about, so it is also a problem for View log's "problems only".
     // The error itself carries the stack — one frame normally, a real call path
     // in detailed mode.
-    logDebugEvent("ai", `Task "${taskKey}" failed${controller.signal.aborted ? " (aborted)" : ""}: ${failureReason}`, actualError instanceof Error ? actualError : undefined, { problem: true });
+    logDebugEvent("ai", `Task "${taskKey}" failed${controller.signal.aborted || cancelledAll ? " (aborted)" : ""}: ${failureReason}`, actualError instanceof Error ? actualError : undefined, { problem: true });
   } finally {
     idle.cancel();
   }
@@ -3861,6 +4023,20 @@ const runJsonTask = async (taskKey, {
     throw signal.reason instanceof Error
       ? signal.reason
       : new DOMException("Timeline jump cancelled.", "AbortError");
+  }
+
+  // "Cancel all AI requests" is the player's own cancel as well. For a time
+  // skip the fallback below is a canned turn written into the game, which is
+  // the one thing the player had just asked the game not to go on with: a
+  // single-request skip stopped that way used to land as "Turn generated by
+  // fallback: Cancelled by player." It ends as the skip's own Cancel does
+  // instead, with the abort handed up and nothing written (runJumpSegments
+  // rethrows an AbortError; the Timeline logs a cancelled turn). Before the
+  // salvage below, too: an earlier answer is not a turn the player still wants.
+  // Every other task keeps its harmless fallback, as with the two cases after
+  // this one.
+  if (cancelledAll && ["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    throw cancelledAll;
   }
 
   // The request does not fit any model the player has (contextWindow.js). A
@@ -3908,7 +4084,7 @@ const runJsonTask = async (taskKey, {
   }
 
   if (typeof fallback !== "function") {
-    throw new Error(`AI task "${taskKey}" failed: ${failureReason}`);
+    throw Object.assign(new Error(`AI task "${taskKey}" failed: ${failureReason}`), transportFailure ? { transportFailure: true } : {});
   }
 
   console.warn(`[ai] task "${taskKey}" failed (${failureReason}) — using the deterministic fallback.`);
@@ -3925,9 +4101,10 @@ const runJsonTask = async (taskKey, {
   // No body at all is itself the diagnosis, so say so instead of leaving the
   // field empty and letting the report guess it is an old turn. The marker
   // goes in the same field the raw text uses, so it survives the reload path
-  // (applySimulationResult → world.json) with no extra plumbing.
+  // (applySimulationResult → world.json) with no extra plumbing. A connection
+  // that closed mid-answer has its own marker: the request did get through.
   const rawResponse = capturedRawText
-    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : NO_RESPONSE_BODY_NOTE);
+    || (sawResponseBody ? EMPTY_RESPONSE_BODY_NOTE : connectionClosed ? RESPONSE_CUT_SHORT_REMARK : NO_RESPONSE_BODY_NOTE);
   if (capturedRawText) {
     console.warn(`[ai] task "${taskKey}" — raw model response that failed to parse:\n${capturedRawText}`);
   } else {
@@ -3936,6 +4113,9 @@ const runJsonTask = async (taskKey, {
   return {
     generation: { source: "fallback", fallbackReason: failureReason, rawResponse, taskKey },
     payload: await fallback(),
+    // Beside the generation, not in it: that record is written into the game's
+    // history, and this is for the caller alone.
+    ...(transportFailure ? { transportFailure: true } : {}),
   };
 };
 
@@ -4332,13 +4512,11 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "" } = {}) => {
-  // The document this pass revises, and the revision it was read at: a pass
-  // that lands against a different revision (a hand edit in the meantime)
-  // appends rather than overwrites (applyHistoryDocumentUpdate).
-  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
-  const historyDocumentContext = buildHistoryDocumentDirective(bundle.world);
-  const variables = await buildTemplateVariables(bundle, {
+// What one pass of the consolidator is shown: the material it folds, as text,
+// and the document directive (historyConsolidation.js). Shared by the pass that
+// is a request of its own and the one a time skip carries (prepareSkipHistoryFold).
+const historyConsolidationVariables = async (bundle, events, chats, actions = []) => ({
+  ...(await buildTemplateVariables(bundle, {
     taskKey: "eventConsolidator",
     // Resolved orders are consolidated alongside the events they caused. Capping
     // the history that gets SENT each turn is not enough on its own: drop the old
@@ -4352,7 +4530,66 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     }),
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
-  });
+  })),
+  historyDocumentContext: buildHistoryDocumentDirective(bundle.world),
+});
+
+// A pass's boundary as plain JSON: what its ledger entry records, and what a
+// batch applier needs to be rebuilt after a reload (batchApplierFor).
+const consolidationResume = (plan, bundle, { campaignId, world }) => ({
+  kind: "consolidation",
+  campaignId,
+  actionIds: plan.actionsToConsolidate.map((action) => action.id),
+  chatIds: plan.closedChats.map((chat) => chat.id),
+  throughDate: plan.throughEvent?.date || bundle.game.gameDate,
+  throughEventId: plan.throughEvent?.id || "",
+  throughRound: bundle.game.round,
+  baseRevision: world.historyDocument?.revision ?? 0,
+  eventCount: plan.eventsToConsolidate.length,
+  chatCount: plan.closedChats.length,
+});
+
+// ---- The history fold a time skip carries ---------------------------------------
+// A skip is ONE request (requestBudget.js), so a fold that is due is not a
+// request after it: it is a job inside the skip's own prompt
+// (historyConsolidation.js buildSkipHistoryJob) and a field of its answer.
+//
+// Planned HERE, before the skip, on the campaign as it stands and for the round
+// the skip is about to produce, so the cadence is the one a pass after the skip
+// kept, and nothing the skip writes is in it. Three things come back:
+//   null                nothing is due: nothing is asked, and nothing is asked
+//                       after the skip either. Whatever the skip adds waits
+//                       for the next one.
+//   { separate: true }  due, but not the skip's to carry: the player sends
+//                       this pass through the provider's batch endpoint
+//                       (Settings → Batch background AI tasks), or a batch is
+//                       already out for these events. The pass after the skip
+//                       handles it, as it always has.
+//   { brief, resume, baseRevision, currentText }
+//                       due and carried: the consolidator's own prompt, whole,
+//                       and the boundary the fold will record.
+const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() } = {}) => {
+  const plan = planHistoryConsolidation(bundle, { round: (Number(bundle.game?.round) || 0) + 1 });
+  if (!plan.due) return null;
+  if (hasPendingBatch("eventConsolidator", campaignId)) return { separate: true };
+  if (batchBackgroundTasksEnabled() && providerSupportsBatch("eventConsolidator")) return { separate: true };
+  const world = normalizeWorldState(bundle.world);
+  const variables = await historyConsolidationVariables(bundle, plan.eventsToConsolidate, plan.closedChats, plan.actionsToConsolidate);
+  const { systemPrompt } = await buildTaskSystemPrompt("eventConsolidator", { variables, lookups: null, reminders: false });
+  return {
+    brief: systemPrompt,
+    resume: consolidationResume(plan, bundle, { campaignId, world }),
+    baseRevision: world.historyDocument?.revision ?? 0,
+    currentText: seedHistoryDocumentText(world),
+  };
+};
+
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "" } = {}) => {
+  // The document this pass revises, and the revision it was read at: a pass
+  // that lands against a different revision (a hand edit in the meantime)
+  // appends rather than overwrites (applyHistoryDocumentUpdate).
+  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
+  const variables = await historyConsolidationVariables(bundle, events, chats, actions);
   const { generation, payload, deferred } = await runJsonTask("eventConsolidator", {
     // The deterministic digest cannot judge importance, so it carries no
     // document: the pass appends it to the document instead of rewriting.
@@ -4367,7 +4604,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     ...(typeof onRequest === "function" ? { onRequest } : {}),
     ...(signal ? { signal } : {}),
-    variables: { ...variables, historyDocumentContext },
+    variables,
     // Off the critical path when the caller supplies an applier: the summary
     // may land later through the batch poller.
     sync: typeof onBatchResult !== "function",
@@ -4454,28 +4691,56 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null } = {}) => {
+// `skipFold`: what the time skip this turn came from did about the fold itself
+// (foldedTurnReview's `review.history`), when it was a folded skip:
+//   { due: false }                  nothing was due before the skip, so nothing
+//                                   is folded now either;
+//   { due: true, ok: true, ... }    the skip's own answer carried the fold, and
+//                                   it is written here with no request;
+//   { due: true, ok: false, ... }   the answer's fold could not be used. It
+//                                   waits for the next skip, unless the pile
+//                                   has outgrown HISTORY_CONSOLIDATION's
+//                                   ownRequestThreshold, when it is asked for
+//                                   below like any pass.
+// Absent, this is a pass of its own, as it is for everything that is not a
+// folded skip.
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null, skipFold = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
+  if (skipFold && !force) {
+    if (!skipFold.due) return world;
+    if (skipFold.ok) {
+      const entry = consolidationEntryFor(skipFold.resume, skipFold.summary, "ai", world.consolidatedHistory);
+      const documentUpdate = applyHistoryDocumentUpdate(world, {
+        document: skipFold.document,
+        summary: skipFold.summary,
+        source: "ai",
+        throughDate: entry.throughDate,
+        throughEventId: entry.throughEventId,
+        throughRound: entry.throughRound,
+        baseRevision: skipFold.baseRevision,
+      });
+      logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
+      return normalizeWorldState({
+        ...world,
+        consolidatedHistory: [...world.consolidatedHistory, entry],
+        historyDocument: documentUpdate.historyDocument,
+      });
+    }
+    const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
+    if (waiting <= HISTORY_CONSOLIDATION.ownRequestThreshold) {
+      logDebugEvent("turn", `History consolidation waits for the next skip: this skip's answer ${skipFold.reason || "gave no usable fold"}.`, { unfoldedEvents: waiting }, { problem: true });
+      return world;
+    }
+    logDebugEvent("turn", `History consolidation is asked for on its own: ${waiting} events are unfolded and this skip's answer ${skipFold.reason || "gave no usable fold"}.`, undefined, { problem: true });
+  }
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
   // Cheats tool and the tests.
-  const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = planHistoryConsolidation(bundle, { force });
+  const plan = planHistoryConsolidation(bundle, { force });
+  const { eventsToConsolidate, closedChats, actionsToConsolidate } = plan;
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
-  // The pass's boundary as plain JSON: what the entry records, and what a
-  // batch applier needs to be rebuilt after a reload (batchApplierFor).
-  const resume = {
-    kind: "consolidation",
-    campaignId,
-    actionIds: actionsToConsolidate.map((action) => action.id),
-    chatIds: closedChats.map((chat) => chat.id),
-    throughDate: throughEvent?.date || bundle.game.gameDate,
-    throughEventId: throughEvent?.id || "",
-    throughRound: bundle.game.round,
-    baseRevision: world.historyDocument?.revision ?? 0,
-    eventCount: eventsToConsolidate.length,
-    chatCount: closedChats.length,
-  };
+  const resume = consolidationResume(plan, bundle, { campaignId, world });
   // Whether to ask and the answer, together in a time skip's replay
   // (heldTurnReplay.js): a skip kept for its campaign and written later neither
   // asks nor spends again, and decides the same way even when a batch has been
@@ -5913,7 +6178,13 @@ const resolveRegionTransfers = async (containers, world, {
     let payload = fallback();
     let source = "fallback";
 
-    try {
+    // Inside a time skip nothing asks but the skip itself (requestBudget.js
+    // SKIP_SPENDERS). The label stays unresolved, its transfer fails safe below,
+    // and the receipt tells the model, which writes the map's own name next
+    // time, or looks it up first when function calling is on.
+    const insideSkip = Boolean(requests?.budget) && !requests.budget.allows("geography");
+    if (insideSkip) requests.budget.take("geography");
+    else try {
       const response = await runJsonTask("geographyResolver", {
         lookups: buildTaskLookups({ world }),
         fallback,
@@ -7695,10 +7966,11 @@ const applySimulationResult = async ({
   // visibly neglected; every supplemental event passes the same integrity
   // screen and the same curator. Not a quota: a quiet world may return none.
   //
-  // Not while requests are being saved. It is a second search — a whole request,
-  // and a curator pass after it — to pad a skip that came back thin, and a thin
-  // skip is still a skip: the lanes it neglected are the ones the world director
-  // selects first next turn.
+  // Not for a time skip (requestBudget.js SKIP_SPENDERS serves no repair). It
+  // is a second search — a whole request, and a curator pass after it — to pad
+  // a skip that came back thin, and a thin skip is still a skip: the lanes it
+  // neglected are the ones the world director selects first next turn.
+  const breadthRepairAllowed = !review && (!requests?.budget || requests.budget.allows("repair"));
   const searchBreadth = () => maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
@@ -7713,7 +7985,7 @@ const applySimulationResult = async ({
   // and failed (the request, or an answer that broke its rules) holds the turn
   // like any other check; one not needed, or that found nothing, has answered.
   // Through the replay first, like the curator above.
-  const breadthRepair = review ? null : await replayAnswer(replay, "breadthRepair", () => (checks
+  const breadthRepair = !breadthRepairAllowed ? null : await replayAnswer(replay, "breadthRepair", () => (checks
     ? checks.run("breadth", searchBreadth, (answer) => (answer?.failed ? "the search failed or came back unusable" : ""))
     : searchBreadth()));
   // The round's storyline records, with the repair's added. A local rather than
@@ -8533,7 +8805,9 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests, signal: projects?.signal, campaignId, replay });
+        // A folded skip did the fold itself, or planned that none was due
+        // (foldedTurnReview): no request of its own then.
+      }, { requests, signal: projects?.signal, campaignId, replay, skipFold: review?.history ?? null });
     } catch (error) {
       if (projects?.signal?.aborted) throw error;
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
@@ -8792,26 +9066,13 @@ const applySimulationResult = async ({
 
   // Spies report on the world the turn just produced. Awaited so the reports are
   // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // While requests are being saved the reports came in the time skip's own
-  // answer (foldedTurnReview; or with the turn review, when a provider refused
-  // that skip) and are only filed here; a turn with neither (a resolved
-  // interactive event, a game-master command) waits for the next skip's. With
-  // saving off, after a time skip only, each agent due a report makes its own
-  // request (refreshSpyIntercepts).
-  // The agents whose report then failed are handed back on the result: the
-  // turn is already written, so they cannot hold it, but the player is told and
-  // can ask again (time.jsx).
-  let agentReportsFailed = [];
+  // The reports came in the time skip's own answer (foldedTurnReview; or with
+  // the turn review, when a provider refused that skip) and are only filed
+  // here. A turn with neither (a resolved interactive event, a game-master
+  // command) waits for the next skip's. No agent makes a request of its own
+  // after a skip any more: with Save AI requests off each one due a report
+  // used to, a request apiece.
   if (review) await fileReviewedAgentReports(review, { campaignId });
-  else if (!savingRequests() && (result.mode === "jump" || result.mode === "auto")) {
-    agentReportsFailed = (await refreshSpyIntercepts({
-      campaignId,
-      round: Number(nextGame.round) || 0,
-      originDate: normalizeString(baseGame.gameDate),
-      signal: projects?.signal,
-      requests,
-    })).failed.map((entry) => entry.target);
-  }
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
   // And the advisor flags each new paper in its conversation.
@@ -8826,7 +9087,6 @@ const applySimulationResult = async ({
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
     // With saving off, the agents whose report failed after this turn was
     // written (time.jsx names them, with a retry).
-    agentReportsFailed,
     // False when the turn was written without a restore point (time.jsx says so).
     restorePointSaved,
     world: nextWorld,
@@ -9091,7 +9351,7 @@ const getWorldDirectorWorker = () => {
   }
 };
 
-const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8, additionalActors = []) => {
+const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8) => {
   const out = [];
   const seen = new Set();
   const push = (value) => {
@@ -9106,7 +9366,6 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   // can matter to history, but the prompt below explicitly keeps that evidence
   // separate from authority to invent a sovereign player choice.
   push(playerPolity);
-  for (const actor of normalizeArray(additionalActors)) push(actor);
 
   for (const storyline of normalizeArray(analysis?.attentionStorylines)) {
     for (const participant of normalizeArray(storyline?.participants)) push(participant);
@@ -9120,8 +9379,8 @@ const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxA
   return out;
 };
 
-const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity, additionalActors = [] }) => {
-  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8, additionalActors);
+const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity }) => {
+  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8);
   if (!actorPolities.length) return "";
 
   const set = buildBoundedPoliticalDecisionContextSet(world, {
@@ -9588,12 +9847,14 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
   // A canned fallback means the model is not answering; repair calls to the same
   // provider would only fail again after costing their wait.
   if (normalizeString(state?.generation?.source) === "fallback") return none;
-  // While requests are being saved (requestBudget.js) no repair is asked for:
-  // each is a request of its own, to move a storyline the skip left still. Every
-  // issue is settled as skipped instead, which is exactly a failed repair — its
-  // copy-forward is withdrawn below, the storyline stays overdue, and overdue
-  // storylines are what the next skip is told to move first.
-  const savingRequestsNow = Boolean(state?.requests?.saving);
+  // No repair is asked for inside a time skip (requestBudget.js SKIP_SPENDERS):
+  // each is a request of its own, to move a storyline the skip left still, and
+  // a skip is one request in every mode. Every issue is settled as skipped
+  // instead, which is exactly a failed repair — its copy-forward is withdrawn
+  // below, the storyline stays overdue, and overdue storylines are what the next
+  // skip is told to move first. What follows the skip check still runs for a
+  // budget that does serve repairs, which today is none.
+  const noRepairRequests = Boolean(state?.requests?.budget) && !state.requests.budget.allows("repair");
 
   // ONE stop date for detecting the issues, prompting the repair and validating
   // it: the merged one the round is applied at. (Detecting at one date and
@@ -9648,8 +9909,8 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
     // Over its limits the issue is treated exactly like a failed repair: the
     // storyline stays overdue for the main pass. Issues arrive in attention
     // order, so the cap keeps the most urgent ones.
-    const skipReason = savingRequestsNow
-      ? "requests are being saved"
+    const skipReason = noRepairRequests
+      ? "a time skip is one request"
       : motionRepairSkipReason(issue, { budget, failures: motionRepairFailures, campaignId, round });
     if (skipReason) {
       settledIds.add(issueId);
@@ -12074,13 +12335,12 @@ const playersAgentIn = (bundle, target) => {
     entry.owner === player && entry.target === target && (entry.status === "active" || entry.status === "turned"));
 };
 
-// `requests` is the time skip the report belongs to (createJumpRequests), so it
-// is asked of that skip's budget and counted in what the skip cost.
-export const gatherIntelligence = async (target, { signal, requestKind, requests = null, campaignId = "" } = {}) => {
+// A report asked for by itself: the trickle between turns (maybeGatherIntelligence).
+// No time skip asks this way: a skip's agents report in the skip's own answer.
+export const gatherIntelligence = async (target, { signal, requestKind, campaignId = "" } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
-  // The turn's campaign when a turn asked for the report, else the open one,
-  // stamped before the read.
+  // The campaign the caller names, else the open one, stamped before the read.
   const campaign = normalizeString(campaignId) || activeCampaignId();
   const bundle = await readGameStateBundle({ force: true });
   const spy = playersAgentIn(bundle, name);
@@ -12094,7 +12354,6 @@ export const gatherIntelligence = async (target, { signal, requestKind, requests
     userMessage: prepared.userMessage,
     variables: prepared.variables,
     ...(requestKind ? { requestKind } : {}),
-    ...jumpTaskOptions(requests, "spies"),
   });
   return storeSpyReport(bundle, spy, payload, { campaignId: campaign });
 };
@@ -12169,65 +12428,6 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
     spyReportInFlight = false;
   }
 };
-
-// With saving off, after a time skip: the agents due a report of their own
-// (agentReports.js) make one request each — not every agent after every turn,
-// which cost a player with five agents five requests a skip. On the skip's
-// signal, so Cancel stops them, and counted in what the skip cost.
-// `round` is the round the skip produced and `originDate` the date it started.
-// `campaignId`: the campaign whose turn just landed. The agents report one at a
-// time, a request each; once another campaign is open the rest stay silent
-// rather than spend requests on, and file reports into, a campaign that is not
-// theirs.
-// -> { failed: [{ target, reason }] }: the agents whose report did not come
-// back, so the player can be told and ask again (retryAgentReports). `targets`
-// limits it to those agents.
-export const refreshSpyIntercepts = async ({ campaignId = "", round = 0, originDate = "", signal = null, requests = null, targets = null } = {}) => {
-  const failed = [];
-  if (!isActiveFeatureEnabled("espionage") || !stillCampaign(campaignId)) return { failed };
-  let world;
-  let filed;
-  try {
-    world = normalizeWorldState(await readWorldState({ force: true }));
-    filed = normalizeIntercepts(await readInterceptsState({ force: true }).catch(() => ({})));
-  } catch {
-    return { failed };
-  }
-  const only = Array.isArray(targets) ? new Set(targets.map((target) => normalizeString(target).toLowerCase())) : null;
-  const player = normalizeString((await readGameData()).country);
-  const agents = activeSpies(world, player);
-  const { justPlaced, overdue } = agentsDueToReport({ agents, filed, round, originDate });
-  // Asked again by name (retryAgentReports), an agent reports whatever the
-  // calendar says: it was due when its report failed.
-  const reporting = only
-    ? agents.filter((spy) => only.has(normalizeString(spy.target).toLowerCase()))
-    : [...justPlaced, ...overdue];
-  for (const spy of reporting) {
-    if (signal?.aborted || !stillCampaign(campaignId)) return { failed };
-    try {
-      await gatherIntelligence(spy.target, { signal, requests, campaignId });
-    } catch (error) {
-      console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
-      failed.push({ target: spy.target, reason: normalizeString(error?.message) || "the request failed" });
-    }
-  }
-  return { failed };
-};
-
-// Ask again for the reports a time skip could not get (with Save AI requests
-// off, each agent asks on its own after the turn is written, so a failed one
-// cannot hold the turn). Waits for no turn: refused while one is being written,
-// since the report would describe a world the turn is about to replace.
-export const retryAgentReports = async ({ targets = [] } = {}) => {
-  if (spyReportInFlight || isSimulationBusy()) throw new Error("A turn is being written; ask the agents again once it lands.");
-  spyReportInFlight = true;
-  try {
-    return await refreshSpyIntercepts({ targets });
-  } finally {
-    spyReportInFlight = false;
-  }
-};
-
 
 // ---- First readings -------------------------------------------------------
 //
@@ -13384,11 +13584,6 @@ export const runChatActionBatch = async ({
   budget = null,
   spender = "",
   onRequest = null,
-  // Developer Political World A/B lab. A frozen bundle keeps both arms on the
-  // exact same campaign snapshot; only the explicit Political Decision Context
-  // projection may be omitted/overridden. dryRun keeps formal Council actions
-  // inside an in-memory governance application and never persists them.
-  evaluation = null,
   // The campaign this round belongs to. The institution commits below carry
   // it, so the store refuses them if the player switched saves while the model
   // was answering. Read here, before the model call, when not given: game.json
@@ -13400,15 +13595,10 @@ export const runChatActionBatch = async ({
   // post-turn autonomous ballot is different: it is world simulation and must
   // see the just-committed canonical proposal/ballot state even before the
   // timeline reveal has finished animating.
-  const frozenBundle = evaluation?.bundleOverride && typeof evaluation.bundleOverride === "object"
-    ? evaluation.bundleOverride
-    : null;
-  const readBundle = frozenBundle || (useCanonicalState
+  const readBundle = useCanonicalState
     ? await readGameStateBundle({ force: true })
-    : await readSeenGameStateBundle({ force: true }));
-  const bundle = frozenBundle
-    ? { ...readBundle, savedGame: readBundle.savedGame || readBundle.game, unseen: readBundle.unseen ?? new Set() }
-    : useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
+    : await readSeenGameStateBundle({ force: true });
+  const bundle = useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
   const unseen = bundle.unseen ?? new Set();
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
@@ -13558,9 +13748,8 @@ export const runChatActionBatch = async ({
     ...otherPeople.map((name) => `- ${name} — HUMAN-controlled (another player): never speak or act for it; it answers for itself`),
   ].join("\n");
 
-  const politicalContextWorld = evaluation?.politicalWorldOverride || bundle.world;
   const focusInstitution = stored.institutionId
-    ? resolveInstitutionRecord(politicalContextWorld, stored.institutionId)
+    ? resolveInstitutionRecord(bundle.world, stored.institutionId)
     : null;
   const focusProposal = normalizeString(institutionProposalId)
     ? Object.values(focusInstitution?.proposals || {}).find((proposal) => regionKey(proposal?.id) === regionKey(institutionProposalId)) || null
@@ -13573,17 +13762,9 @@ export const runChatActionBatch = async ({
     normalizeString(autonomousBallotWork?.proposalTitle),
     lifecycleResponseRequested ? normalizeString(institutionLifecyclePrompt) : "",
   ].filter(Boolean).join("\n");
-  const evaluationPriorityActors = normalizeArray(evaluation?.additionalPoliticalActors)
-    .map(normalizeString)
-    .filter((name) => name && aiParticipants.some((participant) => regionKey(participant) === regionKey(name)));
-  const politicalActorOrder = evaluation
-    ? [...evaluationPriorityActors, ...aiParticipants]
-      .filter((name, index, rows) => rows.findIndex((candidate) => regionKey(candidate) === regionKey(name)) === index)
-    : aiParticipants;
   const politicalContextOptions = {
     // Keep the normal one-request group-diplomacy projection byte-for-byte on
-    // the established participant order. Evaluation may override only the actor
-    // ordering so a selected sensitivity actor survives the bounded Council set.
+    // the established participant order.
     actorPolities: aiParticipants,
     counterpartByActor: Object.fromEntries(aiParticipants.map((name) => [name, player])),
     maxActors: formalBusinessRequested ? 32 : 6,
@@ -13595,21 +13776,11 @@ export const runChatActionBatch = async ({
       pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
       perceptions: 3, relations: 2, agreements: 2, wars: 2, institutions: 6,
     },
-    ...(evaluation ? {
-      actorPolities: politicalActorOrder,
-      counterpartByActor: Object.fromEntries(politicalActorOrder.map((name) => [name, player])),
-    } : {}),
   };
-  const politicalDecisionSet = evaluation?.politicalContextMode === "omit"
-    ? { text: "" }
-    : buildBoundedPoliticalDecisionContextSet(politicalContextWorld, politicalContextOptions);
+  const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, politicalContextOptions);
   const politicalDecisionPrompt = politicalDecisionSet.text
     ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
     : "";
-  if (evaluation?.capture && typeof evaluation.capture === "object") {
-    evaluation.capture.politicalContextText = politicalDecisionPrompt;
-    evaluation.capture.aiParticipants = [...aiParticipants];
-  }
 
   // Each AI participant also sees only the documents its own government can read.
   // One-request group diplomacy contains several governments in one model call,
@@ -13650,7 +13821,6 @@ export const runChatActionBatch = async ({
     signal,
     userMessage: [
       normalizeString(catchUp),
-      normalizeString(evaluation?.sharedDirective),
       playerMessage
         ? `${player} has just said: ${playerMessage}`
         : formalBusinessRequested && autonomousBallotWork
@@ -13686,8 +13856,6 @@ export const runChatActionBatch = async ({
     ...(requestKind ? { requestKind } : {}),
     ...(budget ? { budget, spender: spender || "institutionBallots" } : {}),
     ...(typeof onRequest === "function" ? { onRequest } : {}),
-    ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-    ...(evaluation?.capture ? { capture: evaluation.capture.task || (evaluation.capture.task = {}) } : {}),
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
@@ -13726,33 +13894,19 @@ export const runChatActionBatch = async ({
   let formalRejected = [];
   let lifecycleRejected = [];
   if (stored.institutionId && !lifecycleGovernanceThread) {
-    committedInstitution = evaluation?.dryRun
-      ? applyInstitutionalChatGovernanceBatch({
-        world: bundle.world,
-        chats: bundle.chats,
-        events: bundle.events,
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-      })
-      : await commitInstitutionalChatGovernanceBatch({
-        institutionId: stored.institutionId,
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        formalActions: partitioned.formal,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
+    committedInstitution = await commitInstitutionalChatGovernanceBatch({
+      institutionId: stored.institutionId,
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      formalActions: partitioned.formal,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     // An AI sponsor's submit refused only for want of a charter voting rule
     // gets the one-time rule backfill and one more try
-    // (institutionGovernanceRetry.js). Never in an evaluation's dry run.
-    const stalledSubmit = evaluation?.dryRun
-      ? null
-      : normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
+    // (institutionGovernanceRetry.js).
+    const stalledSubmit = normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
     if (stalledSubmit?.command) {
       const expectedGameId = normalizeString(bundle.game?.id || bundle.game?.gameId);
       try {
@@ -13777,49 +13931,17 @@ export const runChatActionBatch = async ({
     }
     formalRejected = committedInstitution.rejected || [];
   } else if (stored.lifecycleInstitutionId && lifecycleActions.length) {
-    if (evaluation?.dryRun) {
-      // Evaluation must remain observational even if a future caller points it at
-      // an invitation/accession negotiation. Mirror the lifecycle commit's pure
-      // core application on scratch state rather than touching canonical storage.
-      const scratchChats = normalizeChats(bundle.chats).map((entry) => {
-        if (normalizeString(entry?.id) !== normalizeString(stored.id)) return entry;
-        return normalizeChatEntry({
-          ...entry,
-          lifecycleInstitutionId: stored.lifecycleInstitutionId,
-          lifecycleCaseIds: stored.lifecycleCaseIds || [],
-          events: [...normalizeArray(entry?.events), ...outcome.events],
-        }) || entry;
-      });
-      const scratchLifecycle = applyInstitutionLifecycleChatBatchCore({
-        world: bundle.world,
-        chats: scratchChats,
-        events: normalizeEvents(bundle.events),
-        playerCountry: player,
-        date: turnTime,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleActions,
-      });
-      const scratchWorld = nextCursors && typeof nextCursors === "object" && Object.keys(nextCursors).length
-        ? { ...scratchLifecycle.world, chatKnowledgeCursors: { ...(scratchLifecycle.world?.chatKnowledgeCursors || {}), ...nextCursors } }
-        : scratchLifecycle.world;
-      committedLifecycle = {
-        ...scratchLifecycle,
-        world: scratchWorld,
-        channel: normalizeChats(scratchLifecycle.chats).find((entry) => normalizeString(entry?.id) === normalizeString(stored.id)) || null,
-      };
-    } else {
-      committedLifecycle = await commitInstitutionLifecycleChatBatch({
-        chatId: stored.id,
-        institutionId: stored.lifecycleInstitutionId,
-        lifecycleCaseIds: stored.lifecycleCaseIds || [],
-        playerCountry: player,
-        date: turnTime,
-        chatEvents: outcome.events,
-        lifecycleActions,
-        cursors: nextCursors,
-        expectedGameId: campaign,
-      });
-    }
+    committedLifecycle = await commitInstitutionLifecycleChatBatch({
+      chatId: stored.id,
+      institutionId: stored.lifecycleInstitutionId,
+      lifecycleCaseIds: stored.lifecycleCaseIds || [],
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      lifecycleActions,
+      cursors: nextCursors,
+      expectedGameId: campaign,
+    });
     lifecycleRejected = committedLifecycle.rejected || [];
   }
 
@@ -14280,8 +14402,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
       ...bundle.world,
       activeInteractive: null,
     },
-    // The Board moves with a Scene too: from the review's answer when one request
-    // asked everything, otherwise by its own request, as after a jump.
+    // The Board moves with a Scene too, from the review's answer.
     projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
     result: {
       clearActions: false,
@@ -14307,13 +14428,11 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
 };
 
 // The checks a Scene outcome goes through: units, territory, Structures and the
-// Board — never the timeline, agent reports or order attribution. While requests
-// are being saved they are ONE review request, and none when nothing in the Scene
-// qualifies; otherwise each check that has something to look at makes its own,
-// as after a jump. A check that fails leaves the Scene outcome as written.
+// Board — never the timeline, agent reports or order attribution. They are ONE
+// review request, whatever "Save AI requests" says, and none when nothing in
+// the Scene qualifies. A review that fails leaves the Scene outcome as written.
 const SCENE_REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "board"]);
 const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
-  const saving = savingRequests();
   // Approximate placements are told to the model like a jump's. The last jump's
   // notes are carried over, because only the newest entry in the history keeps
   // its notes; the receipt is written only when this Scene added one.
@@ -14323,43 +14442,32 @@ const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
   const carried = receipt.notes.length;
   const merged = { events: [outcome], stopDate: normalizeString(bundle.game?.gameDate), clearActions: false };
   let review = null;
-  if (saving) {
-    try {
-      review = await runTurnReview({
-        context: { bundle, mode: "interactive", targetDate: merged.stopDate },
-        merged,
-        signal: null,
-        state: { requests: null, generation, hiddenEvents: [] },
-        sections: SCENE_REVIEW_SECTIONS,
-      });
-    } catch (error) {
-      logDebugEvent("turn", "Scene outcome: the map check failed; the Scene stands as written.", error, { problem: true });
-      return null;
-    }
+  try {
+    review = await runTurnReview({
+      context: { bundle, mode: "interactive", targetDate: merged.stopDate },
+      merged,
+      signal: null,
+      state: { requests: null, generation, hiddenEvents: [] },
+      sections: SCENE_REVIEW_SECTIONS,
+    });
+  } catch (error) {
+    logDebugEvent("turn", "Scene outcome: the map check failed; the Scene stands as written.", error, { problem: true });
+    return null;
   }
   const { events, structureLinks } = await applyMapConsequences({
     events: merged.events,
     world: bundle.world,
     game: bundle.game,
     playerCountry: normalizeString(bundle.game?.country),
-    analyze: directorAnalyzers({ bundle, review, signal: null, requests: null, gameDate: merged.stopDate, sections: SCENE_REVIEW_SECTIONS, receipt }),
-    findPlaces: review ? null : placeReaderFor(bundle),
+    analyze: directorAnalyzers({ bundle, review, sections: SCENE_REVIEW_SECTIONS, receipt }),
+    // No places to look up: no Director asks (the review was handed them).
+    findPlaces: null,
     resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: null }),
   });
-  // The Board moves only when the Scene concerns an entry on it: from the review's
-  // part while saving, otherwise by its own request only then — a Scene that
-  // touches nothing on the Board costs nothing for it. The calendar never asks
-  // after a Scene; that is a jump's.
-  const board = saving
-    ? Boolean(review?.parts?.board)
-    : boardPassReasons({
-      board: normalizeArray(bundle.world?.projects),
-      events,
-      gameDate: merged.stopDate,
-      round: Math.max(1, Number(bundle.game?.round) || 0),
-      reviewedRound: Math.max(1, Number(bundle.game?.round) || 0),
-      playerCountry: normalizeString(bundle.game?.country),
-    }).length > 0;
+  // The Board moves only when the review answered for it, which it is asked to
+  // only when the Scene concerns an entry on it. The calendar never asks after
+  // a Scene; that is a jump's.
+  const board = Boolean(review?.parts?.board);
   return { events, structureLinks, review: review ?? null, board, receipt: receipt.notes.length > carried ? receipt : null };
 };
 
@@ -14566,17 +14674,28 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 
 // ---- The folded time skip -------------------------------------------------------
 //
-// While requests are being saved (the default) a skip is ONE request. Until
-// 2026-10 it was two on most turns: the skip, and a "turn review" that read its
-// events back and asked for the units they moved, the fronts, the structures,
-// the repeats, the Projects board and the agents' reports (runTurnReview). The
-// review existed because the simulator narrated a town falling and wrote no op
-// for it. The answer to that is a prompt that says so, not a second request to
-// catch it: now each event carries every consequence itself
-// (FOLDED_SKIP_CONSEQUENCES), the board among them (projectsDirective.js), and
-// the agents' reports ride at the end of the same answer. That is also what lets
-// a skip be shown event by event as it is written: an event that arrives is
-// finished, map and all.
+// A skip is ONE request, whatever the settings. Until 2026-10 it was two on
+// most turns while requests were being saved (the skip, and a "turn review"
+// that read its events back and asked for the units they moved, the fronts, the
+// structures, the repeats, the Projects board and the agents' reports,
+// runTurnReview), and with saving off it was a request for each of those, and
+// for each agent: twenty or more. The checks existed because the simulator
+// narrated a town falling and wrote no op for it. The answer to that is a
+// prompt that says so, not more requests to catch it: now each event carries
+// every consequence itself (FOLDED_SKIP_CONSEQUENCES), the board among them
+// (projectsDirective.js), and the agents' reports ride at the end of the same
+// answer, with the history document's fold after them when one is due
+// (prepareSkipHistoryFold). That is also what lets a skip be shown event by
+// event as it is written: an event that arrives is finished, map and all.
+//
+// What can still make a skip more than one request (requestBudget.js
+// SKIP_SPENDERS), never past the cap of three:
+//   - function calling, with Save AI requests off and the lookup functions on:
+//     a round of questions is a request, and a skip may ask two;
+//   - an answer that could not be used at all is asked for once more;
+//   - a provider that refuses the folded request (below);
+//   - two things a player switches on: the automatic Stats refresh, and NPC
+//     votes in an institution, on the skips where they fall due.
 //
 // What the review's parts became:
 //   units, territory, structures   the event's own unitOps, regionControlOps,
@@ -14589,24 +14708,22 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 //   the Projects board             impacts.projectOps, lifted off the events
 //                                  and applied by the board's own machinery
 //                                  (foldedTurnReview);
-//   the agents' reports            the answer's agentReports.
-//
-// With saving off the checks are still requests of their own, every one of them
-// always (the switches that turned them off one by one are gone), and the skip
-// is sent the contract it always was.
+//   the agents' reports            the answer's agentReports;
+//   folding old history            the answer's history, a fenced job of its
+//                                  own in the prompt.
 //
 // The folded contract is larger than the one it replaces, and a provider can
 // refuse a function declaration for its size alone (geminiSchema.js). So a
 // folded request that a provider refuses outright is asked again the old way,
-// with the review after it, and the rest of the session's skips are asked that
-// way from the start. A player loses nothing but the saving.
+// with the review after it as ONE request, and the rest of the session's skips
+// are asked that way from the start. A player loses nothing but a request.
 let foldedSkipRefused = false;
 
 // What a folded skip carries besides its events, gathered once before its first
-// request: the doubted board entries a fresh agent can now settle, and the
-// agents whose reports ride on it, each with the brief its own request would
-// have carried. Nothing here costs a request.
-const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
+// request: the doubted board entries a fresh agent can now settle, the agents
+// whose reports ride on it, each with the brief its own request would have
+// carried, and the history fold when one is due. Nothing here costs a request.
+const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) => {
   const world = normalizeWorldState(bundle.world);
   const playerCountry = normalizeString(bundle.game?.country);
   // The skip keeps the board exactly when it is shown one: an empty board has
@@ -14639,12 +14756,22 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
       console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
     }
   }
+  // The fold of the history document, when one is due (prepareSkipHistoryFold).
+  // A fold that cannot be prepared is one the skip does not carry: the pass
+  // after the skip then decides, as it does for any skip that is not folded.
+  let history = { separate: true };
+  try {
+    history = await prepareSkipHistoryFold(bundle, { campaignId });
+  } catch (error) {
+    console.warn("[ai] the history fold could not be prepared for this skip; it is left to the pass after it.", error?.message || error);
+  }
   return {
     board: boardShown,
     boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
     agentJobs,
     // What the unit and structure directors would have been told (regionTypesBlock).
     regionTypeRules: await regionTypeRulesFor(bundle.world).catch(() => ""),
+    history,
   };
 };
 
@@ -14666,14 +14793,30 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
 const foldedTurnReview = ({ context, merged, state }) => {
   const { bundle } = context;
   const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
+  // The history fold (compactHistoryIfNeeded reads this as `skipFold`). Nothing
+  // due before the skip means nothing is folded after it either. A fold this
+  // skip did not carry (`separate`) is the pass after it's own business, so the
+  // record says nothing about it.
+  const fold = state.foldedPrep?.history ?? null;
+  if (!fold?.separate) review.history = { due: false };
   const rawEvents = normalizeArray(merged.events);
   const rawHidden = normalizeArray(state.hiddenEvents);
   const eventOps = rawEvents.map(boardOpsOf);
   const hiddenOps = rawHidden.map(boardOpsOf);
   merged.events = rawEvents.map(withoutBoardOps);
   state.hiddenEvents = rawHidden.map(withoutBoardOps);
-  // A canned turn carries nothing of the model's: the board is not looked at.
+  // A canned turn carries nothing of the model's: the board is not looked at,
+  // and no history is folded (or asked for: the model is not answering).
   if (normalizeString(state.generation?.source) === "fallback") return review;
+
+  if (fold && !fold.separate) {
+    review.history = {
+      due: true,
+      resume: fold.resume,
+      baseRevision: fold.baseRevision,
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText }),
+    };
+  }
 
   const priorEvents = normalizeEvents(bundle.events);
   // The candidates as reviewCandidateEvents builds them, each still knowing
@@ -14734,12 +14877,12 @@ const foldedTurnReview = ({ context, merged, state }) => {
     boardKept: Boolean(review.parts.board),
     agentReports: review.agentReports.length,
     agentsAsked: jobs.length,
+    history: !review.history ? "left to the pass after the skip" : !review.history.due ? "not due" : review.history.ok ? "folded" : `waits (${review.history.reason})`,
   }, { verbose: true });
   return review;
 };
 
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
-  const evaluation = context?.evaluation && typeof context.evaluation === "object" ? context.evaluation : null;
   const {
     bundle,
     dateStep,
@@ -14797,12 +14940,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // that heard them no longer happened. Empty when nobody touched the world.
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
 
-  // Whether this skip is the folded one (see "The folded time skip" above).
-  // Decided once, when the skip starts, and kept through a held segment's retry:
-  // the segments already in hand were written under it. The lab's A/B runs are
-  // never folded, since they compare the skip's own contract.
-  if (state.folded === undefined) state.folded = Boolean(state.requests?.saving) && !evaluation && !foldedSkipRefused;
-  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables });
+  // Whether this skip is the folded one (see "The folded time skip" above):
+  // every skip is, with Save AI requests on or off, unless a provider has
+  // refused the folded request this session. Decided once, when the skip starts,
+  // and kept through a held segment's retry: the segments already in hand were
+  // written under it.
+  if (state.folded === undefined) state.folded = !foldedSkipRefused;
+  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
   let segmentIndex = state.nextSegment;
@@ -14880,20 +15024,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
         `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
       );
-      const politicalDecisionContext = evaluation?.politicalContextMode === "omit"
-        ? ""
-        : buildWorldInitiativePoliticalDecisionContext({
-          world: evaluation?.politicalWorldOverride || ledgerWorld,
-          analysis: worldInitiative.analysis,
-          playerPolity: normalizeString(bundle.game?.country),
-          additionalActors: evaluation?.additionalPoliticalActors || [],
-        });
-      let evaluationSegmentCapture = null;
-      if (evaluation?.capture && typeof evaluation.capture === "object") {
-        if (!Array.isArray(evaluation.capture.segments)) evaluation.capture.segments = [];
-        evaluationSegmentCapture = { segmentIndex, politicalContextText: politicalDecisionContext };
-        evaluation.capture.segments.push(evaluationSegmentCapture);
-      }
+      const politicalDecisionContext = buildWorldInitiativePoliticalDecisionContext({
+        world: ledgerWorld,
+        analysis: worldInitiative.analysis,
+        playerPolity: normalizeString(bundle.game?.country),
+      });
       // What the player has going on across THIS segment's window, and the
       // block that tells the simulator about it (playerFocus.js). Written with
       // the code-appended directives, where an author's guidance cannot reach it.
@@ -14939,11 +15074,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // agents report once, at the end of the last segment, when every event
       // they have to agree with is written.
       const agentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
+      // So does the history fold, when one is due and this skip carries it
+      // (prepareSkipHistoryFold): last of all, as a job of its own.
+      const historyJob = state.folded && isFinalSegment ? buildSkipHistoryJob(state.foldedPrep?.history?.brief) : "";
       const foldedVariables = {
         foldedSkip: true,
         foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
         foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
         foldedRegionTypeRules: normalizeString(state.foldedPrep?.regionTypeRules),
+        foldedHistoryJob: historyJob,
       };
       // Every provider response this segment causes, so a contract the provider
       // would not take can be told from an answer that was simply no good.
@@ -14951,20 +15090,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const statuses = [];
 
       const askSegment = (folded) => runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+        // Function calling, when the player has it on (lookupFunctionsEnabled):
+        // the only thing that makes a skip more than one request, and bounded
+        // by the skip's budget (runJsonTask).
         lookups: buildTaskLookups(segmentBundle),
         // The skip itself always runs; asking again is what the budget weighs.
         ...spend,
+        // One request in every mode: a flaw is cut out or repaired in place,
+        // never sent back to be redone (requestBudget.js).
+        salvage: true,
         onRequest: (status) => {
           statuses.push(Number(status));
           spend.onRequest?.(status);
         },
-        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0 }) } : {}),
-        ...(evaluation?.forceEntryId ? { forceEntryId: evaluation.forceEntryId } : {}),
-        ...(evaluationSegmentCapture ? { capture: evaluationSegmentCapture.task || (evaluationSegmentCapture.task = {}) } : {}),
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0, history: Boolean(historyJob) }) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
+        ...(context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
@@ -14973,7 +15116,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, normalizeString(evaluation?.sharedDirective), politicalDecisionContext,
+        userMessage: [lastTurnReceipt, gmChangeNarration, politicalDecisionContext,
           // What failed for the player, on a retry from a turn held on it
           // (playerTurnFailures.js): the whole skip again, or only those events.
           normalizeString(context.retryDirective),
@@ -15189,14 +15332,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (state.folded) {
         let refused = false;
         let refusal = null;
+        // A call that ended on the connection (the server could not be reached,
+        // or closed while the answer was arriving) is no refusal, whatever
+        // statuses came before it: the task runner says which it was
+        // (`transportFailure`), and the turn fails the way any skip does.
         try {
           answer = await askSegment(true);
-          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses);
+          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses, { transportFailure: answer.transportFailure === true });
         } catch (error) {
           // A request too large for every model the player has is the same
           // case: the folded one is the larger of the two.
           const tooBig = error?.providerFailure?.kind === "tooBig";
-          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses))) throw error;
+          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses, { transportFailure: error?.transportFailure === true }))) throw error;
           refused = true;
           refusal = error;
         }
@@ -15229,6 +15376,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       if (payload && typeof payload === "object" && AGENT_REPORTS_FIELD in payload) {
         if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
         delete payload[AGENT_REPORTS_FIELD];
+      }
+      // And the history fold, the same way (judged in foldedTurnReview).
+      if (payload && typeof payload === "object" && HISTORY_FIELD in payload) {
+        if (state.folded && historyJob && segmentGeneration?.source !== "fallback") state.foldedHistoryAnswer = payload[HISTORY_FIELD];
+        delete payload[HISTORY_FIELD];
       }
 
       // Resolve a dated trigger only after this segment has actually been
@@ -15328,9 +15480,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   } catch (error) {
     // A deliberate cancel must still cancel.
     if (signal?.aborted || error?.name === "AbortError") throw error;
-    // A/B evaluation is observational. Never replace a failed arm with canned
-    // history and never create resumable pending-jump state in the live game.
-    if (evaluation) throw error;
     const reason = normalizeString(error?.message) || `AI task "jumpForward" failed.`;
 
     // A retry of the player's failed events adds to a period already written:
@@ -15413,20 +15562,27 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // for the whole skip, never per segment; a failed repair leaves it overdue.
   // Outside the try on purpose: nothing here may hold the turn as a failed
   // segment, and a repair never throws except on the player's Cancel.
-  if (!evaluation) await repairSkipStorylineMotion({ context, state, signal });
+  await repairSkipStorylineMotion({ context, state, signal });
 };
 
 // ---- What a time skip spends ---------------------------------------------------
 //
 // Every request a skip makes is asked of the skip's budget first and counted on
-// the way back (requestBudget.js). While requests are being saved the budget is
-// real — one request where it can be, never more than the cap — and the checks
-// after the skip go out together as the turn review below. With saving switched
-// off the budget grants everything, and the skip runs exactly as it always did.
+// the way back (requestBudget.js). The budget is real in every mode: ONE
+// request, the skip itself; more only for what SKIP_SPENDERS names, function
+// calling first among it; never past the cap. Save AI requests decides whether
+// the model may look things up at all (lookupFunctionsEnabled), not how many
+// requests a skip's checks are: there are none of those any more.
+//
+// Each segment's own request is reserved before anything else can ask, so a
+// round of function calling or a retry in one segment never costs a later
+// segment its skip.
 const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false } = {}) => {
   const saving = savingRequests();
-  const budget = createJumpBudget({ cap: jumpRequestCap({ segments }), unlimited: !saving });
-  if (saving && reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
+  const pieces = Math.max(1, Math.round(Number(segments) || 1));
+  const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces }), only: SKIP_SPENDERS });
+  budget.reserve("jump", pieces);
+  if (reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
   return {
     saving,
     budget,
@@ -15451,9 +15607,13 @@ const reportJumpRequests = (requests) => {
     requestLedger.noteJump({ used: requests.used, refused: requests.refused });
   } catch { /* a count is never worth a turn */ }
   const skipped = requests.budget.skipped;
+  // What a skip never spends a request on (requestBudget.js SKIP_SPENDERS), and
+  // would have been asked for here before a skip was one request.
+  const denied = [...new Set(requests.budget.denied ?? [])];
   logDebugEvent("turn", `This time skip used ${requests.used} request${requests.used === 1 ? "" : "s"}`
     + `${requests.refused ? ` (and was refused ${requests.refused} time${requests.refused === 1 ? "" : "s"} by a rate limit)` : ""}`
-    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}.`, {
+    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}`
+    + `${denied.length ? `; not asked, because a skip makes no request for it: ${denied.join(", ")}` : ""}.`, {
     saving: requests.saving,
     spends: requests.budget.log,
   });
@@ -15465,14 +15625,15 @@ const reportJumpRequests = (requests) => {
 // timeline, the Projects board, the agents' reports — as ONE request instead of
 // one each (turnReview.js says how several jobs share a prompt safely).
 //
-// No longer what a skip normally does. While requests are being saved a skip is
-// folded: its events carry their own consequences and nothing is asked after it
-// (see "The folded time skip"). This is what is left for the one case where
-// that cannot be: a provider that refused the folded request, whose skip was
-// asked again the way it always was and is checked here. With saving off each
-// check makes its own request, as before. Every check always runs: the six
-// switches that turned them off one by one are gone (2026-10), since a check
-// left off only ever meant a map that did not match the story.
+// No longer what a skip normally does. A skip is folded, in every mode: its
+// events carry their own consequences and nothing is asked after it (see "The
+// folded time skip"). This is what is left for the one case where that cannot
+// be: a provider that refused the folded request, whose skip was asked again
+// the way it always was and is checked here, in one request. Every check that
+// has something to look at rides on it: the six switches that turned them off
+// one by one are gone (2026-10), since a check left off only ever meant a map
+// that did not match the story, and so is the mode in which each was a request
+// of its own.
 //
 // Nothing here decides what a check DOES. Each job is built from the input its
 // own native director would have sent (buildUnitDirectorInput and the rest), its
@@ -15622,48 +15783,31 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
 };
 
 // How each Director is answered, for mapConsequences.js: from the turn review's
-// part when one request already asked everything (`review`), otherwise by a
-// request of its own. Each analyser is handed the events as they stand when its
-// Director runs, since an answer is placed against those, and approximate
-// placements are noted on `receipt` for the next turn. `sections` is a Scene's
-// list of checks, each also subject to its setting; a jump passes none and runs
-// the unit and territory Directors whatever the settings, as it always has.
-const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = null, gameDate = "", sections = null, receipt = null }) => {
+// part, the one request that asked everything. A Director the review holds no
+// part for adds nothing, which is its ordinary "no analyst"; none asks a request
+// of its own, after a time skip or after a Scene. Each analyser is handed the
+// events as they stand when its Director runs, since an answer is placed
+// against those, and approximate placements are noted on `receipt` for the next
+// turn. `sections` is a Scene's list of checks; a jump passes none and runs the
+// unit and territory Directors as it always has.
+const directorAnalyzers = ({ bundle, review, sections = null, receipt = null }) => {
   const runs = (key) => !sections || sections.includes(key);
-  const requestDirector = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
-    lookups: buildTaskLookups(bundle),
-    fallback,
-    signal,
-    userMessage,
-    variables,
-    ...jumpTaskOptions(requests, "review"),
-  });
-  // Through the turn's checks when a time skip has them (turnChecks.js): a
-  // director that fell back holds the turn instead of leaving its changes out.
-  const askAsCheck = (key, taskKey, fallback, userMessage, variables) => (checks
-    ? checks.run(key, () => requestDirector(taskKey, fallback, userMessage, variables), fellBack)
-    : requestDirector(taskKey, fallback, userMessage, variables));
 
   const units = !runs("units") ? null : async (input, events) => {
-    const answer = review
-      ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
-      : await askAsCheck("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game, await regionTypeRulesFor(bundle.world)));
+    const answer = { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } };
     await raiseMissingCombatants(answer, input, bundle);
-    await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
+    await placeDirectorOrders(answer.payload, bundle.world, events, receipt);
     return answer;
   };
 
-  const territory = !runs("territory") ? null : async (input) => (review
-    ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
-    : askAsCheck("territory", "territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+  const territory = !runs("territory") ? null : async () => ({
+    payload: review.parts.territory ?? territoryDirectorUnavailable(),
+    generation: { source: review.parts.territory ? "ai" : "fallback" },
+  });
 
-  const structures = !runs("structures") ? null : async (input, events) => {
-    const answer = review
-      ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
-      : await askAsCheck("structures", "structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
-        structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }, await regionTypeRulesFor(bundle.world)));
-    return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
-  };
+  const structures = !runs("structures") ? null : async (input, events) => ({
+    payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, events, receipt),
+  });
 
   return { units, territory, structures };
 };
@@ -15872,8 +16016,8 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
     //   - its report is AGENT_REPORT_EVERY_ROUNDS rounds old, and this is one of
     //     the rounds reports are collected on.
     // Every other skip it simply rides along when something else asks.
-    // The calendar is agentReports.js's, shared with the reports made with
-    // saving off.
+    // The calendar is agentReports.js's, which a folded skip's agents keep to
+    // as well (agentsReportingWithSkip).
     const filed = normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})));
     const { justPlaced, overdue } = agentsDueToReport({
       agents,
@@ -16044,69 +16188,6 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
   return review;
 };
 
-// With request-saving OFF the legacy directors still make their own calls, so
-// there is no combined turn-review request to piggyback on. Outcome attribution
-// gets one bounded request of its own only when a current order lacks a citation
-// and there are retained candidate events that might answer it. Failure is
-// deliberately fail-open: settleOrders will keep the order overdue.
-const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state }) => {
-  if (normalizeString(state.generation?.source) === "fallback") return null;
-  const candidates = reviewCandidateEvents(merged, context.bundle, state.generation);
-  const plan = merged.clearActions === false
-    ? null
-    : buildActionOutcomeAssociationPlan({ actions: context.bundle.actions, events: candidates });
-  if (!plan) return null;
-  if (!state.requests?.budget?.take("review")) return { plan, answer: null };
-
-  const tool = {
-    name: ACTION_OUTCOME_ASSOCIATION_TOOL,
-    description: "Link current queued player orders to the retained candidate events that genuinely give them an outcome.",
-    schema: ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-  };
-  const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort(signal.reason);
-    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  }
-  const idleMs = taskIdleTimeoutMs();
-  const idle = createIdleDeadline(
-    { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
-    () => controller.abort(new Error("Queued-order outcome attribution timed out: the model stopped answering.")),
-  );
-  state.phases?.enter("checking", { label: "queued order outcomes" });
-  logDebugEvent("turn", `Queued-order outcome attribution: ${plan.pendingActions.length} order(s), ${plan.candidates.length} candidate event(s).`, undefined, { verbose: true });
-
-  try {
-    idle.start();
-    const response = await callAI(plan.prompt, [{
-      role: "user",
-      parts: [{ text: `Check the exact queued orders against the numbered candidate events and call ${tool.name} once.` }],
-    }], {
-      deadline: idle.deadline,
-      onActivity: idle.note,
-      signal: controller.signal,
-      tool,
-      logLabel: `task "${TURN_REVIEW_TASK}:actions"`,
-      taskKey: TURN_REVIEW_TASK,
-      __debug: { taskKey: TURN_REVIEW_TASK, attempt: 1, maxAttempts: 1, simulatedDays: null },
-      onRequest: jumpTaskOptions(state.requests, "review").onRequest,
-    });
-    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
-    const raw = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool.name);
-    const normalized = normalizeActionOutcomeAssociationAnswer(raw, plan);
-    if (normalized.removed) {
-      logDebugEvent("turn", `Queued-order outcome attribution ignored ${normalized.removed} invalid association(s).`, undefined, { verbose: true });
-    }
-    return { plan, answer: { associations: normalized.associations } };
-  } catch (error) {
-    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
-    logDebugEvent("turn", "Queued-order outcome attribution failed; unanswered orders remain queued.", error, { problem: true });
-    return { plan, answer: null, failed: error?.message || "the request failed" };
-  } finally {
-    idle.cancel();
-  }
-};
-
 // The agents' reports the review carried, filed once the turn is written — and
 // only for agents who are still in place after it: one caught this turn did not
 // get a report out.
@@ -16145,14 +16226,14 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
 
-  // While requests are being saved the skip was ONE request and its events
-  // carried their own consequences (see "The folded time skip"): the review is
-  // read off the skip's own answer, with no request. Each director below then
-  // runs exactly as it always has, on a review that holds no part for it, which
-  // is its ordinary "nothing to add". Only a skip whose folded request the
-  // provider refused still asks for a review here (runTurnReview). `review` is
-  // null when saving is off, and each check makes its own request as before.
-  const folded = Boolean(state.folded && state.requests?.saving);
+  // The skip was ONE request and its events carried their own consequences
+  // (see "The folded time skip"): the review is read off the skip's own answer,
+  // with no request. Each director below then runs exactly as it always has, on
+  // a review that holds no part for it, which is its ordinary "nothing to add".
+  // Only a skip whose folded request the provider refused still asks for a
+  // review here, as one request (runTurnReview). There is always a review
+  // record: no check after a skip is a request of its own any more.
+  const folded = Boolean(state.folded);
   if (!folded) {
     // Not this skip's to write: the board is moved by its own pass, and an op
     // left on an event would be applied a second time by the event itself.
@@ -16192,10 +16273,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   if (hostingSharedGame()) checks.accept();
   // A folded skip's review makes no request, so it is not one of the checks:
   // nothing in it can fail, hold the turn or be asked again. The review a
-  // refused folded skip still asks for is one, like every other request here.
-  const review = state.requests?.saving
-    ? (folded ? foldedTurnReview({ context, merged, state }) : await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure, { copy: copyReviewParts }))
-    : null;
+  // refused folded skip still asks for is one. There is always a review
+  // record: no check after a skip is a request of its own any more.
+  const review = folded
+    ? foldedTurnReview({ context, merged, state })
+    : await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure, { copy: copyReviewParts });
   // Held here rather than at the write when the one request is what failed:
   // nothing after it has anything to go on.
   if (checksHoldTurn(checks)) {
@@ -16204,17 +16286,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 
   // A current order whose outcome event omitted actionIds gets one bounded
-  // semantic association pass. Saving mode piggybacks on the combined review;
-  // legacy/non-saving mode asks only when needed. Native application accepts
-  // exact ids/indexes only, then the normal curator sees the repaired actionIds
-  // and protects a genuine order outcome from filler removal.
-  const standaloneActionReview = review ? null : await checks.run(
-    "actions",
-    () => runStandaloneActionOutcomeReview({ context, merged, signal, state }),
-    (answer) => answer?.failed || "",
-  );
-  const actionPlan = review?.actionOutcomePlan ?? standaloneActionReview?.plan ?? null;
-  const actionAnswer = review?.parts?.actions ?? standaloneActionReview?.answer ?? null;
+  // semantic association pass, as a job of the combined review when there is
+  // one (a folded skip's events cite their own orders). Native application
+  // accepts exact ids/indexes only, then the normal curator sees the repaired
+  // actionIds and protects a genuine order outcome from filler removal.
+  const actionPlan = review.actionOutcomePlan ?? null;
+  const actionAnswer = review.parts?.actions ?? null;
   if (actionPlan && actionAnswer) {
     const repaired = applyActionOutcomeAssociations({ events: merged.events, plan: actionPlan, answer: actionAnswer });
     merged.events = repaired.events;
@@ -16241,19 +16318,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     world: bundle.world,
     game: bundle.game,
     playerCountry: normalizeString(bundle.game?.country),
-    analyze: directorAnalyzers({
-      bundle,
-      review,
-      signal,
-      checks,
-      requests: state.requests,
-      gameDate: normalizeString(merged.stopDate) || context.targetDate,
-      receipt: state.receipt,
-    }),
-    // The places the events name, with who holds each (lookupTools.js
-    // placesNamedIn), so the territory director can fill in fromCode without
-    // asking. Not needed when the review already answered: it never asks.
-    findPlaces: review ? null : placeReaderFor(bundle),
+    analyze: directorAnalyzers({ bundle, review, receipt: state.receipt }),
+    // No places to look up here: a skip's directors never ask (the review,
+    // when there was one, was handed them where it was built, runTurnReview).
+    findPlaces: null,
     resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: state.requests }),
     // The player's Cancel, handed on to each director (mapConsequences.js):
     // a cancelled skip ends here, not as a turn written without its checks.
@@ -16300,8 +16368,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // The board runs inside applySimulationResult so that it sees the espionage
   // events too. All this side does is hold the turn when it fails, because this
   // is where the arguments a retry needs are held.
-  // `review` carries the turn review's answers (null when requests are not being
-  // saved) and `requests` the skip's budget, for everything the apply still asks.
+  // `review` carries what the skip's own answer gave for the board, the agents
+  // and the history (or the turn review's answers, for a skip a provider
+  // refused folded), and `requests` the skip's budget, for the little the apply
+  // may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
   applyArgs.phases = state.phases;
   // Held with the turn, so a retry of the board gets the curator's and the
@@ -16346,18 +16416,15 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, evaluation = null, retryDirective = "" } = {}) => {
-  const evaluationMode = evaluation && typeof evaluation === "object";
-  // Starting a fresh LIVE turn abandons any jump still held on a failed segment.
-  // The A/B lab is observational and must not touch any live pending/simulation
-  // state, even when one of its candidate generations fails.
-  if (!evaluationMode) {
-    discardHeldTurns();
-    // A kept skip too, and its stored copy: this skip starts from the campaign
-    // as it stands, and a new round makes the kept one stale anyway.
-    if (discardParkedTurn()) void forgetStoredParkedTurn(activeCampaignId());
-    beginSimulation();
-  }
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, retryDirective = "" } = {}) => {
+  // Starting a fresh turn abandons any jump still held on a failed segment. Its
+  // state was captured against a world snapshot this one is about to re-read, so
+  // applying it later would write a turn built on stale ground.
+  discardHeldTurns();
+  // A kept skip too, and its stored copy: this skip starts from the campaign
+  // as it stands, and a new round makes the kept one stale anyway.
+  if (discardParkedTurn()) void forgetStoredParkedTurn(activeCampaignId());
+  beginSimulation();
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
   // and counted into one log line when the skip lands. The request count comes
   // from the skip's budget once there is one.
@@ -16365,11 +16432,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = withDiplomaticLedgerMigration(
-    evaluationMode && evaluation.bundleOverride
-      ? evaluation.bundleOverride
-      : await readGameStateBundle({ force: true }),
-  );
+  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
@@ -16431,8 +16494,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     baseColors,
     bundle,
     // Stamped here, at the read, not at the write minutes later.
-    campaignId: evaluationMode ? "political-world-ab-eval" : activeCampaignId(),
-    evaluation: evaluationMode ? evaluation : null,
+    campaignId: activeCampaignId(),
     dateStep,
     mode,
     originDate,
@@ -16446,7 +16508,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // once, at the start, so a toggle mid-skip does not change the skip.
     // The host's own setting, read from the host's device, is not the other
     // players': a shared game's round never stops on it (and nobody could answer).
-    stopOnPlayerFailures: !evaluationMode && getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures) && !hostingSharedGame(),
+    stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures) && !hostingSharedGame(),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };
@@ -16484,34 +16546,18 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // What this skip may spend and what it has spent (requestBudget.js): one
     // request where it can be, never more than the cap, while requests are
     // being saved.
-    requests: evaluationMode
-      ? { saving: false, budget: createJumpBudget({ cap: 999, unlimited: true }), used: 0, refused: 0 }
-      : createJumpRequests({
-        segments: segmentCount,
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
-      }),
+    requests: createJumpRequests({
+      segments: segmentCount,
+      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
+    }),
     phases,
   };
   budgetForPhases = jumpState.requests;
 
   await runJumpSegments({ context: jumpContext, onEvents, onProgress, signal, state: jumpState });
-  if (evaluationMode) {
-    // Return the validated candidate round exactly where normal gameplay would
-    // begin its apply/review pipeline. Nothing below this point is persisted.
-    const payload = mergeSegmentPayloads(jumpState.segmentPayloads, { targetDate });
-    return {
-      evaluation: true,
-      payload,
-      events: normalizeArray(payload?.events),
-      generation: jumpState.generation,
-      requests: { used: jumpState.requests?.used || 0, refused: jumpState.requests?.refused || 0 },
-      originDate,
-      targetDate,
-    };
-  }
   return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
   } finally {
-    if (!evaluationMode) endSimulation();
+    endSimulation();
   }
 };
 
@@ -18642,6 +18688,41 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
   return "";
 };
 
+// A fact the compiler left out of the baseline (receipt.omitted) covers nobody.
+// The coverage check counts the answer's wars and processes as written, so it is
+// run again without those facts: a baseline is never accepted, or published, on
+// the strength of a war that is not in it. Nothing left out, nothing to check.
+const pregameCoverageErrorWithoutOmitted = (payload, compilation, options) => {
+  const omittedRefs = new Set(
+    normalizeArray(compilation?.receipt?.omitted).map((entry) => normalizeString(entry?.ref)).filter(Boolean),
+  );
+  if (!omittedRefs.size) return "";
+  return validatePregameBootstrapCoverage({
+    ...payload,
+    canonicalUpdates: normalizeArray(payload?.canonicalUpdates)
+      .filter((fact) => !omittedRefs.has(normalizeString(fact?.ref))),
+  }, options);
+};
+
+// What the compiler did with a fact that says again what the world already
+// holds, in the log the player sends: one line for each fact read as an
+// existing record under that record's title, one for each left out. Logged where
+// the baseline is published, so once, and only for the answer that landed.
+const logPregameRestatedAndOmittedFacts = (compilation) => {
+  for (const entry of normalizeArray(compilation?.receipt?.restated)) {
+    logDebugEvent("ai", `Round Zero read the ${entry.kind} "${entry.title}" as the ${entry.kind} already on record, "${entry.canonicalTitle}": the canonical title is kept and nothing new was made.`, {
+      ref: entry.ref,
+      canonicalId: entry.canonicalId,
+    });
+  }
+  for (const entry of normalizeArray(compilation?.receipt?.omitted)) {
+    logDebugEvent("warn", `[ai] Round Zero left the ${entry.kind} "${entry.title}" out of the baseline; the rest of it stands.`, {
+      ref: entry.ref,
+      reason: entry.reason,
+    });
+  }
+};
+
 // Round Zero validates semantic baseline facts against the current snapshot, but
 // persistent identity is NOT finalized here. Publication recompiles the exact
 // accepted candidate inside mutateCanonicalTurnState against the fresh world and
@@ -18681,9 +18762,20 @@ const validatePregameCanonicalBootstrap = (
     eventIdsByRef: eventRefs.map,
     startDate,
     round: 1,
+    // While a corrective attempt remains, a fact that could be more than one
+    // canonical record is sent back to be said plainly. On the last attempt it
+    // is left out and the rest of the baseline stands: one such fact used to
+    // fail the bootstrap on both attempts, and at every open after that. A fact
+    // that restates the ONE record it could be is accepted on any attempt.
+    leaveOutAmbiguous: !strict,
   });
   if (!compilation.ok) return compilation.error || "Round-Zero semantic baseline compilation failed.";
-  return "";
+  return pregameCoverageErrorWithoutOmitted(candidate, compilation, {
+    world,
+    briefing,
+    canonicalPolities,
+    requirements: coverageRequirements,
+  });
 };
 
 // The request a pre-game history is: the backstory before the start date and
@@ -18881,10 +18973,22 @@ export const maybeGeneratePregameHistory = async () => {
         eventIdsByRef: eventRefs.map,
         startDate,
         round: 1,
+        // The answer is accepted and no attempt remains: a fact that could be
+        // more than one canonical record is left out here as it was when the
+        // answer was accepted on its last attempt, and as it must be if the
+        // world gained such a record since. The baseline is not lost to it.
+        leaveOutAmbiguous: true,
       });
       if (!compilation.ok) {
         throw new Error(compilation.error || "Round-Zero semantic baseline compilation failed against fresh canonical state.");
       }
+      const omittedCoverageError = pregameCoverageErrorWithoutOmitted(payload, compilation, {
+        world: currentWorld,
+        briefing,
+        canonicalPolities,
+        requirements: freshCoverageRequirements,
+      });
+      if (omittedCoverageError) throw new Error(omittedCoverageError);
 
       const bootstrapEvents = attachCompiledPregameStorylines(generatedEvents, compilation.projectedWorld);
       const committedEventIds = new Set(bootstrapEvents.map((event) => normalizeString(event?.id)).filter(Boolean));
@@ -18935,6 +19039,7 @@ export const maybeGeneratePregameHistory = async () => {
         `${factCounts.storyline || 0} non-war storyline fact(s), ${derivedStorylineIds.length} derived war mirror(s), ` +
         `${freshCoverageRequirements.length} authoritative armed-actor coverage anchor(s).`,
       );
+      logPregameRestatedAndOmittedFacts(compilation);
 
       const summary = normalizeString(payload?.summary);
       bootstrapWorld.simulationHistory = [

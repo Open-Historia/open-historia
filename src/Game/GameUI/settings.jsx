@@ -100,7 +100,6 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
-import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -1186,7 +1185,8 @@ const RequestBudgetSection = () => {
             ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
             : "Player pressed Cancel all AI requests, but none were active.");
     };
-    const cost = describeJumpCost({ saveRequests: saving });
+    // The most a skip is when function calling may add to it (Save AI requests off).
+    const lookupCap = describeJumpCost({ lookups: true }).max;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1265,10 +1265,12 @@ const RequestBudgetSection = () => {
                 apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
             }}
             />
+            {/* One sentence group per state, each a single string, so a language
+                pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
                 {saving
-                    ? <>On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your agents&apos; reports come back in the same answer. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip never uses more than <span data-no-translate>{cost.max}</span>.</>
-                    : <>Off: the most thorough turns, for a key with no daily limit. After every skip the units, the occupied land, the structures, the repeats, the Projects board and your agents&apos; reports are each checked by a request of their own. The model may look things up (up to three extra requests per task), and a flawed answer is sent back to be redone. A busy skip can use twenty requests or more, and while the model may look things up a Gemini skip&apos;s events arrive together at the end instead of one at a time.</>}
+                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
+                    : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
             </div>
 
             <div style={fieldGroupStyle}>
@@ -2263,7 +2265,6 @@ const SettingsWorkspace = ({
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
-    const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
     // The system asks for reduced motion: the motion switches are on whatever
     // is stored, so they show on and stay put (mapSettings.js).
     const systemReducedMotion = useSystemReducedMotion();
@@ -2432,11 +2433,11 @@ const SettingsWorkspace = ({
                     </div>
                     <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
-                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
+                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
-                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way, and Gemini arrives all at once regardless.
+                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
                     </div>
                     <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
                     <div style={settingsHelper}>
@@ -2468,25 +2469,6 @@ const SettingsWorkspace = ({
                 >
                     <TaskPicks />
                 </SettingsSection>
-                {forGame && (
-                <SettingsSection
-                title="Political World A/B Lab"
-                description="Run the same frozen diplomacy, Council, vote or event-generation task with Political World context on/off — or push one actor through HAWK/DOVE sensitivity variants. The lab never applies either candidate to the campaign."
-                right={(
-                    <button
-                    type="button"
-                    onClick={() => setPoliticalWorldLabOpen(true)}
-                    style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "8px", color: "var(--oh-grey-text)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
-                    >
-                    Open A/B Lab
-                    </button>
-                )}
-                >
-                    <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.55 }}>
-                    Pins every arm to one exact fallback-list entry, counterbalances run order, saves raw prompts/responses and proves the non-Political prompt hash matches before you interpret the result. Blind review is available to reduce confirmation bias.
-                    </div>
-                </SettingsSection>
-                )}
                 <SettingsSection
                 title="Telemetry"
                 description="What the AI debug console can show about every call."
@@ -2555,7 +2537,6 @@ const SettingsWorkspace = ({
                     <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
                 </div>
             </div>
-            {politicalWorldLabOpen && <PoliticalWorldABLab onClose={() => setPoliticalWorldLabOpen(false)} />}
         </div>,
         document.body,
     );

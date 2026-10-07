@@ -19,6 +19,30 @@ export const RELAY_REFUSED_HEADER = "X-OH-Relay";
 export const isRelayRefusal = (response) =>
     response?.status === 403 && response.headers?.get?.(RELAY_REFUSED_HEADER) === "refused";
 
+// The relay could not connect to the AI endpoint at all: nothing listening at
+// the address, a name that does not resolve, a connection refused or reset
+// before any answer. It says so with a 502, which is also what a gateway in
+// front of a busy model answers, and the game used to read the two alike: it
+// waited fifteen seconds and asked again, three times, then called a server
+// that was not running "busy". The same header tells them apart, for the same
+// reason as above: an endpoint's own 502 is relayed with the same status.
+export const isRelayUnreachable = (response) =>
+    response?.status === 502 && response.headers?.get?.(RELAY_REFUSED_HEADER) === "unreachable";
+
+// What the connection reported, for the message: the error's code
+// (ECONNREFUSED, ENOTFOUND) when there is one, else the relay's own words.
+// Never throws: a body that cannot be read just says nothing more.
+export const relayUnreachableReason = async (response) => {
+    try {
+        const payload = await response.json();
+        const code = String(payload?.code ?? "").trim();
+        if (code) return code;
+        return String(typeof payload?.error === "string" ? payload.error : "").trim().replace(/^\((.*)\)$/, "$1");
+    } catch {
+        return "";
+    }
+};
+
 // Statuses a Response cannot be built with a body for.
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 

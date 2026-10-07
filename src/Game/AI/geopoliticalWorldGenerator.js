@@ -28,6 +28,7 @@ import {
 } from "../../runtime/powerStatus.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
+import { stableAsciiId } from "../../runtime/stableId.js";
 import {
   applyGeopoliticalInstitutionGovernanceBaseline,
   geopoliticalInstitutionGovernanceTargets,
@@ -70,7 +71,14 @@ const geopoliticalHistoryAuthorityBlock = (historyAuthority, scenarioDate) => {
   }
   return `TARGET WORLD DATE: ${target}. EXTERNAL/REFERENCE AUTHORITY: NONE. Use only scenario-authored/derived canon and explicit current world state; do not import another timeline or universe.`;
 };
-const slug = (value) => lower(value).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72);
+// The id an institution or an agreement is known by when the model gives a
+// name or a title in its place: the one runtime/institutions.js makes, whose
+// catalog a membership is looked up in. This used to be its own a-z0-9 slug,
+// which is the same id for an ASCII name and nothing at all for one in
+// Cyrillic, Arabic or Chinese: a membership of an institution so named was
+// "outside the fixed catalog", and an agreement known only by such a title
+// had no id and was dropped.
+const slug = (value) => stableAsciiId(value, { maxLength: 72 });
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
 
 const shallowTool = (name, description, properties, required) => Object.freeze({

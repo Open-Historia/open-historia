@@ -1,5 +1,6 @@
 /*! Open Historia — node-side signature verification © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Verifies project-signed artifacts (such as public/content-manifest.json)
+// Verifies project-signed artifacts (a node directory, a node update manifest;
+// the game's own builds no longer ship or read a signed document)
 // against the pinned root public key, using Node's built-in crypto (no extra
 // dependency). scripts/sign-release.mjs checks each signature it writes with
 // it, and server/contentManifest.test.js checks the committed manifest.

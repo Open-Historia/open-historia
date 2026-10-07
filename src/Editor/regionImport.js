@@ -14,14 +14,14 @@
 
 import GeoJSON from "ol/format/GeoJSON";
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
+import { worldFileUrl } from "../runtime/worldFiles.js";
 
-// Web build hosts the big seeds on the registry Worker /content proxy
-// (VITE_OH_PMTILES_URL); local/desktop leaves it unset → same-origin /assets
-// (public/assets/, fetched by scripts/fetch-map-assets.mjs). Mirrors
-// runtime/web/libraryStore.js. On Cloudflare Pages /assets/*.geojson would return
-// the SPA-fallback HTML (the seed isn't hosted there), which parses to zero regions.
-const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
-export const SEED_URL = `${CONTENT_BASE}/regions-seed.geojson`;
+// Every build reads the seed from its own /assets folder (runtime/worldFiles.js):
+// the desktop's is fetched at first launch (scripts/fetch-map-assets.mjs), the
+// website's and the Android app's are laid into the build
+// (scripts/stage-map-assets.mjs). A build without it answers with the SPA's
+// fallback page, which parses to zero regions.
+export const SEED_URL = worldFileUrl("seed");
 
 // Fetch + parse the seed FeatureCollection into OL features (EPSG:3857).
 // Returns [] and warns if the seed asset is missing (run the extract script).

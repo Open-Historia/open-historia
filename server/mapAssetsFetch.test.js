@@ -13,7 +13,7 @@
 // dependencies in scope (as desktopPortProbe.test.js does).
 
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,10 +27,10 @@ const source = fs.readFileSync(new URL("../electron/main.cjs", import.meta.url),
 const start = source.indexOf("const assetTarget = (assetPath) => {");
 const end = source.indexOf("// The fetcher reports a file it could not get");
 assert.ok(start !== -1 && end > start, "could not find the map-data helpers in electron/main.cjs");
-const desktop = ({ assetsDir, dataDir, userRoot, manifestPath }) => new Function(
-  "path", "fs", "ASSETS_DIR", "DATA_DIR", "USER_ROOT", "MANIFEST",
-  `${source.slice(start, end)}\nreturn { assetTarget, missingAssets, relocateLegacyStockMap };`,
-)(path, fs, assetsDir, dataDir, userRoot, manifestPath);
+const desktop = ({ assetsDir, dataDir, userRoot, manifestPath, logMain = () => {} }) => new Function(
+  "path", "fs", "crypto", "logMain", "ASSETS_DIR", "DATA_DIR", "USER_ROOT", "MANIFEST",
+  `${source.slice(start, end)}\nreturn { assetTarget, missingAssets, relocateLegacyStockMap, relocateOwnFolderMap };`,
+)(path, fs, crypto, logMain, assetsDir, dataDir, userRoot, manifestPath);
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -206,6 +206,12 @@ test("a download that fails its checksum leaves nothing behind and is reported",
     manifest: { owner: "o", repo: "r", release: "map-data", assets: [asset] },
     root: dir,
     progress: true,
+    // A clock that stands still: no progress line falls due while the bytes
+    // arrive, so the only line that could say "received 5" is the one printed
+    // for a finished file. On the real clock a slow disk let 250 ms pass
+    // between the first line and the bytes, and that ordinary progress line
+    // failed the check below whenever the whole suite ran at once.
+    now: () => 0,
     fetchImpl: async () => new Response("wrong"),
     log: (line) => lines.push(line),
     warn: (line) => warnings.push(line),
@@ -279,11 +285,136 @@ test("a stamp for other bytes than the manifest's is not trusted", async (t) => 
   assert.equal(stamps[install.target].sha256, install.asset.sha256);
 });
 
-test("the desktop downloads the same z8 map archives the Android app ships", () => {
-  const android = JSON.parse(fs.readFileSync(new URL("../mobile/map-assets.android.json", import.meta.url), "utf8"));
+test("the desktop downloads the same z8 map archives the website and the Android app carry", () => {
+  const android = JSON.parse(fs.readFileSync(new URL("../scripts/map-assets.web.json", import.meta.url), "utf8"));
   const pmtiles = (list) => Object.fromEntries(list.assets
     .filter((asset) => asset.path.endsWith(".pmtiles"))
     .map((asset) => [path.posix.basename(asset.path), { asset: asset.asset, bytes: asset.bytes, sha256: asset.sha256 }]));
   assert.deepEqual(pmtiles(MANIFEST), pmtiles(android));
   assert.equal(pmtiles(MANIFEST)["regions.pmtiles"].asset, "regions-z8.pmtiles");
+});
+
+// --- a beta that downloaded its map under the old rule ---
+//
+// Before the folders agreed, a packaged beta's setup download wrote the whole
+// map under its own userData and its server never read it (a player's beta
+// 0.0.66 log: "No PMTiles archive available" at every launch). That install
+// still holds the map. It is moved to the folder the server reads rather than
+// downloaded a second time.
+
+// A beta install as the old rule left it: every manifest file under userData.
+const oldRuleBeta = (t, files) => {
+  const dir = tempDir(t);
+  const layout = betaLayout(dir);
+  const release = fakeRelease(files);
+  const manifestPath = path.join(dir, "map-assets.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(release.manifest));
+  const own = (assetPath) => path.join(layout.userRoot, assetPath);
+  for (const [assetPath, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(own(assetPath)), { recursive: true });
+    fs.writeFileSync(own(assetPath), text);
+  }
+  const logged = [];
+  const shell = desktop({ ...layout, manifestPath, logMain: (level, event, message, data) => logged.push({ level, event, message, data }) });
+  return { ...shell, layout, release, own, logged, shared: (name) => path.join(layout.assetsDir, name) };
+};
+
+const SHIPPED = {
+  "public/assets/regions.pmtiles": "regions archive",
+  "public/assets/cities.pmtiles": "cities archive",
+  "server/data/stock/regions.geojson": "{\"type\":\"FeatureCollection\"}",
+};
+
+test("a map the beta downloaded into its own folder is moved to the shared one, not downloaded again", async (t) => {
+  const install = oldRuleBeta(t, SHIPPED);
+  assert.deepEqual(install.missingAssets().map((asset) => asset.asset), ["regions.pmtiles", "cities.pmtiles"], "the server's folder is empty");
+
+  assert.deepEqual(install.relocateOwnFolderMap(), ["regions.pmtiles", "cities.pmtiles"]);
+  assert.deepEqual(install.missingAssets(), [], "so the setup window is not shown");
+  assert.equal(fs.readFileSync(install.shared("regions.pmtiles"), "utf8"), "regions archive");
+  assert.equal(fs.readFileSync(install.shared("cities.pmtiles"), "utf8"), "cities archive");
+  assert.equal(fs.existsSync(install.own("public/assets/regions.pmtiles")), false, "moved, not copied");
+  // The stock map is the beta's own under both rules and stays where it is.
+  assert.equal(fs.readFileSync(install.own("server/data/stock/regions.geojson"), "utf8"), SHIPPED["server/data/stock/regions.geojson"]);
+  assert.deepEqual(install.logged.map((entry) => [entry.level, entry.event, entry.data]), [["info", "map.relocated", { assets: ["regions.pmtiles", "cities.pmtiles"] }]]);
+
+  // Neither the setup download nor the background check asks the release for anything.
+  const result = await syncMapAssets({
+    manifest: install.release.manifest,
+    root: install.layout.userRoot,
+    assetsDir: install.layout.assetsDir,
+    dataDir: install.layout.dataDir,
+    fetchImpl: install.release.fetchImpl,
+    log: () => {},
+    warn: () => {},
+  });
+  assert.deepEqual([result.present, result.downloaded, result.failed], [3, 0, 0]);
+  assert.deepEqual(install.release.requests, []);
+
+  // A second launch finds nothing to do, and says nothing.
+  assert.deepEqual(install.relocateOwnFolderMap(), []);
+  assert.equal(install.logged.length, 1);
+});
+
+test("only the published bytes are moved into the folder the stable app reads too", (t) => {
+  const install = oldRuleBeta(t, SHIPPED);
+  // The right length, other contents: the setup check would pass it for good.
+  fs.writeFileSync(install.own("public/assets/regions.pmtiles"), "regions ARCHIVE");
+  // Another length: unfinished, or a file the player put there.
+  fs.writeFileSync(install.own("public/assets/cities.pmtiles"), "cities");
+
+  assert.deepEqual(install.relocateOwnFolderMap(), []);
+  assert.equal(fs.existsSync(install.shared("regions.pmtiles")), false);
+  assert.equal(fs.existsSync(install.shared("cities.pmtiles")), false);
+  assert.equal(fs.readFileSync(install.own("public/assets/regions.pmtiles"), "utf8"), "regions ARCHIVE", "left where it was");
+  assert.deepEqual(install.missingAssets().map((asset) => asset.asset), ["regions.pmtiles", "cities.pmtiles"], "and the download fetches both");
+  assert.deepEqual(install.logged, []);
+});
+
+test("a file the shared folder already holds is left alone, and one it holds wrongly is replaced", (t) => {
+  const install = oldRuleBeta(t, SHIPPED);
+  fs.mkdirSync(install.layout.assetsDir, { recursive: true });
+  // The stable app is installed and has this one: nothing to do for it.
+  fs.writeFileSync(install.shared("regions.pmtiles"), "regions archive");
+  const stamp = new Date(Date.now() - 60_000);
+  fs.utimesSync(install.shared("regions.pmtiles"), stamp, stamp);
+  const written = fs.statSync(install.shared("regions.pmtiles")).mtimeMs;
+  // And a download of this one that stopped part-way.
+  fs.writeFileSync(install.shared("cities.pmtiles"), "citi");
+
+  assert.deepEqual(install.relocateOwnFolderMap(), ["cities.pmtiles"]);
+  assert.equal(fs.statSync(install.shared("regions.pmtiles")).mtimeMs, written, "the stable app's file was not touched");
+  assert.equal(fs.existsSync(install.own("public/assets/regions.pmtiles")), true, "and the beta's copy of it is still its own");
+  assert.equal(fs.readFileSync(install.shared("cities.pmtiles"), "utf8"), "cities archive");
+  assert.deepEqual(install.missingAssets(), []);
+});
+
+test("a build whose own folder is the folder its server reads moves nothing", (t) => {
+  // The stable app, an unpackaged run, and a beta with nothing downloaded yet.
+  const dir = tempDir(t);
+  const userRoot = path.join(dir, "open-historia");
+  const release = fakeRelease(SHIPPED);
+  const manifestPath = path.join(dir, "map-assets.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(release.manifest));
+  for (const [assetPath, text] of Object.entries(SHIPPED)) {
+    fs.mkdirSync(path.dirname(path.join(userRoot, assetPath)), { recursive: true });
+    fs.writeFileSync(path.join(userRoot, assetPath), text);
+  }
+  const stable = desktop({ userRoot, dataDir: path.join(userRoot, "server", "data"), assetsDir: path.join(userRoot, "public", "assets"), manifestPath });
+  assert.deepEqual(stable.relocateOwnFolderMap(), []);
+  assert.deepEqual(stable.missingAssets(), []);
+  assert.equal(fs.readFileSync(path.join(userRoot, "public", "assets", "regions.pmtiles"), "utf8"), "regions archive");
+
+  const fresh = desktop({ ...betaLayout(tempDir(t)), manifestPath });
+  assert.deepEqual(fresh.relocateOwnFolderMap(), []);
+  assert.equal(fresh.missingAssets().length, 3);
+  // No manifest at all is not a reason to fail a launch.
+  assert.deepEqual(desktop({ ...betaLayout(tempDir(t)), manifestPath: path.join(dir, "absent.json") }).relocateOwnFolderMap(), []);
+});
+
+test("the map already downloaded is moved before the launch decides what is missing", () => {
+  const boot = source.slice(source.indexOf("const boot = async () => {"));
+  const moved = boot.indexOf("relocateOwnFolderMap();");
+  const checked = boot.indexOf("missingAssets()");
+  assert.ok(moved !== -1 && checked !== -1 && moved < checked);
 });

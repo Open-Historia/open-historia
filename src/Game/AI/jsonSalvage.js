@@ -56,6 +56,22 @@ const WORD_START = /[A-Za-z_$]/;
 const WORD_CHAR = /[A-Za-z0-9_$]/;
 const BLANK = /\s/;
 
+// A line break, a tab or any other control character written straight into a
+// string, where JSON wants its escape. A model writing several paragraphs into
+// one field (the history document a time skip carries, an agent's long
+// message) presses Enter between them, and the whole answer stops being JSON
+// over text that reads perfectly well. Never valid JSON as written, so putting
+// the escape in changes no answer that parsed.
+const escapeControlCharacter = (char) => {
+  if (char === "\n") return "\\n";
+  if (char === "\r") return "\\r";
+  if (char === "\t") return "\\t";
+  return char < " " ? `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}` : char;
+};
+// Everything below a space, written as "not a space or anything above it".
+const RAW_CONTROL = /[^ -￿]/g;
+const escapeControlCharacters = (text) => text.replace(RAW_CONTROL, escapeControlCharacter);
+
 export const repairLooseJson = (text) => {
   const source = String(text ?? "");
   const length = source.length;
@@ -82,7 +98,7 @@ export const repairLooseJson = (text) => {
         else if (inner === '"') break;
         end += 1;
       }
-      out.push(source.slice(at, Math.min(end + 1, length)));
+      out.push(escapeControlCharacters(source.slice(at, Math.min(end + 1, length))));
       at = end + 1;
       keyPosition = false;
       continue;
@@ -207,6 +223,10 @@ const escapeInnerQuotes = (text) => {
         out += "\\\"";
         continue;
       }
+    } else if (ch < " ") {
+      // A raw line break inside the string (escapeControlCharacter above).
+      out += escapeControlCharacter(ch);
+      continue;
     }
     out += ch;
   }
@@ -303,6 +323,88 @@ const balancedJsonCandidates = (text) => {
   return [...candidates, ...repairs];
 };
 
+// An object whose LAST fields are riders: things carried at the end of an answer
+// that the answer is whole without. A time skip's answer ends with the agents'
+// reports and the history document's fold (gameplay.js, "The folded time
+// skip"), each of which fails open by itself: a report that is missing is
+// asked for with the next skip, a fold that is missing waits for it. They are
+// also the longest free text in the answer and the part an answer that runs out
+// of room loses, and a broken or cut-off rider must not cost the turn written
+// in full before it.
+//
+// So when the text does not parse, it is tried again without its riders, the
+// last one first: cut where that field's key begins at the top level, and
+// closed there. Nothing is closed that was open inside the turn itself (the
+// rule balancedJsonCandidates keeps): everything before the cut is a complete
+// member, or the text still does not parse and nothing is returned.
+//
+// `fields` in the order the contract gives them. Returns { value, dropped } or
+// null; `dropped` names the riders that were cut away.
+export const parseWithoutTrailingFields = (rawText, fields) => {
+  const text = String(rawText ?? "");
+  const riders = (Array.isArray(fields) ? fields : []).map((name) => String(name ?? "")).filter(Boolean);
+  const start = text.indexOf("{");
+  if (start < 0 || !riders.length) return null;
+  // Where each rider's key begins at the top level: the comma before it.
+  const cuts = new Map();
+  let depth = 0;
+  let lastComma = -1;
+  let at = start;
+  while (at < text.length) {
+    const char = text[at];
+    if (char === '"') {
+      let end = at + 1;
+      let escaped = false;
+      while (end < text.length) {
+        if (escaped) escaped = false;
+        else if (text[end] === "\\") escaped = true;
+        else if (text[end] === '"') break;
+        end += 1;
+      }
+      if (depth === 1 && lastComma >= 0) {
+        const name = text.slice(at + 1, end);
+        let after = end + 1;
+        while (after < text.length && BLANK.test(text[after])) after += 1;
+        if (text[after] === ":" && riders.includes(name) && !cuts.has(name)) cuts.set(name, lastComma);
+      }
+      at = end + 1;
+      // Past the first rider the text may be broken in any way: the cuts that
+      // matter are found, and the later riders' keys are looked for by name.
+      continue;
+    }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") depth -= 1;
+    else if (char === "," && depth === 1) lastComma = at;
+    if (depth <= 0) break;
+    at += 1;
+  }
+  // The last rider first, so a break in the history still keeps the reports.
+  const order = [...riders].reverse().filter((name) => cuts.has(name));
+  for (const name of order) {
+    const value = lenientJsonParse(`${text.slice(start, cuts.get(name))}}`);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const dropped = riders.filter((rider) => cuts.has(rider) && cuts.get(rider) >= cuts.get(name));
+      return { value, dropped };
+    }
+  }
+  return null;
+};
+
+// The OpenAI wire's own tool call, written out as text:
+// `{ "id": "call_001", "type": "function", "function": { "name": …,
+// "arguments": … } }`. The call is its `function` member, returned here; null
+// when `value` is not such a call. Everything around that member has to be the
+// wire's own fields, so a payload that merely has a field named `function` is
+// not taken for one.
+const WIRE_CALL_KEYS = new Set(["id", "type", "index", "function"]);
+const wireCallFunction = (value) => {
+  const inner = value.function;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return null;
+  if (Object.keys(value).some((key) => !WIRE_CALL_KEYS.has(key))) return null;
+  if (value.type !== undefined && normalizeString(value.type).toLowerCase() !== "function") return null;
+  return inner;
+};
+
 // Some openai-compatible endpoints/models (seen with nvidia/nemotron models)
 // are asked to call the tool (tool_choice: "required") but don't actually
 // populate tool_calls — they answer with a normal text message that just
@@ -315,12 +417,19 @@ const balancedJsonCandidates = (text) => {
 // wrapping breaks strict JSON parsing, fails to parse at all) and the whole
 // turn is discarded to the canned fallback. Unwrap it back to the actual
 // arguments object so the real content underneath still gets applied.
+//
+// Small local models go one level further and write the wire's whole call
+// around it (wireCallFunction above), usually as the one member of an array,
+// once a lookup conversation has shown them what a call looks like. A player's
+// koboldcpp model answered the Projects board that way, and "$ must be object;
+// received array" held a turn whose events were already written.
 export const unwrapMimickedToolCall = (value, toolName) => {
   let current = value;
   for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
     current = current[0];
   }
   if (!current || typeof current !== "object" || Array.isArray(current)) return value;
+  current = wireCallFunction(current) ?? current;
   const name = normalizeString(current.name);
   if (toolName && name && name !== toolName) return value;
   // getGameplayTool returns null for tasks with no registered tool, so a name

@@ -527,8 +527,10 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                   {filteredCommunity.map((post) => (
                     <div key={post.id} style={{ ...cardSurface, cursor: "default" }}>
                       <div style={{ aspectRatio: "3 / 2", background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-                        {post.imageUrl ? (
-                          <img src={post.imageUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        {/* The image's checked copy in the hub's releases, never
+                            the post's own attachment (communityFlags.js). */}
+                        {post.pictureUrl ? (
+                          <img src={post.pictureUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                         ) : (
                           <span style={{ fontSize: "2rem", opacity: 0.6 }}>🚩</span>
                         )}

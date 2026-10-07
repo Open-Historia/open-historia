@@ -273,7 +273,10 @@ try {
   console.warn(`[trash] purge failed: ${error.message}`);
 }
 
-const sendError = (res, statusCode, error) => {
+// `extra`: fields to send beside the message, for a caller that has to tell
+// one failure from another without reading the words (the AI relay marks an
+// endpoint it could not connect to).
+const sendError = (res, statusCode, error, extra = undefined) => {
   const message = error instanceof Error ? error.message : String(error);
   // Node hides WHAT failed behind a bare "fetch failed" / "socket hang up" and
   // puts the real cause on error.cause — which is the difference between a
@@ -295,7 +298,7 @@ const sendError = (res, statusCode, error) => {
     message: reported,
     data: error instanceof Error && error.stack ? { stack: error.stack } : undefined,
   });
-  res.status(statusCode).json({ error: reported });
+  res.status(statusCode).json({ error: reported, ...extra });
 };
 
 // An optional asset a scenario or game simply does not have — its stats sheet,
@@ -1207,7 +1210,11 @@ const relaySettingState = () => ({
   relayLockedByEnv: ALLOW_REMOTE_RELAY,
 });
 // Marks the relay's own refusal, so the page can tell it from an AI endpoint
-// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal).
+// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal). And,
+// with the value "unreachable", a 502 that means the relay could not connect to
+// the endpoint at all, so the page can tell that from a gateway's own 502: the
+// game waits and asks a busy gateway again, and must not do that to a server
+// that is not running (isRelayUnreachable).
 const RELAY_REFUSED_HEADER = "X-OH-Relay";
 const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
@@ -1304,7 +1311,13 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         signal: controller.signal,
         lookup: relayLookup,
       }, resolve);
-      upstreamRequest.on("error", reject);
+      // Whatever fails before the endpoint has answered is the connection's
+      // (refused, no such host, reset, a broken handshake), and is said so
+      // below; a throw from building the request is not, and is left alone.
+      upstreamRequest.on("error", (error) => {
+        if (error && typeof error === "object") error.relayCouldNotConnect = true;
+        reject(error);
+      });
       upstreamRequest.end(body);
     });
 
@@ -1372,7 +1385,21 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, error?.code === RELAY_BLOCKED_CODE ? 400 : 502, error);
+      if (error?.code === RELAY_BLOCKED_CODE) {
+        sendError(res, 400, error);
+      } else if (error?.relayCouldNotConnect) {
+        // Still a 502, for anything that reads only the status; the header and
+        // the two fields say it is the connection, not a busy gateway. `code`
+        // is what the player needs to see: ECONNREFUSED is a server that is not
+        // running, ENOTFOUND an address that is wrong.
+        res.setHeader(RELAY_REFUSED_HEADER, "unreachable");
+        sendError(res, 502, error, {
+          unreachable: true,
+          code: String(error.code || error.cause?.code || error.errors?.[0]?.code || ""),
+        });
+      } else {
+        sendError(res, 502, error);
+      }
     } else if (res.headersSent) {
       cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {
@@ -1643,67 +1670,14 @@ app.delete("/api/hub/cache", (_req, res) => {
   res.json(clearHubCache(HUB_CACHE_DIR));
 });
 
-// Best-effort scenario-import telemetry. On a successful import the client pings
-// here; we forward it to the self-hosted counter (a Cloudflare Worker — see
-// tools/import-counter/) so the hub owner can see how many people imported each
-// scenario, including attachment scenarios GitHub can't count. Deduped per
-// install: only the FIRST successful import of a given bundle counts, so a
-// re-import never inflates the number. Points at the hub's deployed counter
-// Worker (tools/import-counter); OH_IMPORT_COUNTER_URL overrides it, and an
-// empty value disables the ping entirely (silent no-op).
-const IMPORT_COUNTER_URL = (
-  process.env.OH_IMPORT_COUNTER_URL ?? "https://oh-import-counter.nichojkrol.workers.dev"
-).replace(/\/+$/, "");
-const IMPORT_PING_DIR = path.join(DATA_DIR, "import-pings");
-app.post("/api/hub/import-log", jsonParser, (req, res) => {
-  res.json({ ok: true }); // ack at once — telemetry must never delay or fail the import
-  (async () => {
-    try {
-      const { url: fileUrl, id, title } = req.body ?? {};
-      if (!IMPORT_COUNTER_URL || (id == null && !fileUrl)) return;
-      // One ping per scenario per install, EVER. Key the marker on the scenario
-      // id (its hub issue number) so re-importing — an updated version, or just
-      // mashing the Import button — never counts twice. The marker is created
-      // atomically (wx: fails if it already exists) so even racing requests
-      // can't both slip a ping through.
-      const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
-      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
-      fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
-      try {
-        fs.writeFileSync(marker, markerKey, { flag: "wx" });
-      } catch {
-        return; // marker already exists — this scenario was counted on this install
-      }
-      await fetch(`${IMPORT_COUNTER_URL}/hit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: String(id ?? fileUrl).slice(0, 120), title: String(title ?? "").slice(0, 200) }),
-      }).catch(() => {});
-    } catch {
-      // best-effort telemetry — swallow everything
-    }
-  })();
-});
-
-// Read the self-hosted import counts back for the Community tab. Proxied (not
-// fetched from the Worker in the browser) so the client stays URL-agnostic and
-// same-origin. Lightly cached so a hub refresh doesn't hammer the Worker.
-let importCountsCache = { at: 0, data: null };
-app.get("/api/hub/import-counts", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  if (!IMPORT_COUNTER_URL) return res.json({});
-  if (importCountsCache.data && Date.now() - importCountsCache.at < 60000) {
-    return res.json(importCountsCache.data);
-  }
-  try {
-    const upstream = await fetch(`${IMPORT_COUNTER_URL}/counts`);
-    const data = upstream.ok ? await upstream.json() : {};
-    importCountsCache = { at: Date.now(), data };
-    res.json(data);
-  } catch {
-    res.json(importCountsCache.data || {});
-  }
-});
+// Imports are no longer reported from here. A scenario's import count is how many
+// times its file has been downloaded from the hub's releases, as GitHub counts
+// it; the page reads the counts from the hub's own index (src/runtime/hubFiles.js).
+// The routes that pinged and read the old counter on Cloudflare
+// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) are gone:
+// its free allowance was spent within hours of every day. /api/hub/file above
+// serves a file it has already downloaded from its cache, so importing the same
+// file again on this machine does not count twice.
 
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {

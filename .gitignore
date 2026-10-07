@@ -14,6 +14,10 @@ dist-web
 # mobile/scripts/stage-map-assets.mjs downloads for it.
 dist-android
 mobile/map-cache
+# The web build's map files (the website and the Android app), fetched and
+# verified by scripts/stage-map-assets.mjs.
+/map-cache
+/public/assets/default-regions.geojson
 # Which map files scripts/fetch-map-assets.mjs has hashed and passed (per install).
 .map-assets-verified.json
 # Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and

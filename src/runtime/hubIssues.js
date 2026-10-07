@@ -1,22 +1,27 @@
 /*! Open Historia — the community hub's issue lists © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// The Scenario Hub is a GitHub repo whose open issues are the community's
-// posts, told apart by label: "scenario" (the Community tab, and the basemaps
-// and flag packs carried inside scenarios), "basemap" and "flag". Everything
-// reads them unauthenticated, 60 requests an hour per player, so a list is
-// fetched once and kept five minutes for every screen that shows it, and
-// callers asking at the same time share the one request.
+// The Scenario Hub is a GitHub repo whose issues are the community's posts,
+// told apart by label: "scenario" (the Community tab, and the basemaps and
+// flag packs carried inside scenarios), "basemap" and "flag". The game does
+// not ask GitHub for them. The hub's own workflow publishes the list (the
+// posts whose file it has checked and released, and no others) in its index,
+// and every screen that shows posts reads them from that one file, kept five
+// minutes and shared by callers asking at the same time (hubFiles.js). It
+// costs none of the 60 API requests an hour a player has; those are left for
+// the one thing still read through GitHub's API, a post's comments
+// (hubPosts.js fetchPostComments, every page of them: fetchHubPages).
 //
-// A leaf module: hubPosts.js imports communityBasemaps.js, so what both need
-// lives here rather than in either.
+// hubPosts.js imports communityBasemaps.js, so what both need lives here
+// rather than in either.
 
-// The one and only hub. Not configurable by design.
-export const HUB_OWNER = "Open-Historia";
-export const HUB_REPO = "Open-historia-scenarios";
+import { HUB_OWNER, HUB_REPO } from "../../server/hubProvenance.js";
+import { fetchHubIndex, hubIndexProblem } from "./hubFiles.js";
+
+// The one and only hub (server/hubProvenance.js, where the stores read it too).
+export { HUB_OWNER, HUB_REPO };
 export const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 export const HUB_API = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}`;
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
 // GitHub serves 100 entries a page; a list stops after this many pages.
 export const MAX_HUB_PAGES = 10;
 const HEADERS = { Accept: "application/vnd.github+json" };
@@ -39,21 +44,15 @@ export const nextPageUrl = (link) => {
   return null;
 };
 
-// Every page of a GitHub list, following rel="next" up to `maxPages`. A first
-// page that fails throws; a later one throws too, unless `partial`, which ends
-// the list there instead.
-export const fetchHubPages = async (url, { maxPages = MAX_HUB_PAGES, partial = false } = {}) => {
+// Every page of a GitHub list, following rel="next" up to `maxPages`. A page
+// that fails fails the read: a post's comments are read to the end or not at
+// all, so nobody records a count of comments it has not seen.
+export const fetchHubPages = async (url, { maxPages = MAX_HUB_PAGES } = {}) => {
   const items = [];
   let next = url;
   for (let page = 0; next && page < maxPages; page += 1) {
-    let response;
-    try {
-      response = await fetch(next, { headers: HEADERS });
-      if (!response.ok) throw new HubHttpError(response.status);
-    } catch (error) {
-      if (page > 0 && partial) break;
-      throw error;
-    }
+    const response = await fetch(next, { headers: HEADERS });
+    if (!response.ok) throw new HubHttpError(response.status);
     const body = await response.json();
     if (Array.isArray(body)) items.push(...body);
     next = nextPageUrl(response.headers?.get?.("link"));
@@ -61,25 +60,19 @@ export const fetchHubPages = async (url, { maxPages = MAX_HUB_PAGES, partial = f
   return items;
 };
 
-const issueCache = new Map(); // label -> { at, issues, pending }
-
-// The hub's open issues carrying `label`, pull requests left out.
+// The hub's posts carrying `label`, as the issue objects the parsers read
+// (hubPosts.js parsePost, communityFlags.js, communityBasemaps.js): the
+// index's own list, which holds a post once its file has been checked and
+// released, whether its issue is open or closed. The index is kept five
+// minutes; `force` (a Refresh button) reads it again. When the hub has no list
+// to give (it could not be reached, or its index is from before it kept one)
+// this fails with a sentence a player can read. GitHub's API is never asked
+// instead: what the hub has not released is not listed.
 export const fetchHubIssues = async (label, { force = false } = {}) => {
-  const cached = issueCache.get(label);
-  if (!force && cached?.issues && Date.now() - cached.at < CACHE_TTL_MS) return cached.issues;
-  if (!force && cached?.pending) return cached.pending;
-  const pending = fetchHubPages(`${HUB_API}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`, { partial: true })
-    .then((issues) => {
-      const list = issues.filter((issue) => issue && !issue.pull_request);
-      issueCache.set(label, { at: Date.now(), issues: list });
-      return list;
-    })
-    .catch((error) => {
-      issueCache.set(label, { at: cached?.at ?? 0, issues: cached?.issues ?? null });
-      throw error;
-    });
-  issueCache.set(label, { at: cached?.at ?? 0, issues: cached?.issues ?? null, pending });
-  return pending;
+  const index = await fetchHubIndex({ force });
+  const problem = hubIndexProblem(index);
+  if (problem) throw new Error(problem);
+  return index.posts.filter((post) => post.labels.includes(label));
 };
 
 // The scenario posts: the Community tab's list, and where basemaps and flag
@@ -88,16 +81,17 @@ export const fetchHubScenarioIssues = (options) => fetchHubIssues("scenario", op
 
 // ---- images on the cards ----------------------------------------------------
 
-// An image a card loads straight from its URL, with no click: only GitHub's
-// own hosts over https (github.com/user-attachments, *.githubusercontent.com,
-// camo included). Anywhere else, whoever wrote the post would learn the
-// address of every player who opens the tab.
+// An image a post attached, by its address: only GitHub's own hosts over
+// https (github.com/user-attachments, *.githubusercontent.com, camo
+// included). No card loads it from there any more: the address is what the
+// image's checked copy is looked up by (hubFiles.js releaseCopyOf), and the
+// copy is what a card shows.
 export const hubImageUrl = (value) => {
   const url = String(value ?? "").trim();
   return /^https:\/\/(?:github\.com\/|(?:[a-z0-9-]+\.)*githubusercontent\.com\/)/i.test(url) ? url : null;
 };
 
-// The first image in an issue body a card may show: markdown ![alt](url) or
+// The first image in an issue body that GitHub hosts: markdown ![alt](url) or
 // GitHub's own <img src="..."> attachment markup (issue bodies mix both,
 // depending on how the image was pasted), or null.
 const IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/gi;

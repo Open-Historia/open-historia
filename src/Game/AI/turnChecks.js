@@ -1,8 +1,9 @@
 /*! Open Historia — the checks a time skip makes after its events, held on failure © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // After a skip's events are written by the model, the game asks more of it:
 // which units move, whose ground is held, what was built, which events are
-// filler, which orders were answered, how the board moves. With "Save AI
-// requests" on that is one request (turnReview.js); with it off, one each.
+// filler, which orders were answered, how the board moves. A skip's events
+// carry all of that themselves; a skip a provider refused in that form asks it
+// in one request (turnReview.js), and that request is a check.
 //
 // Each of those fails open by itself, which used to mean the turn landed with
 // none of it done and no word to the player. Now a failed check holds the turn,
@@ -16,8 +17,8 @@
 // a retried search produced afresh) is asked, never handed an answer about
 // other events. Once the player continues without, the failed answers are given
 // back as they are (the fail-open fallback) and no check is asked again. What a
-// turn asks after it is written is not a check and still runs: with Save AI
-// requests off the agents' reports, and the institutions' votes.
+// turn asks after it is written is not a check and still runs: the
+// institutions' votes.
 //
 // A check that answered with nothing to change has answered. Failure is the
 // request failing or its answer not being usable — the caller says which.

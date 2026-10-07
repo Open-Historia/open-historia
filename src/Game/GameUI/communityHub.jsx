@@ -3,11 +3,13 @@
 // The Community tab of the scenario library: featured/pinned posts get one
 // dedicated shelf, while every other scenario lives in a single searchable
 // browse grid that can be sorted by installs, likes or recency. Data comes
-// straight from the public
+// from the public
 // Scenario Hub — a GitHub
-// repo where every issue is a posted scenario — and bundles import through the
-// server's /api/hub proxy. Publishing exports the chosen scenario locally and
-// opens a prefilled hub post where the author drags the bundle in.
+// repo where every issue is a posted scenario — as the hub's own index lists
+// it: the posts whose file the hub has checked and released. Bundles import
+// from those checked copies, through the server's /api/hub proxy. Publishing
+// exports the chosen scenario locally and opens a prefilled hub post where the
+// author drags the bundle in.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -36,7 +38,7 @@ import {
   HUB_NEW_POST_URL,
   HUB_URL,
   SCENARIO_KEY_LINE,
-  downloadHubBundle,
+  downloadHubScenario,
   fetchHubPosts,
   hubCopiesByPostId,
   hubCopyStatus,
@@ -45,8 +47,9 @@ import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
-// two functions other modules have always imported from here stay exported.
-export { downloadHubBundle, fetchHubPosts };
+// post list, which the translator has always imported from here, stays
+// exported.
+export { fetchHubPosts };
 
 // How many of a scenario's custom flags are the author's OWN — i.e. worth
 // advertising to the hub. A flag installed from the Community tab is already
@@ -180,16 +183,20 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
 );
 
 // What the library already holds of a post (hubCopyStatus), as a small pill.
+// "unchecked" is a copy downloaded the old way, from the post's attachment
+// before the hub checked its files: it reads as an update too, with its own
+// reason, because that is what its card in the Scenarios tab asks for.
 const LIBRARY_BADGES = {
   current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
   update: { label: "Update available", title: "Your copy is older than this post, or its basemap could not be downloaded. Update it from the Scenarios tab." },
+  unchecked: { label: "Update available", title: "Your copy was downloaded before the hub started checking its files. Update it from the Scenarios tab." },
   edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
 };
 
 const LibraryBadge = ({ status }) => {
   const badge = LIBRARY_BADGES[status];
   if (!badge) return null;
-  const update = status === "update";
+  const update = status === "update" || status === "unchecked";
   return (
     <span
       title={badge.title}
@@ -233,7 +240,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status,
         <div
           title={post.official ? "Official: posted by a hub maintainer (verified by GitHub, not by the title)" : undefined}
           style={{
-            // The OFFICIAL badge marks a verified post (hub-owner). A random poster writing
+            // The OFFICIAL badge marks a post made by a team member (the hub's owner or a collaborator). A random poster writing
             // "official" in their title stays white.
             color: post.official ? "#e4e4e7" : "#fff",
             fontSize: "0.95rem",
@@ -479,7 +486,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
   // enough that a browser may block the page it tries to open by itself.
   const [publishPostUrl, setPublishPostUrl] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
-  // description. No extra network calls; the hub API is only ever hit by load().
+  // description. No extra network calls; the hub is only ever read by load().
   const [searchQuery, setSearchQuery] = useState("");
   const [browseSort, setBrowseSort] = useState("installs");
 
@@ -607,25 +614,20 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
     setBusyId(post.id);
     clearBanners();
     try {
-      const bundle = await downloadHubBundle(post.bundleUrl);
-      // Provenance: which post and which exact bundle file this copy came from.
-      // The library's Scenarios tab compares this against the post's CURRENT
-      // bundle URL to offer an Update button while the copy is unedited; once
-      // the player edits it the link stays, marked edited, so they can suggest
-      // their changes back to the post (server/hubProvenance.js).
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // The checked copy of the post's file, from the hub's releases, stamped
+      // with its provenance: which post, which file of it, and which copy was
+      // downloaded (hubPosts.js downloadHubScenario). The library's Scenarios
+      // tab compares this against the post's CURRENT bundle URL to offer an
+      // Update button while the copy is unedited; once the player edits it the
+      // link stays, marked edited, so they can suggest their changes back to
+      // the post (server/hubProvenance.js).
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author });
+      // Nothing is reported anywhere: the download of the post's file from the
+      // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
       // A basemap that just failed to download is not tried again this session
       // (runtime/missingBasemap.js); Import & Play opens the picker next.
       noteMissingBasemapTried(details?.scenario);
-      // Best-effort: tell the server this import succeeded so it can count it
-      // (once per install) on the hub's self-hosted import counter. Never blocks
-      // or fails the import — fire and forget.
-      fetch("/api/hub/import-log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
-      }).catch(() => {});
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
@@ -784,7 +786,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
               Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
-              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a verified post.</span>
+              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a post made by a team member of the game.</span>
             </div>
             <div style={{ flex: 1 }} />
             <input

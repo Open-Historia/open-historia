@@ -19,6 +19,7 @@ import {
     DEFAULT_DAILY_REQUEST_LIMIT,
     JUMP_REQUEST_CAP,
     REQUEST_BUDGET_KEYS,
+    SKIP_SPENDERS,
     backgroundAllowance,
     createJumpBudget,
     createMemoryStorage,
@@ -259,21 +260,116 @@ test("a budget carried over a restart spends on from where it was, reservation a
     assert.deepEqual(resumed.skipped, ["stats"]);
 });
 
-test("a skip that is not saving requests is never refused, and still keeps its log", () => {
-    const budget = createJumpBudget({ unlimited: true });
-    for (let request = 0; request < 12; request += 1) assert.equal(budget.take("jump"), true);
-    assert.equal(budget.spent, 12);
-    assert.equal(budget.remaining, Infinity);
-    assert.deepEqual(budget.skipped, []);
+test("no budget is without a cap: the one the A/B lab's runs had went with them", () => {
+    // Asking for one changes nothing.
+    const budget = createJumpBudget({ unlimited: true, only: SKIP_SPENDERS });
+    assert.equal("unlimited" in budget, false);
+    for (let request = 0; request < 3; request += 1) assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("jump"), false, "the cap holds");
+    assert.equal(budget.take("repair"), false, "and so does the list");
+    assert.equal(budget.spent, 3);
+    assert.equal(budget.remaining, 0);
+    assert.equal(budget.free, 0);
+    assert.deepEqual(budget.skipped, ["jump"]);
+    assert.deepEqual(budget.denied, ["repair"]);
+});
+
+// ---------------------------------------------------------------------------
+// The owner's rule (2026-10): a time skip is ONE request; function calling is
+// what can make it more, and never more than three.
+
+const skipBudget = ({ segments = 1, ballots = false } = {}) => {
+    const budget = createJumpBudget({ cap: jumpRequestCap({ segments }), only: SKIP_SPENDERS });
+    budget.reserve("jump", segments);
+    if (ballots) budget.reserve("institutionBallots", 1);
+    return budget;
+};
+
+test("a skip with no function calling is one request, with two left that only its own list may ask for", () => {
+    const budget = skipBudget();
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.spent, 1);
+    assert.equal(budget.free, 2);
+    // What used to be asked after a skip, each a request of its own.
+    for (const gone of ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects"]) {
+        assert.equal(budget.allows(gone), false, gone);
+        assert.equal(budget.take(gone), false, gone);
+    }
+    assert.equal(budget.spent, 1, "none of them cost anything");
+    assert.deepEqual(budget.skipped, [], "nor were they put off for the cap: a skip does not ask for them at all");
+    assert.deepEqual(budget.denied, ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects"]);
+    assert.deepEqual(SKIP_SPENDERS, ["jump", "review", "history", "stats", "institutionBallots"]);
+});
+
+test("function calling is the skip asking again: two rounds make three requests, and then it answers", () => {
+    const budget = skipBudget();
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.free, 2, "two rounds of questions may be asked");
+    assert.equal(budget.allows("jumpLookup"), true, "a lookup is the skip's own request");
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.free, 0, "the next request has to be the answer");
+    assert.equal(budget.spent, JUMP_REQUEST_CAP);
+    assert.equal(budget.take("jumpRetry"), false, "and a flawed answer is not asked for again on top of that");
+    assert.equal(budget.take("stats"), false);
+    assert.deepEqual(budget.skipped, ["jumpRetry", "stats"]);
+    assert.deepEqual(budget.denied, []);
+});
+
+test("an answer that could not be used at all is asked for once more, inside the same three", () => {
+    const budget = skipBudget();
+    budget.take("jump");
+    assert.equal(budget.take("jumpRetry"), true);
+    assert.equal(budget.free, 1);
+});
+
+test("every segment keeps its own request, whatever asks first", () => {
+    const budget = skipBudget({ segments: 3 });
+    assert.equal(budget.cap, 5);
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.free, 2, "the two segments still to come are not on offer");
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.free, 0);
+    assert.equal(budget.take("jumpLookup"), false, "a third round would cost a later segment its skip");
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.spent, 5);
+});
+
+test("an open ballot keeps its request, and function calling gets what is left", () => {
+    const budget = skipBudget({ ballots: true });
+    budget.take("jump");
+    assert.equal(budget.free, 1);
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.take("jumpLookup"), false);
+    assert.equal(budget.take("institutionBallots"), true);
+    assert.equal(budget.spent, 3);
+});
+
+test("what a skip spends on survives a restart with the rest of its budget", () => {
+    const budget = skipBudget();
+    budget.take("jump");
+    budget.take("geography");
+    const carried = JSON.parse(JSON.stringify({ cap: budget.cap, only: budget.only, state: budget.state }));
+    const resumed = createJumpBudget({ cap: carried.cap, only: carried.only, state: carried.state });
+    assert.equal(resumed.allows("repair"), false);
+    assert.equal(resumed.allows("history"), true);
+    assert.deepEqual(resumed.denied, ["geography"]);
+    assert.equal(resumed.spent, 1);
 });
 
 test("a segmented skip pays one request per segment and the cap moves with it", () => {
     assert.equal(jumpRequestCap({ segments: 1 }), 3);
     assert.equal(jumpRequestCap({ segments: 4 }), 6);
     assert.equal(jumpRequestCap({ segments: 0 }), 3);
-    assert.deepEqual(describeJumpCost({ saveRequests: true, segments: 1 }), { min: 1, max: 3, capped: true });
-    assert.deepEqual(describeJumpCost({ saveRequests: true, segments: 3 }), { min: 3, max: 5, capped: true });
-    assert.deepEqual(describeJumpCost({ saveRequests: false }), { min: 1, max: null, capped: false });
+});
+
+test("what a skip is said to cost: one request, and up to the cap only with function calling", () => {
+    assert.deepEqual(describeJumpCost(), { min: 1, max: 1, lookups: false });
+    assert.deepEqual(describeJumpCost({ lookups: false, segments: 3 }), { min: 3, max: 3, lookups: false });
+    assert.deepEqual(describeJumpCost({ lookups: true }), { min: 1, max: 3, lookups: true });
+    assert.deepEqual(describeJumpCost({ lookups: true, segments: 3 }), { min: 3, max: 5, lookups: true });
 });
 
 test("the day is described for the panel: used, left, and never less than nothing left", () => {

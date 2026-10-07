@@ -118,8 +118,6 @@ export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-// The agents' reports are the game's own record: written by the host.
-export const retryAgentReports = hostOnly(async (...args) => (await gameplay()).retryAgentReports(...args));
 // A stat sheet is the game's own record, so in a shared game the host writes
 // it, on the host's AI key: the page asks (the host answers once it is
 // written, which takes as long as the model does) and reads the sheet out of

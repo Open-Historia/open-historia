@@ -302,6 +302,39 @@ test("an Update and an Unlink of one scenario take turns", async () => {
   assert.equal(own.hubOrigin, null);
 });
 
+test("a link keeps the checked copy it was downloaded from, and an Update gives an old link one", async () => {
+  // hubBundle stamps no release: a link as it was made when the game still
+  // downloaded the post's own attachment, which is what every older save holds.
+  const HUB_RELEASE = (version) => `https://github.com/Open-Historia/Open-historia-scenarios/releases/download/scenarios-1/p42-${version}-hub-map-0a1b2c3d.zip`;
+  const checkedBundle = (name, version) => ({ ...scenarioBundle(name), hubOrigin: { postId: 42, bundleUrl: HUB_FILE(version), release: HUB_RELEASE(version) } });
+  await reset();
+  const id = ok(await scenarios("POST", "import", hubBundle("Hub Map"))).scenario.id;
+  assert.equal(ok(await scenarios("GET", id)).scenario.hubOrigin.release, undefined, "an old link names no checked copy");
+  const edited = ok(await scenarios("PUT", id, { name: "My Hub Map" })).scenario;
+  assert.ok(edited.hubOrigin.editedAt);
+  assert.equal(edited.hubOrigin.release, undefined);
+
+  // The Update its card asks for: the hub's checked file replaces the copy,
+  // the player's changes with it, and the link says which copy it was.
+  const updated = ok(await scenarios("PUT", `${id}/import`, checkedBundle("Hub Map", 1))).scenario;
+  assert.equal(updated.name, "Hub Map");
+  assert.equal(updated.hubOrigin.release, HUB_RELEASE(1));
+  assert.equal(updated.hubOrigin.editedAt, undefined);
+  ok(await scenarios("PUT", id, { hubPublished: { key: PUBLISH_KEY, postIds: [55] } }));
+  const editedAgain = ok(await scenarios("PUT", id, { name: "Mine Again" })).scenario;
+  assert.equal(editedAgain.hubOrigin.release, HUB_RELEASE(1), "bookkeeping and a later edit keep it");
+  assert.ok(editedAgain.hubOrigin.editedAt);
+
+  const imported = ok(await scenarios("POST", "import", checkedBundle("Second Copy", 2))).scenario;
+  assert.equal(imported.hubOrigin.release, HUB_RELEASE(2), "an import keeps the copy it came from");
+  const elsewhere = ok(await scenarios("POST", "import", {
+    ...scenarioBundle("Elsewhere"),
+    hubOrigin: { postId: 42, bundleUrl: HUB_FILE(3), release: "https://evil.example/releases/download/x/hub-map.zip" },
+  })).scenario;
+  assert.equal(elsewhere.hubOrigin.postId, 42);
+  assert.equal(elsewhere.hubOrigin.release, undefined, "an address outside the hub's releases is not kept as one");
+});
+
 const newGame = async (name, body = {}) =>
   ok(await games("POST", "", { name, scenarioId: "default", setActive: true, ...body })).game.id;
 

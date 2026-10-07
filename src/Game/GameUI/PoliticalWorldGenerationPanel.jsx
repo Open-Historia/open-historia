@@ -1602,7 +1602,8 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             <div style={{ color: "#bbf7d0", fontSize: "0.7rem", marginTop: "0.45rem" }}>Quality checks passed. The Political World is ready to apply to the scenario.</div>
           ) : (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
-              {v2Checkpoint.pauseReason === "model-call-budget"
+              {/* In an element of its own, so it is translated as the sentence it is. */}
+              <span>{v2Checkpoint.pauseReason === "model-call-budget"
                 ? "Generation paused at this run's AI-request limit. Completed work is saved. Continue Generation continues unfinished polities."
                 : v2Checkpoint.pauseReason === "total-model-call-budget"
                   ? (v2Checkpoint.lastError || "Generation paused at the AI-request safety limit. Completed work is saved.")
@@ -1610,7 +1611,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                     ? `${v2RetryPolityCount} ${v2RetryPolityCount === 1 ? "polity needs" : "polities need"} another attempt. Completed work is saved. Continue Generation retries only the unfinished polities.`
                     : ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error", "storage-unavailable"].includes(v2Checkpoint.pauseReason)
                       ? (v2Checkpoint.lastError || "Generation paused because the current AI provider could not complete a step. Completed work is saved; continue after the provider issue is resolved.")
-                      : `${v2UnresolvedPolityCount} ${v2UnresolvedPolityCount === 1 ? "polity remains" : "polities remain"} unfinished. Completed work is saved.`}
+                      : `${v2UnresolvedPolityCount} ${v2UnresolvedPolityCount === 1 ? "polity remains" : "polities remain"} unfinished. Completed work is saved.`}</span>
               {v2UnresolvedPolityKeys.length > 0 && <div style={{ marginTop: "0.25rem" }}>Still unfinished: {v2UnresolvedPolityKeys.slice(0, 8).join(" · ")}{v2UnresolvedPolityKeys.length > 8 ? "…" : ""}</div>}
               {v2Checkpoint.pauseReason === "total-model-call-budget" && (
                 <>

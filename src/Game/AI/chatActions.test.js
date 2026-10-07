@@ -194,6 +194,53 @@ test("a poll written loosely still lands: bare options, votes by label", () => {
     assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), ["Accept:1", "Refuse:1"]);
 });
 
+// The same loose poll in the player's language. A label's ref was its a-z and
+// 0-9, so "Принять" and "Отказать" were both the empty ref: the options were
+// thrown out, the poll with them, and each vote was refused for naming a poll
+// that did not exist.
+test("a loosely written poll lands in any script", () => {
+    for (const [question, yes, no, yesVote, noVote] of [
+        ["Принять немедленное перемирие?", "Принять", "Отказать", "Принять", "отказать"],
+        ["是否接受立即停火？", "接受", "拒绝", "接受", "拒绝"],
+        ["هل نقبل وقف إطلاق النار؟", "قبول", "رفض", "قبول", "رفض"],
+    ]) {
+        const { events, applied, rejected } = applyChatActionBatch([
+            { type: "create_poll", actorName: "France", pollRef: "ceasefire_vote", question, options: [yes, no] },
+            { type: "poll_vote", actorName: "France", pollRef: "ceasefire_vote", optionRef: yesVote },
+            { type: "poll_vote", actorName: "Prussia", pollRef: "ceasefire_vote", optionRef: noVote },
+        ], roster(), { time: "1871-01-26" });
+        assert.deepEqual(rejected, [], question);
+        assert.equal(applied.length, 3);
+        const [poll] = projectChatThread([
+            { id: "c", kind: "chat_created", title: "Armistice" },
+            { id: "j1", kind: "member_joined", member: "France" },
+            { id: "j2", kind: "member_joined", member: "Prussia" },
+            ...events,
+        ]).polls;
+        assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), [`${yes}:1`, `${no}:1`]);
+    }
+});
+
+// An added option's id was its ref cut to a-z and 0-9: every ref in another
+// script gave the one id "<poll>--", so two added options were one option.
+test("options added under refs in another script are options of their own", () => {
+    const { events, rejected } = applyChatActionBatch([
+        { type: "create_poll", actorName: "France", pollRef: "terms", question: "Какие условия?", options: [{ optionRef: "a", label: "Мир" }, { optionRef: "b", label: "Война" }] },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "terms", optionRef: "перемирие", label: "Перемирие" },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "terms", optionRef: "переговоры", label: "Переговоры" },
+        { type: "add_poll_option", actorName: "Prussia", pollRef: "terms", optionRef: "status quo", label: "Status quo" },
+        { type: "poll_vote", actorName: "France", pollRef: "terms", optionRef: "переговоры" },
+        { type: "poll_vote", actorName: "Prussia", pollRef: "terms", optionRef: "перемирие" },
+    ], roster(), { time: "1871-01-26" });
+    assert.deepEqual(rejected, []);
+    const added = events.filter((event) => event.kind === "poll_option_added").map((event) => event.optionId);
+    assert.equal(new Set(added).size, 3, "three options, three ids");
+    assert.match(added[0], /-перемирие$/);
+    assert.match(added[2], /-status-quo$/, "a ref in a-z and 0-9 makes the id it always made");
+    const votes = events.filter((event) => event.kind === "poll_vote_cast").map((event) => event.optionId);
+    assert.deepEqual(votes, [added[1], added[0]]);
+});
+
 test("a second turn on the same game day mints ids of its own, so its replies are not dropped", () => {
     const base = [
         { id: "c", kind: "chat_created", title: "Talks" },

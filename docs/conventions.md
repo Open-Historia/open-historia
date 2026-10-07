@@ -25,7 +25,7 @@ Sibling repos in the same org that the code and docs reference (not part of this
 
 | Repo | Purpose |
 |------|---------|
-| `Open-Historia/open-historia-node` | Community **content node** — caches/serves read-only, checksum-verified map data. |
+| `Open-Historia/open-historia-node` | Community **content node** — caches/serves read-only, checksum-verified map data. The game no longer loads its map through nodes: every build carries or downloads its own copy. |
 | `Open-Historia/open-historia-admin` | Private registry Worker (D1) + signing panel; deploys the website and node directory. |
 | `Open-Historia/Open-historia-scenarios` | The Scenario Hub — official presets + community scenarios. |
 
@@ -229,37 +229,37 @@ These strings are wired into external contracts (release assets players download
 | **`android`** (rolling release tag) | `android-apk.yml` | The APK is republished to this single rolling release; the app updates itself from it. |
 | **`desktop-stable` / `desktop-beta`** (release tags) | `package.json` `build.publish`, `electron-builder.beta.yml` `publish`, `desktop-installer.yml`, `desktop-beta.yml` | The installed apps read their update feed (`latest*.yml`) from these URLs, which are baked into every install; the README links `desktop-stable`. |
 | **Installer asset names** (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, and the `Open-Historia-Beta-*` set) | `artifactName` in `package.json` `build` and `electron-builder.beta.yml`; `latest.json` in both desktop workflows | The update feeds and `latest.json` name them, and the README and site link them by name. |
-| **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
+| **`map-data`** (release) + the per-asset names | `scripts/map-assets.json`, `scripts/map-assets.web.json` | The map-binary release and asset names (`regions-z8.pmtiles`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson`, `default-regions-names-web-clean.geojson`, …). The desktop's fetch script and the web builds' stager resolve these by name; a rename orphans every fetch. |
 | **The Android WebView host** (Capacitor `hostname`) | `mobile/capacitor.config.json` | The WebView origin the Android app serves under. |
 | **`Build: N`** convention | `android-apk.yml` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
 
-When a map file legitimately changes, you upload a *new* asset and update its `sha256`/`bytes` in `scripts/map-assets.json` — you don't rename the contract-facing names.
+When a map file legitimately changes, you upload a *new* asset and update its `sha256`/`bytes` in `scripts/map-assets.json` (and in `scripts/map-assets.web.json` when the website and the Android app carry it) — you don't rename the contract-facing names.
 
 ---
 
 ## 9. The map-data-off-LFS rule
 
-**The large world-map binaries are not in the repo and must never be re-added to Git (or Git LFS).** They are hosted as assets on the `map-data` GitHub Release and downloaded on demand by `scripts/fetch-map-assets.mjs`, which reads `scripts/map-assets.json`.
+**The large world-map binaries are not in the repo and must never be re-added to Git (or Git LFS).** They are hosted as assets on the `map-data` GitHub Release and downloaded on demand by `scripts/fetch-map-assets.mjs`, which reads `scripts/map-assets.json`. The website and the Android app carry web-sized copies, downloaded when they are built by `scripts/stage-map-assets.mjs`, which reads `scripts/map-assets.web.json` and keeps the files in the gitignored `map-cache/`.
 
-Why: LFS's free bandwidth (1 GB/month, shared org-wide) was exhausted by a handful of player installs. Release-asset download bandwidth is free and unmetered. This is stated three times in the tree so it can't be missed: `.gitattributes:6-11`, `.gitignore` ("Large world-map binaries" block), and `scripts/map-assets.json:_comment`.
+Why: LFS's free bandwidth (1 GB/month, shared org-wide) was exhausted by a handful of player installs. Release-asset download bandwidth is free and unmetered. This is stated three times in the tree so it can't be missed: `.gitattributes:10-15`, `.gitignore` ("Large world-map binaries" block), and `scripts/map-assets.json:_comment`.
 
 The gitignored / release-hosted files:
 
 | File | Manifest asset name |
 |------|--------------------|
-| `public/assets/regions.pmtiles` | `regions.pmtiles` |
-| `public/assets/countries.pmtiles` | `countries.pmtiles` |
+| `public/assets/regions.pmtiles` | `regions-z8.pmtiles` |
+| `public/assets/countries.pmtiles` | `countries-z8.pmtiles` |
 | `public/assets/cities.pmtiles` | `cities.pmtiles` |
 | `public/assets/cities-seed.json` | `cities-seed.json` |
-| `public/assets/regions-seed.geojson` | `regions-seed-z8.geojson` |
-| `server/data/stock/regions.geojson` | `default-regions-names.geojson` |
+| `public/assets/regions-seed.geojson` | `regions-seed-z8-clean.geojson` |
+| `server/data/stock/regions.geojson` | `default-regions-names-clean.geojson` |
 
 Rules of thumb:
 - **Never `git add`** any `*.pmtiles`, the seed geojson/json, or the default scenario's `regions.geojson`. They're gitignored; don't `-f` them in.
-- **To change a map file:** upload the new asset to the `map-data` release, then update its `sha256` + `bytes` in `scripts/map-assets.json`. `fetch-map-assets.mjs` re-downloads any listed file that's missing or hash-mismatched.
-- **The builds actively drop these from the bundle** — `vite.config.ts`'s `dropMapBinaries` plugin deletes the pmtiles (and, for web, the editor seeds) after copy, because Cloudflare Pages rejects any file over 25 MiB and nothing loads a pmtiles archive from the bundle anyway (the desktop streams them off disk via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes, hash-verified). Don't defeat this plugin. See [Assets & data](assets-and-data.md).
+- **To change a map file:** upload the new asset to the `map-data` release, then update its `sha256` + `bytes` in `scripts/map-assets.json`, and in `scripts/map-assets.web.json` when the web builds carry it (the three archives and `cities-seed.json` are in both lists). `fetch-map-assets.mjs` re-downloads any listed file that's missing or hash-mismatched; the website and the Android app get the change at their next build.
+- **The builds actively drop `public/`'s copies from the bundle** — `vite.config.ts`'s `dropMapBinaries` plugin deletes the pmtiles (and, for web, the world files) after copy, because Cloudflare Pages rejects any file over 25 MiB and neither build wants the copies a developer's `public/` holds (the desktop streams its archives off disk via `/api/runtime/pmtiles/:assetKey`; a web build carries its own web-sized files, which `scripts/stage-map-assets.mjs` lays into the output afterwards). Don't defeat this plugin. See [Assets & data](assets-and-data.md).
 
-Related gitignored-but-not-in-LFS runtime artifacts you also shouldn't commit: `/fmg/` (vendored Fantasy Map Generator, fetched by `scripts/fetch-fmg.mjs`), `/src/runtime/web/generated/` (web seed), `/node-content/` (a content-node store left in old checkouts by the removed in-repo node stub), and the offline signing keys `trust/*.key.pem` / `*.key` (**never commit a signing key**).
+Related gitignored-but-not-in-LFS runtime artifacts you also shouldn't commit: `/fmg/` (vendored Fantasy Map Generator, fetched by `scripts/fetch-fmg.mjs`), `/src/runtime/web/generated/` (web seed), `/map-cache/` (the web builds' map files, fetched by `scripts/stage-map-assets.mjs`), `/node-content/` (a content-node store left in old checkouts by the removed in-repo node stub), and the offline signing keys `trust/*.key.pem` / `*.key` (**never commit a signing key**).
 
 ---
 

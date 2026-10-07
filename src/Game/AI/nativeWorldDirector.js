@@ -1104,11 +1104,16 @@ export const coalesceWorldStorylines = (worldLike) => {
   };
 };
 
+// A storyline's title as it is compared: the letters, marks and digits of
+// every script, case, accents and punctuation folded away. Folded to a-z0-9, a
+// title in Cyrillic, Arabic or Chinese had no key at all: two processes of one
+// kind among the same participants were one storyline whatever each was
+// called. An ASCII title keeps the key it had.
 const pregameStorylineTitleKey = (value) => normalizeString(value)
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -1117,6 +1122,15 @@ const pregameStorylineSourceContains = (superset, required) => {
   return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
 };
 
+// Which storyline on record a Round-Zero fact is. Unlike a war or an agreement
+// (resolvePregameWarBaselineMatch, resolvePregameAgreementBaselineMatch), a
+// storyline under another title is NOT read as a restatement of the one on
+// record: kind, participants and date do not say which process it is. Two
+// crises of one country in one year are two crises, and a gas dispute among the
+// same two governments is not their border talks. So another title stays an
+// ambiguity, as does a title that fits more than one record. Both are marked
+// `ambiguous`, which lets the caller leave that one fact out on its last
+// attempt instead of losing the whole Round-Zero answer.
 export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero storyline resolver requires a candidate." };
   const kind = normalizeString(candidate.processKind || candidate.kind).toLowerCase();
@@ -1131,9 +1145,9 @@ export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate =
   const dateCompatible = (entry) => !date || !normalizeString(entry.startedDate) || normalizeString(entry.startedDate) === date;
   const possible = candidates.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameStorylineTitleKey(entry.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero storyline identity matches multiple canonical processes." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero storyline identity matches multiple canonical processes." };
   if (exact.length === 1) return { match: exact[0], error: "" };
-  if (possible.length) return { match: null, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
+  if (possible.length) return { match: null, ambiguous: true, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
   return { match: null, error: "" };
 };
 
@@ -1546,7 +1560,12 @@ const looksLikeStorylineStateProse = (value) => {
 
 const parseStorylineRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  // Fields joined by the separator make a record, so a line with none is not
+  // one. It is prose a model wrote where records go, a heading or "No
+  // changes." (nativeWarLedger.js has the report this comes from). Read as a
+  // record it had an id and no status, and a strict pass refused the whole
+  // answer over it.
+  if (!text || !text.includes(STORYLINE_RECORD_SEPARATOR)) return null;
 
   // Format:
   // id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventIndexesCSV~state
@@ -1679,12 +1698,16 @@ const STORYLINE_LINK_STOPWORDS = new Set([
   "republic", "state", "states", "process", "current", "continues", "continued",
 ]);
 
+// The letters, marks and digits of any script. Kept to a-z and 0-9, a
+// storyline and an event written in Russian or Arabic shared no words however
+// plainly one advanced the other, and only an actor the event named in a
+// structured field could link them. English text reads as it always did.
 const storylineLinkText = (value) =>
   normalizeString(value)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 

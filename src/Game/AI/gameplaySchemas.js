@@ -1045,17 +1045,19 @@ const jumpImpactsSchema = {
 };
 
 // ---- The folded time skip -------------------------------------------------------
-// While requests are being saved a skip is ONE request (requestBudget.js): no
-// second request checks its events afterwards, so each event carries every
-// consequence itself, the board included, and the agents' reports ride at the
-// end of the same answer. The contract a skip is SENT then is the lean one above
-// plus two things, added per call by foldJumpTool below:
+// A skip is ONE request (requestBudget.js): no second request checks its events
+// afterwards, so each event carries every consequence itself, the board
+// included, and what used to be asked after it rides at the end of the same
+// answer. The contract a skip is SENT is the lean one above plus up to three
+// things, added per call by foldJumpTool below:
 //   impacts.projectOps   the board, moved by the event that moved it;
-//   agentReports         one report per agent that is due one, when any is.
-// With saving off the checks are requests of their own and the skip is sent the
-// lean contract, exactly as before. The schema an answer is VALIDATED against
-// (JUMP_FORWARD_SCHEMA) accepts both, so neither answer costs a turn its schema
-// check; gameplay.js decides what each skip does with the extra fields.
+//   agentReports         one report per agent that is due one, when any is;
+//   history              the history document, when a fold is due.
+// The lean contract alone is what a skip is sent only when a provider refused
+// the folded one, and the checks then follow as one request of their own. The
+// schema an answer is VALIDATED against (JUMP_FORWARD_SCHEMA) accepts both, so
+// neither answer costs a turn its schema check; gameplay.js decides what each
+// skip does with the extra fields.
 //
 // The board's op is the board's own (projectOpSchema) without the fields an
 // event never sets: the priority is the player's dial, the links and the map
@@ -1090,6 +1092,10 @@ const jumpAnswerImpactsSchema = {
 
 // The field a folded skip's agents' reports come back in (gameplay.js).
 export const AGENT_REPORTS_FIELD = "agentReports";
+
+// And the one its fold of the history document comes back in, when one is due
+// (historyConsolidation.js buildSkipHistoryJob).
+export const HISTORY_FIELD = "history";
 
 // Category tags (runtime/eventTags.js): the timeline's filter chips.
 const eventTagsSchema = {
@@ -1280,6 +1286,14 @@ export const JUMP_FORWARD_SCHEMA = {
       description: "The player's agents' reports: one per agent listed under [Agents' Reports], and only when that block is present.",
       items: { type: "object" },
     },
+    // A folded skip's fold of the history document. Loose for the same reason:
+    // it is judged when it is read (historyConsolidation.js
+    // judgeSkipHistoryAnswer), and a poor one costs that fold, which waits for
+    // the next skip, and never the turn.
+    [HISTORY_FIELD]: {
+      type: "object",
+      description: "The history job's answer, only when the prompt carries that job.",
+    },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
   // reads it as `payload?.clearActions !== false`, so a missing value already
@@ -1295,10 +1309,10 @@ export const JUMP_FORWARD_SCHEMA = {
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
 
-// The lean contract a skip is SENT while its checks are requests of their own:
-// the answer schema without the board and without the agents' reports.
+// The lean contract, which foldJumpTool adds to: the answer schema without the
+// board, the agents' reports and the history.
 const JUMP_FORWARD_LEAN_SCHEMA = (() => {
-  const { [AGENT_REPORTS_FIELD]: _agentReports, ...properties } = JUMP_FORWARD_SCHEMA.properties;
+  const { [AGENT_REPORTS_FIELD]: _agentReports, [HISTORY_FIELD]: _history, ...properties } = JUMP_FORWARD_SCHEMA.properties;
   return {
     ...JUMP_FORWARD_SCHEMA,
     properties: { ...properties, events: { ...properties.events, items: leanJumpEventSchema } },
@@ -3314,15 +3328,17 @@ export const AUTO_JUMP_FORWARD_TOOL = makeTool(
 
 // A skip's tool as the folded contract (see "The folded time skip"): the board
 // under each event's impacts when `board` is set (a skip with nothing on the
-// board is not asked to keep one), and the agents' reports when `agentReports`
-// is. Takes the tool the task would have been sent, so a scenario's own stat
-// keys (getGameplayToolForStatIndices) are kept. The reports come last, written
-// after the events they have to agree with. Anything that is not a skip's tool,
-// and a skip with neither, comes back as it was.
-export const foldJumpTool = (tool, { board = true, agentReports = false } = {}) => {
+// board is not asked to keep one), the agents' reports when `agentReports` is,
+// and the history document when `history` is. Takes the tool the task would
+// have been sent, so a scenario's own stat keys (getGameplayToolForStatIndices)
+// are kept. The reports come after the events they have to agree with, and the
+// history last of all: it is the longest thing in the answer and the one an
+// answer cut short can best do without. Anything that is not a skip's tool, and
+// a skip with none of the three, comes back as it was.
+export const foldJumpTool = (tool, { board = true, agentReports = false, history = false } = {}) => {
   const events = tool?.schema?.properties?.events;
   const impacts = events?.items?.properties?.impacts;
-  if (!impacts?.properties || (!board && !agentReports)) return tool;
+  if (!impacts?.properties || (!board && !agentReports && !history)) return tool;
   return {
     ...tool,
     schema: {
@@ -3354,6 +3370,17 @@ export const foldJumpTool = (tool, { board = true, agentReports = false } = {}) 
               required: ["agent", "exchanges"],
               additionalProperties: false,
             },
+          },
+        } : {}),
+        ...(history ? {
+          [HISTORY_FIELD]: {
+            type: "object",
+            description:
+              "The answer to the separate job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last. "
+              + "It covers only what that job lists, never the events of this answer.",
+            properties: EVENT_CONSOLIDATOR_SCHEMA.properties,
+            required: ["summary", "document"],
+            additionalProperties: false,
           },
         } : {}),
       },

@@ -78,8 +78,11 @@ export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
     return rest.trim();
 };
 
-// An option's label, usable as its ref when the model gave none.
-const refFromLabel = (label) => fold(label).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+// An option's label, usable as its ref when the model gave none. The letters,
+// marks and digits of any script: kept to a-z and 0-9, "Принять" and "Отказать"
+// both came out empty, and a poll whose options were written as bare strings in
+// the player's language lost them all, and with them the poll and its votes.
+const refFromLabel = (label) => fold(asText(label).normalize("NFKC")).replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 40);
 
 // ---------------------------------------------------------------------------
 // Reading one action
@@ -288,7 +291,11 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds
         }
 
         if (action.type === "add_poll_option") {
-            const optionId = `${pollId}-${asText(action.optionRef).replace(/[^a-z0-9-]+/gi, "-")}`;
+            // The ref's own letters and digits, in any script: cut to a-z and
+            // 0-9, every option added under a ref in another script was given
+            // the one id "<poll>--". An id is made once, here, and read back
+            // from the thread afterwards, so options already saved keep theirs.
+            const optionId = `${pollId}-${asText(action.optionRef).replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")}`;
             optionIdByRef.set(`${action.pollRef}/${action.optionRef}`, optionId);
             events.push({ id: nextId("pollopt"), kind: "poll_option_added", time, by: actor, pollId, optionId, label: action.label });
             applied.push({ ...action, actorName: actor, pollId, optionId });

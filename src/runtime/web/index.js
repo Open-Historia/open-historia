@@ -12,7 +12,6 @@
 import { installWebApiRouter } from "./router.js";
 import { ensureSeeded, migrateStoreLayout } from "./libraryStore.js";
 import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
-import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
 import { forgetRetiredAccount } from "./retiredAccount.js";
 import { setBootTranslations } from "./bootTexts.js";
@@ -21,9 +20,10 @@ import { kvGet } from "./idb.js";
 import { DEFAULT_LANGUAGE, getStoredLanguage, hasShippedPack } from "../i18n.js";
 
 // Everything the player owns lives in this origin's storage: the games and
-// scenarios in IndexedDB, and — on the website — the ~215MB of map archives in
-// the preload Cache. (The Android app carries the map inside the APK instead,
-// and its http origin has no Cache Storage to begin with.)
+// scenarios in IndexedDB, and — on the website — the map archives in the
+// preload Cache, kept there after their first read from the site. (The Android
+// app carries the map inside the APK, and its http origin has no Cache Storage
+// to begin with.)
 // By default that is "best-effort" storage, which the browser or the OS may
 // evict under pressure — losing saved games outright, and turning the next
 // launch into a full re-download of the world map.
@@ -71,7 +71,7 @@ export const installWebBackend = async () => {
   // native splash comes down the moment the WebView has a document, and a white
   // gap where it was is most of the difference between an app and a web page in a
   // shell. Everything after this point is the same on both.
-  const boot = isNativeApp() ? showNativeBoot({ local: Boolean(import.meta.env.VITE_OH_NATIVE) }) : null;
+  const boot = isNativeApp() ? showNativeBoot() : null;
   const bootLanguage = loadBootLanguage();
   if (boot) bootLanguage.then(() => boot.relabel());
 
@@ -91,32 +91,21 @@ export const installWebBackend = async () => {
   }, STORE_LAYOUT_DELAY_MS);
   forgetRetiredAccount();
 
-  // Home page: connect to the best content node on entry.
-  // Once the player has entered this tab session, just connect in the background.
+  // The whole world is under this build's own /assets, on the website as in
+  // the app: there is nothing to find or connect to before the game can start.
   try {
     if (boot) {
       // The app has no entry screen and nothing to press: the player already
-      // chose to be here by opening it. Connect on their behalf, let the game
-      // mount behind the boot screen, and let that screen take itself down when
-      // the connection settles — including when it settles on the origin
-      // fallback, which is a playable answer and not an error. A connection that
-      // never settles is handled by the boot screen's own deadline, so a bad
-      // network delays the game rather than withholding it.
+      // chose to be here by opening it. The game mounts behind the boot screen,
+      // which still holds its minimum, so a fast phone does not flash it.
       markEntered();
-      if (import.meta.env.VITE_OH_NATIVE) {
-        // The app has the whole world under /assets: there is no node to find
-        // and nothing to wait for. The screen still holds its minimum, so a fast
-        // phone does not flash it.
-        boot.settle({ local: true });
-      } else {
-        connectBestNode().then((node) => boot.settle(node)).catch(() => boot.settle(null));
-      }
+      boot.settle();
     } else if (shouldShowHome()) {
       await bootLanguage;
       showHomePage();
-    } else connectBestNode().catch(() => {});
+    }
   } catch (error) {
-    if (boot) boot.settle(null);
+    if (boot) boot.settle();
     console.warn("Home page failed:", error.message);
   }
 };

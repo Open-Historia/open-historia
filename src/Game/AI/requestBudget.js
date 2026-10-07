@@ -4,10 +4,10 @@
 // Most players bring a free Gemini key. On that tier tokens are close to free
 // and REQUESTS are what run out: a few hundred a day, a handful a minute. So
 // the yardstick for every AI feature is how many requests a player action
-// costs, not how long its prompt is. A time skip is ONE request where it can
-// be, and never more than JUMP_REQUEST_CAP; what the game spends while the
-// player is not pressing anything stops at a daily cap, and at nothing when
-// the player turns it off.
+// costs, not how long its prompt is. A time skip is ONE request, in every mode;
+// function calling is what can make it more, and it is never more than
+// JUMP_REQUEST_CAP. What the game spends while the player is not pressing
+// anything stops at a daily cap, and at nothing when the player turns it off.
 //
 // Three parts, all plain data and rules:
 //   - the SETTINGS a player chooses (save requests, background AI, the limits);
@@ -29,8 +29,40 @@ export const DEFAULT_BACKGROUND_DAILY_CAP = 30;
 // Background AI also stops while less than this share of the day is left, so
 // the last requests of the day are always the player's own.
 export const BACKGROUND_RESERVE_SHARE = 0.1;
-// The most one time skip may spend while requests are being saved.
+// The most one time skip may spend, whatever the settings: the skip itself and
+// two rounds of function calling.
 export const JUMP_REQUEST_CAP = 3;
+
+// What a time skip may spend a request on at all (the owner's rule, 2026-10:
+// "at most 3 api calls per skip, and that's for the function calling").
+//
+//   jump                the skip itself. ONE request: its events carry their own
+//                       consequences, the Projects board, the agents' reports
+//                       and, when it is due, the history document
+//                       (gameplay.js, "The folded time skip"). A round of
+//                       function calling it asks for is counted as jumpLookup,
+//                       and being asked again, only when its first answer could
+//                       not be used at all, as jumpRetry.
+//   review              the checks as one request: only for a provider that
+//                       refused the skip that carries them (runTurnReview).
+//   history             folding old events into the history document: only when
+//                       the skip could not carry it (that same provider, a
+//                       batch the player asked for, or a fold that has failed
+//                       until the pile is twice its limit).
+//   stats               the automatic Stats refresh, a feature the player
+//                       switches on and sets the interval of.
+//   institutionBallots  NPC votes on a proposal open in an institution.
+//
+// Nothing else asks inside a skip. A place name the map does not have is left
+// out and said in the receipt (the model writes it exactly next time, or looks
+// it up when function calling is on); a storyline the skip left still stays
+// overdue, which is what the next skip is told to move first; with saving off
+// the units, the fronts, the structures, the repeats, the board and the agents
+// used to be a request each, and are the skip's own answer now.
+export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats", "institutionBallots"]);
+
+// "jumpRetry" and "jumpLookup" are "jump" asking again and looking something up.
+const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
 
 export const REQUEST_BUDGET_KEYS = Object.freeze({
     // ON unless the player turned it off ("0"): an absent key saves requests.
@@ -253,42 +285,43 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 
 // --- One time skip ---
 //
-// Who may spend, in order, while requests are being saved: "jump" (the time
-// skip itself, which carries its own consequences, the Projects board and the
-// agents' reports), "jumpRetry" (asked again, only when the first answer could
-// not be used at all), "geography" (a place the events name that exact matching
-// could not find), "history" (folding old events into the history document,
-// when due), "repair" (a storyline the skip left stale) and "institutionBallots"
-// (unresolved NPC formal ballots after the new turn is canonical). "review" is
-// the checks as one request after the skip, which is asked only when a provider
-// refused the skip that carries them (gameplay.js runTurnReview). The skip
-// itself always runs. Everything after it asks first, and a "no" is never an
-// error: the checks fail open, the history is folded on a later skip.
+// Who may spend is SKIP_SPENDERS above, and how much is the cap. The skip
+// itself always runs: every segment's one request is reserved when the skip
+// starts. Everything else asks first, and a "no" is never an error: a lookup
+// round that is refused means the model answers with what it has, a refused
+// retry leaves whatever the first answer can still give, and upkeep that is put
+// off is due again on the next skip.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
 export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
-// `state` is what `state` below gave out: a skip kept for its campaign
-// (parkedTurn.js) goes on spending from the budget it had, after a restart too.
-export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, state = null } = {}) => {
+// `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
+// skip); null serves anyone. `state` is what `state` below gave out: a skip
+// kept for its campaign (parkedTurn.js) goes on spending from the budget it
+// had, after a restart too. There is no budget without a cap: the one that
+// had none was for the A/B lab's runs, and went with them.
+export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = null } = {}) => {
     const spends = (Array.isArray(state?.spends) ? state.spends : [])
         .filter((entry) => entry && typeof entry === "object")
-        .map((entry) => ({ spender: String(entry.spender || "other"), granted: entry.granted === true }));
+        .map((entry) => ({ spender: String(entry.spender || "other"), granted: entry.granted === true, ...(entry.denied === true ? { denied: true } : {}) }));
     const reservations = new Map(Object.entries(state?.reservations && typeof state.reservations === "object" ? state.reservations : {})
         .map(([key, value]) => [key, Math.max(0, Math.round(Number(value) || 0))])
         .filter(([, value]) => value > 0));
     const limit = Math.max(1, Math.round(Number(cap) || JUMP_REQUEST_CAP));
+    const served = Array.isArray(only) ? new Set(only.map((entry) => String(entry))) : null;
     const spent = () => spends.filter((entry) => entry.granted).length;
     const reserved = () => [...reservations.values()].reduce((sum, value) => sum + value, 0);
+    // Is this something the budget spends on at all, whatever is left of it?
+    const allows = (spender) => !served || served.has(spenderBase(spender));
     return {
         cap: limit,
-        unlimited,
+        only: served ? [...served] : null,
+        allows,
         // Reserve a bounded slot for correctness work that happens late in the
         // turn. Optional work asked earlier cannot consume that slot, but the
         // total request cap never increases.
         reserve: (spender, count = 1) => {
-            if (unlimited) return 0;
             const key = String(spender || "other");
             const wanted = Math.max(0, Math.round(Number(count) || 0));
             if (!wanted) return reservations.get(key) || 0;
@@ -298,15 +331,18 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, st
             return reservations.get(key) || 0;
         },
         // May this spender make one request? Recorded either way, so the turn's
-        // log can say what was skipped to stay inside the cap.
+        // log can say what was skipped to stay inside the cap, and what was not
+        // asked because a skip does not spend on it.
         take: (spender) => {
             const key = String(spender || "other");
+            if (!allows(key)) {
+                spends.push({ spender: key, granted: false, denied: true });
+                return false;
+            }
             const ownReservation = reservations.get(key) || 0;
-            const granted = unlimited || (
-                ownReservation > 0
-                    ? spent() < limit
-                    : spent() < Math.max(0, limit - reserved())
-            );
+            const granted = ownReservation > 0
+                ? spent() < limit
+                : spent() < Math.max(0, limit - reserved());
             if (granted && ownReservation > 0) {
                 if (ownReservation === 1) reservations.delete(key);
                 else reservations.set(key, ownReservation - 1);
@@ -315,9 +351,15 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, st
             return granted;
         },
         get spent() { return spent(); },
-        get remaining() { return unlimited ? Infinity : Math.max(0, limit - spent()); },
-        get reserved() { return unlimited ? 0 : reserved(); },
-        get skipped() { return spends.filter((entry) => !entry.granted).map((entry) => entry.spender); },
+        get remaining() { return Math.max(0, limit - spent()); },
+        get reserved() { return reserved(); },
+        // What anyone without a reservation could still take: the rounds of
+        // function calling a task may ask (gameplay.js runJsonTask).
+        get free() { return Math.max(0, limit - spent() - reserved()); },
+        // Put off to stay inside the cap; and never asked, because a skip does
+        // not spend on it.
+        get skipped() { return spends.filter((entry) => !entry.granted && !entry.denied).map((entry) => entry.spender); },
+        get denied() { return spends.filter((entry) => entry.denied).map((entry) => entry.spender); },
         get log() { return spends.map((entry) => ({ ...entry })); },
         // Plain data, for createJumpBudget's `state`.
         get state() {
@@ -326,11 +368,13 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, st
     };
 };
 
-// What the time panel says a skip will cost before the player presses it.
-export const describeJumpCost = ({ saveRequests, segments = 1 } = {}) => {
+// What the time panel says a skip will cost before the player presses it: one
+// request (one per segment), and up to the cap only when function calling may
+// add rounds to it, which is Save AI requests off with the lookup functions on
+// (`lookups`).
+export const describeJumpCost = ({ lookups = false, segments = 1 } = {}) => {
     const pieces = Math.max(1, Math.round(Number(segments) || 1));
-    if (saveRequests) return { min: pieces, max: jumpRequestCap({ segments: pieces }), capped: true };
-    return { min: pieces, max: null, capped: false };
+    return { min: pieces, max: lookups ? jumpRequestCap({ segments: pieces }) : pieces, lookups: Boolean(lookups) };
 };
 
 // "37 of 500 today" — and what is left, never below zero.

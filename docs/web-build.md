@@ -1,6 +1,6 @@
 # Web Build (openhistoria.com)
 
-The web build is the browser-only edition of Open Historia served from the trusted central origin (openhistoria.com / the `/play/` site). It runs the **entire game client unchanged** with **zero server**: a `window.fetch` interceptor answers every same-origin `/api/*` call out of IndexedDB, and heavy map tiles stream from a Cloudflare Worker proxy (or a hash-verified community node swarm). There are no accounts: games stay in this browser and move between devices by export and import. Everything in this page lives under `src/runtime/web/` and ships in the web build and in the Android app (`--mode android`, which sets `VITE_OH_WEB` too and adds `VITE_OH_NATIVE` — see [mobile.md](mobile.md)); it is dynamically imported behind `import.meta.env.VITE_OH_WEB` so it is dead-code-eliminated from the desktop download, which keeps its real same-origin Express server.
+The web build is the browser-only edition of Open Historia served from the trusted central origin (openhistoria.com / the `/play/` site). It runs the **entire game client unchanged** with **zero server**: a `window.fetch` interceptor answers every same-origin `/api/*` call out of IndexedDB, and the map files are part of the site, served from the build's own `/assets` folder (`/play/assets` on openhistoria.com). There are no accounts: games stay in this browser and move between devices by export and import. Everything in this page lives under `src/runtime/web/` and ships in the web build and in the Android app (`--mode android`, which sets `VITE_OH_WEB` too and adds `VITE_OH_NATIVE` — see [mobile.md](mobile.md)); it is dynamically imported behind `import.meta.env.VITE_OH_WEB` so it is dead-code-eliminated from the desktop download, which keeps its real same-origin Express server.
 
 See also: [Server build](server.md) (the Express store this mirrors), [World state](world-state.md), [Assets & PMTiles](assets-and-data.md), [Scenario & game library](runtime-services.md), [Community hub](runtime-services.md).
 
@@ -14,7 +14,7 @@ The whole web backend is behind one Vite mode flag. `.env.web` sets `VITE_OH_WEB
 |---|---|---|
 | Gate | `src/main.jsx` | `if (import.meta.env.VITE_OH_WEB)` dynamically `import("./runtime/web/index.js")`, calls `installWebBackend()`, then `mount()`s the React app. Non-web builds just `mount()`. |
 | Entry | `src/runtime/web/index.js` | `installWebBackend()` — seed → install interceptor → drop a retired sign-in → home page. |
-| Content fetch | `src/runtime/assets.js` (`warmPmtilesArchive`) | For pmtiles, dynamically imports `web/contentTrust.js` and tries `fetchVerifiedBuffer(url)` (node swarm) before the origin; the origin's bytes are then held to the same signed manifest by `verifyOriginBuffer(url, buffer)`. A scenario's own archive skips both. |
+| Map files | `src/runtime/worldFiles.js`, `src/runtime/assets.js` (`warmPmtilesArchive`) | Every map file is read from the build's own `/assets` folder (`ASSETS_BASE`, `worldFileUrl`, `mapArchiveUrl`). `warmPmtilesArchive` downloads an archive once through `fetchWithPersistence` and keeps it in memory. There is no node to try first and no manifest to hold the bytes to (§8). |
 | Worker fetches | `src/runtime/assets.js` (`prepareWorkerFetchableUrl`) | Workers never see the `window.fetch` patch, so the scenario's regions GeoJSON reaches MapLibre's `custom-regions-source` and the cartography worker through a `blob:` copy (`Nations.jsx` via `useWorkerFetchableUrl`); the runtime URL stays the epoch/cache key. |
 
 `installWebBackend()` (`src/runtime/web/index.js`) runs, in order:
@@ -22,30 +22,32 @@ The whole web backend is behind one Vite mode flag. `.env.web` sets `VITE_OH_WEB
 1. `await ensureSeeded()` — write the default scenario into IndexedDB before any `/api` call (`libraryStore.js`).
 2. `installWebApiRouter()` — monkey-patch `window.fetch` (`router.js`).
 3. `forgetRetiredAccount()` (`retiredAccount.js`) — best-effort, not awaited: deletes the kv rows a sign-in from before accounts were removed left behind (`account:session`, `account:email`, `account:dek`, `sync:versions`). Nothing reads them any more.
-4. If `shouldShowHome()` (not yet "entered" this tab session) → `showHomePage()`; otherwise `connectBestNode()` in the background.
+4. On the website, if `shouldShowHome()` (not yet "entered" this tab session) → `showHomePage()`. Nothing is looked up or connected to first: the map is under the build's own `/assets`. The Android app has no home page; its boot screen (`nativeBoot.js`), painted before step 1, settles here.
 
 Build scripts (`package.json`):
 
 | Script | Command |
 |---|---|
-| `build:web` | `node scripts/seed-web-defaults.mjs && vite build --mode web --outDir dist-web --emptyOutDir` |
-| `build:site` | same, but `--base /play/` + `scripts/assemble-site.mjs` (the GitHub-Pages parchment landing site wraps `/play/`). |
+| `build:web` | `node scripts/seed-web-defaults.mjs && vite build --mode web --outDir dist-web --emptyOutDir && node scripts/stage-map-assets.mjs dist-web` |
+| `build:site` | same, but `--base /play/`, then `scripts/assemble-site.mjs` after the map is staged (the GitHub-Pages parchment landing site wraps `/play/`). |
+| `dev:web` | `node scripts/seed-web-defaults.mjs && node scripts/stage-map-assets.mjs public --missing-only && vite --mode web` |
 
 `scripts/seed-web-defaults.mjs` regenerates `src/runtime/web/generated/defaultScenario.js` (auto-generated; the default scenario's meta + colors + base64 cover) so the seed is baked into the bundle.
+
+`scripts/stage-map-assets.mjs` puts the map into the build (§8). It downloads the six files pinned in `scripts/map-assets.web.json` from the `map-data` GitHub Release into `map-cache/` at the repo root (gitignored), checks each against its size and sha256, and, given a folder, lays them under that folder's `assets/` at their stable names. A file already in the cache and correct is not downloaded again. It exits non-zero when a file cannot be had, so a site is never built without its map. `build:web` and `build:site` stage into `dist-web` after the Vite build; `dev:web` stages into `public` with `--missing-only`, which lays only the files `public/` lacks and never overwrites a developer's desktop copies.
 
 ---
 
 ## 2. Configuration (`.env.web`)
 
-Every URL points at the **registry Worker** (`open-historia-registry.nichojkrol.workers.dev`), which is the one piece of always-on server infrastructure.
+The one URL left points at the **registry Worker** (`open-historia-registry.nichojkrol.workers.dev`), the project's one piece of always-on server infrastructure, and the game calls it only for community hub downloads. The map needs no setting: it is part of the build (§8).
 
 | Var | Value / default | Purpose | Read in |
 |---|---|---|---|
 | `VITE_OH_WEB` | `1` | Master flag; gates all web-mode code + dynamic imports. | `main.jsx`, `assets.js`, `libraryBar.jsx`, `settings.jsx` |
-| `VITE_OH_PMTILES_URL` | Worker `/content` | CORS+range proxy for the 60–100 MB pmtiles (Cloudflare Pages caps at 25 MB/file). Also the base for `default-regions.geojson`. Falls back to `/assets` (local dev). | `router.js`, `libraryStore.js` |
-| `VITE_OH_DIRECTORY_URL` | Worker `/node-directory.json` | The **signed** live node directory (updates as nodes are accepted/paused/banned). | `contentTrust.js` |
-| `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/*`), because GitHub attachments send no CORS. | `router.js` |
-| `VITE_OH_MANIFEST_URL` | *(unset)* → `${BASE_URL}content-manifest.json` | Signed asset→hash manifest; ships with the build, so the default sits beside it (`/play/content-manifest.json` on openhistoria.com; a root-absolute default 404'd there and verification never ran). A missing manifest logs one `console.info`. | `contentTrust.js` |
+| `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/file`), because GitHub attachments and release assets send no CORS header. | `router.js` |
+
+`VITE_OH_PMTILES_URL`, `VITE_OH_DIRECTORY_URL` and `VITE_OH_MANIFEST_URL` no longer exist. They named a content origin, a node directory and a signed manifest, and the build has none of the three (§8).
 
 ---
 
@@ -53,7 +55,7 @@ Every URL points at the **registry Worker** (`open-historia-registry.nichojkrol.
 
 There is no Express server. `installWebApiRouter()` (`router.js`) replaces `window.fetch` once (`installed` guard). The wrapper:
 
-- Resolves the request URL against `location.href`. **Only** same-origin requests whose path starts with `/api/` are intercepted; everything else (AI providers, GitHub API, ESRI tiles, static assets, node URLs) passes straight to the saved `originalFetch`.
+- Resolves the request URL against `location.href`. **Only** same-origin requests whose path starts with `/api/` are intercepted; everything else (AI providers, GitHub API, ESRI tiles, static assets, the map files under `/assets` among them) passes straight to the saved `originalFetch`.
 - Builds a real `Request`, dispatches to `route(request, url)`, and returns a real `Response` — so all the existing client code (`src/runtime/library.js`, `src/runtime/assets.js`, `documentIO.js`, `basemapLibrary.js`) runs **unchanged**.
 - On throw: `SyntaxError` (bad JSON body) → `400`, anything else → `500` (mirrors Express body-parser behavior).
 
@@ -65,7 +67,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 
 | `domain` (+ path shape) | Handler | Store file |
 |---|---|---|
-| `runtime/pmtiles/<key>` | inline (scenario override → else proxy) | `libraryStore.getScenarioPmtilesOverride` |
+| `runtime/pmtiles/<key>` | inline (scenario override → else the build's own archive) | `libraryStore.getScenarioPmtilesOverride` |
 | `runtime/json/<key>` | `handleRuntimeJson` | `libraryStore.js` |
 | `mapeditor/*` | `handleMapEditor` | `editorStore.js` |
 | `basemaps/*` | `handleBasemaps` | `basemapStore.js` |
@@ -76,7 +78,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 | `trash`, `trash/<entry>/restore` | `handleTrash` | `libraryStore.js` |
 | `ui-settings/*` | `handleUiSettings` | `settingsStore.js` |
 | `lang/*` | `handleLang` | `settingsStore.js` |
-| `hub/*` | inline proxy → Worker / node | (see below) |
+| `hub/*` | inline proxy → Worker | (see below) |
 | *(anything else)* | `errorResponse("Unknown web-mode endpoint", 404)` | `util.js` |
 
 ### Body handling (`readBody`, `router.js`)
@@ -87,8 +89,8 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 
 ### The two branches that are *not* pure IndexedDB
 
-- **`runtime/pmtiles/<key>`** (`router.js`): first ask `getScenarioPmtilesOverride(key, range)` (a scenario may carry its own pmtiles in IndexedDB); otherwise proxy `${VITE_OH_PMTILES_URL||/assets}/<key>.pmtiles` with the incoming `Range`/method.
-- **`hub/*`** (`router.js`): forward to `${VITE_OH_HUB_URL}/hub/<segments>`. For a bundle download (`hub/file?url=…`, GET) it **prefers the connected content node** (`getConnected()` → `node.url/oh/v1/hub`) to offload the central proxy, falling back to the Worker. `POST`s (import counters) are anonymous; the Worker dedups them by IP.
+- **`runtime/pmtiles/<key>`** (`router.js`): first ask `getScenarioPmtilesOverride(key, range)` (a scenario may carry its own pmtiles in IndexedDB); otherwise fetch `mapArchiveUrl(key)` (`src/runtime/worldFiles.js`: `<ASSETS_BASE>/<key>.pmtiles`, the build's own z8 archive) with the incoming method and headers, so a `Range` is answered by the host that serves the site.
+- **`hub/*`** (`router.js`): the only hub call is a bundle download, `GET hub/file?url=…`, forwarded to `${VITE_OH_HUB_URL}/hub/file`. Community bundles are files on GitHub, which sends no CORS header on them, so a page cannot read one itself: the Worker fetches the file and returns it with the header. Any other hub path answers 404, and an unset `VITE_OH_HUB_URL` answers 502. Import counts are read from the hub's own index (`src/runtime/hubFiles.js`), straight from GitHub.
 
 ---
 
@@ -159,7 +161,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 `readRuntimeJsonAsset(key)` resolves an asset by precedence: **active game record → active runtime scenario → fallback default**. Special cases:
 
 - `SCENARIO_GEOJSON_ASSET_KEYS` (`regionsGeojson`/`citiesGeojson`/`backgroundData`) come from the scenario; a scenario without its own `regionsGeojson` **borrows Modern Day's** (migrated as *default's* record, since those owners live in default's owner-space).
-- The default scenario's `regionsGeojson` (~12 MB) is **not** in the seed — `fetchDefaultRegionsGeojson()` pulls `${VITE_OH_PMTILES_URL}/default-regions.geojson` once per session (never pinning an empty/failed result, so a transient miss retries). Without it the political map renders blank.
+- The stock world (the web-sized GADM world with owners as country names, 13.1 MB) is **not** in the seed. `fetchDefaultRegionsGeojson()` fetches it from the build's own assets folder, `default-regions.geojson` (`worldFileUrl("stock")`, `src/runtime/worldFiles.js`; §8), once per session, never pinning an empty/failed result, so a transient miss retries. The editor's default world is read the same way, from `regions-seed.geojson` (`worldFileUrl("seed")`). Without the stock world the political map renders blank.
 - These session caches (the built-in and stock regions, and the coarse copy of the regions for the scenario being looked at, `coarseRegionsCache.js`, one slot) are all dropped when Android sends `oh:memory-pressure` (`src/runtime/memoryPressure.js`); the next read fetches and builds them again.
 - `colors` falls back to the immutable app palette (`generated/fallbackColors.js`), **not** the mutable default-scenario colors.
 
@@ -177,7 +179,7 @@ Rewrites a record whose owners are GADM codes into one keyed by country **names*
 
 - `exportScenarioBundle(id)` — every export is full (`mode: "full"`): the cover, colours, flags, tags, geometry, background and any custom PMTiles archive travel whenever the scenario has them. There is no light mode any more; an older `mode: "light"` bundle still imports. Geometry and the other JSON assets are embedded as JSON, not base64, matching the desktop store (see `docs/server.md`); the cover and PMTiles archives are still base64. Schema `open-historia-scenario-bundle/2`.
 - `importScenarioBundle` / `updateScenarioFromBundle` accept any schema in `ACCEPTED_BUNDLE_SCHEMAS` (v1 + v2), and lay down each asset through one `applyScenarioBundleAsset`, as the desktop store does: geometry that travelled as JSON is stored, one that travelled as base64 is decoded, and only an asset the bundle does not embed is cleared (the hub Update once had its own copy without the JSON branch and deleted a map's regions, cities and basemap). Note the **JSON-descriptor gotcha**: `colors`/`flags`/`tags` descriptors carry the **object itself** in `descriptor.data`, not base64 — passing them through `base64ToBytes` (as geojson/pmtiles do) made `atob` throw and broke import of every flag/tag-carrying preset (e.g. WWII).
-- Hub provenance (`hubOrigin`, `hubPublished`, `hubUnlinked`, `hubReviews`) follows the desktop store's rules through the same `server/hubProvenance.js`. `hubOrigin` is stamped **last** by an import. Any later edit keeps it and stamps `editedAt`, which stops hub updates from overwriting the player's work while keeping the original for **Suggest changes**. `hubOrigin: null` unlinks the scenario, and `hubPublished: null` its player's own post, both for good: what was unlinked goes into `hubUnlinked` and nothing attaches it again (`hubLinksAfterWrite`), a scenario write cannot set `hubOrigin` at all (`pickHubProvenance`), and an Update only renews the link a copy has (`hubOriginForUpdate`). A body carrying only provenance is bookkeeping (`writeScenarioMeta(record, updates, { touch: false })`: no `updatedAt`, no `editedAt`). One thing is this store's own: `updateScenario` and `updateScenarioFromBundle` take one turn per scenario (`serializeByKey`, `scenario-write:<id>`), because a write here is a read, a change and a put with awaits between them, and two at once each began from the same record, so a check for suggestions landing with an Unlink put the post back. The desktop store answers one request at a time and needs none. See [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went).
+- Hub provenance (`hubOrigin`, `hubPublished`, `hubUnlinked`, `hubReviews`) follows the desktop store's rules through the same `server/hubProvenance.js`. `hubOrigin` is stamped **last** by an import, with the checked copy in the hub's releases that was downloaded (`release`, kept through every write that keeps the link; a link without one is an old link, whose card asks for an Update). Any later edit keeps it and stamps `editedAt`, which stops hub updates from overwriting the player's work while keeping the original for **Suggest changes**. `hubOrigin: null` unlinks the scenario, and `hubPublished: null` its player's own post, both for good: what was unlinked goes into `hubUnlinked` and nothing attaches it again (`hubLinksAfterWrite`), a scenario write cannot set `hubOrigin` at all (`pickHubProvenance`), and an Update only renews the link a copy has (`hubOriginForUpdate`). A body carrying only provenance is bookkeeping (`writeScenarioMeta(record, updates, { touch: false })`: no `updatedAt`, no `editedAt`). One thing is this store's own: `updateScenario` and `updateScenarioFromBundle` take one turn per scenario (`serializeByKey`, `scenario-write:<id>`), because a write here is a read, a change and a put with awaits between them, and two at once each began from the same record, so a check for suggestions landing with an Unlink put the post back. The desktop store answers one request at a time and needs none. See [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went).
 - A community basemap that could not be downloaded (`missingBasemap`, see [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went)) is kept and exported as its reference, and `PUT /api/scenarios/:id/basemap` (`restoreScenarioBasemap`) puts it in place once the game has downloaded it, as the desktop store does.
 
 ### Trash (Recently deleted)
@@ -235,65 +237,68 @@ Resolves an owner token to its canonical **name**. Precedence:
 
 ---
 
-## 8. Heavy content: PMTiles, the node swarm, and the trust model
+## 8. Heavy content: the map files the build carries
 
-Heavy map tiles never touch IndexedDB by default; they stream from the network. Integrity comes from **hashes and signatures, never from trusting a node**.
+The map is part of the site. Every build of the game reads its map data from its own `/assets` folder under the same stable names, and what differs is only how the files get there. The desktop app fetches them from the `map-data` GitHub Release at first launch (`scripts/fetch-map-assets.mjs`, list `scripts/map-assets.json`). The website and the Android app are the same bundle and carry the same six files, laid into the build when it is made. Nothing is fetched from a third party at run time, so there is no node to connect to, no manifest and no signature to check.
 
-### The fetch path (`assets.js` → `contentTrust.js`)
+### Where the files are read from (`worldFiles.js`)
 
-`assets.js` (web only): for a pmtiles URL, try `fetchVerifiedBuffer(url)` first; on any miss/failure fall through to the origin (via `router.js`'s pmtiles proxy branch → the Worker). A node outage is therefore invisible.
+`src/runtime/worldFiles.js` is the one module that names them. `ASSETS_BASE` is `${BASE_URL}assets`: `/assets` on the desktop and in the Android app, `/play/assets` on openhistoria.com.
 
-`fetchVerifiedBuffer(url)` (`contentTrust.js`):
-
-1. Map the URL to a content-manifest asset id (`countries.pmtiles`, etc.).
-2. Load the **signed** content manifest (asset→`{sha256,bytes}`) and the active node list.
-3. For each candidate node (connected node first, then a per-asset rotation): `GET <node>/oh/v1/content/<sha256>`, reject on wrong byte length, **recompute SHA-256 and compare** — a tampered node is skipped with a warning.
-4. Return the verified `ArrayBuffer`, or `null` so the caller uses the canonical origin.
-
-### Where the manifest comes from
-
-`public/content-manifest.json` describes the files the **website** fetches by release-asset name through the Worker's `/content` proxy, listed in `scripts/map-assets.web.json` (the full `regions.pmtiles` / `countries.pmtiles`, `cities.pmtiles`, and the web-sized seeds). It is not the desktop list (`scripts/map-assets.json`), whose files differ in size. `node scripts/build-content-manifest.mjs` rebuilds it from the web list; when nothing changed it leaves the file byte-for-byte alone (the signature stays valid), otherwise it drops `keyid`/`issued`/`expires` and prints the `sign-release.mjs --stamp` command to run. Content nodes are filled from the same list by the node software ([Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node)). `server/contentManifest.test.js` fails when the web list and the committed manifest drift apart, or when two lists give one release asset different bytes.
-
-### Node directory: signed control doc + live addresses
-
-`loadDirectoryNodes()` (`contentTrust.js`) combines two sources:
-- The **signed** directory (`VITE_OH_DIRECTORY_URL`) — an auto-accept **deny-list / control doc**: nodes marked `banned`/`paused` are excluded and rate-limit/cap overrides applied.
-- The **unsigned** live list (`nodes-live.json`, same origin) — actual current URLs (`{id,url,status}`), so a node restarting on a new URL needs no admin re-sign.
-
-Because every byte is hash-verified, an un-vetted node can at worst be useless; a bad actor is removed by an admin ban published to the signed directory.
-
-### Signature verification (`trust.js` + `trust/pinned-key.js`)
-
-`fetchSignedJson(url)` (`trust.js`) fetches `url` and `url.sig` (both bounded by `SIGNED_FETCH_TIMEOUT_MS`, 4 s, body included; `nodes-live.json` has the same deadline), verifies the **detached Ed25519 signature over the exact served bytes** against the pinned root key(s), and enforces `keyid` + `expires`. Returns `{valid, data, reason}`; any of unsigned / bad-signature / expired / keyid-unknown / timed out ⇒ `valid:false` and the client simply **doesn't use nodes** and falls back to the origin — a broken trust chain degrades safely.
-
-- `verifyDetached` uses `@noble/ed25519`.
-- `PINNED_ROOT_KEYS` (`trust/pinned-key.js`) — currently one key `oh-root-1` — is compiled into both the client and the node software; the private key is offline. Rotation = ship both keys for one release, then drop the old one.
-
-### Connecting to a node (`nodeConnect.js`)
-
-`connectBestNode()` probes every directory node's `/oh/v1/status` (4 s timeout), picks reachable + `active` + not `full` with the **lowest latency**, and makes content fetches prefer it (`setPreferredNode`).
-
-| Endpoint | Method | Purpose |
+| Call | File under `ASSETS_BASE` | Read by |
 |---|---|---|
-| `/oh/v1/status` | GET | probe: liveness, region, user counts, `full` |
-| `/oh/v1/ping` | GET | count toward the node's live user tally; heartbeat health check |
-| `/oh/v1/leave` | GET (keepalive, `pagehide`) | drop out of the node's player count immediately |
-| `/oh/v1/content/<sha256>` | GET | fetch a hash-addressed content blob |
-| `/oh/v1/hub?url=…` | GET | node-served community bundle download |
+| `mapArchiveUrl(key)` | `<key>.pmtiles` (`regions`, `countries`, `cities`) | `router.js`, for `/api/runtime/pmtiles/<key>` |
+| `worldFileUrl("stock")` | `default-regions.geojson` | `libraryStore.js` (`fetchDefaultRegionsGeojson`) |
+| `worldFileUrl("seed")` | `regions-seed.geojson` | `src/Editor/regionImport.js` |
+| `worldFileUrl("cities")` | `cities-seed.json` | `src/Editor/citiesImport.js`, `src/Game/AI/promptContext.js`, `src/Game/AI/worldCities.js` |
 
-A 20 s heartbeat re-selects a node if the current one goes draining/full/unreachable. Nothing is reported to the registry: a node sees only IPs, and the player stays anonymous.
+Which bytes are behind a name is decided by the pinned list and by nothing at run time. On the desktop the server answers `/api/runtime/pmtiles/<key>` from the same folder itself, and reads the stock world from its data folder (`server/data/stock/regions.geojson`).
+
+### The list and the stager
+
+`scripts/map-assets.web.json` pins the six files. Each entry has `asset` (the name on the release), `path` (the stable name under the build), `bytes` and `sha256`.
+
+| Release asset | Path in the build | Bytes |
+|---|---|---|
+| `regions-z8.pmtiles` | `assets/regions.pmtiles` | 21,106,005 |
+| `countries-z8.pmtiles` | `assets/countries.pmtiles` | 12,580,027 |
+| `cities.pmtiles` | `assets/cities.pmtiles` | 1,547,924 |
+| `cities-seed.json` | `assets/cities-seed.json` | 7,857,627 |
+| `regions-seed-clean.geojson` | `assets/regions-seed.geojson` | 13,077,300 |
+| `default-regions-names-web-clean.geojson` | `assets/default-regions.geojson` | 13,128,553 |
+
+About 69 MB in all. The archives are the z8 trims the desktop and the Android app already used: 35 MB instead of the 168 MB z10 ones the website used to stream. The two world files are the web-sized cut of the world, deep-cleaned. The stock world has its owners as country names and is built from that seed by `scripts/build-default-map.mjs`, exactly as the desktop's stock world is built from the desktop's seed. It is 13 MB where the stock world the website used to be handed was 55 MB. See [Map Data & Assets](assets-and-data.md) §3.
+
+`scripts/stage-map-assets.mjs` downloads and verifies the files into `map-cache/` and lays them into a build (§1). `build:web` and `build:site` lay them into `dist-web/assets/`, and `build:site` then assembles the site, so they are served at `/play/assets/`. Before that, the Vite plugin `dropMapBinaries` (`vite.config.ts`) removes whatever map files `public/assets/` put into the output: a developer's `public/` holds the desktop's copies under the same names, and its `regions-seed.geojson` is 55 MB. For Android, `mobile/scripts/stage-map-assets.mjs` (`npm run map` in `mobile/`) is a thin wrapper around the same script and cache, and `mobile/scripts/stage-www.mjs` lays the files under `www/assets/` (see [mobile.md](mobile.md)).
+
+Every file must stay under Cloudflare Pages' 25 MiB a file (`SITE_FILE_LIMIT_BYTES` in the stager). `src/runtime/worldFiles.test.js` checks the list against the limit and against the names the app asks for, and the deploy workflow refuses a built site with a file over 24 MiB.
+
+### Why the site carries its own copy
+
+A browser cannot read a GitHub release asset. Neither the release download (`github.com/.../releases/download/...`, which redirects to `release-assets.githubusercontent.com`) nor the API route sends an `Access-Control-Allow-Origin` header on the file (measured 2026-10-06), and the API route is limited to 60 requests an hour without a token. The desktop's fetcher is a Node script, where that header is not needed.
+
+The host must answer byte-range requests for static files: an archive is read by `Range` until the whole of it has been warmed into memory. Cloudflare Pages does (measured: a 206 on the live site). A self-hosted site needs a server that does too; nginx, Caddy, Apache, Netlify and GitHub Pages all do.
+
+### What it replaced
+
+The website used to fetch the archives and the two world files at run time from a content origin (`VITE_OH_PMTILES_URL`: the registry Worker's `/content` proxy in front of the `map-data` release), try community content nodes first (a signed node directory, `VITE_OH_DIRECTORY_URL`), and check the bytes against a signed manifest. The proxy and the nodes existed only to get around the limit above, and none of it is in the game any more: `src/runtime/web/nodeConnect.js`, `contentTrust.js` and `trust.js`, `public/content-manifest.json` and `public/node-directory.json` with their signatures, `scripts/build-content-manifest.mjs`, `server/contentManifest.test.js` and the tests workflow's manifest-expiry step are removed.
+
+The signing tools are still in the repo (`scripts/sign-release.mjs`, `scripts/gen-signing-key.mjs`, `server/trust.js`, `server/releaseSigning.test.js`, `trust/`), but no build of the game uses them. The content-node software ([Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node), a separate repository) and the Worker's `/content` route still exist; the game does not use them for map data.
+
+Community hub downloads still go through the Worker (`VITE_OH_HUB_URL`, `/hub/file`, §3): community bundles are files on GitHub, and the same limit applies to them.
 
 ---
 
-## 9. Home / connect screen (`homePage.js`)
+## 9. Home screen (`homePage.js`)
 
-A full-screen parchment/Roman overlay injected over the already-mounted game on first entry per tab session (`sessionStorage["oh:entered"]`). Pure DOM (no React), scoped under `.oh-home`. It auto-connects the best node and renders live stats. Its text, the demo notice's and the Android boot screen's come from `bootTexts.js`, looked up in the player's shipped language pack (see [i18n.md](i18n.md)).
+A full-screen parchment/Roman overlay injected over the already-mounted game on first entry per tab session (`sessionStorage["oh:entered"]`). Pure DOM (no React), scoped under `.oh-home`. It shows the wordmark, what the game is and the way in. There is nothing to connect to first, so it has no connection card and Enter is available at once. Its text, the demo notice's and the Android boot screen's come from `bootTexts.js`, looked up in the player's shipped language pack (see [i18n.md](i18n.md)).
 
 | Control | Behavior |
 |---|---|
-| Connection panel | "Finding the nearest node…" → connected node card (**anonymous node id only**, region, latency, `players/max` bar) or "Connected via the origin" fallback. Fed by `connectBestNode()` → `renderConnection`. If the connection has not settled by `CONNECT_DEADLINE_MS` (8 s, `nativeBoot.js`) it shows the origin and enables Enter; a node that answers later replaces it. |
-| **⚔ Enter Open Historia** | `enter()` — sets the `oh:entered` flag and removes the overlay. |
-| Footer links | GitHub, Discord, Host a node. |
+| **⚔ Enter Open Historia** | Shows the demo notice once per tab session, then `enter()` sets the `oh:entered` flag and removes the overlay. |
+| Footer links | GitHub, Discord, Privacy. |
+
+The Android app never shows this page. Its boot screen (`nativeBoot.js`) says "Getting the world ready…" while the library is seeded, then "Everything is on this device", and comes down after `BOOT_DEADLINE_MS` (8 s) at the latest.
 
 ---
 
@@ -326,10 +331,10 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | Record layout | scenario split across many files | `world`/`game`/`colors`/`geojson`/`cover` in **one** record |
 | Owner migration | must keep files in step | in-place on one record; the **same** `migrateOwnerRecord` and context (`server/ownerMigration.js`) |
 | Cover image URL | fetchable `/api/.../assets/cover?token=` | `blob:` object URL (bypasses the fetch interceptor) — see §6 |
-| PMTiles hosting | served by the server | Worker CORS+range proxy + hash-verified node swarm; default `regions.geojson` fetched from the content origin, not seeded |
+| Map files | fetched from the `map-data` release at first launch, then served by the server | static files under the build's own `/assets`, laid in at build time from the same release (§8); the stock world is one of them, not seeded |
 | Default scenario | full data on disk | seeded from `generated/defaultScenario.js`; big geometry fetched on demand |
 | Moving games between devices | copy the data folder, or export/import | export/import only — there are no accounts and no sync |
-| Community bundle download | direct | proxied via Worker `/hub/file` or a connected node (CORS) |
+| Community bundle download | direct | proxied via Worker `/hub/file` (CORS) |
 | Code shipped | this whole tree stripped out | this whole tree, behind `VITE_OH_WEB` |
 
 ---
@@ -346,12 +351,12 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | `src/runtime/web/util.js` | response builders, base64, SHA-256, range serving |
 | `src/runtime/web/retiredAccount.js` | one-time boot cleanup of a pre-removal sign-in |
 | `src/runtime/web/coverUrls.js` | covers as cached `blob:` object URLs |
-| `src/runtime/web/homePage.js` | entry/connect overlay |
+| `src/runtime/web/homePage.js` | the website's entry overlay |
+| `src/runtime/web/nativeBoot.js` | the Android app's boot screen |
 | `src/runtime/web/bootTexts.js` | the first screens' text, looked up in the player's language pack |
-| `src/runtime/web/contentTrust.js` | verified node-swarm content fetch |
-| `src/runtime/web/trust.js` | Ed25519 signed-manifest verification |
-| `src/runtime/web/nodeConnect.js` | node selection + heartbeat |
+| `src/runtime/worldFiles.js` | where a build reads its map files: `ASSETS_BASE`, `worldFileUrl`, `mapArchiveUrl` |
 | `src/runtime/web/settingsStore.js` | ui-settings + language handlers |
 | `src/runtime/web/basemapStore.js` / `flagStore.js` / `editorStore.js` | secondary store handlers |
-| `trust/pinned-key.js` | pinned root public key(s) |
+| `scripts/map-assets.web.json` | the six map files a web build carries, pinned by size and sha256 |
+| `scripts/stage-map-assets.mjs` | downloads and verifies them into `map-cache/`, lays them into a build |
 | `.env.web` | web-mode build config |

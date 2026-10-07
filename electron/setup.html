@@ -39,6 +39,8 @@
       .actions button:disabled { opacity: .5; cursor: default; }
       .update { margin-top: 14px; }
       .update[hidden] { display: none; }
+      .beta { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(244, 234, 208, .12); }
+      .beta[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -64,6 +66,12 @@
           <button type="button" class="quiet" id="later">Open the game now</button>
         </div>
       </div>
+      <div class="beta" id="beta" hidden>
+        <p>Want the latest features early? The beta is a separate app: it installs beside this one and keeps its own saves.</p>
+        <div class="actions">
+          <button type="button" class="quiet" id="getBeta">Download the beta</button>
+        </div>
+      </div>
     </div>
     <script>
       const fill = document.getElementById("fill");
@@ -77,6 +85,8 @@
       const lede = document.getElementById("lede");
       const update = document.getElementById("update");
       const later = document.getElementById("later");
+      const beta = document.getElementById("beta");
+      const getBeta = document.getElementById("getBeta");
       const mb = (n) => (n / 1e6).toFixed(0);
 
       // The same window shows two things: an update installing as the game opens
@@ -86,9 +96,13 @@
         title.textContent = "Setting up Open Historia";
         lede.textContent = "Downloading the world map. This happens once — it is not downloaded again on future launches.";
         update.hidden = true;
+        beta.hidden = true;
       };
 
-      window.ohSetup.onUpdate(({ version, percent, installing, opening, failed: updateFailed }) => {
+      window.ohSetup.onUpdate(({ version, percent, installing, opening, failed: updateFailed, betaOffer }) => {
+        // The stable app offers the beta for as long as this screen is up; the
+        // beta itself is never told to.
+        beta.hidden = !betaOffer;
         document.title = "Updating Open Historia";
         title.textContent = "Updating Open Historia";
         lede.textContent = version
@@ -109,6 +123,11 @@
         }
         pct.textContent = `${Math.round(value)}%`;
         update.hidden = false;
+      });
+
+      getBeta.addEventListener("click", () => {
+        // In the player's browser; this window goes on updating.
+        window.ohSetup.openBeta().catch(() => {});
       });
 
       later.addEventListener("click", () => {

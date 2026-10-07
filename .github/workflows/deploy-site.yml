@@ -9,10 +9,12 @@ name: Deploy website
 # it that way would mean a NEW project and moving openhistoria.com onto it, i.e.
 # downtime on the live domain to gain what this file already gives.
 #
-# A happy side effect: CI is the one place the map-binary trap cannot fire. The
-# pmtiles are gitignored and only ever arrive from the map-data Release, so a
-# runner never has them, and `build:site` cannot sweep 160MB of them into the
-# site the way it can on a machine that has actually played the game.
+# The map is part of the site: `build:site` fetches the six files pinned in
+# scripts/map-assets.web.json from the map-data Release, verifies each against
+# its sha256 and lays them under /play/assets/ (scripts/stage-map-assets.mjs),
+# every one under Pages' 25 MiB a file. The build fails if one cannot be had,
+# so a site without its map is never deployed. A runner has no other map files
+# to sweep in by accident: the desktop's are gitignored and never on it.
 
 on:
   workflow_dispatch:
@@ -51,10 +53,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # ~69 MB that changes only when the list does; without this every deploy
+      # downloads it again.
+      - name: Restore the map data
+        uses: actions/cache@v4
+        with:
+          path: map-cache
+          key: web-map-data-${{ hashFiles('scripts/map-assets.web.json') }}
+
       - name: Build the site
-        # Landing page at /, game at /play/. seed-web-defaults.mjs reads the
-        # default scenario out of server/data, which IS committed, so this needs
-        # nothing from the map-data Release.
+        # Landing page at /, game at /play/, the map under /play/assets/.
+        # seed-web-defaults.mjs reads the default scenario out of server/seed,
+        # which IS committed; the map files come from the map-data Release.
         run: npm run build:site
 
       - name: Refuse to deploy an oversized bundle

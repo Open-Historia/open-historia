@@ -10,6 +10,17 @@ const abortError = () => {
   return Object.assign(new Error("Cancelled by player."), { name: "AbortError" });
 };
 
+// The reasons "Cancel all AI requests" has aborted with. The stop reaches a
+// request through callAI's own scope, not through the signal its caller handed
+// down, so the code above an aborted call cannot tell it from its signal: the
+// task runner took it for an ordinary failure, and a single-request time skip
+// went on to write its canned turn, the opposite of what the player had just
+// asked for. Kept by identity (fetch and the body readers reject with the
+// signal's own reason), so nothing else that is merely named AbortError passes.
+const cancelAllReasons = new WeakSet();
+
+export const isCancelAllAbort = (error) => Boolean(error) && typeof error === "object" && cancelAllReasons.has(error);
+
 const announce = (detail = {}) => {
   try {
     window.dispatchEvent(new CustomEvent(AI_REQUEST_CONTROL_EVENT, {
@@ -74,7 +85,15 @@ export const cancelAllAiRequests = () => {
   const cancelled = activeScopes;
   const previous = generationController;
   generationController = new AbortController();
-  if (!previous.signal.aborted) previous.abort(abortError());
+  if (!previous.signal.aborted) {
+    const reason = abortError();
+    cancelAllReasons.add(reason);
+    previous.abort(reason);
+  }
+  // Heard by the Settings row (the count) and by the Timeline (GameUI/time.jsx),
+  // which cancels a skip or a held turn's retry exactly as its own Cancel button
+  // does: `cancelled` is only on this announcement, never on a scope opening or
+  // closing.
   announce({ cancelled });
   return cancelled;
 };

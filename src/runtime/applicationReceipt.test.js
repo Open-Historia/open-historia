@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { receiptPlayerNote } from "./receiptPlayerNotes.js";
 import {
   RECEIPT_EVENT_MAX_CHARS,
+  RECEIPT_ID_MAX_CHARS,
   RECEIPT_KIND_PLAYER_TITLES,
   RECEIPT_MAX_NOTES,
   RECEIPT_NOTE_KINDS,
@@ -27,6 +28,7 @@ import {
   normalizeApplicationReceipt,
   noteMalformedImpacts,
   noteReceipt,
+  quoteReceiptIds,
   receiptHasNotes,
   renderApplicationReceipt,
   renderLastTurnReceipt,
@@ -107,6 +109,20 @@ test("only the first sentence of a strict complaint is carried forward", () => {
   assert.equal(firstComplaintLine(""), "");
   // A complaint with no sentence break is clipped rather than dropped.
   assert.ok(firstComplaintLine("y".repeat(900)).length <= 220);
+});
+
+// An "id" is whatever the model wrote in that field. From a player's log: a
+// war record whose id was a sentence ending in the model's own reminder to
+// itself, quoted whole into the next prompt as a dropped record.
+test("ids a note quotes back are cut short, and a long list to its first few", () => {
+  assert.equal(quoteReceiptIds(["war-france-germany-1914", "war-rome-carthage"]), "war-france-germany-1914, war-rome-carthage");
+  const sentence = "Нет изменений. В этом периоде ни одна война не началась, не закончилась и не изменилась — на карте нет активных конфликтов. ### Конец обновлений. **ВАЖНО:** Отвечай ТОЛЬКО валидным JSON объектом без каких-либо объяснений, комментариев или предисловий. Не добавляй текст перед или после JSON.";
+  const quoted = quoteReceiptIds(["### Обновления войн:", sentence]);
+  assert.equal(quoted, `### Обновления войн:, ${sentence.slice(0, RECEIPT_ID_MAX_CHARS - 1).trimEnd()}…`);
+  assert.ok(!quoted.includes("ВАЖНО") && !quoted.includes("JSON"), "the instruction on its end is not carried into the next prompt");
+  assert.equal(quoteReceiptIds(Array.from({ length: 9 }, (_unused, index) => `war-${index}`)), "war-0, war-1, war-2, war-3, war-4, war-5 and 3 more");
+  assert.equal(quoteReceiptIds(["  war-a \n war-b  ", "", null]), "war-a war-b", "one line each; blanks are not ids");
+  assert.equal(quoteReceiptIds(null), "");
 });
 
 test("an abbreviation is not the end of a sentence", () => {

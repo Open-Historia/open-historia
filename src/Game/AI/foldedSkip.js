@@ -20,7 +20,20 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // a busy model (503) is not that, and neither is a request that was answered
 // and whose answer was no good: asking those again with a smaller contract
 // would change nothing.
-export const providerRefusedContract = (statuses) => {
+//
+// Nor is a call that ended on the connection, whatever its statuses:
+// `transportFailure`, which the task runner reports for a server that could not
+// be reached or a connection that closed while the answer was arriving. The
+// statuses alone cannot tell. A call that gave way on something else first
+// (the JSON-text form refused, a temperature refused: a 400 each) and then lost
+// the connection has a 400 and no 2xx among them, exactly as a refused contract
+// has. Asked again the old way it would spend a request to learn nothing about
+// the contract, and if that request were answered every later skip of the
+// session would be asked the old way, for a contract nobody refused. (An
+// answer cut at the model's output limit needs no such word: it came with a
+// 200.)
+export const providerRefusedContract = (statuses, { transportFailure = false } = {}) => {
+    if (transportFailure) return false;
     const list = asArray(statuses).map(Number).filter(Number.isFinite);
     return list.length > 0
         && !list.some((status) => status >= 200 && status < 300)

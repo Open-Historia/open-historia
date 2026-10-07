@@ -1251,39 +1251,12 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
 
   const request = (async () => {
     let buffer = null;
-    // Web build only: try the vetted node swarm first, verifying every byte
-    // against the signed content manifest. On any miss/failure we fall through to
-    // the canonical origin below, so a node outage is invisible. This whole block
-    // (and the content-trust module) is stripped from the local download.
-    // The Android app reads its archives from inside the APK and skips both the
-    // swarm and the manifest check: bytes that shipped with the app are not a
-    // download to verify, and its http origin has no crypto.subtle anyway.
-    if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
-      try {
-        const { fetchVerifiedBuffer } = await import("./web/contentTrust.js");
-        buffer = await fetchVerifiedBuffer(url, { signal });
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        buffer = null; // fall back to the origin
-      }
-    }
-    if (buffer == null) {
-      const { response } = await fetchWithPersistence(url, { signal });
-      buffer = await response.arrayBuffer();
-      // Bytes from a node were hash-checked above; bytes from the origin were
-      // not, which made the fallback the weakest link in a chain built to be
-      // strong. Hold it to the same signed manifest. A mismatch throws rather
-      // than degrading quietly: the caller already handles a failed archive by
-      // painting the procedural fallback, and a map that fails loudly beats a
-      // map someone else chose.
-      if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
-        const { verifyOriginBuffer } = await import("./web/contentTrust.js");
-        const { checked, ok } = await verifyOriginBuffer(url, buffer);
-        if (checked && !ok) {
-          throw new Error(`${url} does not match the signed content manifest — refusing to use it.`);
-        }
-      }
-    }
+    // The archive is this build's own copy on every build: the desktop's local
+    // server, the Android app's APK, the website's own /assets. Nothing is
+    // fetched from a third party, so there is no swarm to try first and no
+    // manifest to hold the bytes to.
+    const { response } = await fetchWithPersistence(url, { signal });
+    buffer = await response.arrayBuffer();
     primePmtilesArchive(url, buffer);
     return buffer;
   })().finally(() => {

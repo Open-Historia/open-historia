@@ -2676,6 +2676,34 @@ const describeUnitOpRejection = (entry) => {
   return `unknown op "${op}"`;
 };
 
+// Says once that a unit op was thrown away, and why.
+//
+// normalizeEvents runs over the same raw answer many times before it is
+// applied: every ledger validator normalizes the events it is handed, and the
+// later stages work on copies of them. Each pass said the same drop again, so
+// one fleet with no coordinates was eighteen warnings in a player's log, which
+// reads as eighteen lost units. A drop is remembered by the op and the event it
+// rode on (its date and title: an event's id, and an op's place in its list,
+// change between passes), so the same op written again in a later turn's event
+// is a new drop and is said again.
+const REPORTED_UNIT_OP_DROPS_LIMIT = 256;
+const reportedUnitOpDrops = new Set();
+const reportUnitOpDrop = (entry, index, event) => {
+  let signature = null;
+  try {
+    signature = JSON.stringify([event?.date ?? "", event?.title ?? "", entry]);
+  } catch {
+    // Not serializable: said every time rather than never.
+  }
+  if (signature !== null) {
+    if (reportedUnitOpDrops.has(signature)) return;
+    // Bounded: past the limit the memory starts again, and a drop may repeat.
+    if (reportedUnitOpDrops.size >= REPORTED_UNIT_OP_DROPS_LIMIT) reportedUnitOpDrops.clear();
+    reportedUnitOpDrops.add(signature);
+  }
+  console.warn(`[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`, entry);
+};
+
 const normalizeUnitOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -3364,7 +3392,9 @@ const politicalActorOperationFromImpact = (entry, resolveOwner = (value) => valu
   return { operation: { ...args, op: normalized.op, polityKey }, error: "" };
 };
 
-const normalizeEventImpacts = (value) => {
+// `event`: the entry these impacts ride on, for the one thing said about them
+// here (reportUnitOpDrop).
+const normalizeEventImpacts = (value, event = null) => {
   if (!value || typeof value !== "object") {
     return {
       actionIds: [],
@@ -3408,15 +3438,11 @@ const normalizeEventImpacts = (value) => {
     // and it used to vanish into .filter(Boolean) without a word — leaving no way
     // to tell "the model never emitted one" from "it emitted one we rejected".
     // Region transfers have logged their drops for a while; units now match.
+    // Once per op, however many times its event is read (reportUnitOpDrop).
     unitOps: normalizeArray(value.unitOps)
       .map((entry, index) => {
         const normalized = normalizeUnitOp(entry);
-        if (!normalized) {
-          console.warn(
-            `[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`,
-            entry,
-          );
-        }
+        if (!normalized) reportUnitOpDrop(entry, index, event);
         return normalized;
       })
       .filter(Boolean),
@@ -3516,7 +3542,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     ...(npcReaction ? { npcReaction } : {}),
     ...(audience.length ? { audience } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
-    impacts: normalizeEventImpacts(entry.impacts),
+    impacts: normalizeEventImpacts(entry.impacts, entry),
     agency: normalizeEventAgency(entry.agency),
     importance: normalizeOptionalString(entry.importance) || "minor",
     kind: normalizeRenamedKind(entry.kind) || "world",

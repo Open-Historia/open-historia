@@ -14,15 +14,17 @@ import {
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { HELD_TURN, PARKED_TURN_STALE_NOTE, discardHeldTurn, discardParkedTurn, getHeldTurn, getParkedTurn, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { checksHeldError } from "../AI/turnChecks.js";
 import { describePlayerTurnFailures } from "../AI/playerTurnFailures.js";
 import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
+import { AI_REQUEST_CONTROL_EVENT } from "../AI/aiRequestControl.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { describeRequestActivity, formatElapsedClock, requestActivity } from "../AI/requestActivity.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -56,7 +58,7 @@ import { getUnitById, setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMotionSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMapSettingValue, useMotionSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import {
@@ -1054,8 +1056,15 @@ const PanelChrome = ({
 // day and, until this line, no way to see them going.
 const RequestsTodayCaption = () => {
     const [day, setDay] = useState(() => requestDay());
+    // Held as state, like the day: a value read from storage while rendering is
+    // one the compiler keeps from the first render, so this line went on saying
+    // what a skip cost under the setting it was first drawn with.
+    const [saving, setSaving] = useState(() => savingRequests());
     useEffect(() => {
-        const refresh = () => setDay(requestDay());
+        const refresh = () => {
+            setDay(requestDay());
+            setSaving(savingRequests());
+        };
         window.addEventListener("ai:request-budget", refresh);
         const timer = setInterval(refresh, 60000);
         return () => {
@@ -1063,7 +1072,11 @@ const RequestsTodayCaption = () => {
             clearInterval(timer);
         };
     }, []);
-    const cost = describeJumpCost({ saveRequests: savingRequests() });
+    // A skip is one request; function calling is what can add to it (Settings →
+    // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
+    // That switch is on unless it was turned off.
+    const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
+    const cost = describeJumpCost({ lookups: !saving && lookupsOn });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
     const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
@@ -1074,9 +1087,15 @@ const RequestsTodayCaption = () => {
         >
             <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today
             <br />
-            {cost.capped
-                ? <>a skip uses <span data-no-translate>{cost.min}</span>, at most <span data-no-translate>{cost.max}</span>{segmented ? ", plus one per extra segment" : ""}</>
-                : <>a skip can use twenty or more</>}
+            {/* A whole line, one string, in an element of its own, so a language
+                pack translates the sentence and not its pieces (docs/i18n.md). */}
+            <span>
+                {cost.lookups
+                    ? (segmented
+                        ? `a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment`
+                        : `a skip uses 1 request, at most ${cost.max} when the model looks things up`)
+                    : (segmented ? "a skip uses 1 request, plus one per extra segment" : "a skip uses 1 request")}
+            </span>
             {day.lastJump ? <> · the last used <span data-no-translate>{day.lastJump.used}</span></> : null}
         </div>
     );
@@ -1120,47 +1139,109 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
     );
 };
 
+// What the open request is doing, in the words the row shows under the phase
+// (AI/requestActivity.js names the three states).
+const REQUEST_ACTIVITY_TEXTS = {
+    waiting: "Waiting for the model to answer…",
+    thinking: "The model is thinking…",
+    writing: "The model is writing its answer…",
+};
+// Added once the request has been open a minute: by then a player who does not
+// know a thinking model can take ten is reaching for Cancel.
+const REQUEST_STILL_OPEN_TEXT = "Still working: a slow model can take several minutes. The request is still open.";
+
+// What the row adds to the phase's name: how long the skip has run, and what
+// its open request is doing. Both are read off the clock, so they are state the
+// row's own timer refreshes, never values worked out while rendering.
+const readSkipProgress = (startedAt) => ({
+    elapsed: startedAt ? formatElapsedClock(Date.now() - startedAt) : "",
+    request: requestActivity.current(),
+});
+
 // What the skip is doing, and the way out. The same row in both panels, so
 // switching between them does not look like two different states of the game.
-const SkipProgressRow = ({ label, onCancel }) => (
-    <div
-    style={{
-        alignItems: "center",
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "12px",
-        color: "rgba(255,255,255,0.75)",
-        display: "flex",
-        fontSize: "0.76rem",
-        gap: "0.55rem",
-        justifyContent: "center",
-        padding: "0.68rem 0.8rem",
-    }}
-    >
-    <SpinnerRing size={15} />
-    <span>{label || "Simulating…"}</span>
-    {onCancel && (
-        <button
-        type="button"
-        className="oh-tap-row"
-        onClick={onCancel}
+//
+// A skip is mostly one long request, and a spinner beside an unchanging line
+// reads as a hung one: players cancelled skips that were minutes from landing.
+// So the row also counts the time since the skip began (`startedAt`, held by
+// the widget: the row is mounted afresh whenever the player changes panel) and
+// says, on a second line, what the open request is doing. The second line is
+// absent while the skip is doing its own work between requests.
+//
+// The clock ticks in here, once a second and whenever the request changes
+// state, so the panel around the row is not rendered again for it.
+const SkipProgressRow = ({ label, onCancel, startedAt = 0 }) => {
+    const [progress, setProgress] = useState(() => readSkipProgress(startedAt));
+    useEffect(() => {
+        const refresh = () => setProgress(readSkipProgress(startedAt));
+        const timer = setInterval(refresh, 1000);
+        const stopListening = requestActivity.subscribe(refresh);
+        return () => {
+            clearInterval(timer);
+            stopListening();
+        };
+    }, [startedAt]);
+    const activity = progress.request ? REQUEST_ACTIVITY_TEXTS[progress.request.state] : "";
+
+    return (
+        <div
         style={{
-            background: "rgba(220,38,38,0.18)",
-            border: "1px solid rgba(248,113,113,0.5)",
-            borderRadius: "8px",
-            color: "#fecaca",
-            cursor: "pointer",
-            fontSize: "0.74rem",
-            fontWeight: 600,
-            marginLeft: "0.2rem",
-            padding: "0.28rem 0.7rem",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: "12px",
+            color: "rgba(255,255,255,0.75)",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "0.76rem",
+            gap: "0.4rem",
+            padding: "0.68rem 0.8rem",
         }}
         >
-        Cancel
-        </button>
-    )}
-    </div>
-);
+        {/* The label may wrap and the clock and Cancel may not: on a phone the
+            row is under 280 px wide, and Cancel must stay on it. */}
+        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center" }}>
+        <span style={{ display: "flex", flexShrink: 0 }}><SpinnerRing size={15} /></span>
+        <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{label || "Simulating…"}</span>
+        {/* Its own element: a number that changes every second is never text to translate. */}
+        {progress.elapsed && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+            {progress.elapsed}
+            </span>
+        )}
+        {onCancel && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={onCancel}
+            style={{
+                background: "rgba(220,38,38,0.18)",
+                border: "1px solid rgba(248,113,113,0.5)",
+                borderRadius: "8px",
+                color: "#fecaca",
+                cursor: "pointer",
+                flexShrink: 0,
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                marginLeft: "0.2rem",
+                padding: "0.28rem 0.7rem",
+                whiteSpace: "nowrap",
+            }}
+            >
+            Cancel
+            </button>
+        )}
+        </div>
+        {/* Each sentence in an element of its own, so each is looked up whole
+            in the player's language. */}
+        {activity && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", lineHeight: 1.45, textAlign: "center" }}>
+            <span>{activity}</span>
+            {progress.request.stillWorking && <> <span>{REQUEST_STILL_OPEN_TEXT}</span></>}
+            </div>
+        )}
+        </div>
+    );
+};
 
 // A HELD turn, not a failed one: generated, NOT written, waiting on the
 // player (AI/simulationStatus.js HELD_TURN). Amber rather than red for that
@@ -1375,15 +1456,23 @@ const TimelineSkipPanel = ({
     onRetryWholeSkip,
     onUndo,
     progressLabel,
+    progressStartedAt = 0,
     sceneInProgress = false,
     topOffset,
     undoCount,
 }) => {
     const [customValue, setCustomValue] = useState("");
     const [customUnit, setCustomUnit] = useState("days");
+    // A turn is being made: a skip, or the retry of a held one. The retry
+    // raises only its own flag, and everything here used to ask isLoading
+    // alone, so the skips, Auto-jump, Go and Undo all stayed live through a
+    // retry that can take minutes: a skip started then ran a second turn from
+    // the same pre-jump world, both spent requests, and the later write
+    // replaced the earlier.
+    const busy = isLoading || isRetryingHeld;
     // Time stands still while an interactive event is being played: the skips
     // wait for it to end or be set aside, as the engine does.
-    const blocked = isLoading || sceneInProgress;
+    const blocked = busy || sceneInProgress;
     const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
     const runCustomJump = () => {
         const amount = Number(customValue);
@@ -1458,15 +1547,15 @@ const TimelineSkipPanel = ({
             <button
             type="button"
             className="oh-tap-row"
-            disabled={isLoading}
-            onClick={() => { if (!isLoading) onUndo(); }}
+            disabled={busy}
+            onClick={() => { if (!busy) onUndo(); }}
             style={{
                 background: "rgba(180,83,9,0.18)",
                 border: "1px solid rgba(245,158,11,0.5)",
                 borderRadius: "10px",
                 color: "#fcd9a8",
-                cursor: isLoading ? "default" : "pointer",
-                opacity: isLoading ? 0.7 : 1,
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.7 : 1,
                 padding: "0.38rem 0",
                 textAlign: "center",
                 width: "12.5rem",
@@ -1624,6 +1713,7 @@ const TimelineSkipPanel = ({
             <SkipProgressRow
             label={progressLabel || (isRetryingHeld ? (HELD_NOTICE[held?.kind]?.retrying ?? "") : isApplyingParked ? "Applying the time skip…" : "")}
             onCancel={onCancel}
+            startedAt={progressStartedAt}
             />
         )}
 
@@ -1859,7 +1949,7 @@ const TimelineHistoryPanel = ({
     // moved. The cards and the reveal are a finished turn's, but everything that
     // acts on a written turn waits for it to land.
     live = false,
-    // { label, onCancel } while the skip runs.
+    // { label, onCancel, startedAt } while the skip runs.
     progress = null,
     record,
     topOffset,
@@ -1874,11 +1964,6 @@ const TimelineHistoryPanel = ({
     // { eventId, seq }: a card another panel asked to be shown.
     focusRequest = null,
     warning,
-    // { failed: [polity], state: "idle" | "working" }: agents whose report did
-    // not come back after the turn was written (AI/gameplay.js
-    // refreshSpyIntercepts), with the retry that asks them again.
-    agentReports = null,
-    onRetryAgentReports = null,
     // The newest turn's restore point could not be saved (a very large save,
     // or storage full): there is no Rollback for it, and the player is told why.
     restorePointMissing = false,
@@ -2030,45 +2115,6 @@ const TimelineHistoryPanel = ({
             }}
             >
             This turn could not be saved as a restore point, so it cannot be rolled back. The turn itself is saved. If this keeps happening, the save may be too large or the storage full.
-            </div>
-        )}
-        {agentReports?.failed?.length > 0 && (
-            <div
-            style={{
-                background: "rgba(120,53,15,0.24)",
-                border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: "12px",
-                color: "#fde68a",
-                fontSize: "0.76rem",
-                lineHeight: "1.5",
-                marginBottom: "0.75rem",
-                padding: "0.75rem 0.85rem",
-            }}
-            >
-            Your agent{agentReports.failed.length === 1 ? "" : "s"} in {agentReports.failed.join(", ")} did not report this turn: the request failed. The turn itself is saved.
-            {typeof onRetryAgentReports === "function" && (
-                <div style={{ marginTop: "0.6rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={agentReports.state === "working"}
-                onClick={onRetryAgentReports}
-                style={{
-                    background: "rgba(251,191,36,0.1)",
-                    border: "1px solid rgba(251,191,36,0.3)",
-                    borderRadius: "8px",
-                    color: "#fde68a",
-                    cursor: agentReports.state === "working" ? "default" : "pointer",
-                    fontSize: "0.72rem",
-                    fontWeight: 600,
-                    opacity: agentReports.state === "working" ? 0.6 : 1,
-                    padding: "0.4rem 0.7rem",
-                }}
-                >
-                {agentReports.state === "working" ? "Asking the agents again…" : "Retry the reports"}
-                </button>
-                </div>
-            )}
             </div>
         )}
         {warning && (
@@ -2320,7 +2366,7 @@ const TimelineHistoryPanel = ({
         {/* Under the cards, so the list reads as a finished turn's would. */}
         {progress && (
             <div style={{ marginTop: totalEvents > 0 ? "0.75rem" : 0 }}>
-            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} />
+            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} startedAt={progress.startedAt} />
             </div>
         )}
         </PanelChrome>
@@ -2367,6 +2413,10 @@ const DateWidget = ({
     // A phase of the skip as it starts: "Writing 1 month of events… (part 2 of 3)".
     const showSkipPhase = ({ label, detail } = {}) =>
         setJumpProgress(label ? `${label}…${detail ? ` (${detail})` : ""}` : "");
+    // When the skip or retry now running began, for the clock in its progress
+    // row; 0 while none is. Held here because the row is not: it is shown in two
+    // panels and mounted afresh whenever the player moves between them.
+    const [progressStartedAt, setProgressStartedAt] = useState(0);
     // The skip's events as the model writes them (AI/streamedEvents.js): the
     // request already streamed, nothing was reading it. A preview, before the
     // validators sort, clamp and screen; the list goes when the turn does.
@@ -2401,7 +2451,6 @@ const DateWidget = ({
     const [held, setHeld] = useState(heldTurnOnOpen);
     // Agents whose report failed after the turn was written (with Save AI
     // requests off each asks on its own, after the write): told, with a retry.
-    const [agentReports, setAgentReports] = useState({ failed: [], state: "idle" });
     // The newest turn could not be saved as a restore point (restorePointSaved):
     // a turn written without one (AI/gameplay.js captureRollbackSnapshot) cannot
     // be undone, and the Events page says so with the turn.
@@ -2443,6 +2492,9 @@ const DateWidget = ({
     }, [modeEvidence, turnRunning]);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
+    // What the open request had got to when Cancel was pressed, for the log line
+    // the cancel writes: by the time the cancel has unwound, the request is closed.
+    const cancelledRequestRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     // How many turns can be undone (a restore point is captured at the start of
     // each turn). The index, not the snapshots: the full list carries every
@@ -2517,7 +2569,6 @@ const DateWidget = ({
     useEffect(() => {
         const handleRolledBack = () => {
             setFallbackWarning("");
-            setAgentReports({ failed: [], state: "idle" });
             setRestorePointMissing(false);
         };
         window.addEventListener("oh:rolled-back", handleRolledBack);
@@ -2571,7 +2622,8 @@ const DateWidget = ({
     function togglePanel(panelName) {
         // While a skip runs, only its own panels: the Timeline, and the Events
         // panel a watched skip streams into, so the player can go back to it
-        // after looking for Cancel.
+        // after looking for Cancel. (The guard is from before live skips: «
+        // did nothing for the whole of one.)
         if (isLoading && panelName !== "skip" && !(panelName === "history" && skipInFlight)) {
             return;
         }
@@ -2591,7 +2643,8 @@ const DateWidget = ({
     const runJump = async (days, mode = "jump", { retryDirective = "" } = {}) => {
         // A held turn's retry holds the controller too: a skip started under it
         // would run a second turn from the same pre-jump world, and the later
-        // write would replace the earlier.
+        // write would replace the earlier. The panel greys the buttons out
+        // (`busy`); this is the backstop behind them.
         if (!gameData || days == null || isLoading || jumpAbortRef.current) {
             return;
         }
@@ -2652,7 +2705,6 @@ const DateWidget = ({
         // left on screen would offer buttons with nothing behind them.
         setHeld(null);
         setParkedHeld(false);
-        setAgentReports({ failed: [], state: "idle" });
         setRestorePointMissing(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
@@ -2661,12 +2713,14 @@ const DateWidget = ({
         // that took eleven seconds are different bugs, and the wall-clock
         // timestamps are the only way to tell them apart after the fact.
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         logDebugEvent("turn", `Timeline ${mode === "auto" ? "auto-jump" : "jump"} started: ${days} day(s) from ${gameData.gameDate || "unknown"}.`, {
             round: gameData.round ?? 0,
         });
 
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             // No onEvents with the setting off: nothing streams anywhere.
             const onEvents = live ? showStreamedEvents : undefined;
@@ -2687,7 +2741,6 @@ const DateWidget = ({
             // Not for a fallback turn: the canned period is not the round that
             // was on screen, so it is read from the beginning.
             if (result.generation?.source !== "fallback") carryLiveReveal();
-            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
@@ -2749,7 +2802,10 @@ const DateWidget = ({
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
-                logDebugEvent("turn", "Turn cancelled by the player.");
+                // With how long it had run and what its open request had
+                // received: a report of skips "failing" that were in fact
+                // cancelled a minute or two into a slow answer reads at a glance.
+                logDebugEvent("turn", `Turn cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}.`);
             } else if (jumpError?.heldKind) {
                 // Not a failed turn: it is generated and HELD unwritten — on a
                 // segment that did not come back, the board, or a failed check —
@@ -2766,6 +2822,7 @@ const DateWidget = ({
             setIsLoading(false);
             setSkipInFlight(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             setStreamedEvents([]);
             setLiveStageBase(null);
             // Between turns, never during one. If the ladder has learned
@@ -2774,9 +2831,31 @@ const DateWidget = ({
         }
     };
 
-    const cancelJump = () => {
-        jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
-    };
+    // Only refs inside, so one function for the life of the widget: the Cancel
+    // buttons and the listener below share it.
+    const cancelJump = useCallback(() => {
+        const controller = jumpAbortRef.current;
+        // A second press while the first unwinds has nothing left to read.
+        if (!controller || controller.signal.aborted) return;
+        // Read before the abort: it closes the request this is taken from.
+        cancelledRequestRef.current = requestActivity.current();
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    }, []);
+
+    // "Cancel all AI requests" (Settings → AI requests) stops a skip, or a held
+    // turn's retry, the way its own Cancel does. On its own the stop reaches only
+    // the request in flight (AI/aiRequestControl.js): the skip's signal stayed
+    // live, so a single-request skip took the failure for a model that would not
+    // answer and wrote its canned turn, and a longer one went on to make its
+    // next request after the player had asked for all of them to stop. Every
+    // press counts, with a request in flight or between two of them.
+    useEffect(() => {
+        const stopWithTheRest = (event) => {
+            if (event?.detail && "cancelled" in event.detail) cancelJump();
+        };
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+    }, [cancelJump]);
 
     // A skip that finished while another campaign was open was kept for this one,
     // in memory and in the campaign's store (AI/gameplay.js loadParkedTurn), and
@@ -2822,7 +2901,6 @@ const DateWidget = ({
             const result = await applyParkedTurn({ signal: controller.signal });
             setParkedHeld(false);
             if (!result) return;
-            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
@@ -2879,6 +2957,7 @@ const DateWidget = ({
     // Busy like a skip (isLoading): it writes a turn like one, so the skips,
     // Auto-jump and Undo wait for it, and its Cancel is the skip's.
     const retryHeld = async ({ withoutFailedChecks = false, keep = false } = {}) => {
+        // Never beside a skip, an undo or another retry: it writes a turn too.
         if (isRetryingHeld || isLoading || jumpAbortRef.current || !held) return;
         const { kind } = held;
         // A segment retry writes the rest of the round, so it streams like a jump.
@@ -2901,8 +2980,10 @@ const DateWidget = ({
             setPanel("history");
         }
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             const options = { signal: controller.signal, onProgress: showSkipPhase };
             const result = kind === HELD_TURN.segment
@@ -2914,7 +2995,6 @@ const DateWidget = ({
                         : await retryPendingChecksJump({ ...options, withoutFailedChecks });
             if (kind === HELD_TURN.segment) carryLiveReveal();
             else setVisibleEventCount(1);
-            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
@@ -2930,7 +3010,7 @@ const DateWidget = ({
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
                 // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", `Retry of the held turn (${kind}) cancelled; the turn is still held.`);
+                logDebugEvent("turn", `Retry of the held turn (${kind}) cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}. The turn is still held.`);
             } else if (retryError?.heldKind) {
                 // Held again — by the same thing, or by what comes after it (the
                 // segments finished and the board or a check holds it now). One
@@ -2948,6 +3028,7 @@ const DateWidget = ({
             setIsRetryingHeld(false);
             setIsLoading(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             if (kind === HELD_TURN.segment) {
                 setSkipInFlight(false);
                 setStreamedEvents([]);
@@ -2994,19 +3075,6 @@ const DateWidget = ({
         // Remembered for the session, so it asks once rather than every turn.
         declineStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode);
         setModeSuggestion(null);
-    };
-
-    const retryFailedAgentReports = async () => {
-        if (agentReports.state === "working" || !agentReports.failed.length) return;
-        setAgentReports((current) => ({ ...current, state: "working" }));
-        try {
-            const { failed } = await retryAgentReports({ targets: agentReports.failed });
-            setAgentReports({ failed: failed.map((entry) => entry.target), state: "idle" });
-            logDebugEvent("turn", `Agents' reports asked again: ${failed.length ? `${failed.length} still failed` : "all in"}.`);
-        } catch (retryError) {
-            setAgentReports((current) => ({ ...current, state: "idle" }));
-            setError(retryError.message || "The agents could not be asked again.");
-        }
     };
 
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
@@ -3660,6 +3728,7 @@ const DateWidget = ({
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
+        progressStartedAt={progressStartedAt}
         sceneInProgress={sceneInProgress}
         topOffset={topOffset}
         undoCount={undoCount}
@@ -3677,15 +3746,16 @@ const DateWidget = ({
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.
         // Nothing is written mid-skip, so there is no turn to roll back and no round to stop.
-        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
+        // Nor while a held turn's retry runs: it is about to write one.
+        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !olderTurnRecord}
+        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
         offeredInteractiveId={!skipInFlight && !olderTurnRecord && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
-        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
+        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump, startedAt: progressStartedAt } : null}
         record={displayRecord}
         topOffset={topOffset}
         visibleEventCount={olderTurnRecord ? totalVisibleEvents : visibleEventCount}
@@ -3701,8 +3771,6 @@ const DateWidget = ({
         onToggleMapChanges={toggleMapChanges}
         warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}
         // The newest turn's own, like the live warning: not over an older turn.
-        agentReports={olderTurnRecord ? null : agentReports}
-        onRetryAgentReports={retryFailedAgentReports}
         restorePointMissing={restorePointMissing && !olderTurnRecord}
         />
 

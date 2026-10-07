@@ -32,6 +32,16 @@ const APP_TRACK = String(import.meta.env.VITE_APP_TRACK || "stable");
 const WEB_BUILD = String(import.meta.env.VITE_WEB_BUILD || "");
 const VERSION_URL = `${import.meta.env.BASE_URL || "/"}version.json`;
 const DISMISS_KEY = "oh-update-dismissed-build";
+// The Android beta: its APK on its own release (the asset name is contractual,
+// docs/delivery-and-deploy.md). The stable app's update cover offers it, as the
+// desktop's update screen offers the desktop beta (electron/setup.html). It is a
+// second app with its own saves, installed beside this one.
+const ANDROID_BETA_APK = "https://github.com/Open-Historia/open-historia/releases/download/android-beta/open-historia-beta.apk";
+// The WebView does not own this address, so Android opens it in the phone's
+// browser, which downloads the APK; the update here goes on downloading.
+const openBetaDownload = () => {
+  window.location.href = ANDROID_BETA_APK;
+};
 
 // Launch attempts per build (appUpdate.js shouldUpdateAtLaunch). Storage that
 // throws (a private window, blocked site data) reads as no attempts, so the
@@ -136,6 +146,7 @@ const track = { height: "10px", margin: "1.3rem 0 0.6rem", borderRadius: "99px",
 const fill = { display: "block", height: "100%", borderRadius: "99px", background: "linear-gradient(180deg, #d4af37, #b8901f)", transition: "width 250ms" };
 const coverPct = { fontWeight: 700, fontSize: "0.86rem" };
 const quietBtn = { ...btn, marginTop: "1rem", color: "#f4ead0", background: "transparent", border: "1px solid rgba(212,175,55,0.3)" };
+const betaOffer = { marginTop: "1.1rem", paddingTop: "0.9rem", borderTop: "1px solid rgba(244,234,208,0.12)" };
 
 export default function AppUpdateBanner() {
   // Two shapes of "an update exists", one banner. The native app asks its on-device
@@ -149,6 +160,9 @@ export default function AppUpdateBanner() {
   // it: the website reloads onto the new bundle, and the app downloads the APK
   // and opens Android's installer, under a cover with a progress bar.
   const isApp = Number.isFinite(APP_BUILD) && APP_BUILD > 0;
+  // The stable app offers the beta on its update cover; the beta has nothing
+  // newer to offer, and the website has no beta.
+  const offerBeta = isApp && APP_TRACK !== "beta";
   // The desktop app is an ordinary localhost page, so it cannot tell it is inside
   // the app on its own. Its server answers /api/app-update with a `current` build,
   // and only that server does — so the reply itself is the signal. Nothing is added
@@ -483,6 +497,14 @@ export default function AppUpdateBanner() {
                   Not now
                 </button>
               </div>
+              {offerBeta ? (
+                <div style={betaOffer}>
+                  <p style={coverText}>Want the latest features early? The beta is a separate app: it installs beside this one and keeps its own saves.</p>
+                  <button type="button" className="oh-tap-row" style={quietBtn} onClick={openBetaDownload}>
+                    Download the beta
+                  </button>
+                </div>
+              ) : null}
             </>
           )}
         </div>

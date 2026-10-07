@@ -48,7 +48,7 @@ test("in the host's engine a failed check lands the turn as written, and is deci
 });
 
 test("a shared round never stops on the host's own \"Stop when my events fail\"", () => {
-  assert.match(gameplay, /stopOnPlayerFailures: !evaluationMode && getMapSetting\(MAP_SETTING_KEYS\.stopOnPlayerFailures\) && !hostingSharedGame\(\),/);
+  assert.match(gameplay, /stopOnPlayerFailures: getMapSetting\(MAP_SETTING_KEYS\.stopOnPlayerFailures\) && !hostingSharedGame\(\),/);
 });
 
 test("a skip that fails in the host's engine leaves no turn held, and the round still hears of the failure", () => {

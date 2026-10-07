@@ -1,10 +1,13 @@
 /*! Open Historia — reading the community hub © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // The Scenario Hub is a GitHub repo whose issues are the Community tab's posts
-// (labelled "scenario"). Everything here reads it the way a visitor would —
-// unauthenticated REST calls, 60 an hour per player — and never writes: a post,
-// or a comment on one, is always made by the player in their own browser, from
-// a form or a page the game opens for them.
+// (labelled "scenario"). The game reads what the hub has checked and released,
+// and nothing else of it: the posts and their files through the hub's own
+// index (hubFiles.js, hubIssues.js), which costs no API request, and a post's
+// comments the way a visitor would, by unauthenticated REST calls, 60 an hour
+// per player. It never writes: a post, or a comment on one, is always made by
+// the player in their own browser, from a form or a page the game opens for
+// them.
 //
 // Moved out of communityHub.jsx so the library can find a player's own posts
 // and the suggestions left on them without loading the Community tab.
@@ -24,6 +27,7 @@ import {
   normalizeHubSuggestionRef,
   normalizeHubUnlinked,
 } from "../../server/hubProvenance.js";
+import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, importCountOf, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
@@ -35,38 +39,29 @@ export const hubPostUrl = (postId) => `${HUB_URL}/issues/${Number(postId)}`;
 // First GitHub-hosted .json (release asset, attachment or raw) link in an issue
 // body = the bundle. Release links come first in official posts so imports go
 // through the download-counted URL; the raw mirror below it serves old clients.
+// It is the post's file as the post names it, which is what the file's checked
+// copy is looked up by; the file itself is only ever downloaded from that copy.
 export const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
 // The cover is the body's first image hosted by GitHub (hubIssues.js
-// firstHubImage), used as the card/detail-view cover; posts with no such
-// image simply get coverImageUrl: null (existing text-only card, no error).
+// firstHubImage), shown from its checked copy in the hub's releases as the
+// card/detail-view cover; a post with no such image, or whose image the hub
+// has not copied, gets coverImageUrl: null (the default cover, no error).
 
 // The key the Publish button writes into a post (the form's technical field),
 // which is how an install recognises the post as the one its player made.
 export const SCENARIO_KEY_LINE = "Scenario-Key";
 const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
 
-// Self-hosted import counts (keyed by hub issue number), read back through the
-// server proxy from our own counter Worker. Unlike GitHub's release download
-// counts, this covers EVERY scenario — including attachment posts — and is
-// deduped per person. Empty object if the counter isn't configured/reachable.
-const fetchImportCounts = async () => {
-  try {
-    const response = await fetch("/api/hub/import-counts");
-    if (!response.ok) return {};
-    const data = await response.json();
-    return data && typeof data === "object" ? data : {};
-  } catch {
-    return {};
-  }
-};
-
 // Official = posted by someone with real access to the hub repo, as reported
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-export const parsePost = (issue, importsById) => {
+// `hubIndex` is the hub's index (hubFiles.js): where a post's import count, the
+// checked copies of its file and of its cover, and the suggestions on it that
+// passed the hub's check come from.
+export const parsePost = (issue, hubIndex) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   // The issue-form body is a series of "### <label>\n<value>" sections. Show only
@@ -95,14 +90,16 @@ export const parsePost = (issue, importsById) => {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   const description = fullDescription.replace(/\s+/g, " ");
-  const coverImageUrl = firstHubImage(body);
-  // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
-  // It is deduped per person (an account, or an IP hash) and covers every scenario —
-  // release assets and attachment posts alike. We deliberately do NOT fall back to
-  // GitHub's release download count: that counts every file download, including
-  // repeat downloads by the same person and non-import curiosity clicks, so it both
-  // over-counts and disagrees between posts. One accurate source for all.
-  const installs = importsById?.[String(issue.number)]?.count ?? null;
+  // Never the attachment itself: no copy, no picture.
+  const coverImageUrl = releaseCopyOf(hubIndex, firstHubImage(body));
+  // The import count is how many times the post's file has been downloaded from
+  // the hub's releases, as GitHub counts it and the hub's index reports it
+  // (hubFiles.js). It counts downloads, not people: importing again after
+  // clearing the download cache counts again. It used to come from a counter of
+  // the game's own, one per install, which ran on a free Cloudflare allowance
+  // that was spent within hours of every day; what that counter had reached is
+  // carried into these numbers by the hub.
+  const installs = importCountOf(hubIndex, issue.number);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -123,53 +120,67 @@ export const parsePost = (issue, importsById) => {
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
     fullDescription,
     bundleUrl,
+    // The checked copy of that file in the hub's releases: what Import and
+    // Update download, and null for a post that has none to offer.
+    releaseUrl: releaseCopyOf(hubIndex, bundleUrl),
     installs,
     coverImageUrl,
     scenarioKey: normalizeHubKey(body.match(SCENARIO_KEY_PATTERN)?.[1]),
+    // { comment id -> its .zip }: the comments on this post that the hub has
+    // checked as suggestions (refreshPublishedRecord offers no others).
+    checkedSuggestions: checkedSuggestionsOf(hubIndex, issue.number),
   };
 };
 
 // Exported so the translator can pre-translate the Community tab's posts.
-// The issue list is the one every hub screen shares (hubIssues.js), every page
-// of it; the posts made of it, with their import counts, are kept as long as
-// that list is.
-let hubCache = { issues: null, posts: null };
+// The issue list is the one every hub screen shares (hubIssues.js), read from
+// the hub's index together with the index itself; the posts made of it, with
+// their import counts and checked copies, are kept as long as that index is.
+let hubCache = { index: null, posts: null };
 export const fetchHubPosts = async ({ force = false } = {}) => {
-  const issues = await fetchHubScenarioIssues({ force }).catch((error) => {
-    if (error?.status === undefined) throw error;
-    throw new Error(
-      error.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the Scenario Hub (HTTP ${error.status}).`,
-    );
-  });
-  if (hubCache.issues === issues) return hubCache.posts;
-  const importsById = await fetchImportCounts();
+  const [issues, hubIndex] = await Promise.all([fetchHubScenarioIssues({ force }), fetchHubIndex({ force })]);
+  if (hubCache.index === hubIndex) return hubCache.posts;
   const posts = issues
-    .map((issue) => parsePost(issue, importsById))
-    // The parser already decides whether a post has an importable scenario
-    // bundle. Do not surface malformed or misfiled "scenario" issues whose
-    // Import button would otherwise be disabled.
-    .filter((post) => Boolean(post.bundleUrl));
-  hubCache = { issues, posts };
+    .map((issue) => parsePost(issue, hubIndex))
+    // The parser finds the post's scenario file, and the index that file's
+    // checked copy. A post without either has nothing to import, so it is not
+    // surfaced: a malformed or misfiled "scenario" issue, or one whose file
+    // the index does not hold under the address the post gives it.
+    .filter((post) => Boolean(post.bundleUrl && post.releaseUrl));
+  hubCache = { index: hubIndex, posts };
   return posts;
 };
 
 // ---- the library's copies of hub posts ----------------------------------------
 
-// Whether a copy downloaded from a post can take the post's newer file: it came
-// from that post, the player has not edited it (an edited copy is never
-// overwritten — its player suggests their changes instead), and the post's
-// file is not the one it was imported from, or its community basemap could not
-// be downloaded (missingBasemap), which Update tries again. The Scenarios tab's
-// Update button and the Community tab's "Update available" both ask this.
-export const hubUpdateAvailable = (scenario, post) => Boolean(
-  scenario?.hubOrigin &&
-  !scenario.hubOrigin.editedAt &&
-  post?.bundleUrl &&
-  Number(post.id) === Number(scenario.hubOrigin.postId) &&
-  (post.bundleUrl !== scenario.hubOrigin.bundleUrl || scenario.missingBasemap),
-);
+// Why a copy downloaded from a post should take the post's file again, or null
+// when it should not. `post` is the copy's post as fetchHubPosts lists it: on
+// the hub, with a checked copy of its file to download. A post that is not
+// there offers nothing, whatever the copy is.
+//   "unchecked" — the copy has an old link: it was downloaded from the post's
+//                 own attachment, before the hub checked what it released
+//                 (hubOrigin.release is stamped by every download since). The
+//                 game no longer downloads those, so the copy is asked to take
+//                 the checked file, and this is the one reason that reaches a
+//                 copy its player has edited (its Update asks first: it
+//                 replaces their changes).
+//   "newer"     — the post's file is not the one the copy was imported from.
+//   "basemap"   — the copy's community basemap could not be downloaded
+//                 (missingBasemap), which Update tries again.
+// The last two are for an unedited copy only: an edited one is never offered a
+// newer file, its player suggests their changes to the post instead.
+export const hubUpdateReason = (scenario, post) => {
+  const origin = scenario?.hubOrigin;
+  if (!origin || !post?.bundleUrl || !post.releaseUrl || Number(post.id) !== Number(origin.postId)) return null;
+  if (!origin.release) return "unchecked";
+  if (origin.editedAt) return null;
+  if (post.bundleUrl !== origin.bundleUrl) return "newer";
+  return scenario.missingBasemap ? "basemap" : null;
+};
+
+// Whether a copy is offered an Update. The Scenarios tab's cards and the
+// Community tab's badges both ask this.
+export const hubUpdateAvailable = (scenario, post) => Boolean(hubUpdateReason(scenario, post));
 
 // The library's scenarios that came from each hub post, by post id.
 export const hubCopiesByPostId = (scenarios) => {
@@ -183,10 +194,12 @@ export const hubCopiesByPostId = (scenarios) => {
 };
 
 // What the library holds of one post, and the copy to play:
-//   null      — nothing;
-//   "current" — an unedited copy of the post's current file;
-//   "update"  — only unedited copies the post has moved past;
-//   "edited"  — only copies the player has changed.
+//   null        — nothing;
+//   "current"   — an unedited copy of the post's current file;
+//   "update"    — only unedited copies the post has moved past;
+//   "unchecked" — the copy to play has an old link (hubUpdateReason), edited
+//                 or not: the Scenarios tab asks for its Update;
+//   "edited"    — only copies the player has changed.
 // An unedited copy wins over an edited one, and among several the one touched
 // last (updatedAt is a real timestamp, not a game date).
 export const hubCopyStatus = (copies, post) => {
@@ -197,14 +210,18 @@ export const hubCopyStatus = (copies, post) => {
   const unedited = list.filter((entry) => !entry?.hubOrigin?.editedAt);
   const current = unedited.filter((entry) => !hubUpdateAvailable(entry, post));
   if (current.length) return { status: "current", copy: latest(current) };
-  if (unedited.length) return { status: "update", copy: latest(unedited) };
-  return { status: "edited", copy: latest(list) };
+  const copy = latest(unedited.length ? unedited : list);
+  if (hubUpdateReason(copy, post) === "unchecked") return { status: "unchecked", copy };
+  return { status: unedited.length ? "update" : "edited", copy };
 };
 
 // A file on the hub (a bundle, a suggestion), through the allowlisted
-// /api/hub/file proxy: GitHub's attachments send no CORS headers.
-export const downloadHubFile = async (fileUrl) => {
-  const response = await fetch(`/api/hub/file?url=${encodeURIComponent(fileUrl)}`);
+// /api/hub/file proxy: GitHub's files send no CORS headers. A post's file is
+// its checked copy in the hub's releases, and there is no download without
+// one (hubFiles.js); `copy: false` is for a suggestion, which is a comment's
+// attachment and never copied, fetched once the hub has checked it.
+export const downloadHubFile = async (fileUrl, { copy = true } = {}) => {
+  const response = await fetchHubFile(fileUrl, { copy });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
@@ -240,17 +257,54 @@ export const unpackScenarioBundle = async (bytes) => {
 // so fetch and inline it before importing or the map is blank. Every way a
 // hub scenario arrives goes through here — downloaded by the game, or a
 // post's .zip the player downloaded and imported from disk.
+//
+// A file never says for itself which post it came from: the game stamps that
+// on a bundle after it has downloaded a post's checked copy
+// (downloadHubScenario), and a link a file brought along would pass for one.
 export const readScenarioBundleBytes = async (bytes) => {
   const bundle = await unpackScenarioBundle(bytes);
+  if (bundle && typeof bundle === "object") delete bundle.hubOrigin;
   await resolveScenarioBundleBackground(bundle);
   return bundle;
 };
 
-// Download + assemble a hub post's scenario bundle, ready for import, through
-// the server's allowlisted /api/hub/file proxy. Shared by the Community tab's
-// Import button, the Scenarios tab's Update button and Suggest changes (the
-// post's file is what a suggestion is measured against).
+// Download + assemble a hub post's scenario bundle through the server's
+// allowlisted /api/hub/file proxy: the checked copy of the file `bundleUrl`
+// names. Suggest changes reads the file a copy came from this way (it is what
+// a suggestion is measured against); an import goes through
+// downloadHubScenario, which also says where the bundle came from.
 export const downloadHubBundle = async (bundleUrl) => readScenarioBundleBytes(await downloadHubFile(bundleUrl));
+
+// A post's scenario file, ready for import and stamped with where it came from
+// (bundle.hubOrigin, which the stores keep with the scenario:
+// server/hubProvenance.js): the post, the file as the post names it, and
+// `release`, the checked copy that was downloaded. Every link the game makes
+// is made here: the Community tab's Import, the Scenarios tab's Update, and
+// Import & play for a game whose map the library lacks. The copy is found
+// first and then asked for by its own address, so the address stamped is the
+// one the bytes came from, even if the index is read again in between.
+export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt } = {}) => {
+  const release = await requireReleaseCopy(bundleUrl);
+  const bundle = await downloadHubBundle(release);
+  bundle.hubOrigin = {
+    postId,
+    bundleUrl,
+    release,
+    ...(title ? { title } : {}),
+    ...(author ? { author } : {}),
+    ...(syncedAt ? { syncedAt } : {}),
+  };
+  return bundle;
+};
+
+// Whether the file a copy came from can no longer be had from the hub, so that
+// Suggest changes has nothing to measure the copy against: the link is an old
+// one (hubUpdateReason: the copy came from an attachment nobody had checked,
+// and the checked file the hub now offers is not that file), or the post has
+// moved on and the hub no longer holds the older file. Asked of an index that
+// was read, before the download, so the player is told to update first
+// instead of being shown a download that failed.
+export const hubOriginalGone = (origin, hubIndex) => !origin?.release || !releaseCopyOf(hubIndex, origin.bundleUrl);
 
 // ---- suggestions: comments on a post that carry a suggestion file ------------
 
@@ -333,6 +387,16 @@ export const trimSuggestions = (list, reviews = {}) => {
 // count moved since the last look, so an unchanged post costs nothing but its
 // share of the one post list. Returns { published, changed }.
 //
+// Only a suggestion the hub has checked is kept: the hub looks inside every
+// suggestion's file as it does a post's, lists the comments that pass
+// (post.checkedSuggestions, from the index) and deletes the ones that fail. A
+// comment that reads as a suggestion and is not on that list is still waiting
+// for its check, or is about to be deleted: it is neither stored nor offered.
+// So that it appears once it has passed, the post's comment count is not
+// recorded while one is waiting, and the next look reads the comments again.
+// A suggestion already held is put away the same way when the hub no longer
+// lists it, or lists another file for its comment (the comment was edited).
+//
 // This is the only thing that attaches a post to a scenario by itself, so it
 // is where an unlinked post must not come back: `unlinked` is the scenario's
 // hubUnlinked, and a post in it is never found again, whatever key it carries
@@ -354,15 +418,26 @@ export const refreshPublishedRecord = async (published, posts, { fetchComments =
   let fetchedAny = false;
   for (const postId of postIds) {
     const post = byId.get(postId);
-    if (!post) continue; // closed, or past every page read: keep what we had
+    if (!post) continue; // no longer on the hub's list: keep what we had
+    const checked = post.checkedSuggestions ?? {};
+    const isChecked = (ref) => Boolean(ref.commentId) && Object.hasOwn(checked, ref.commentId) && checked[ref.commentId] === ref.zipUrl;
+    const held = suggestions.filter((ref) => ref.postId === postId);
+    const stillChecked = held.filter(isChecked);
+    suggestions = suggestions.filter((ref) => ref.postId !== postId || isChecked(ref));
     const count = Number(post.comments) || 0;
-    if (count === (commentCounts[postId] ?? 0)) continue;
+    if (stillChecked.length === held.length && count === (commentCounts[postId] ?? 0)) continue;
     const comments = await fetchComments(postId);
     fetchedAny = true;
-    const found = comments.map((comment) => parseSuggestionComment(comment, postId)).filter(Boolean);
+    // The hub never checks a bot's comment, so one is never a suggestion in waiting.
+    const found = comments
+      .filter((comment) => comment?.user?.type !== "Bot")
+      .map((comment) => parseSuggestionComment(comment, postId))
+      .filter(Boolean);
+    const offered = found.filter(isChecked);
     // Comments the author deleted take their suggestions with them.
-    suggestions = [...suggestions.filter((ref) => ref.postId !== postId), ...found];
-    commentCounts[postId] = count;
+    suggestions = [...suggestions.filter((ref) => ref.postId !== postId), ...offered];
+    if (offered.length === found.length) commentCounts[postId] = count;
+    else delete commentCounts[postId];
   }
   const next = normalizeHubPublished({
     ...current,

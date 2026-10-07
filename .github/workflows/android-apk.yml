@@ -66,13 +66,13 @@ jobs:
           npm ci
           npm run build:android
 
-      # The six map files are pinned by sha256 in mobile/map-assets.android.json;
+      # The six map files are pinned by sha256 in scripts/map-assets.web.json, the list the website's build reads too;
       # a cache hit skips ~70 MB of downloads and the verify still runs.
       - name: Restore the map data
         uses: actions/cache@v4
         with:
-          path: mobile/map-cache
-          key: android-map-data-${{ hashFiles('mobile/map-assets.android.json') }}
+          path: map-cache
+          key: android-map-data-${{ hashFiles('scripts/map-assets.web.json') }}
 
       - name: Build the APK
         env:

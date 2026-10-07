@@ -22,6 +22,7 @@ import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } f
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { difficultyPassage } from "../../runtime/difficulty.js";
+import { worldFileUrl } from "../../runtime/worldFiles.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { SHARED_WORLD_TASKS, buildSharedGameDirective } from "./sharedGameDirective.js";
 
@@ -1049,9 +1050,11 @@ const markerAttentionKey = (value) => normalizeString(value)
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase();
 
+// Words of any script: a structure the model named in Russian or Chinese used
+// to have no words here, and nothing the story said could bring it forward.
 const markerAttentionTokens = (value) => new Set(
   markerAttentionKey(value)
-    .split(/[^a-z0-9]+/)
+    .split(/[^\p{L}\p{M}\p{N}]+/u)
     .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
 );
 
@@ -1436,11 +1439,9 @@ export const buildProjectsSummaryText = (world, game) => {
 const CITY_CATALOG_LIMIT = 200;
 let _stockCityCatalogCache = null;
 
-// Same resolution the editor's city importer uses: the seed rides the content
-// node on web builds and same-origin /assets locally.
-// import.meta.env is Vite-only; the optional chain keeps this module importable
-// by the node test runner.
-const CITY_SEED_URL = `${(import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "")}/cities-seed.json`;
+// The same file the editor's city importer reads: the build's own /assets
+// folder, on every build (runtime/worldFiles.js).
+const CITY_SEED_URL = worldFileUrl("cities");
 
 const formatCityLine = (name, country, lat, lng, extra = "") =>
   `- ${name}${country ? ` (${country})` : ""}: lat ${Number(lat).toFixed(2)}, lng ${Number(lng).toFixed(2)}${extra}`;
