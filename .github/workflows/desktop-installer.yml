@@ -88,6 +88,34 @@ jobs:
           # discover one and fails the build rather than skipping signing.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      # The same files a second time, cut into chunks: an installed app updates by
+      # fetching the chunks that changed instead of the installer again
+      # (scripts/build-update-chunks.mjs, electron/payloadUpdate.cjs). They go to a
+      # release of their own, named after the installers' with "-chunks" on the
+      # end, and they go up before the installers below, so an app the banner
+      # tells of this build already finds its chunks. A problem here never costs
+      # the release its installers: an app that finds no chunks takes the
+      # installer, as every app did before.
+      - name: Cut the app's files into update chunks
+        continue-on-error: true
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            windows-latest) app="release/win-unpacked/resources/app.asar"; platform=win ;;
+            macos-latest) app="$(ls -d release/mac*/*.app | head -1)/Contents/Resources/app.asar"; platform=mac ;;
+            *) app="release/linux-unpacked/resources/app.asar"; platform=linux ;;
+          esac
+          node scripts/build-update-chunks.mjs --app "$app" --out update-chunks --platform "$platform" --channel stable
+
+      - name: Publish the update chunks
+        continue-on-error: true
+        if: github.event_name == 'push' || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        shell: bash
+        run: node scripts/publish-update-chunks.mjs --dir update-chunks --tag "${TAG}-chunks" --repo "${{ github.repository }}"
+
       - name: Upload as a build artifact
         uses: actions/upload-artifact@v6
         with:

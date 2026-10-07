@@ -169,7 +169,8 @@ test("main.cjs runs the launch update before the server and stops for an install
 // sha512 checksum mismatch", on every update.
 test("an update is downloaded in full: no differential download is tried", () => {
   const main = fs.readFileSync(path.join(ROOT, "electron/main.cjs"), "utf8").replace(/\r\n/g, "\n");
-  const setup = main.slice(main.indexOf("const setupAutoUpdater = () => {"), main.indexOf("const installAutoUpdater = () => {"));
+  // The installer's own updater; the chunked update in front of it downloads no installer at all.
+  const setup = main.slice(main.indexOf("const setupInstallerUpdater = () => {"), main.indexOf("const setupPayloadUpdater = () => {"));
   assert.match(setup, /autoUpdater\.autoDownload = false;\n(?: *\/\/[^\n]*\n)* *autoUpdater\.disableDifferentialDownload = true;\n/);
   // The reason it cannot work: no installer's name carries its version.
   const build = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build;

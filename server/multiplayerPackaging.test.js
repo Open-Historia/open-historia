@@ -6,6 +6,8 @@
 //   electron-builder.multiplayer.yml  what is installed, and under which name
 //   electron/main.cjs                 what the running app calls itself, which is
 //                                     what gives it a profile of its own
+//   electron/channel.cjs              the name itself, and electron/bootstrap.cjs,
+//                                     which runs first and asks for the data folder
 //   scripts/stamp-channel.mjs         how the build learns it is the multiplayer one
 //   package.json                      the script that builds it, and the stable
 //                                     build, which none of this may touch
@@ -23,6 +25,8 @@ const read = (relative) => fs.readFileSync(new URL(`../${relative}`, import.meta
 const builderYml = read("electron-builder.multiplayer.yml");
 const betaYml = read("electron-builder.beta.yml");
 const mainCjs = read("electron/main.cjs");
+const channelCjs = read("electron/channel.cjs");
+const bootstrapCjs = read("electron/bootstrap.cjs");
 const stampChannel = read("scripts/stamp-channel.mjs");
 const packageJson = JSON.parse(read("package.json"));
 
@@ -64,11 +68,42 @@ test("the multiplayer build is its own application, beside the official app and 
   // app's folder.
   assert.match(productName, /^[-_+0-9a-zA-Z .]+$/);
   // The running app renames itself to the same name: that is its own profile.
-  assert.equal(mainCjs.match(/MULTIPLAYER_APP_NAME\s*=\s*"([^"]+)"/)?.[1], productName);
+  // The name is in electron/channel.cjs, as the beta's is, and both files that
+  // need it take it from there.
+  assert.equal(channelCjs.match(/MULTIPLAYER_APP_NAME\s*=\s*"([^"]+)"/)?.[1], productName);
+  assert.match(mainCjs, /const \{ MULTIPLAYER_APP_NAME \} = require\("\.\/channel\.cjs"\);/);
   assert.match(mainCjs, /if \(IS_BETA \|\| IS_MULTIPLAYER\) app\.setName\(APP_NAME\);/);
   // Its shortcut and uninstall entry say so too.
   assert.equal(value(block(builderYml, "nsis"), "shortcutName"), productName);
   assert.equal(value(block(builderYml, "nsis"), "uninstallDisplayName"), productName);
+});
+
+test("the bootstrap names the multiplayer build before it asks for a data folder", () => {
+  // The bootstrap runs before main.cjs and asks Electron for the data folder,
+  // and Electron keeps the first answer. Asked under the official app's name,
+  // this build would open the official app's saves, and would run a set of
+  // files an update of the official app had left there.
+  assert.match(bootstrapCjs, /const \{ MULTIPLAYER_APP_NAME \} = require\("\.\/channel\.cjs"\);/);
+  const named = bootstrapCjs.indexOf("if (IS_MULTIPLAYER) app.setName(MULTIPLAYER_APP_NAME);");
+  const asked = bootstrapCjs.indexOf('app.getPath("userData")');
+  assert.ok(named > -1, "the bootstrap never names the multiplayer build");
+  assert.ok(asked > named, "the data folder is asked for before the build is named");
+  assert.match(bootstrapCjs, /const IS_MULTIPLAYER = readChannel\(__dirname\) === "multiplayer";/);
+});
+
+test("the multiplayer build never runs, or fetches, a set of files an update put together", () => {
+  // The official app's chunks are the official game: taking them would put it
+  // in this build's place. The bootstrap throws its own "no update" switch for
+  // this channel before it looks, and main.cjs makes no updater to fetch one.
+  const thrown = bootstrapCjs.indexOf('if (IS_MULTIPLAYER) process.env.OH_NO_PAYLOAD = "1";');
+  const looked = bootstrapCjs.indexOf('if (app.isPackaged && process.env.OH_NO_PAYLOAD !== "1") {');
+  assert.ok(thrown > -1, "the bootstrap would look for an update's files");
+  assert.ok(looked > thrown, "the switch is thrown after the bootstrap has looked");
+  assert.match(mainCjs, /if \(!app\.isPackaged \|\| !PAYLOAD_PLATFORM \|\| !build \|\| IS_MULTIPLAYER\) return null;/);
+});
+
+test("the window and the data folder go by the name the build was given", () => {
+  assert.match(mainCjs, /const APP_NAME = IS_BETA \? BETA_APP_NAME : IS_MULTIPLAYER \? MULTIPLAYER_APP_NAME : "Open Historia";/);
 });
 
 test("the multiplayer build never borrows the official app's map folder", () => {

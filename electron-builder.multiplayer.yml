@@ -7,7 +7,8 @@
 # and the beta, never over either:
 #   appId / productName  — its own install folder, Start Menu entry and uninstall
 #                          entry. productName is also MULTIPLAYER_APP_NAME in
-#                          electron/main.cjs, which renames the running app, so its
+#                          electron/channel.cjs, which the bootstrap and main.cjs
+#                          both rename the running app to, so its
 #                          profile (%APPDATA%\Open Historia Multiplayer) holds its own
 #                          saves, settings and map files. Nothing is shared with the
 #                          official app's profile, not even the map folder the beta
@@ -18,7 +19,8 @@
 #   publish              — none. The multiplayer build has no update feed, and the
 #                          official one would offer it the stable installer as an
 #                          "update" (electron/main.cjs never reads a build id or
-#                          starts the updater on this channel).
+#                          starts the updater on this channel, and
+#                          electron/bootstrap.cjs never runs an update's files).
 #
 # What tells the RUNNING app it is the multiplayer build is electron/channel.json,
 # stamped by scripts/stamp-channel.mjs, as for the beta.
