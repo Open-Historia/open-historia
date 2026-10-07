@@ -59,7 +59,7 @@ Point an **A** record for the server's name (say `mp.example.org`) at the VM's p
 
 ## 6. The files and the settings
 
-The lab repository is private, so either clone it with a deploy key or copy just the two folders, which are self-contained:
+Clone the repository on the VM, or copy just the two folders, which are self-contained:
 
 ```sh
 scp -r server-mp ops ubuntu@<vm>:~/open-historia/

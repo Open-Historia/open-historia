@@ -28,7 +28,7 @@ const DIRECT_WRITE = /\b(writeWorldState|writeGameData|writeActionsState|writeEv
 // What may still write directly, and why. Lower a number when a write goes;
 // never raise one for a write of our own.
 //
-// Raised once, when public alpha f4f21604 was merged (2026-10-05), for the
+// Raised once, when alpha f4f21604 was merged in (2026-10-05), for the
 // direct writes its new features brought with them. Each is marked "alpha";
 // step 2 turns the panel ones into intents like the rest.
 const ALLOWED = {
