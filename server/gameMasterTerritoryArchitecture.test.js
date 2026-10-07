@@ -81,8 +81,21 @@ test("GM Apply distinguishes same-prose corrections by canonical effects", async
 
 test("GM exact approved events bypass ordinary prose-only write de-dup", async () => {
   const source = await sourceText(gameplayPath);
-  assert.match(source, /writeEventsState\(nextEvents, \{ preserveApprovedEvents: true \}\)/);
-  assert.match(source, /writeEventsState\(bundle\.events, \{ preserveApprovedEvents: true \}\)/);
+  const start = source.indexOf("export const applyGameMasterPreview");
+  // Up to the next thing declared after it (the event-reaction helpers).
+  const end = source.indexOf("const eventReactionKey = ", start);
+  assert.ok(start >= 0 && end > start, "GM Apply must exist");
+  const apply = source.slice(start, end);
+  // One journaled generation, all of it or none: there is no restore write
+  // left that could itself half-fail.
+  assert.match(apply, /mutateCanonicalTurnState\(/);
+  assert.match(apply, /\}, \{ preserveApprovedEvents: true \}\)/);
+  assert.doesNotMatch(apply, /writeEventsState\(/);
+  const state = await sourceText(gameStatePath);
+  const mutate = state.slice(state.indexOf("export const mutateCanonicalTurnState"), state.indexOf("const RUNTIME_DOCUMENTS"));
+  assert.match(mutate, /buildCanonicalTurnPayload\(next, \{ expectedGameId, preserveApprovedEvents \}\)/);
+  const payload = state.slice(state.indexOf("const buildCanonicalTurnPayload"), state.indexOf("const commitCanonicalTurnPayload"));
+  assert.match(payload, /preserveApprovedEvents\s*\?\s*dedupeEventLog\(eventLog, \{ keyOf: eventCanonicalKey \}\)\s*:\s*dedupeEventLog\(eventLog\)/s);
 });
 
 

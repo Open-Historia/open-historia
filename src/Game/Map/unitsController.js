@@ -26,6 +26,7 @@ import {
 } from "../../runtime/gameState.js";
 import { wrapLng } from "../../runtime/unitMotion.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // A turn reads world.json when it starts and writes it back whole when it
 // lands, so a unit placed, disbanded or moved in between would be undone
@@ -479,6 +480,9 @@ const commitWithActions = async (edit, mutator) => {
 export const revertUnitOrder = async (revert) => {
   const unitId = String(revert?.unitId ?? "").trim();
   if (!unitId) return false;
+  // In a shared game the host undoes an order's move when the order is
+  // withdrawn (multiplayer/host/forces.js): there is nothing to undo here.
+  if (inSharedGame()) return true;
   if (unitsLocked()) return false;
   // A standing order minted by the beta engine for this action: cancel it, or the
   // unit keeps marching toward a destination whose justification is gone.
@@ -524,6 +528,20 @@ export const revertUnitOrder = async (revert) => {
 // placing nothing: the Forces panel only offers those, and this holds the rule
 // for every other caller too (the advisor's one-click deployments).
 export const deployUnit = async ({ type, strength, name, composition, lng, lat }) => {
+  // In a shared game the host raises the formation and queues its Deploy
+  // request, for this player and by the same rules (multiplayer/host/forces.js);
+  // both come back in the next view.
+  if (inSharedGame()) {
+    const answer = await requestFromHost("deploy", {
+      type: String(type ?? "").trim().toLowerCase(),
+      strength: Math.max(1, Math.min(100, Number(strength) || 100)),
+      name: String(name ?? "").trim().slice(0, 80),
+      composition: String(composition ?? "").trim().slice(0, 200),
+      lng: wrapLng(Number(lng)),
+      lat: Number(lat),
+    });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
+  }
   if (unitsLocked()) return null;
   if (!playerCode) await bootstrap();
   if (!isDeployableType(type, allowedUnitTypes)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
@@ -568,6 +586,15 @@ export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
   if (!unit || !request) return false;
+  // In a shared game an order is asked of the host, like any other
+  // (multiplayer/): the same words, under this player's country.
+  if (inSharedGame()) {
+    const wording = `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+      `situation allow, or explain in an event why it could not be done.`;
+    return (await requestFromHost("order", { text: wording.slice(0, 1500) })).ok;
+  }
   return queueOrder(
     `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
@@ -592,6 +619,11 @@ export const requestUnitOrders = async (unitId, text) => {
 export const disbandUnit = async (unitId) => {
   const unit = getUnitById(unitId);
   if (!unit) return { ok: false, error: ORDER_NOT_SAVED };
+  // In a shared game the host stands it down (multiplayer/host/forces.js).
+  if (inSharedGame()) {
+    const answer = await requestFromHost("disband", { unit: String(unit.id) });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
+  }
   if (unitsLocked()) return { ok: false, error: TURN_RUNNING_NOTE };
   const removeIt = (list) => list.filter((u) => u.id !== unit.id);
   const edit = unit.status === "pending"

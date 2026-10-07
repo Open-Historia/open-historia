@@ -31,6 +31,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -70,6 +71,28 @@ const applyAdvisorActions = async (proposal, problems = []) => {
     const plan = planAdvisorActionEdits(current, proposal, normalizeActionEntry);
     problems.push(...plan.problems);
     if (plan.items.length === 0) return null;
+    // In a shared game the queue is the host's (multiplayer/): each change the
+    // advisor made is asked of it, as the Actions panel asks, and what the host
+    // turns down is told to the advisor with the rest of its receipt.
+    if (inSharedGame()) {
+        const wording = (action) => String(action?.text || action?.title || "").trim();
+        const before = new Map(current.map((action) => [String(action.id), action]));
+        const after = new Map(plan.next.map((action) => [String(action.id), action]));
+        const ask = async (request, fields, what) => {
+            const answer = await requestFromHost(request, fields);
+            if (!answer.ok) problems.push(`the host did not ${what}: ${answer.error || "it did not answer"}`);
+        };
+        for (const [id, action] of before) {
+            const kept = after.get(id);
+            if (kept && wording(kept) === wording(action)) continue;
+            await ask("unorder", { order: id }, `withdraw "${action.title || wording(action)}"`);
+            if (kept) await ask("order", { text: wording(kept) }, `take the reworded "${kept.title || wording(kept)}"`);
+        }
+        for (const [id, action] of after) {
+            if (!before.has(id)) await ask("order", { text: wording(action) }, `take "${action.title || wording(action)}"`);
+        }
+        return plan.items;
+    }
     // A removed troop order takes its unit off the map again (or back where it
     // was), exactly as deleting it in the Actions panel does.
     if (plan.reverts.length) {

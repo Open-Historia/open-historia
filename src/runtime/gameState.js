@@ -492,6 +492,9 @@ export const normalizeActionEntry = (entry, index = 0) => {
     // Carried over unanswered from the last time skip (AI/playerFocus.js
     // settleOrders): the next skip answers it first.
     ...(entry.overdue === true ? { overdue: true } : {}),
+    // The polity whose order this is, in a shared game (runtime/humanPolities.js).
+    // Single player's orders name none: they are the player's.
+    ...(normalizeOptionalString(entry.ownerCode) ? { ownerCode: normalizeOptionalString(entry.ownerCode) } : {}),
   };
 };
 
@@ -737,10 +740,15 @@ export const normalizeChatEntry = (entry, index = 0) => {
   // projection would drop them.
   const events = withUnloggedMessages(normalizeChatEvents(entry.events), entry.messages, { threadId: entry.id });
   const projected = events.length ? projectChatThread(events) : null;
+  // In a shared game a thread belongs to the person who opened it, named here
+  // (multiplayer/host/projection.js threadOwner). Single player's threads name
+  // nobody: they are the player's.
+  const owner = normalizeOptionalString(entry.player);
 
   return {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
+    ...(owner ? { player: owner } : {}),
     ...(institutionId ? { institutionId } : {}),
     ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
     ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),
@@ -955,13 +963,28 @@ const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", id
 
 export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   const index = buildPolityIdentityIndex(world || {});
+  // In a shared game a thread can belong to another person (entry.player, kept
+  // by normalizeChatEntry): its implicit player is that person, so this player
+  // may be one of its listed members, and its members may match one of this
+  // player's own threads. It is theirs and stays as it stands: never reconciled
+  // against this player, never merged into a thread of this player's.
+  const playerName = normalizeOptionalString(playerCountry);
+  const playerKey = playerName ? normalizedChatIdentityToken(playerName, world, index) : "";
+  const anothers = (entry) => {
+    const owner = normalizeOptionalString(entry?.player);
+    return Boolean(owner) && normalizedChatIdentityToken(owner, world, index) !== playerKey;
+  };
   const reconciled = normalizeArray(chats)
-    .map((entry) => reconcileModernChatForPlayer(entry, world, playerCountry, index))
+    .map((entry) => (anothers(entry) ? normalizeChatEntry(entry) : reconcileModernChatForPlayer(entry, world, playerCountry, index)))
     .filter(Boolean);
 
   const output = [];
   const openByIdentity = new Map();
   for (const chat of reconciled) {
+    if (anothers(chat)) {
+      output.push(chat);
+      continue;
+    }
     if (normalizeOptionalString(chat.status).toLocaleLowerCase() === "closed") {
       output.push(chat);
       continue;
@@ -3250,12 +3273,16 @@ export const linkStructuresToProjects = (world, links = []) => {
 // Deliberately NOT run from normalizeWorldState: that runs on every read, and
 // pruning there would delete units on a read racing a write and fight the map's
 // 5s poll. Call it from the turn commit and the idle pulse instead.
-export const enforceUnitVolume = (world, { playerCode = "" } = {}) => {
+// playerCodes: every polity a person plays, in a shared game
+// (runtime/humanPolities.js humanCountriesOf); each one's units are exempt.
+export const enforceUnitVolume = (world, { playerCode = "", playerCodes = [] } = {}) => {
   const units = normalizeUnits(world?.units);
-  const player = toCountryName(normalizeOptionalString(playerCode)).toLowerCase();
+  const players = new Set([playerCode, ...normalizeArray(playerCodes)]
+    .map((code) => toCountryName(normalizeOptionalString(code)).toLowerCase())
+    .filter(Boolean));
   const isPlayers = (unit) =>
     unit.source === "player" ||
-    (player && toCountryName(unit.ownerCode).toLowerCase() === player);
+    players.has(toCountryName(unit.ownerCode).toLowerCase());
 
   const mine = units.filter(isPlayers);
   const theirs = units.filter((unit) => !isPlayers(unit));
@@ -3501,6 +3528,10 @@ export const normalizeEventEntry = (entry, index = 0) => {
     quote: entry.quote,
   });
   const npcReaction = normalizeEventNpcReaction(entry.npcReaction);
+  // In a shared game, what one government alone found out (runtime/spycraft.js
+  // resolveEspionage): the polities whose players may read the event. Absent,
+  // as on every event of a one-player game, it is everybody's.
+  const audience = [...new Set(normalizeActionParticipants(entry.audience))].slice(0, 12);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3509,6 +3540,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
+    ...(audience.length ? { audience } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts, entry),
     agency: normalizeEventAgency(entry.agency),
@@ -4274,6 +4306,18 @@ export const normalizeWorldState = (world) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
     }),
+    // A shared game's other boards (multiplayer/host/gameHost.js): every country
+    // a second person plays keeps a Projects board of its own here, by country
+    // name. world.projects stays the host's, which is single player's. Only a
+    // world that has the key keeps it, so a single-player save never gains one.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatBoards") ? {
+      seatBoards: Object.fromEntries(
+        Object.entries(nextWorld.seatBoards && typeof nextWorld.seatBoards === "object" && !Array.isArray(nextWorld.seatBoards) ? nextWorld.seatBoards : {})
+          .map(([country, board]) => [normalizeOptionalString(country), normalizeProjects(board)])
+          .filter(([country, board]) => country && board.length)
+          .slice(0, 64),
+      ),
+    } : {}),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -4605,6 +4649,10 @@ export const readAdvisorMessages = async ({ force = false } = {}) => {
 
 let chatWriteQueue = Promise.resolve();
 
+// Unqueued: only for callers already running inside the canonical queue.
+const writeChatsNow = (chats, options = {}) =>
+  writeJson(JSON_URLS.chat, cloneValue(normalizeChats(chats)), { pretty: true, ...options });
+
 export const writeChatsState = async (chats, options = {}) => {
   const normalized = normalizeChats(chats);
   const snapshot = cloneValue(normalized);
@@ -4771,6 +4819,7 @@ export const mutateCanonicalTurnState = (mutator, {
   expectedGameId = "",
   emitEvents = true,
   guardRuntimeGeneration = true,
+  preserveApprovedEvents = false,
 } = {}) => {
   if (typeof mutator !== "function") {
     return Promise.reject(new TypeError("mutateCanonicalTurnState requires a mutator function."));
@@ -4808,8 +4857,110 @@ export const mutateCanonicalTurnState = (mutator, {
         ? patch.chats
         : Object.prototype.hasOwnProperty.call(patch, "chat") ? patch.chat : chats,
     };
-    const payload = buildCanonicalTurnPayload(next, { expectedGameId });
+    const payload = buildCanonicalTurnPayload(next, { expectedGameId, preserveApprovedEvents });
     return commitCanonicalTurnPayload(payload, { emitEvents, startedAt });
+  });
+};
+
+// One document's read-modify-write, on the same queue as the canonical
+// generation and the chat writes. The document is read fresh INSIDE the queue,
+// so the mutator always starts from what the previous write left. Reading it
+// before a model call and writing the whole of it back afterwards is how a unit
+// the player deployed, or a note another writer posted, while the call was out
+// used to be erased: the old copy won. Call the model first, then hand its
+// result to a mutator that applies it to the current document.
+//
+// The mutator gets the current value and returns the next one (it may change
+// the one it was given and return it), or null/undefined to write nothing. It
+// must stay native and quick: nothing it awaits may queue another canonical
+// write, or the queue waits on itself. Resolves to the saved value, or null
+// when nothing was written. Rejects, writing nothing, if the active campaign
+// changed after the call was made.
+const RUNTIME_DOCUMENTS = {
+  world: {
+    read: () => readWorldState({ force: true }),
+    write: (value, options) => writeWorldState(value, options),
+  },
+  chats: {
+    read: () => readChatsState({ force: true }),
+    write: (value, options) => writeChatsNow(value, options),
+  },
+  events: {
+    read: () => readEventsState({ force: true }),
+    write: (value, options) => writeEventsState(value, options),
+  },
+  actions: {
+    read: () => readActionsState({ force: true }),
+    write: (value, options) => writeActionsState(value, options),
+  },
+  game: {
+    read: () => readGameData({ force: true }),
+    write: (value, options) => writeGameData(value, options),
+  },
+  intercepts: {
+    read: () => readInterceptsState({ force: true }),
+    write: (value, options) => writeInterceptsState(value, options),
+  },
+  // The advisor's conversation: written by its panel, by document notices and
+  // by a rollback, so all three meet here too.
+  advisor: {
+    // A read that fails throws (readConversationJson), so nothing is ever written
+    // over a conversation that could not be loaded.
+    read: () => readAdvisorMessages({ force: true }),
+    write: (value, options) => writeJson(JSON_URLS.advisor, Array.isArray(value) ? value : [], options),
+  },
+};
+
+export const mutateRuntimeDocument = (key, mutator, {
+  guardRuntimeGeneration = true,
+  ...writeOptions
+} = {}) => {
+  const document = RUNTIME_DOCUMENTS[key];
+  if (!document) return Promise.reject(new TypeError(`mutateRuntimeDocument: unknown document "${key}".`));
+  if (typeof mutator !== "function") {
+    return Promise.reject(new TypeError("mutateRuntimeDocument requires a mutator function."));
+  }
+  const expectedRuntimeGameUrl = guardRuntimeGeneration ? String(JSON_URLS.game || "") : "";
+  const assertRuntimeGeneration = () => {
+    if (expectedRuntimeGameUrl && String(JSON_URLS.game || "") !== expectedRuntimeGameUrl) {
+      throw new Error(`Active campaign changed before the ${key} write could commit.`);
+    }
+  };
+  return enqueueCanonicalGenerationWrite(async () => {
+    assertRuntimeGeneration();
+    const current = await document.read();
+    const next = await mutator(current);
+    assertRuntimeGeneration();
+    if (next === null || next === undefined) return null;
+    return document.write(next, writeOptions);
+  });
+};
+
+export const mutateWorldState = (mutator, options) => mutateRuntimeDocument("world", mutator, options);
+export const mutateChatsState = (mutator, options) => mutateRuntimeDocument("chats", mutator, options);
+export const mutateEventsState = (mutator, options) => mutateRuntimeDocument("events", mutator, options);
+export const mutateActionsState = (mutator, options) => mutateRuntimeDocument("actions", mutator, options);
+export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game", mutator, options);
+export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
+export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
+
+// A write another thread performs, run while this page's write queue is held.
+// The country-stats worker reads world.json, merges one sheet in and PUTs the
+// whole document back itself (it keeps that stringify off the page); held here
+// for that round trip, no queued page write can land between its read and its
+// PUT and be erased by it. The whole queue waits on the task, so it must settle
+// on its own: give it a timeout. Rejects, running nothing, if the active
+// campaign changed after the call was made.
+export const runInCanonicalWriteQueue = (task, { guardRuntimeGeneration = true } = {}) => {
+  if (typeof task !== "function") {
+    return Promise.reject(new TypeError("runInCanonicalWriteQueue requires a task function."));
+  }
+  const expectedRuntimeGameUrl = guardRuntimeGeneration ? String(JSON_URLS.game || "") : "";
+  return enqueueCanonicalGenerationWrite(async () => {
+    if (expectedRuntimeGameUrl && String(JSON_URLS.game || "") !== expectedRuntimeGameUrl) {
+      throw new Error("Active campaign changed before the write could run.");
+    }
+    return task();
   });
 };
 

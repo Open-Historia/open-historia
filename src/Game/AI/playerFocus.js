@@ -133,7 +133,10 @@ export const collectPlayerMaterial = ({
 
   for (const action of asArray(actions)) {
     if (asText(action?.status) !== "planned") continue;
-    items.push({ kind: "order", id: asText(action.id), label: asText(action.text || action.rawInput), overdue: action.overdue === true, required: true });
+    // In a shared game every order names the polity that gave it (ownerCode).
+    const owner = asText(action.ownerCode);
+    const label = asText(action.text || action.rawInput);
+    items.push({ kind: "order", id: asText(action.id), label: owner ? `(${owner}) ${label}` : label, overdue: action.overdue === true, required: true });
   }
 
   for (const project of asArray(projects)) {

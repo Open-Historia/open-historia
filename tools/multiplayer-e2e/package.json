@@ -1,0 +1,13 @@
+{
+  "name": "open-historia-multiplayer-e2e",
+  "private": true,
+  "description": "A shared game hosted, joined with an invite token and played for a round, in two real browsers.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "test": "node e2e.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}
