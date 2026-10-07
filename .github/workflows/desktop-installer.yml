@@ -164,3 +164,25 @@ jobs:
             files+=(latest.json)
           fi
           gh release upload "$TAG" "${files[@]}" --clobber
+
+  # Once every system's build of this release is up, the chunks no build names
+  # any more come off the chunk release, which holds 1,000 files at most
+  # (scripts/publish-update-chunks.mjs --prune-only). It is the last job, on its
+  # own, so it never runs beside a publish of the same release, and it never
+  # removes what a head still leads to or anything uploaded in the last six
+  # hours. A system whose build failed keeps its old head, and so its chunks.
+  prune-chunks:
+    needs: build
+    if: ${{ !cancelled() && (github.event_name == 'push' || inputs.tag != '') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Remove the update chunks no build names any more
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: node scripts/publish-update-chunks.mjs --prune-only --tag "${TAG}-chunks" --repo "${{ github.repository }}"
