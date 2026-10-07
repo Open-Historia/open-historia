@@ -45,7 +45,7 @@ Every URL points at the **registry Worker** (`open-historia-registry.nichojkrol.
 | `VITE_OH_WEB` | `1` | Master flag; gates all web-mode code + dynamic imports. | `main.jsx`, `assets.js`, `libraryBar.jsx`, `settings.jsx` |
 | `VITE_OH_PMTILES_URL` | Worker `/content` | CORS+range proxy for the 60–100 MB pmtiles (Cloudflare Pages caps at 25 MB/file). Also the base for `default-regions.geojson`. Falls back to `/assets` (local dev). | `router.js:55`, `libraryStore.js:325` |
 | `VITE_OH_DIRECTORY_URL` | Worker `/node-directory.json` | The **signed** live node directory (updates as nodes are accepted/paused/banned). | `contentTrust.js:17` |
-| `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/*`), because GitHub attachments send no CORS. | `router.js:109` |
+| `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/file`), because GitHub's files (attachments and release copies) send no CORS. | `router.js` |
 | `VITE_OH_ACCOUNT_URL` | Worker root | Accounts (`/account/*`) + encrypted sync (`/sync/*`). | `account.js:11` |
 | `VITE_OH_GOOGLE_CLIENT_ID` | Google OAuth client id | Public client id for "Sign in with Google". Empty ⇒ Google button hidden (accounts effectively disabled). | `account.js:77` |
 | `VITE_OH_MANIFEST_URL` | *(unset)* → `/content-manifest.json` | Signed asset→hash manifest; ships with the build, same-origin default. | `contentTrust.js:18` |
@@ -90,7 +90,7 @@ There is no Express server. `installWebApiRouter()` (`router.js:138`) replaces `
 ### The two branches that are *not* pure IndexedDB
 
 - **`runtime/pmtiles/<key>`** (`router.js:51`): first ask `getScenarioPmtilesOverride(key, range)` (a scenario may carry its own pmtiles in IndexedDB); otherwise proxy `${VITE_OH_PMTILES_URL||/assets}/<key>.pmtiles` with the incoming `Range`/method.
-- **`hub/*`** (`router.js:108`): forward to `${VITE_OH_HUB_URL}/hub/<segments>`. For a bundle download (`hub/file?url=…`, GET) it **prefers the connected content node** (`getConnected()` → `node.url/oh/v1/hub`) to offload the central proxy, falling back to the Worker. `POST`s (import counters) attach `Authorization: Bearer <session>` when signed in so imports dedup by **account** instead of by IP.
+- **`hub/*`** (`router.js`): one call only, a download (`hub/file?url=…`, GET); anything else is a 404. It **prefers the connected content node** (`getConnected()` → `node.url/oh/v1/hub`) to offload the central proxy, falling back to `${VITE_OH_HUB_URL}/hub/file`. What the page asks it for is a checked copy in the hub's releases, or a suggestion's `.zip` the hub has checked (`src/runtime/hubFiles.js`). The hub's index (its list of posts, its checked copies, the import counts) is read straight from `raw.githubusercontent.com` and a post's comments from `api.github.com`: both send CORS and never reach the router. The import counter is no longer called, so the account's session is no longer sent to the Worker for it.
 
 ---
 

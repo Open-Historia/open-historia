@@ -233,7 +233,7 @@ A player who downloaded a community scenario and changed it can send the changes
 
 **Suggest changes** (`SuggestChangesDialog`, `ScenarioSuggestions.jsx:426`). Unsaved edits in the drawer are saved first, with a confirm (`handleSuggestChanges`). The dialog downloads the post's bundle and exports the copy (`exportScenarioBundle`), and `diffScenarioBundles` (`src/runtime/scenarioChanges.js`) lists what changed, in two parts: **Changes outside the map** and **Changes on the map**. An unchanged copy says so. The player may add a name and a note. **Save the file and open the post** then does three things. It opens the post at its comment box first, while the click still counts as the player's. It copies the comment (`buildSuggestionComment`) to the clipboard. It saves `<scenario>-suggestion.zip` (`buildSuggestionZip`). **Only save the file** skips the post. The dialog then shows the steps: paste the comment, drag the file in, click Comment. The comment's text is also shown there, for when the clipboard was refused.
 
-**The author learns of it.** When the menu opens, the effect at `libraryBar.jsx:2221` reads the post list once (`fetchHubPosts`, cached five minutes; the effect itself runs at most once every five minutes). `refreshPublishedRecord` (`hubPosts.js`) finds the posts carrying the scenario's key. It then reads a post's comments only when the post's comment count has moved. A comment is a suggestion when it has a `.zip` attachment, and either the file name says "suggestion" or the comment carries the marker line `Open-Historia-Suggestion: sug-…`. Where the author sees it:
+**The author learns of it.** When the menu opens, the effect at `libraryBar.jsx:2221` reads the post list once (`fetchHubPosts`: the hub's index, kept five minutes, no API request; the effect itself runs at most once every five minutes). `refreshPublishedRecord` (`hubPosts.js`) finds the posts carrying the scenario's key. It then reads a post's comments (through GitHub's API, the one thing still asked of it) only when the post's comment count has moved, or while a suggestion on it is still waiting for the hub's check. A comment is a suggestion when it has a `.zip` attachment, and either the file name says "suggestion" or the comment carries the marker line `Open-Historia-Suggestion: sug-…`. Only a suggestion the hub has checked is kept and offered: the hub looks inside every suggestion's file, lists the comments that pass in its index (`post.checkedSuggestions`: same comment, same `.zip`) and deletes the ones that fail. One that is not listed yet is not stored, and the post's comment count is not recorded while it waits, so the next look reads the comments again and finds it once it has passed, a minute or so after it was posted. One already held is put away when the hub stops listing it. Where the author sees it:
 
 - `SuggestionsBanner` above the Games and Scenarios tabs: **💬 People have suggested changes to your scenarios**, one button per scenario;
 - the card's badge;
@@ -241,7 +241,7 @@ A player who downloaded a community scenario and changed it can send the changes
 
 A deleted comment takes its suggestion with it.
 
-**The changelog** (`SuggestionReviewDialog`, `ScenarioSuggestions.jsx:589`). The dialog downloads the suggestion's file through `/api/hub/file`, exports the author's scenario as it is now, and marks each change outside the map with one of three states:
+**The changelog** (`SuggestionReviewDialog`, `ScenarioSuggestions.jsx:589`). The dialog downloads the suggestion's file from its comment (`downloadHubFile(zipUrl, { copy: false })`: through `/api/hub/file`, and only while the hub's index lists that file as checked), exports the author's scenario as it is now, and marks each change outside the map with one of three states:
 
 - *open*;
 - *You changed this too* (a conflict: the author rewrote it since posting; accepting replaces their version);
@@ -523,7 +523,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 20 | Country / faction picker | `libraryBar.jsx` | modal | `countryPicker` | country options, custom regions | `createGame`, `saveGame`, `activateGame` |
 | 21 | Map editor host | `libraryBar.jsx` | overlay | `isMapEditorOpen` | scenario assets | `applyMapToScenario` → many asset writes + new game |
 | 22 | ⌂ Exit Game / summary | `libraryBar.jsx` | cluster | `!menuOpen` | `activeGame` | `setMenuOpen(true)` |
-| 23 | Community hub tab | `communityHub.jsx` (posts read by `runtime/hubPosts.js`) | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle` (stamps `hubOrigin`), publish/export (writes `Scenario-Key`, see [§4.8](#48-suggested-changes)) |
+| 23 | Community hub tab | `communityHub.jsx` (posts read by `runtime/hubPosts.js`) | panel | menu tab | the hub's index (`runtime/hubFiles.js`), `/api/hub/file` | `downloadHubScenario` (the checked copy, stamped with `hubOrigin`)+`importScenarioBundle`, publish/export (writes `Scenario-Key`, see [§4.8](#48-suggested-changes)) |
 
 ---
 

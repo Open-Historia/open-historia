@@ -93,9 +93,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, on silence (restarted by every chunk), and it replies `504` rather than hanging. Once the answer has started, a failure (that deadline, the 64 MB cap, the endpoint dropping mid-answer) destroys the connection instead of ending it cleanly, so the browser's reader fails rather than taking half an answer for a whole one. An endpoint it could not reach at all (refused, unresolved, dropped before a byte) is answered `502 { error, code, unreachable: true }` with the header `X-OH-Relay: unreachable`, so the page can tell it from a provider's own 502 relayed as it came (an endpoint's own headers are not passed on, so only the relay can set that one) | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
-| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`) | `server/server.js` |
-| POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
-| GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
+| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`). The page asks it for two things only: a checked copy in the hub's releases, and a suggestion's `.zip` the hub has checked (`src/runtime/hubFiles.js` decides; the route itself still serves any GitHub-hosted file). There is no import-counter route any more: `/api/hub/import-log` and `/api/hub/import-counts` are gone, and the page reads the counts from the hub's own index | `server/server.js` |
 
 ### Map editor, flags, basemaps
 | Method | Path | Purpose | Handler |
@@ -155,8 +153,8 @@ server/data/
   mapeditor-documents/  mapeditor-manifest.json
   flags-library.json
   lang/<code>.json               # runtime-saved translations (survive app updates)
-  hub-cache/<sha256>.body|.type  # cached hub bundle downloads (bundle-names-current: the one-time rename pass is done)
-  import-pings/<sha256>          # one-per-scenario import telemetry markers
+  hub-cache/<sha256>.body|.type  # cached hub downloads (bundles, basemaps, flags); bundle-names-current marks the one-time rename pass as done
+  import-pings/<sha256>          # markers left by the retired import counter; nothing reads or writes them now
   .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games (recoverable by hand)
 ```
 
@@ -283,9 +281,9 @@ The rules:
 - **An edit keeps `hubOrigin` and stamps `editedAt`** (`hubOriginAfterWrite`, used by `writeScenarioMeta`). Before, the first local edit erased it. An edited copy is never offered an **Update**, which would overwrite the player's work. It still knows its original, which **Suggest changes** compares against. A write that carries `hubOrigin` sets it, and an explicit `hubOrigin: null` unlinks the scenario for good.
 - **Bookkeeping is not an edit.** `updateScenario` (`server/libraryStore.js:2240`) writes a body that carries only `hubOrigin` / `hubPublished` / `hubReviews` with `touch: false`. That write moves neither `updatedAt` nor `editedAt`. In a body that also edits the scenario, the provenance is written after the edit.
 - **An edited copy's games carry their map.** `fetchableHubOrigin` returns null for an edited copy, so a game exported from it embeds the map rather than pointing at a post whose file is no longer what the game was played on.
-- **Suggestions are references**, never the files: `{ id, postId, commentId, author, createdAt, zipUrl, note }`, with `zipUrl` a GitHub attachment. There are at most 50, and a blocked contributor's (a case-insensitive login in `blocked`, at most 100) are dropped on every write. `withContributorBlocked` also resets `commentCounts`, so the next check re-reads every comment. `openHubSuggestions(published, reviews)` lists the suggestions not yet reviewed or dismissed.
+- **Suggestions are references**, never the files: `{ id, postId, commentId, author, createdAt, zipUrl, note }`, with `zipUrl` a GitHub attachment. Only the ones the hub's index lists as checked are found and kept (`refreshPublishedRecord`, `src/runtime/hubPosts.js`; the stores themselves cannot read the hub and take the record as written). There are at most 50, and a blocked contributor's (a case-insensitive login in `blocked`, at most 100) are dropped on every write. `withContributorBlocked` also resets `commentCounts`, so the next check re-reads every comment. `openHubSuggestions(published, reviews)` lists the suggestions not yet reviewed or dismissed.
 
-GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal, and the reason `/api/hub/file`'s disk cache can never go stale. What players downloaded before 2026-09-29 says the project's earlier name in its schema: `scenarioBundleNames.js` rewrites the schema value (only that; the format stays 1 or 2, a zip's `scenario.json` is rewritten and re-zipped) as a download arrives, as a cached copy is served, and once for the whole cache at startup (`renameHubCacheBundles`, marker `bundle-names-current`), so every copy a player has downloaded is kept under the current name. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
+GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal. What is downloaded is the file's checked copy in the hub's releases, and the hub gives a copy a new address whenever its bytes change, which is the reason `/api/hub/file`'s disk cache can never go stale. What players downloaded before 2026-09-29 says the project's earlier name in its schema: `scenarioBundleNames.js` rewrites the schema value (only that; the format stays 1 or 2, a zip's `scenario.json` is rewritten and re-zipped) as a download arrives, as a cached copy is served, and once for the whole cache at startup (`renameHubCacheBundles`, marker `bundle-names-current`), so every copy a player has downloaded is kept under the current name. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
 
 ---
 
@@ -323,7 +321,6 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `PORT` | `3000` | Listen port (`server/server.js:61`) |
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
-| `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
 | `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
 | `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |
 

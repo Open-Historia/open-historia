@@ -219,19 +219,22 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ## 7. Cloudflare Workers (the control/edge plane)
 
-### 7.1 Import counter — `tools/import-counter/`
+### 7.1 Import counter — `tools/import-counter/` (retired)
 
-A tiny Worker that counts community-scenario imports. The game server pings it once per successful install via `server/server.js` → `/api/hub/import-log` (`server/server.js:657`), giving real numbers even for scenarios GitHub can't count (issue attachments).
+A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's workflow checks each post's attachment, puts a checked copy of it in a release, adds the downloads up, and writes them to `index.json` on its `hub-index` branch, with where each copy is, the list of released posts and the suggestions it has checked; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. That index is also the game's only list of the hub's posts, and the copies it names are the only hub files the game downloads: a post's own attachment is never fetched, and GitHub's API is asked for nothing but a post's comments. See [runtime-services.md](runtime-services.md).
+
+The count used to be kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game: from the desktop server, from the web build's router (which no longer sends the account's session anywhere for it) and from the page.
+
+Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| Entry | `worker.js` |
-| Storage | KV binding `IMPORTS` (counts live in each key's metadata so `/counts` is one list call) |
-| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js:654`) |
-| Override | `OH_IMPORT_COUNTER_URL` env on the game server |
-| Dedup | Website: once per **account _and_ IP** (skip if either seen); app/anonymous web: once per **IP**. Raw IPs never stored — hashed with `HASH_SALT` |
-| Read routes | `/counts` (all), `/count/<hub-issue-number>` (one) |
+| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
+| `POST /hit` | Accepted and ignored: the download the import made is what counted it |
+| Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers |
+
+The Worker is deployed from `main` with the site, not from this branch.
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
@@ -241,7 +244,7 @@ The web-mode control plane (source of truth: the admin repo). Serves the signed 
 |---|---|---|
 | `NODES` | KV | Small hot keys + TTL items (magic-link tokens, sessions via `acct:`/`magic:`/`sess:` prefixes) |
 | `OH_ACCOUNTS` | D1 (`oh-accounts`) | Nodes table, users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
-| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | Direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
+| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
 The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js:66`). No game rebuild is needed for a directory change.

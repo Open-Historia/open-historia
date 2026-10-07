@@ -62,6 +62,32 @@ test("game and scenario actions use the same compact icon vocabulary", () => {
   assert.match(source, /<ButtonIcon kind="clone" \/> Clone Scenario/);
 });
 
+test("every link to a post is stamped where the file is downloaded, and a file brings none of its own", () => {
+  // The checked copy of the post's file, with the post, its file and the
+  // release it came from (hubPosts.js downloadHubScenario): Update and Import
+  // & play here, Import in the Community tab.
+  const hub = fs.readFileSync(new URL("./communityHub.jsx", import.meta.url), "utf8");
+  assert.equal(source.match(/await downloadHubScenario\(/g)?.length, 2);
+  assert.equal(hub.match(/await downloadHubScenario\(/g)?.length, 1);
+  for (const text of [source, hub]) assert.doesNotMatch(text, /\.hubOrigin = |downloadHubBundle/);
+  // A scenario file picked from disk is read the way a download is, which
+  // drops a link written into it (hubPosts.js readScenarioBundleBytes).
+  const fromDisk = source.slice(source.indexOf("const handleImportScenarioFile = "), source.indexOf("// Full country name in the summary"));
+  assert.match(fromDisk, /const bundle = await readScenarioBundleBytes\(await file\.arrayBuffer\(\)\);\s+const details = await importScenarioBundle\(bundle\);/);
+  // Nothing is reported when a scenario is imported: its download is the count.
+  assert.doesNotMatch(hub, /import-log/);
+});
+
+test("Import & play says in its own prompt why the map could not be fetched", () => {
+  // No editor is open behind the missing-map prompt, and the editor's error
+  // was the only place the reason went: a press that failed showed nothing.
+  const importPlay = source.slice(source.indexOf("const handleMissingScenarioImport = "), source.indexOf("const handleCreateScenario = "));
+  assert.match(importPlay, /setMissingScenarioError\(""\);\s+setIsBusy\(true\);/, "a new try starts clean");
+  assert.match(importPlay, /\} catch \(nextError\) \{\s+setMenuOpen\(true\);\s+setEditorError\(nextError\.message\);\s+setMissingScenarioError\(nextError\.message\);/);
+  assert.match(source, /\{missingScenarioError && \(\s+<div role="alert"[^>]*>\s+\{missingScenarioError\}\s+<\/div>\s+\)\}/);
+  assert.match(source, /setMissingScenarioError\(""\);\s+setMissingScenarioGame\(game\);/, "and so does the prompt, opened for another game");
+});
+
 test("the UI refresh intentionally leaves the decorative page background for later", () => {
   assert.doesNotMatch(source, /midnight_compass_world_map|landing.*background.*url|world_map\.png/i);
 });

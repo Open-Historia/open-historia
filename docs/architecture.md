@@ -202,7 +202,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/basemaps…`, `/api/flags…` | GET/POST/DELETE | `basemapStore.js`, `flagStore.js` |
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
-| `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |
+| `/api/hub/file` | GET | Community hub GitHub proxy (SSRF-guarded to GitHub hosts). The hub's list of posts and the import counts are read by the page from the hub's own index, not through the server |
 | `/api/server/shutdown` | POST | Exits the process (no button in the beta UI any more; scripts and the launcher) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 
@@ -213,7 +213,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | Backend | Entry | How it answers `/api/*` |
 |---|---|---|
 | Express (desktop / mobile) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`) |
-| Web (browser) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. |
+| Web (browser) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/file` forwards to the registry Worker (or a connected node). Everything non-`/api` passes through to the real `fetch`. |
 | Embedded mobile | `mobile/nodejs-project/main.js` | Picks a writable `OH_DATA_DIR`, first-run-seeds from a bundled `seed/` snapshot, best-effort downloads map binaries, then `import("./server/server.js")` bound to `127.0.0.1`; the WebView loads it same-origin |
 
 Because the web router keys on `url.origin === location.origin && pathname.startsWith("/api/")` (`router.js:153`), the client code (`library.js`, `assets.js`, editor IO, basemap library) is **byte-identical** across variants — it just calls `fetch("/api/…")`.

@@ -1396,67 +1396,14 @@ app.get("/api/hub/file", async (req, res) => {
   }
 });
 
-// Best-effort scenario-import telemetry. On a successful import the client pings
-// here; we forward it to the self-hosted counter (a Cloudflare Worker — see
-// tools/import-counter/) so the hub owner can see how many people imported each
-// scenario, including attachment scenarios GitHub can't count. Deduped per
-// install: only the FIRST successful import of a given bundle counts, so a
-// re-import never inflates the number. Points at the hub's deployed counter
-// Worker (tools/import-counter); OH_IMPORT_COUNTER_URL overrides it, and an
-// empty value disables the ping entirely (silent no-op).
-const IMPORT_COUNTER_URL = (
-  process.env.OH_IMPORT_COUNTER_URL ?? "https://oh-import-counter.nichojkrol.workers.dev"
-).replace(/\/+$/, "");
-const IMPORT_PING_DIR = path.join(DATA_DIR, "import-pings");
-app.post("/api/hub/import-log", jsonParser, (req, res) => {
-  res.json({ ok: true }); // ack at once — telemetry must never delay or fail the import
-  (async () => {
-    try {
-      const { url: fileUrl, id, title } = req.body ?? {};
-      if (!IMPORT_COUNTER_URL || (id == null && !fileUrl)) return;
-      // One ping per scenario per install, EVER. Key the marker on the scenario
-      // id (its hub issue number) so re-importing — an updated version, or just
-      // mashing the Import button — never counts twice. The marker is created
-      // atomically (wx: fails if it already exists) so even racing requests
-      // can't both slip a ping through.
-      const markerKey = id != null ? `id:${id}` : `url:${fileUrl}`;
-      const marker = path.join(IMPORT_PING_DIR, crypto.createHash("sha256").update(markerKey).digest("hex"));
-      fs.mkdirSync(IMPORT_PING_DIR, { recursive: true });
-      try {
-        fs.writeFileSync(marker, markerKey, { flag: "wx" });
-      } catch {
-        return; // marker already exists — this scenario was counted on this install
-      }
-      await fetch(`${IMPORT_COUNTER_URL}/hit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: String(id ?? fileUrl).slice(0, 120), title: String(title ?? "").slice(0, 200) }),
-      }).catch(() => {});
-    } catch {
-      // best-effort telemetry — swallow everything
-    }
-  })();
-});
-
-// Read the self-hosted import counts back for the Community tab. Proxied (not
-// fetched from the Worker in the browser) so the client stays URL-agnostic and
-// same-origin. Lightly cached so a hub refresh doesn't hammer the Worker.
-let importCountsCache = { at: 0, data: null };
-app.get("/api/hub/import-counts", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  if (!IMPORT_COUNTER_URL) return res.json({});
-  if (importCountsCache.data && Date.now() - importCountsCache.at < 60000) {
-    return res.json(importCountsCache.data);
-  }
-  try {
-    const upstream = await fetch(`${IMPORT_COUNTER_URL}/counts`);
-    const data = upstream.ok ? await upstream.json() : {};
-    importCountsCache = { at: Date.now(), data };
-    res.json(data);
-  } catch {
-    res.json(importCountsCache.data || {});
-  }
-});
+// Imports are no longer reported from here. A scenario's import count is how many
+// times its file has been downloaded from the hub's releases, as GitHub counts
+// it; the page reads the counts from the hub's own index (src/runtime/hubFiles.js).
+// The routes that pinged and read the old counter on Cloudflare
+// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) are gone:
+// its free allowance was spent within hours of every day. /api/hub/file above
+// serves a file it has already downloaded from its cache, so importing the same
+// file again on this machine does not count twice.
 
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
