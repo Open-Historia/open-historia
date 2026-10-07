@@ -276,6 +276,7 @@ test("the store keeps the checked copy a scenario was downloaded from, and an Up
     const edited = scenario("shared-world").hubOrigin;
     store.updateScenarioFromBundle("shared-world", bundle("Shared World", 1, "${RELEASE}"));
     const updated = scenario("shared-world");
+    const listed = store.getLibraryCatalog().scenarios.find((entry) => entry.id === "shared-world").hubOrigin;
     const exported = store.exportGameBundle("campaign").scenarioRef.hubOrigin;
     store.updateScenario("shared-world", { hubPublished: { key: "oh-3f2a9c1e-77", postIds: [55] } });
     store.updateScenario("shared-world", { name: "Mine Again" });
@@ -283,7 +284,7 @@ test("the store keeps the checked copy a scenario was downloaded from, and an Up
     // A newer file of the post, and a download stamped with a copy that is not the hub's.
     const imported = store.importScenarioBundle(bundle("Second Copy", 2, "${NEWER_RELEASE}"), { setSelected: false }).scenario.hubOrigin;
     const elsewhere = store.importScenarioBundle(bundle("Elsewhere", 3, "https://evil.example/releases/download/x/world.zip"), { setSelected: false }).scenario.hubOrigin;
-    ${report(`{ oldLink, edited, updated, exported, editedAgain, imported, elsewhere }`)}
+    ${report(`{ oldLink, edited, updated, listed, exported, editedAgain, imported, elsewhere }`)}
   `);
   assert.equal(result.oldLink.release, undefined);
   assert.ok(result.edited.editedAt);
@@ -291,6 +292,7 @@ test("the store keeps the checked copy a scenario was downloaded from, and an Up
   assert.equal(result.updated.name, "Shared World", "the Update put the hub's file in place of the player's changes");
   assert.equal(result.updated.hubOrigin.release, RELEASE, "and stamped the copy it downloaded");
   assert.equal(result.updated.hubOrigin.editedAt, undefined);
+  assert.equal(result.listed.release, RELEASE, "the library's catalog, which the menu's cards read, says the same");
   assert.deepEqual(Object.keys(result.exported).sort(), ["bundleUrl", "postId", "syncedAt"], "a game export hands on the post and its file, not this download");
   assert.equal(result.editedAgain.release, RELEASE, "bookkeeping and a later edit keep it");
   assert.ok(result.editedAgain.editedAt);

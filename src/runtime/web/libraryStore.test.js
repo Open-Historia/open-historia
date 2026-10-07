@@ -102,6 +102,7 @@ const scenarios = async (method, path, body) => {
   const text = await response.text();
   return { status: response.status, data: text ? JSON.parse(text) : null };
 };
+const libraryCatalog = async () => JSON.parse(await (await store.handleLibrary({ method: "GET" })).text());
 const ok = (reply) => {
   assert.ok(reply.status < 300, `HTTP ${reply.status}: ${JSON.stringify(reply.data)}`);
   return reply.data;
@@ -137,6 +138,10 @@ test("a link keeps the checked copy it was downloaded from, and an Update gives 
   assert.equal(updated.name, "Hub Map");
   assert.equal(updated.hubOrigin.release, HUB_RELEASE(1));
   assert.equal(updated.hubOrigin.editedAt, undefined);
+  // The menu's cards read the library's catalog, not the scenario itself: it
+  // has to say the same, or the card would go on asking for the Update.
+  const listed = (await libraryCatalog()).scenarios.find((entry) => entry.id === id);
+  assert.equal(listed.hubOrigin.release, HUB_RELEASE(1));
   ok(await scenarios("PUT", id, { hubPublished: { key: PUBLISH_KEY, postIds: [55] } }));
   const editedAgain = ok(await scenarios("PUT", id, { name: "Mine Again" })).scenario;
   assert.equal(editedAgain.hubOrigin.release, HUB_RELEASE(1), "bookkeeping and a later edit keep it");
