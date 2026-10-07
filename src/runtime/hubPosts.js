@@ -136,6 +136,35 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
   return posts;
 };
 
+// ---- the library's copies of hub posts ----------------------------------------
+
+// Why a copy downloaded from a post should take the post's file again, or null
+// when it should not. `post` is the copy's post as fetchHubPosts lists it: on
+// the hub, with a checked copy of its file to download. A post that is not
+// there offers nothing, whatever the copy is.
+//   "unchecked" — the copy has an old link: it was downloaded from the post's
+//                 own attachment, before the hub checked what it released
+//                 (hubOrigin.release is stamped by every download since). The
+//                 game no longer downloads those, so the copy is asked to take
+//                 the checked file, and this is the one reason that reaches a
+//                 copy its player has edited (its Update asks first: it
+//                 replaces their changes).
+//   "newer"     — the post's file is not the one the copy was imported from.
+//   "basemap"   — the copy's community basemap could not be downloaded
+//                 (missingBasemap), which Update tries again. The stores of
+//                 this branch do not record one yet, so until they do this
+//                 reason is never the answer here.
+// The last two are for an unedited copy only: an edited one is never offered a
+// newer file, its player suggests their changes to the post instead.
+export const hubUpdateReason = (scenario, post) => {
+  const origin = scenario?.hubOrigin;
+  if (!origin || !post?.bundleUrl || !post.releaseUrl || Number(post.id) !== Number(origin.postId)) return null;
+  if (!origin.release) return "unchecked";
+  if (origin.editedAt) return null;
+  if (post.bundleUrl !== origin.bundleUrl) return "newer";
+  return scenario.missingBasemap ? "basemap" : null;
+};
+
 // A file on the hub (a bundle, a suggestion), through the allowlisted
 // /api/hub/file proxy: GitHub's files send no CORS headers. A post's file is
 // its checked copy in the hub's releases, and there is no download without
@@ -211,6 +240,15 @@ export const downloadHubScenario = async ({ postId, bundleUrl, title, author, sy
   };
   return bundle;
 };
+
+// Whether the file a copy came from can no longer be had from the hub, so that
+// Suggest changes has nothing to measure the copy against: the link is an old
+// one (hubUpdateReason: the copy came from an attachment nobody had checked,
+// and the checked file the hub now offers is not that file), or the post has
+// moved on and the hub no longer holds the older file. Asked of an index that
+// was read, before the download, so the player is told to update first
+// instead of being shown a download that failed.
+export const hubOriginalGone = (origin, hubIndex) => !origin?.release || !releaseCopyOf(hubIndex, origin.bundleUrl);
 
 // ---- suggestions: comments on a post that carry a suggestion file ------------
 
