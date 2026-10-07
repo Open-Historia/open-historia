@@ -18900,6 +18900,12 @@ export const maybeGeneratePregameHistory = async () => {
       return await applyScenarioPrehistory(storedPayload, { startDate, campaignId });
     }
 
+    // "Pre-game history" off (Gameplay features): nothing is asked of the model
+    // and nothing is read out of the briefing. Only the asking is switched off:
+    // a pre-history the scenario keeps is its author's own, written above
+    // whatever the switch says.
+    if (!isActiveFeatureEnabled("pregameHistory")) return null;
+
     // The backstory now doubles as the round-zero bootstrap of the war and
     // diplomacy ledgers: a campaign that opens mid-war starts with that war on
     // the books, and a standing alliance is a fact from day one.

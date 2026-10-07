@@ -17,7 +17,6 @@
 
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { readWorldStateView } from "../../runtime/gameState.js";
-import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 
 let modulePromise = null;
 
@@ -67,17 +66,12 @@ export const applyParkedTurn = hostOnly(async (...args) => (await gameplay()).ap
 // game is told there is none, and never takes one in or throws one away.
 export const loadParkedTurn = hostQuietly(async (...args) => (await gameplay()).loadParkedTurn(...args));
 export const discardKeptTurn = hostOnly(async (...args) => (await gameplay()).discardKeptTurn(...args));
-export const maybeGeneratePregameHistory = async (...args) => {
-  // The backstory is the game's own record: on a page playing a shared game it
-  // is simply not done (hostQuietly, written out so the gate below reads plainly).
-  if (inSharedGame()) return null;
-  // This is the only production entry point for the automatic Round-Zero
-  // bootstrap. Gate it before importing the large gameplay chunk so an author
-  // who disables pre-game history spends no AI request and starts with exactly
-  // the canonical state already authored into the scenario.
-  if (!isActiveFeatureEnabled("pregameHistory")) return null;
-  return (await gameplay()).maybeGeneratePregameHistory(...args);
-};
+// The only production entry point for a fresh game's backstory. The "Pre-game
+// history" switch is read inside it, after the scenario's own record: off stops
+// the request to the model, never a pre-history the scenario keeps. The
+// backstory is the game's own record, so a page playing a shared game writes
+// none (as hostQuietly does, written out so this stays one plain forward).
+export const maybeGeneratePregameHistory = async (...args) => (inSharedGame() ? null : (await gameplay()).maybeGeneratePregameHistory(...args));
 // A scenario's own pre-history, written in the Workshop: not the game being played.
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
