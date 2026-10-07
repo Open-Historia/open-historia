@@ -469,6 +469,65 @@ export const stripUnsupportedUnitAttackOps = (events = []) => {
   return dropped;
 };
 
+// The fighting of a war already under way, in the words a report of it uses.
+// A game that starts in the middle of history starts with the ledger it was
+// given, and Modern Day's is empty: in 2016 the wars in Syria and Iraq are on
+// no record, so the model opens each from whichever of its battles it writes
+// first (the prompt's "if you write fighting, open the war in the same
+// answer"). A player's turn opened them on "Iraqi Forces Secure Central Ramadi
+// and Clear Anbar Pockets" and on an advance north of Aleppo; neither is a
+// declaration or holds a word of the lists above, both starts were refused,
+// and the turn lost both wars. Each entry here is something done to an enemy:
+// ground taken from one, one cleared out or struck or thrown back. A word that
+// only says where forces are (a front line, a deployment forward) is not here,
+// and neither is "offensive" used of a capability or a doctrine.
+const WAR_FIGHTING_REPORT_RE = new RegExp(
+  [
+    String.raw`\b(?:re)?captur(?:e|es|ed|ing)\b`,
+    String.raw`\bretak(?:e|es|en|ing)\b`,
+    String.raw`\bretook\b`,
+    String.raw`\bliberat(?:e|es|ed|ing|ion)\b`,
+    String.raw`\boverr(?:un|uns|an|unning)\b`,
+    String.raw`\b(?:counter[- ]?)?attack(?:s|ed|ing)?\b`,
+    String.raw`\b(?:counter[- ]?)?offensives?\b(?!\s+(?:capabilit(?:y|ies)|weapons?|arms|missiles?|systems?|posture|doctrine|power|cyber|operations?|potential|options?|plans?|planning|exercises?|drills?)\b)`,
+    String.raw`\bbomb(?:ed|ing|ings)\b`,
+    String.raw`\bstrikes? (?:on|against)\b`,
+    String.raw`\brepel(?:s|led|ling)?\b`,
+    String.raw`\brepuls(?:e|es|ed|ing)\b`,
+    String.raw`\bencircl(?:e|es|ed|ing|ement)\b`,
+    String.raw`\b(?:clear(?:s|ed|ing)?|mop(?:s|ped|ping)? up)\b[^.]{0,60}?\b(?:pockets?|holdouts?|remnants|strongholds?|positions|fighters|militants|insurgents|resistance)\b`,
+    String.raw`\bpockets? of (?:resistance|fighters|militants|insurgents|troops)\b`,
+    String.raw`\bstrongholds?\b`,
+    String.raw`\b(?:rebel|government|regime|enemy|opposition|militant|insurgent|separatist|loyalist|coalition)-held\b`,
+    // A force going forward over ground: "Syrian and Russian Forces Advance
+    // North of Aleppo", "armoured columns push into Idlib".
+    String.raw`\b(?:troops|forces|army|armies|tanks|armou?r|divisions?|brigades?|battalions?|regiments?|soldiers|columns?|units|fighters|militants|insurgents|rebels)\b[^.]{0,60}?\b(?:advanc(?:e|es|ed|ing)\b[^.]{0,20}?\b(?:on|into|through|across|north|south|east|west|deep)|push(?:es|ed|ing)?\b[^.]{0,20}?\b(?:into|through|across|deep))\b`,
+  ].join("|"),
+  "i",
+);
+
+// An exercise is told in the words of a battle ("the drill simulates an attack
+// on the gap"), and the masks above know only its commonest forms. Where an
+// event says it is one, the wider reading below is not used at all.
+const EXERCISE_REPORT_RE = /\b(?:exercises?|drills?|war ?games?|manoeuvres|maneuvers|simulat(?:e|es|ed|ing|ion|ions)|rehears(?:e|es|ed|al|als|ing)|mock|training)\b/i;
+
+// What a war record THE MODEL WROTE may be opened on. The record already names
+// the war and its two sides, so the question here is only whether its event
+// narrates fighting or a declaration at all, and it is asked more widely than
+// eventSupportsNewWarStart, which the engine also asks before it makes up a
+// war of its own from two names (reconcileCombatWarState) and which stays as
+// narrow as it was. Two things are added: the report of a war already being
+// fought (above), and every event the ledger itself calls hard combat. The
+// second was a trap: a military event that "raids" or "repulses" had to belong
+// to an active war (eventNarratesHardCombat) and could not open one, so no
+// answer the model gave for it could pass.
+const eventCanOpenDeclaredWar = (event) => {
+  if (eventSupportsNewWarStart(event)) return true;
+  const text = combatSemanticText(event);
+  if (EXERCISE_REPORT_RE.test(text)) return false;
+  return eventNarratesHardCombat(event) || WAR_FIGHTING_REPORT_RE.test(text);
+};
+
 const eventTransitionExpectation = (event) => {
   const title = normalizeString(event?.title);
   if (WAR_START_RE.test(title)) return new Set(["start", "join-a", "join-b", "resume"]);
@@ -498,7 +557,7 @@ const validateCombatantsAgainstWar = (event, war) => {
   return "";
 };
 
-const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = true }) => {
+const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = true, excused = null }) => {
   const normalizedEvents = normalizeEvents(events);
   const working = warMapFromWorld(world);
   const byEventId = new Map();
@@ -518,16 +577,16 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
     }
   }
 
-  for (const event of normalizedEvents) {
+  for (const [eventIndex, event] of normalizedEvents.entries()) {
     const eventId = normalizeString(event.id);
     const eventUpdates = byEventId.get(eventId) || [];
 
     for (const update of eventUpdates) {
       const op = normalizeString(update?.op).toLowerCase();
-      if (op === "start" && !eventSupportsNewWarStart(event)) {
+      if (op === "start" && !eventCanOpenDeclaredWar(event)) {
         return `War update ${update.id} (start) cannot create a canonical war from "${normalizeString(event.title)}": the causal event does not narrate a war declaration, commencement of hostilities, or direct adversarial battlefield combat. Military cooperation, deployments, exercises, readiness, deterrence, and force labels such as "combat battlegroup" are not belligerency.`;
       }
-      if (op === "resume" && !eventSupportsNewWarStart(event)) {
+      if (op === "resume" && !eventCanOpenDeclaredWar(event)) {
         return `War update ${update.id} (resume) cannot resume hostilities from "${normalizeString(event.title)}": the causal event lacks direct adversarial combat or explicit renewed-hostilities semantics.`;
       }
 
@@ -546,6 +605,12 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
         return `Event "${normalizeString(event.title)}" uses warId ${eventWarId}, but its linked war update modifies ${update.id}.`;
       }
     }
+
+    // The records linked to this event have been applied. What follows is
+    // about the event's own wording, and the repair's question about one war
+    // is not answered by the wording of another war's event (`excused`,
+    // repairWarLedgerPayload).
+    if (excused?.has(eventIndex)) continue;
 
     const expectation = eventTransitionExpectation(event);
     if (expectation) {
@@ -889,7 +954,7 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
   return { bound, started, resumed, sanitized, unresolved };
 };
 
-export const validateWarLedgerPayload = (candidate, { world = {} } = {}) => {
+export const validateWarLedgerPayload = (candidate, { world = {}, excused = null } = {}) => {
   const events = normalizeEvents(candidate?.events);
   const updates = bindWarUpdatesToEvents(candidate?.warUpdates, events);
   if (updates.length > MAX_WAR_UPDATES_PER_PASS) return `$.warUpdates may contain at most ${MAX_WAR_UPDATES_PER_PASS} records.`;
@@ -903,7 +968,7 @@ export const validateWarLedgerPayload = (candidate, { world = {} } = {}) => {
       }
     }
   }
-  return validateBoundWarBatch({ events, updates, world, requireUpdateLinks: true });
+  return validateBoundWarBatch({ events, updates, world, requireUpdateLinks: true, excused });
 };
 
 export const validateCanonicalWarEvents = ({ events, updates, world } = {}) =>
@@ -994,11 +1059,23 @@ export const normalizeWorldWarEventLinks = (candidate) => {
 // 1. A record's own event numbers are its declaration of the link: every event
 //    it names that carries no warId is stamped with the record's id, and the
 //    batch is rebound and validated again.
-// 2. What still fails is dropped: the first single record whose removal makes
-//    the batch valid, or — when no single removal does — every record of the
-//    segment. An event bound to a war that no kept record creates and that
-//    does not already exist in the world loses its war bindings (warId,
-//    combatants); events of wars that already exist keep theirs.
+// 2. What still fails is dropped, a war at a time. Each war's records are
+//    asked about with that war's own events: they stand as they are, or
+//    without the first one of them whose removal lets the rest stand. Failing
+//    that they are asked about alone: records that apply are kept even when
+//    the ledger objects to the wording of one of the war's events, and the
+//    objection is left for the residual. Only records that do not apply are
+//    dropped. An event bound to another war, or to none, is narrative to
+//    these questions and is not held against the records. It used to be one
+//    question of the whole batch, and whatever no record could answer for (a
+//    riot that reads like a battle and belongs to no war, another war's
+//    refused start, a battle naming one side only) left no removal that made
+//    the batch valid, so every war of the turn went: a player's Modern Day
+//    lost its Syrian war to a complaint about its Iraqi one. An event bound
+//    to a war that no kept record creates and that does not already exist in
+//    the world loses its war bindings (warId, combatants); events of wars
+//    that already exist keep theirs.
+// 4. Whatever the validator still says about the remaining narrative (a title
 // 3. Whatever the validator still says about the remaining narrative (a title
 //    that reads like a declaration with no record behind it, a battle narrated
 //    during a ceasefire) comes back as `residual` for the caller to log and
@@ -1042,7 +1119,12 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
     return stripped;
   };
   const idsOf = (list) => new Set(list.map((update) => normalizeString(update.id)));
-  const trial = (keep) => {
+  // Do these records of one war stand? Asked with the war's own events and no
+  // others: an event bound to another war, or to none, or whose own record is
+  // not among the ones asked about, is narrative to this question and is not
+  // held against them (`excused`). `recordsOnly` asks it of the records alone:
+  // do they apply, whatever the war's events say.
+  const stands = (warId, keep, { recordsOnly = false } = {}) => {
     const copy = {
       ...candidate,
       events: normalizeArray(candidate.events).map((event) => (event && typeof event === "object" ? { ...event } : event)),
@@ -1050,19 +1132,51 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
     };
     stripBindings(copy.events, idsOf(keep));
     normalizeWorldWarEventLinks(copy);
-    return validateWarLedgerPayload(copy, { world });
+    const excused = new Set();
+    copy.events.forEach((event, index) => {
+      if (recordsOnly || normalizeString(event?.warId) !== warId) excused.add(index);
+    });
+    for (const update of records) {
+      if (keep.includes(update)) continue;
+      for (const index of normalizeArray(update.eventIndexes)) excused.add(index);
+    }
+    return !validateWarLedgerPayload(copy, { world, excused });
+  };
+  const settle = (warId, own) => {
+    const without = (index) => own.filter((_, position) => position !== index);
+    if (stands(warId, own)) return own;
+    // Without one record, when the rest then agrees with the war's events: a
+    // join that cannot be made, a ceasefire the fighting contradicts. A war
+    // this batch opens is not dropped whole on that ground.
+    for (let index = 0; index < own.length; index += 1) {
+      const rest = without(index);
+      if ((rest.length || existing.has(warId)) && stands(warId, rest)) return rest;
+    }
+    // The records alone. They apply, and what the ledger objects to is the
+    // wording of one of the war's events (a battle that names one side only):
+    // the war is kept, and the objection comes back as the residual.
+    if (stands(warId, own, { recordsOnly: true })) return own;
+    for (let index = 0; index < own.length; index += 1) {
+      const rest = without(index);
+      if (stands(warId, rest, { recordsOnly: true })) return rest;
+    }
+    return [];
   };
 
-  let keep = null;
-  for (let index = 0; index < records.length && !keep; index += 1) {
-    const rest = records.filter((_, position) => position !== index);
-    if (!trial(rest)) keep = rest;
+  const byWar = new Map();
+  for (const update of records) {
+    const warId = normalizeString(update.id);
+    if (!byWar.has(warId)) byWar.set(warId, []);
+    byWar.get(warId).push(update);
   }
-  if (!keep) keep = [];
+  const kept = new Set();
+  for (const [warId, own] of byWar) {
+    for (const update of settle(warId, own)) kept.add(update);
+  }
+  const keep = records.filter((update) => kept.has(update));
 
-  const keptIds = idsOf(keep);
-  result.droppedIds = records.map((update) => normalizeString(update.id)).filter((id) => !keptIds.has(id));
-  result.strippedEvents = stripBindings(normalizeArray(candidate.events), keptIds);
+  result.droppedIds = records.filter((update) => !kept.has(update)).map((update) => normalizeString(update.id));
+  result.strippedEvents = stripBindings(normalizeArray(candidate.events), idsOf(keep));
   candidate.warUpdates = keep;
   normalizeWorldWarEventLinks(candidate);
   result.residual = validateWarLedgerPayload(candidate, { world });
