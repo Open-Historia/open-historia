@@ -3617,11 +3617,14 @@ async function buildAdvisorSystemPrompt() {
     );
     const directives = [
         advisorPoliticalDiplomacy.text,
-        // The government's own Stats sheet, its recent history, its reputation
-        // and its intelligence rating (standingContext.js): the figures the
-        // player sees in the Stats panel, from the world as the player has
-        // seen it, so "how is our economy doing?" is answered from them.
-        describeOurFigures(worldData, gameData?.country || ""),
+        // The government's reputation and intelligence rating, then its own
+        // Stats sheet in full, as the Stats panel shows it and from the world as
+        // the player has seen it (standingContext.js; the sheet is
+        // describePlayerStatsForAdvisor's). The template tells the advisor to
+        // extrapolate statistics from history; without the real sheet it
+        // contradicted the panel the player was looking at. A country with no
+        // sheet yet is told to estimate, and to say so.
+        describeOurFigures(worldData, gameData?.country || "", { statistics: officialStats }),
         advisorTerritory,
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
@@ -3645,10 +3648,6 @@ async function buildAdvisorSystemPrompt() {
         // advice serves. The advisor's alone of the conversations — a leader is
         // never told a government's aims.
         describeGoalForAdvisor(playerGoalOf(worldData, gameData?.country)),
-        // The player's own stat sheet, as the Stats panel shows it. The template
-        // tells the advisor to extrapolate statistics from history; without the
-        // real sheet it contradicted the panel the player was looking at.
-        officialStats,
         describeWorldLedgersForAdvisor(worldData, chatData, gameData?.country || ""),
         // The Game Master's standing reminders (runtime/gmChanges.js): what is
         // true now, whatever the record says. Empty — and so absent — without any.

@@ -119,6 +119,24 @@ test("the advisor is given its own country's figures, their history, its reputat
   assert.equal(describeOurFigures(WORLD, ""), "");
 });
 
+test("given the sheet in full, the advisor's block carries it once, after its reputation and its service", () => {
+  // What the advisor's prompt hands over (runtime/countryStats.js
+  // describeCountryStatsForAdvisor): a scenario's own stats under their own
+  // labels, the capital, GDP per capita, the sector shares, the trend.
+  const statistics = "[Official National Statistics — French Republic]\nThese are the government's own current figures.\n- National stability: 70/100\n- Realm: Piety 71/100";
+  const text = describeOurFigures(FIGURES_WORLD, PLAYER, { statistics });
+  assert.match(text, /^\[Our Country's Figures\]\n/);
+  assert.ok(text.includes(describeReputationStanding(FIGURES_WORLD, PLAYER)));
+  assert.ok(text.includes(describeIntelligenceStanding(FIGURES_WORLD, PLAYER)));
+  assert.ok(text.endsWith(statistics), "the full sheet closes the block, as it was written");
+  // The one-line sheet and its history rows are not said a second time.
+  assert.equal(text.includes(describeStatSheet(SHEET, PLAYER)), false);
+  assert.doesNotMatch(text, /Recorded over time/);
+  assert.doesNotMatch(text, /- 1 June 1914: GDP-eq/);
+  // Without it (no sheet yet, or a caller that has none) the block is as before.
+  assert.equal(describeOurFigures(FIGURES_WORLD, PLAYER, { statistics: "  " }), describeOurFigures(FIGURES_WORLD, PLAYER));
+});
+
 test("a leader is told the player's reputation, its own, and only its own figures", () => {
   const text = describeLeaderStanding(FIGURES_WORLD, { player: PLAYER, speakers: ["German Empire"] });
   assert.match(text, /^\[Standing\]\nFrench Republic: international reputation 72\/100 \(well-regarded\)\.\nGerman Empire: international reputation 90\/100 \(well-regarded\)\./);
