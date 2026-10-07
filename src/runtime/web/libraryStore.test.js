@@ -83,12 +83,68 @@ const ok = (reply) => {
   return reply.data;
 };
 
-const scenarioBundle = (name) => ({
+const REGIONS = {
+  type: "FeatureCollection",
+  features: [{ type: "Feature", properties: { id: "reg_1", edited: true }, geometry: { type: "Point", coordinates: [1, 2] } }],
+};
+const CITIES = {
+  type: "FeatureCollection",
+  features: [{ type: "Feature", properties: { name: "Capital" }, geometry: { type: "Point", coordinates: [3, 4] } }],
+};
+const BACKGROUND = { kind: "image", opacity: 0.5 };
+
+// A bundle in the shape both exporters write today: the geometry as parsed JSON.
+const scenarioBundle = (name, extra = {}) => ({
   schema: "open-historia-scenario-bundle/2",
   version: 2,
   scenario: { id: "hub-map", name },
   data: { game: { country: "Testland" }, world: { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } } },
-  assets: {},
+  assets: {
+    regionsGeojson: { contentType: "application/json", data: REGIONS, fileName: "regions.geojson", mode: "embedded" },
+    citiesGeojson: { contentType: "application/json", data: CITIES, fileName: "cities.geojson", mode: "embedded" },
+    backgroundData: { contentType: "application/json", data: BACKGROUND, fileName: "background.json", mode: "embedded" },
+    ...extra,
+  },
+});
+
+const scenarioAsset = async (id, key) => {
+  try {
+    const response = await store.handleScenarios({ method: "GET", segments: [id, "assets", key], query: new URLSearchParams() });
+    return response.status === 200 ? JSON.parse(await response.text()) : null;
+  } catch {
+    return null;
+  }
+};
+
+test("a hub Update keeps the geometry, cities and basemap a current bundle carries as JSON", async () => {
+  await reset();
+  const imported = ok(await scenarios("POST", "import", scenarioBundle("Hub Map")));
+  const id = imported.scenario.id;
+  assert.deepEqual(await scenarioAsset(id, "regionsGeojson"), REGIONS);
+
+  const updatedRegions = { ...REGIONS, features: [...REGIONS.features, { ...REGIONS.features[0], properties: { id: "reg_2" } }] };
+  const bundle = scenarioBundle("Hub Map v2");
+  bundle.assets.regionsGeojson.data = updatedRegions;
+  const updated = ok(await scenarios("PUT", `${id}/import`, bundle));
+
+  assert.equal(updated.scenario.name, "Hub Map v2");
+  assert.equal(updated.assetStatus.regionsGeojson, true);
+  assert.equal(updated.assetStatus.citiesGeojson, true);
+  assert.equal(updated.assetStatus.backgroundData, true);
+  assert.deepEqual(await scenarioAsset(id, "regionsGeojson"), updatedRegions);
+  assert.deepEqual(await scenarioAsset(id, "citiesGeojson"), CITIES);
+  assert.deepEqual(await scenarioAsset(id, "backgroundData"), BACKGROUND);
+});
+
+test("a hub Update still clears an asset the new bundle leaves out", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "import", scenarioBundle("Hub Map"))).scenario.id;
+  const bundle = scenarioBundle("Hub Map v2");
+  bundle.assets.backgroundData = { fileName: "background.json", mode: "default" };
+  const updated = ok(await scenarios("PUT", `${id}/import`, bundle));
+  assert.equal(updated.assetStatus.backgroundData, false);
+  assert.equal(updated.assetStatus.regionsGeojson, true);
+  assert.equal(await scenarioAsset(id, "backgroundData"), null);
 });
 
 // ---- links to the community hub (server/hubProvenance.js, shared with the desktop store) ----
@@ -117,6 +173,7 @@ test("a link keeps the checked copy it was downloaded from, and an Update gives 
   assert.equal(updated.name, "Hub Map");
   assert.equal(updated.hubOrigin.release, HUB_RELEASE(1));
   assert.equal(updated.hubOrigin.editedAt, undefined);
+  assert.deepEqual(await scenarioAsset(id, "regionsGeojson"), REGIONS, "and the map is still there");
   ok(await scenarios("PUT", id, { hubPublished: { key: PUBLISH_KEY, postIds: [55] } }));
   const editedAgain = ok(await scenarios("PUT", id, { name: "Mine Again" })).scenario;
   assert.equal(editedAgain.hubOrigin.release, HUB_RELEASE(1), "bookkeeping and a later edit keep it");
