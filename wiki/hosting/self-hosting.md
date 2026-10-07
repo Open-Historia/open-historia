@@ -143,9 +143,11 @@ for changing a campaign — it goes through the same validation the game does.
 No accounts, and no game data leaves your machine. Your AI provider key is stored locally and
 sent only to the provider you configured.
 
-Two things do reach the network by default: the browser build's analytics on the website itself,
-and an anonymous counter that pings when a Community Hub scenario is imported (set
-`OH_IMPORT_COUNTER_URL` to an empty value to disable it). Neither carries game data.
+One thing does reach the network by default: the browser build's analytics on the website itself.
+It carries no game data. Importing a scenario from the Community Hub downloads its file from
+GitHub, and GitHub's count of those downloads is what the hub shows as installs — the game
+reports nothing of its own. (Versions before October 2026 pinged an anonymous counter on every
+import; `OH_IMPORT_COUNTER_URL`, which switched that off, no longer does anything.)
 
 ## Next
 

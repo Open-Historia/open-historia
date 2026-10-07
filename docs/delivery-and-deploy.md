@@ -221,19 +221,20 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ### 7.1 Import counter — `tools/import-counter/` (retired)
 
-A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's *Copy post files to releases* workflow copies each post's attachment into a release, adds the downloads up every half hour, and writes them (with where each copy is) to `index.json` on its `hub-index` branch. Builds of the game with `src/runtime/hubFiles.js` read that file from `raw.githubusercontent.com` and download a post's file from the release; this branch's game does not have it yet: it still downloads the post's own attachment, asks this Worker for the counts (`/api/hub/import-counts`) and reports each import to it (`/api/hub/import-log`).
+A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's workflow checks each post's attachment, puts a checked copy of it in a release, adds the downloads up every half hour, and writes them to `index.json` on its `hub-index` branch, with where each copy is, the list of released posts and the suggestions it has checked; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. That index is also the game's only list of the hub's posts, and the copies it names are the only hub files the game downloads: a post's own attachment is never fetched, and GitHub's API is asked for nothing but a post's comments. See [runtime-services.md](runtime-services.md).
 
-Until 2026-10-05 the Worker kept the counts in KV. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. It now answers from the hub's index and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
+Until 2026-10-05 the count was kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game.
+
+Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js`, `OH_IMPORT_COUNTER_URL` overrides it) |
-| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the game reads; the index is kept five minutes at the edge |
+| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
 | `POST /hit` | Accepted and ignored. An import made by a build that downloads the attachment is therefore not counted; one made by a build that downloads the release copy is counted by GitHub |
 | Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers (`data/legacy-import-counts.json` there) |
 
-It takes effect when the site is next deployed from the admin panel (§6.1).
+It rides the site deploy from the admin panel (§6.1).
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
@@ -243,7 +244,7 @@ The web-mode control plane (source of truth: the admin repo). Serves the signed 
 |---|---|---|
 | `NODES` | KV | Small hot keys + TTL items (magic-link tokens, sessions via `acct:`/`magic:`/`sess:` prefixes) |
 | `OH_ACCOUNTS` | D1 (`oh-accounts`) | Nodes table, users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
-| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | Direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
+| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
 The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js:66`). No game rebuild is needed for a directory change.
@@ -352,4 +353,4 @@ Tests: `server/launchUpdate.test.js`.
 
 - [World state](world-state.md) — the `world.json` shape that scenarios and the web seed carry
 - [Web mode & content nodes](web-build.md) — how the browser build resolves map data from the signed directory
-- [Scenario hub](runtime-services.md) — the import flow that feeds the import counter
+- [Scenario hub](runtime-services.md) — the hub's index: its posts, its checked files and the import counts

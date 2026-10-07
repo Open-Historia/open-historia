@@ -13,7 +13,6 @@ import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, getScenarioPmtilesOverride } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
 import { getConnected } from "./nodeConnect.js";
-import { getSession } from "./account.js";
 
 let installed = false;
 
@@ -136,8 +135,10 @@ const route = async (request, url) => {
 
   // Community hub: forward /api/hub/* to the registry Worker's SSRF-guarded
   // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
-  // browser can't download bundles directly). Listing still hits api.github.com
-  // directly (it sends CORS) and passes through the interceptor untouched.
+  // browser can't download bundles directly). The hub's index (its list of
+  // posts and of checked files, runtime/hubFiles.js) is read straight from
+  // raw.githubusercontent.com, and a post's comments from api.github.com: both
+  // send CORS and pass through the interceptor untouched.
   // The Android app is this same web build packaged with Capacitor (with the map
   // inside the APK), so it has no on-device server to answer /api/app-update —
   // but it is the ONE build that can actually self-update (it ships as an APK).
@@ -161,29 +162,24 @@ const route = async (request, url) => {
 
   if (domain === "hub") {
     const base = (import.meta.env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
-    // Community bundle downloads (/api/hub/file?url=…): prefer the connected
-    // content node — it fetches the GitHub-hosted bundle server-side and returns
-    // it with CORS, offloading the central hub proxy — and fall back to the Worker
-    // if there's no node or it can't serve it. Other hub calls (import-counts,
-    // import-log) stay on the Worker.
-    if (segments[0] === "file" && method === "GET") {
-      const node = getConnected();
-      if (node && node.url && !node.origin) {
-        try {
-          const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
-          if (r.ok) return r;
-        } catch { /* node down/unsupported → fall through to the Worker */ }
-      }
+    // Community bundle downloads (/api/hub/file?url=…) are the only hub call
+    // there is: prefer the connected content node — it fetches the GitHub-hosted
+    // bundle server-side and returns it with CORS, offloading the central hub
+    // proxy — and fall back to the Worker if there's no node or it can't serve
+    // it. What is asked for is a checked copy in the hub's releases, or a
+    // suggestion's .zip the hub has checked (runtime/hubFiles.js decides, from
+    // the hub's own index, where the import counts are read from too); the
+    // Worker's import counter is no longer called.
+    if (segments[0] !== "file" || method !== "GET") return errorResponse(`Unknown hub endpoint: ${url.pathname}`, 404);
+    const node = getConnected();
+    if (node && node.url && !node.origin) {
+      try {
+        const r = await fetch(`${node.url.replace(/\/$/, "")}/oh/v1/hub${url.search}`);
+        if (r.ok) return r;
+      } catch { /* node down/unsupported → fall through to the Worker */ }
     }
     if (!base) return errorResponse("Community hub proxy is not configured.", 502);
-    const target = `${base}/hub/${segments.join("/")}${url.search}`;
-    if (method !== "POST") return fetch(target, { method });
-    // Attach the account session (when signed in) so the import counter can dedup a
-    // signed-in user's import by their account — stable across devices/IPs — instead
-    // of by IP. Anonymous users still fall back to IP dedup on the Worker.
-    const headers = { "Content-Type": "application/json" };
-    try { const s = await getSession(); if (s) headers.Authorization = `Bearer ${s}`; } catch { /* not signed in */ }
-    return fetch(target, { method, headers, body: JSON.stringify(ctx.body ?? {}) });
+    return fetch(`${base}/hub/file${url.search}`, { method });
   }
 
   return errorResponse(`Unknown web-mode endpoint: ${url.pathname}`, 404);

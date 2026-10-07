@@ -3,14 +3,18 @@
 // Browse + install + publish basemaps shared through the community hub. Mirrors
 // the scenario hub (src/Game/GameUI/communityHub.jsx): each community basemap is
 // a GitHub issue labeled "basemap" (via the basemap.yml issue form) whose body
-// carries the raw basemap image as an attachment — GitHub renders that image as
-// the card cover for free, and install reads the same image back. A content hash
-// in the body lets a scenario reference an existing community basemap instead of
-// re-embedding it. Publishing is the token-less flow scenarios use: the app hands
-// the author the real image file and opens a prefilled issue form to drag it into.
+// carries the raw basemap image as an attachment. The hub checks that file and
+// puts a checked copy in its releases (hubFiles.js): the copy is the card's
+// picture and what install reads back, never the attachment itself. A content
+// hash in the body lets a scenario reference an existing community basemap
+// instead of re-embedding it. Publishing is the token-less flow scenarios use:
+// the app hands the author the real image file and opens a prefilled issue form
+// to drag it into.
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle, zipBundle } from "./bundleZip.js";
+import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./hubFiles.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -18,29 +22,20 @@ import { saveBlobToDisk } from "./saveFile.js";
 const utf8ToBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
 const base64ToUtf8 = (b64) => decodeURIComponent(escape(atob(b64)));
 
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_BASEMAPS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=basemap&per_page=100`;
 // Scenario posts are scanned too: one shipped as a .zip carries a custom basemap,
 // which we surface in the basemap browser so a basemap shared via a scenario is
 // usable on its own without a second upload.
-const HUB_API_SCENARIOS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
 const SCENARIO_ZIP_PATTERN =
   /https:\/\/github\.com\/(?:[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.zip|user-attachments\/files\/[^\s)<>"']+\.zip)/i;
-const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // A non-image data file linked in an issue body: an old .basemap.json bundle or a
 // new vector's .geojson attachment. Inline images (the new image payload/cover)
 // are NOT matched here — they live in coverImageUrl instead.
 const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|geojson|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.(?:json|geojson))/i;
-const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const HASH_PATTERN = /Basemap-Hash:\s*([a-f0-9]{16,64})/i;
 const KIND_PATTERN = /Basemap-Kind:\s*(image|vector)/i;
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-let cache = { at: 0, posts: null };
 
 // ---- data URL <-> bytes ---------------------------------------------------
 const MIME_TO_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg" };
@@ -80,9 +75,11 @@ const bytesToDataUrl = (bytes, mime) => `data:${mime || "image/png"};base64,${by
 
 // ---- hub fetch through the CORS proxy -------------------------------------
 // The proxy passes the upstream content type through, so JSON/geojson come back
-// as text and images as bytes; callers pick the accessor they need.
+// as text and images as bytes; callers pick the accessor they need. `url` is
+// the file as its post names it; what is fetched is its checked copy in the
+// hub's releases, and with no copy the fetch fails (hubFiles.js).
 const fetchHubResponse = async (url) => {
-  const r = await fetch(`/api/hub/file?url=${encodeURIComponent(url)}`);
+  const r = await fetchHubFile(url);
   if (!r.ok) {
     const p = await r.json().catch(() => ({}));
     throw new Error(p.error || `Download failed (HTTP ${r.status}).`);
@@ -91,17 +88,19 @@ const fetchHubResponse = async (url) => {
 };
 
 const fetchHubText = async (url) => (await fetchHubResponse(url)).text();
+// The copy says what kind of image it is by its bytes: the post's address
+// cannot (an .svg's copy is a PNG the hub drew of it) and neither can the
+// response (GitHub serves a release file as application/octet-stream).
 const fetchHubImage = async (url) => {
   const r = await fetchHubResponse(url);
-  const buf = await r.arrayBuffer();
+  const bytes = new Uint8Array(await r.arrayBuffer());
   const ctype = (r.headers.get("content-type") || "").split(";")[0].trim();
-  const mime = ctype.startsWith("image/") ? ctype : extToMime(url.split(".").pop());
-  return bytesToDataUrl(new Uint8Array(buf), mime);
+  const mime = imageTypeOfBytes(bytes) || (ctype.startsWith("image/") ? ctype : extToMime(url.split(".").pop()));
+  return bytesToDataUrl(bytes, mime);
 };
 
 const parseBasemapPost = (issue) => {
   const body = String(issue.body ?? "");
-  const coverMatch = body.match(COVER_IMAGE_PATTERN);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Basemap\]\s*/i, "").trim() || `Basemap #${issue.number}`,
@@ -113,8 +112,10 @@ const parseBasemapPost = (issue) => {
     upvotes: issue.reactions?.["+1"] ?? 0,
     // A non-image data file (old .basemap.json bundle, or a new vector .geojson).
     bundleUrl: body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null,
-    // The attached image: card cover AND, for new image basemaps, the payload.
-    coverImageUrl: coverMatch ? coverMatch[1] ?? coverMatch[2] ?? null : null,
+    // The attached image, as the post names it: for new image basemaps, the
+    // payload. Only an image GitHub hosts (hubIssues.js firstHubImage). What a
+    // card shows of it is its checked copy (pictureUrl, fetchCommunityBasemaps).
+    coverImageUrl: firstHubImage(body),
     contentHash: body.match(HASH_PATTERN)?.[1]?.toLowerCase() ?? null,
     kind: body.match(KIND_PATTERN)?.[1]?.toLowerCase() ?? "image",
   };
@@ -155,31 +156,20 @@ export const basemapPostInstallable = (post) =>
   Boolean(post?.fromScenario || post?.bundleUrl || (post?.kind === "image" && post?.coverImageUrl));
 
 export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
-  if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
-  const headers = { Accept: "application/vnd.github+json" };
   // Dedicated basemap posts, plus scenario posts (scanned so their basemaps show up
-  // here too). The scenarios call is best-effort — a failure just hides those.
-  const [bmRes, scRes] = await Promise.all([
-    fetch(HUB_API_BASEMAPS, { headers }),
-    fetch(HUB_API_SCENARIOS, { headers }).catch(() => null),
+  // here too), and the index both lists are made of: one read for the three,
+  // since callers asking together share it. The index is kept five minutes
+  // (hubFiles.js), and with it this list.
+  const [bmIssues, scIssues, hubIndex] = await Promise.all([
+    fetchHubIssues("basemap", { force }),
+    fetchHubScenarioIssues({ force }),
+    fetchHubIndex({ force }),
   ]);
-  if (!bmRes.ok) {
-    throw new Error(
-      bmRes.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the basemap hub (HTTP ${bmRes.status}).`,
-    );
-  }
-  const bmIssues = await bmRes.json();
-  const dedicated = (Array.isArray(bmIssues) ? bmIssues : []).filter((i) => !i.pull_request).map(parseBasemapPost);
-  let fromScenarios = [];
-  if (scRes && scRes.ok) {
-    const scIssues = await scRes.json().catch(() => []);
-    fromScenarios = (Array.isArray(scIssues) ? scIssues : [])
-      .filter((i) => !i.pull_request)
-      .map(parseScenarioAsBasemap)
-      .filter(Boolean);
-  }
+  // What a post offers has to be among the hub's checked files, or there is
+  // nothing to download: its image or data file, a scenario's .zip.
+  const released = (post) => Boolean(releaseCopyOf(hubIndex, post.fromScenario ? post.scenarioZipUrl : payloadRefUrl(post)));
+  const dedicated = bmIssues.map(parseBasemapPost).filter(released);
+  const fromScenarios = scIssues.map(parseScenarioAsBasemap).filter(Boolean).filter(released);
   // A basemap that also exists as a dedicated post is shown once (prefer the
   // dedicated post — real cover image, cheaper install). Scenario-carried basemaps
   // without a hash can't be deduped, so they always appear.
@@ -190,8 +180,9 @@ export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
     if (s.contentHash) seen.add(s.contentHash);
     posts.push(s);
   }
-  cache = { at: Date.now(), posts };
-  return posts;
+  // pictureUrl is what a card shows: the checked copy of the post's image, or
+  // null (a vector, a scenario's basemap: the card's placeholder).
+  return posts.map((post) => ({ ...post, pictureUrl: releaseCopyOf(hubIndex, post.coverImageUrl) }));
 };
 
 // Dedup lookup — reads the issue list only (no downloads), matching the content

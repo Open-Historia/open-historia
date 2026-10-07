@@ -9,6 +9,9 @@
 //   - bookkeeping (the player's own post found, a suggestion reviewed) is not
 //     an edit: no updatedAt, no edited mark;
 //   - Unlink clears the link for good;
+//   - the link remembers the checked copy it was downloaded from, in the hub's
+//     own releases and nowhere else, through every write that keeps the link;
+//     a link without one is an old link, and an Update gives it one;
 //   - a game exported from an edited copy carries its map, because the post's
 //     file is no longer that map.
 // Store cases run in a child process: OH_DATA_DIR is read once, at import time.
@@ -21,8 +24,11 @@ import url from "node:url";
 import { after, test } from "node:test";
 import { OWNER_SCHEMA } from "./ownerMigration.js";
 import {
+  HUB_OWNER,
+  HUB_REPO,
   fetchableHubOrigin,
   hubOriginAfterWrite,
+  hubReleaseUrl,
   isBlockedContributor,
   normalizeHubKey,
   normalizeHubLogin,
@@ -36,6 +42,11 @@ import {
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
 const STORE_URL = url.pathToFileURL(path.join(SERVER_DIR, "libraryStore.js")).href;
 const ORIGIN = { postId: 42, bundleUrl: "https://github.com/user-attachments/files/1/world.zip", syncedAt: "2026-08-01T00:00:00.000Z" };
+// The checked copies of the post's file in the hub's releases: of the file
+// ORIGIN names, and of a newer one.
+const RELEASES = "https://github.com/Open-Historia/Open-historia-scenarios/releases/download";
+const RELEASE = `${RELEASES}/scenarios-1/p42-1-world-1a2b3c4d.zip`;
+const NEWER_RELEASE = `${RELEASES}/scenarios-1/p42-2-world-5e6f7a8b.zip`;
 
 test("the link keeps the post's title and author, and whether the copy was edited", () => {
   const origin = normalizeHubOrigin({ ...ORIGIN, title: "  The Long Winter ", author: "arkniem", editedAt: "2026-09-01T10:00:00.000Z" });
@@ -43,6 +54,56 @@ test("the link keeps the post's title and author, and whether the copy was edite
   assert.equal(normalizeHubOrigin({ postId: 0, bundleUrl: "x" }), null);
   assert.equal(normalizeHubOrigin({ postId: 3 }), null);
   assert.equal(normalizeHubOrigin({ ...ORIGIN, editedAt: "not a date" }).editedAt, undefined);
+});
+
+test("the link keeps the checked copy it was downloaded from, and only one in this hub's own releases", () => {
+  assert.equal(`https://github.com/${HUB_OWNER}/${HUB_REPO}/releases/download`, RELEASES, "the one and only hub");
+  assert.deepEqual(normalizeHubOrigin({ ...ORIGIN, release: RELEASE }), { ...ORIGIN, release: RELEASE });
+  assert.equal(normalizeHubOrigin({ ...ORIGIN, release: `  ${RELEASE} ` }).release, RELEASE);
+  assert.equal(hubReleaseUrl(RELEASE), RELEASE);
+  for (const elsewhere of [
+    "https://github.com/someone/else/releases/download/x/world.zip",
+    "http://github.com/Open-Historia/Open-historia-scenarios/releases/download/x/world.zip",
+    "https://github.com.evil.example/Open-Historia/Open-historia-scenarios/releases/download/x/world.zip",
+    "https://evil.example/?https://github.com/Open-Historia/Open-historia-scenarios/releases/download/x/world.zip",
+    `${RELEASE}?then=https://evil.example/world.zip`,
+    `${RELEASE}#fragment`,
+    `${RELEASE} https://evil.example/world.zip`,
+    "https://github.com/Open-Historia/Open-historia-scenarios/releases/tag/scenarios-1",
+    // The post's own attachment is what an old link came from: no release.
+    "https://github.com/user-attachments/files/1/world.zip",
+    // Too long to be one: cut short it would name another file.
+    `${RELEASES}/x/${"w".repeat(600)}.zip`,
+    7,
+    {},
+    null,
+  ]) {
+    assert.equal(hubReleaseUrl(elsewhere), "", `${String(elsewhere).slice(0, 80)} is no copy of this hub's`);
+    const origin = normalizeHubOrigin({ ...ORIGIN, release: elsewhere });
+    assert.equal(origin.postId, 42, "the link itself is kept");
+    assert.equal(origin.release, undefined, "as an old link: it names no checked copy");
+  }
+});
+
+test("the release stays through every write that keeps the link, and an Update stamps the one it downloaded", () => {
+  const origin = { ...ORIGIN, release: RELEASE };
+  const edited = hubOriginAfterWrite(origin, { name: "Renamed" });
+  assert.equal(edited.release, RELEASE, "an edit keeps it");
+  assert.ok(edited.editedAt);
+  assert.equal(hubOriginAfterWrite(edited, { name: "Renamed again" }).release, RELEASE);
+  assert.equal(hubOriginAfterWrite(origin, {}, { touch: false }).release, RELEASE, "bookkeeping keeps it");
+  assert.equal(hubOriginAfterWrite(origin, { hubOrigin: null }), null, "an Unlink takes the whole link");
+
+  const newer = { ...ORIGIN, bundleUrl: "https://github.com/user-attachments/files/2/world.zip", release: NEWER_RELEASE };
+  assert.equal(hubOriginAfterWrite(origin, { hubOrigin: newer }).release, NEWER_RELEASE);
+  assert.equal(hubOriginAfterWrite(edited, { hubOrigin: newer }).release, NEWER_RELEASE);
+  // An old link has none. Its Update gives it one, edited or not, and takes
+  // the edited mark away with the changes it replaced.
+  const oldLink = { ...ORIGIN, editedAt: "2026-09-01T10:00:00.000Z" };
+  assert.equal(normalizeHubOrigin(oldLink).release, undefined);
+  assert.deepEqual(hubOriginAfterWrite(oldLink, { hubOrigin: origin }), origin);
+  // An Update whose bundle names no checked copy stamps none: nothing vouches for one.
+  assert.equal(hubOriginAfterWrite(origin, { hubOrigin: ORIGIN }).release, undefined);
 });
 
 test("an edit keeps the link and marks it edited; bookkeeping and Unlink do what they say", () => {
@@ -60,6 +121,9 @@ test("only an unedited copy is handed on as fetchable from the hub", () => {
   assert.deepEqual(fetchableHubOrigin({ ...ORIGIN, title: "T" }), ORIGIN);
   assert.equal(fetchableHubOrigin({ ...ORIGIN, editedAt: "2026-09-01T10:00:00.000Z" }), null);
   assert.equal(fetchableHubOrigin(null), null);
+  // The post and its file, never this library's download of it: whoever
+  // fetches the map stamps the copy they download.
+  assert.deepEqual(fetchableHubOrigin({ ...ORIGIN, release: RELEASE }), ORIGIN);
 });
 
 test("the player's own post record keeps only what it can trust", () => {
@@ -194,12 +258,60 @@ test("the store keeps the link through an edit, records bookkeeping quietly, and
   assert.deepEqual(result.afterUnlink.hubPublished.postIds, [55]);
 });
 
+test("the store keeps the checked copy a scenario was downloaded from, and an Update gives an old link one", () => {
+  // The scenario in this library has an old link: downloaded when the game
+  // still took the post's own attachment, so it names no release.
+  const root = buildDataDir();
+  const result = runStore(root, `
+    const scenario = (id) => store.getScenarioDetails(id).scenario;
+    const bundle = (name, file, release) => ({
+      schema: "open-historia-scenario-bundle/2",
+      scenario: { name },
+      data: { world: { ownerSchema: ${OWNER_SCHEMA} }, game: {} },
+      assets: {},
+      hubOrigin: { postId: 42, bundleUrl: "https://github.com/user-attachments/files/" + file + "/world.zip", ...(release ? { release } : {}) },
+    });
+    const oldLink = scenario("shared-world").hubOrigin;
+    // The player changes it, and then takes the Update its card asks for.
+    store.updateScenario("shared-world", { name: "My Shared World" });
+    const edited = scenario("shared-world").hubOrigin;
+    store.updateScenarioFromBundle("shared-world", bundle("Shared World", 1, "${RELEASE}"));
+    const updated = scenario("shared-world");
+    const exported = store.exportGameBundle("campaign").scenarioRef.hubOrigin;
+    store.updateScenario("shared-world", { hubPublished: { key: "oh-3f2a9c1e-77", postIds: [55] } });
+    store.updateScenario("shared-world", { name: "Mine Again" });
+    const editedAgain = scenario("shared-world").hubOrigin;
+    // A newer file of the post, and a download stamped with a copy that is not the hub's.
+    const imported = store.importScenarioBundle(bundle("Second Copy", 2, "${NEWER_RELEASE}"), { setSelected: false }).scenario.hubOrigin;
+    const elsewhere = store.importScenarioBundle(bundle("Elsewhere", 3, "https://evil.example/releases/download/x/world.zip"), { setSelected: false }).scenario.hubOrigin;
+    ${report(`{ oldLink, edited, updated, exported, editedAgain, imported, elsewhere }`)}
+  `);
+  assert.equal(result.oldLink.release, undefined);
+  assert.ok(result.edited.editedAt);
+  assert.equal(result.edited.release, undefined, "an edit does not make an old link a checked one");
+  assert.equal(result.updated.name, "Shared World", "the Update put the hub's file in place of the player's changes");
+  assert.equal(result.updated.hubOrigin.release, RELEASE, "and stamped the copy it downloaded");
+  assert.equal(result.updated.hubOrigin.editedAt, undefined);
+  assert.deepEqual(Object.keys(result.exported).sort(), ["bundleUrl", "postId", "syncedAt"], "a game export hands on the post and its file, not this download");
+  assert.equal(result.editedAgain.release, RELEASE, "bookkeeping and a later edit keep it");
+  assert.ok(result.editedAgain.editedAt);
+  assert.equal(result.imported.release, NEWER_RELEASE, "an import keeps the copy it came from");
+  assert.equal(result.elsewhere.postId, 42);
+  assert.equal(result.elsewhere.release, undefined, "an address outside the hub's releases is not kept as one");
+});
+
 test("the web store writes provenance through the same rules", () => {
   const source = readFileSync(path.join(SERVER_DIR, "..", "src", "runtime", "web", "libraryStore.js"), "utf-8");
   assert.match(source, /hubOrigin: hubOriginAfterWrite\(current\.hubOrigin, updates, \{ touch \}\)/);
   assert.match(source, /writeScenarioMeta\(record, provenance, \{ touch: false \}\)/);
   assert.match(source, /hubOrigin: fetchableHubOrigin\(scenario\?\.hubOrigin\)/);
+  // An import and an Update stamp the link their bundle carries, release and
+  // all, through the same normalizeHubOrigin (src/runtime/web/libraryStore.test.js
+  // runs both).
+  assert.equal(source.match(/const hubOrigin = normalizeHubOrigin\(bundle\.hubOrigin\);/g)?.length, 2);
+  assert.equal(source.match(/writeScenarioMeta\(record, \{ hubOrigin \}\);/g)?.length, 2);
   const models = readFileSync(path.join(SERVER_DIR, "..", "src", "runtime", "web", "models.js"), "utf-8");
+  assert.match(models, /hubOrigin: normalizeHubOrigin\(raw\?\.hubOrigin\)/);
   assert.match(models, /hubPublished: normalizeHubPublished\(raw\?\.hubPublished\)/);
   assert.match(models, /hubReviews: normalizeHubReviews\(raw\?\.hubReviews\)/);
 });

@@ -60,6 +60,12 @@ its card in your Scenarios tab.
 Updating replaces the scenario in place. **Games already running on the old version keep
 working** — a game is a copy taken at the moment you started it, so it is not disturbed.
 
+A scenario you imported with a version of the game from before October 2026 asks for an update
+as well, with a note on its card saying why. The hub now checks every file before the game will
+download it, and a copy from before that was never checked: updating swaps it for the hub's
+checked copy. If you have edited that scenario the game asks first, because updating replaces
+your changes — clone the scenario beforehand if you want to keep them.
+
 ## Publishing your own
 
 Build a scenario in [the map editor](/wiki/editor/), then publish it from its card. The game
@@ -88,10 +94,15 @@ The hub is a GitHub repository — `Open-Historia/Open-historia-scenarios` — w
 a posted scenario. Likes are GitHub reactions; the pinned shelf is a label only collaborators can
 apply.
 
-Listings are cached for five minutes, so a brand-new post may take a moment to appear.
+Every file posted to the hub is checked before the game will touch it. A post shows up in the
+game once its file has passed and the hub has released a checked copy of it — usually a minute or
+two after it is posted — and a file that fails is refused with a comment on the post saying why.
+The game downloads only those checked copies, and shows a post's pictures from them too.
+Listings are cached for five minutes on top of that, so a brand-new post may take a moment to
+appear.
 
-Install counts come from a small counter service, deduplicated per person. It records that a
-scenario was imported and nothing else — no game data, and nothing identifying.
+Install counts are GitHub's own: how many times a scenario's checked file has been downloaded
+from the hub. They count downloads rather than people, and the game reports nothing itself.
 
 Because it is GitHub, you can browse the hub in a web browser, and a scenario you cannot reach
 in-game can always be downloaded from the repository directly and imported with the library's

@@ -231,6 +231,8 @@
     ],
     "hosting/community-hub.md": [
       "src/Game/GameUI/communityHub.jsx",
+      "src/runtime/hubFiles.js",
+      "src/runtime/hubPosts.js",
       "server/libraryStore.js",
       "hub-templates"
     ],

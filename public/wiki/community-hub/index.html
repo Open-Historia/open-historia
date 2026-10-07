@@ -192,6 +192,11 @@ hub.</p>
 its card in your Scenarios tab.</p>
 <p>Updating replaces the scenario in place. <strong>Games already running on the old version keep
 working</strong> — a game is a copy taken at the moment you started it, so it is not disturbed.</p>
+<p>A scenario you imported with a version of the game from before October 2026 asks for an update
+as well, with a note on its card saying why. The hub now checks every file before the game will
+download it, and a copy from before that was never checked: updating swaps it for the hub&#39;s
+checked copy. If you have edited that scenario the game asks first, because updating replaces
+your changes — clone the scenario beforehand if you want to keep them.</p>
 <h2 id="publishing-your-own">Publishing your own</h2>
 <p>Build a scenario in <a href="/wiki/editor/">the map editor</a>, then publish it from its card. The game
 exports the bundle locally and opens the hub&#39;s post form with the details filled in; you attach
@@ -214,9 +219,14 @@ bundle can also carry its own basemap.</p>
 <p>The hub is a GitHub repository — <code>Open-Historia/Open-historia-scenarios</code> — where every issue is
 a posted scenario. Likes are GitHub reactions; the pinned shelf is a label only collaborators can
 apply.</p>
-<p>Listings are cached for five minutes, so a brand-new post may take a moment to appear.</p>
-<p>Install counts come from a small counter service, deduplicated per person. It records that a
-scenario was imported and nothing else — no game data, and nothing identifying.</p>
+<p>Every file posted to the hub is checked before the game will touch it. A post shows up in the
+game once its file has passed and the hub has released a checked copy of it — usually a minute or
+two after it is posted — and a file that fails is refused with a comment on the post saying why.
+The game downloads only those checked copies, and shows a post&#39;s pictures from them too.
+Listings are cached for five minutes on top of that, so a brand-new post may take a moment to
+appear.</p>
+<p>Install counts are GitHub&#39;s own: how many times a scenario&#39;s checked file has been downloaded
+from the hub. They count downloads rather than people, and the game reports nothing itself.</p>
 <p>Because it is GitHub, you can browse the hub in a web browser, and a scenario you cannot reach
 in-game can always be downloaded from the repository directly and imported with the library&#39;s
 <strong>Import</strong> button.</p>
