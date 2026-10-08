@@ -60,6 +60,7 @@
   "sameAs": [
     "https://github.com/Open-Historia/open-historia",
     "https://discord.gg/QaqAK7fQAg",
+    "https://x.com/open_historia",
     "https://openhistoria.itch.io/open-historia",
     "https://gamejolt.com/games/open-historia"
   ]
@@ -175,9 +176,10 @@
     transition:background .15s,border-color .15s,color .15s,transform .12s}
   .community-btn:hover{color:#fff4d4;background:var(--marble);border-color:var(--gold-l);transform:translateY(-0.0625rem)}
   .community-btn:focus-visible{outline:2px solid var(--gold-l);outline-offset:2px}
-  /* On a narrow screen the two buttons ARE the message; the sentence is what goes. */
+  /* On a narrow screen the buttons ARE the message; the sentence is what goes,
+     and the words before each name with it, so three buttons stay on one row. */
   @media(max-width:560px){.community-in{gap:0.5rem;padding:0.4375rem 0.75rem;min-height:2.625rem}
-    .community-say{display:none}
+    .community-say,.community-more{display:none}
     .community-btn{font-size:.68rem;letter-spacing:.06em;padding:0.375rem 0.75rem}}
   @media(prefers-reduced-motion: reduce){.community-btn{transition:none}.community-btn:hover{transform:none}}
 
@@ -417,8 +419,9 @@
   <div class="community-in">
     <span class="community-say">Ask questions, share scenarios, and hear about updates &mdash; <b>come say hello.</b></span>
     <span class="community-links">
-      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Join the Discord</a>
+      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener"><span class="community-more">Join the&nbsp;</span>Discord</a>
       <a class="community-btn" href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">r/OpenHistoria</a>
+      <a class="community-btn" href="https://x.com/open_historia" target="_blank" rel="noopener" aria-label="Follow Open Historia on X"><span class="community-more">Follow on&nbsp;</span>X</a>
     </span>
   </div>
 </aside>
@@ -633,6 +636,7 @@
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
       <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>
+      <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
       <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
     </div>
   </div>
