@@ -1,6 +1,7 @@
 /*! Open Historia — Fantasy Map Generator driver © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// Runs Azgaar's Fantasy Map Generator (pinned v1.109, vendored at /fmg/) headlessly
+// Runs Azgaar's Fantasy Map Generator (pinned v1.109; the game's own prepared copy,
+// served at /fmg/: scripts/fmg-vendor.mjs says what is in it) headlessly
 // in a hidden same-origin iframe, drives a generation from a few inputs, and pulls
 // out the data fmgImport needs.
 //
@@ -35,13 +36,24 @@ const resolveTemplate = (params) => {
   return WORLD_TEMPLATES[idx];
 };
 
-// Whether this build serves the generator at all. /fmg/ exists only where
-// scripts/fetch-fmg.mjs has been run by hand (a source checkout on the local
-// server): no installer packages it, and the web and Android builds have no
-// server. Anywhere else /fmg/index.html is a 404 or the app's own page, and
-// Generate would load the whole game again in a hidden frame and give up after
-// READY_TIMEOUT_MS — so the Workshop asks once and hides the tab instead.
-export const isFmgIndexPage = (html) => /fantasy map generator/i.test(String(html || ""));
+// Whether this build serves the generator. The desktop installers pack it and
+// the local server serves it at /fmg/; a source checkout has it once
+// scripts/fetch-fmg.mjs has run. The web and Android builds have no server and
+// no copy. Where there is none, /fmg/index.html is a 404 or the app's own page,
+// and Generate would load the whole game again in a hidden frame and give up
+// after READY_TIMEOUT_MS — so the Workshop asks once and hides the tab instead.
+//
+// The page must also carry the mark of a PREPARED copy. The generator as its
+// author publishes it reports each visit to his analytics and loads a chat
+// widget and fonts from other hosts; the copy the game ships has that taken out
+// and a policy that allows this origin only. A folder fetched by an older
+// checkout has neither, and is not run. (The same words as PREPARED_MARK in
+// scripts/fmg-vendor.mjs; server/fmgVendor.test.js holds the two together.)
+export const PREPARED_MARK = "open-historia: prepared copy";
+export const isFmgIndexPage = (html) => {
+  const page = String(html || "");
+  return /fantasy map generator/i.test(page) && page.includes(PREPARED_MARK);
+};
 export const checkFmgAvailable = async (fetchImpl = globalThis.fetch) => {
   try {
     const res = await fetchImpl(FMG_PATH, { cache: "no-store" });
@@ -220,7 +232,7 @@ export const generateFmgWorld = async (params = {}, onLog = () => {}) => {
     onLog("Starting the generator…");
     if (!(await waitUntil(win, fmgReady))) {
       if (evalIn(win, "typeof d3!=='undefined'") !== true) {
-        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — it isn't vendored yet. Run `node scripts/fetch-fmg.mjs`, then restart the server.");
+        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — this build has no copy of it. In a source checkout, run `node scripts/fetch-fmg.mjs`, then restart the server.");
       }
       throw new Error("FMG scripts didn't finish loading in time.");
     }
