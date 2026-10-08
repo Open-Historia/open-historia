@@ -172,7 +172,7 @@ const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResol
   const [voteComment, setVoteComment] = useState("");
   const needsVote = proposal.status === "voting" && proposal.playerEligible && !proposal.playerBallot;
   const statusTone = needsVote ? "live" : ["passed", "implementation"].includes(proposal.status) ? "good" : ["failed", "vetoed"].includes(proposal.status) ? "bad" : "neutral";
-  return <div style={{ ...panel, padding: ".72rem", borderColor: needsVote ? "rgba(245,158,11,.32)" : "var(--oh-grey-border)", background: needsVote ? "linear-gradient(180deg,rgba(245,158,11,.07),rgba(255,255,255,.025))" : "rgba(255,255,255,.026)" }}>
+  return <div style={{ ...panel, padding: ".72rem", borderColor: needsVote ? "rgba(245,158,11,.32)" : "var(--oh-grey-border)", background: needsVote ? "rgba(250,207,133,0.048)" : "rgba(255,255,255,.026)" }}>
     <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
       <strong style={{ flex: 1, minWidth: 0, fontSize: ".74rem" }}>{proposal.title}</strong>
       {needsVote && <SmallPill tone="live">Your vote</SmallPill>}

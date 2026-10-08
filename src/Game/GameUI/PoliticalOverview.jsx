@@ -14,7 +14,7 @@ const sectionLabel = {
 };
 
 const card = {
-  background: "linear-gradient(180deg, rgba(255,255,255,0.052), rgba(255,255,255,0.032))",
+  background: "rgba(255,255,255,0.042)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "12px",
 };

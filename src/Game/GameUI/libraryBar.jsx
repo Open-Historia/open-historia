@@ -162,9 +162,22 @@ const TOP_BAR_OFFSET = `calc(0.5rem + ${SAFE_TOP})`;
 
 const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
+// The flat tint over a card's cover picture, so its text reads on any picture
+// (an inset shadow, which lies over the picture). The Accent, the colour its
+// author picked, glows in the corner over that: the one fade the interface
+// keeps (noGradients.test.js).
+const COVER_TINT = "inset 0 0 0 100vmax rgba(4,6,12,0.56)";
+const accentGlowStyle = (accentColor, { at, alpha, reach }) => ({
+  background: `radial-gradient(circle at ${at}, ${accentColor}${alpha}, transparent ${reach})`,
+  inset: 0,
+  opacity: 0.6,
+  pointerEvents: "none",
+  position: "absolute",
+});
+
 const surfaceStyle = {
   background:
-    "linear-gradient(180deg, rgba(50, 50, 55, 0.58) 0%, rgba(17, 17, 19, 0.48) 100%)",
+    "rgba(34,34,37,0.53)",
   border: "1px solid var(--oh-hud-border)",
   boxShadow: "var(--oh-hud-shadow-soft)",
   backdropFilter: "var(--oh-hud-blur)",
@@ -805,16 +818,15 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(4,6,12,0.18) 0%, rgba(4,6,12,0.46) 30%, rgba(5,8,14,0.86) 72%, rgba(5,7,12,0.98) 100%), ` +
-            `linear-gradient(90deg, rgba(3,4,8,0.30) 0%, rgba(3,4,8,0.13) 42%, rgba(3,4,8,0.24) 100%), ` +
-            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}b8, transparent 34%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
+          boxShadow: COVER_TINT,
           inset: 0,
           opacity: 0.96,
           position: "absolute",
         }}
       />
+      <div aria-hidden="true" style={accentGlowStyle(scenario.accentColor, { at: "14% 18%", alpha: "b8", reach: "34%" })} />
       <div
         style={{
           display: "flex",
@@ -1102,16 +1114,15 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(4,6,12,0.15) 0%, rgba(4,6,12,0.40) 30%, rgba(5,8,14,0.84) 74%, rgba(5,7,12,0.97) 100%), ` +
-            `linear-gradient(90deg, rgba(3,4,8,0.28) 0%, rgba(3,4,8,0.11) 42%, rgba(3,4,8,0.22) 100%), ` +
-            `radial-gradient(circle at 16% 20%, ${game.accentColor}a8, transparent 32%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
+          boxShadow: COVER_TINT,
           inset: 0,
           opacity: 0.97,
           position: "absolute",
         }}
       />
+      <div aria-hidden="true" style={accentGlowStyle(game.accentColor, { at: "16% 20%", alpha: "a8", reach: "32%" })} />
       <div
         style={{
           display: "flex",
@@ -1347,7 +1358,7 @@ const MenuRow = ({ action, children, description, emptyText, icon, title }) => {
               {title}
             </div>
           </div>
-          <div style={{ background: "linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02))", flex: 1, height: 1 }} />
+          <div style={{ background: "rgba(255,255,255,0.08)", flex: 1, height: 1 }} />
           {action}
         </div>
         {description && (
@@ -4453,7 +4464,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         <div
           style={{
             background:
-              "linear-gradient(180deg, #111113 0%, #0d0d0f 100%)",
+              "#0f0f11",
             color: "#fff",
             display: "flex",
             flexDirection: "column",

@@ -35,14 +35,6 @@ const WorldShell = {
   touchAction: "none",
 };
 
-const Vignette = {
-  position: "fixed",
-  inset: 0,
-  background: "radial-gradient(ellipse at center, transparent 70%, rgba(0,0,0,0.25) 100%)",
-  pointerEvents: "none",
-  zIndex: 10,
-};
-
 function GameApp() {
   const mapRef = useRef(null);
   const preloadStartedAtRef = useRef(null);
@@ -205,7 +197,6 @@ function GameApp() {
     onInitialIdle={handleFirstWorldIdle}
     />
     </Suspense>
-    <div style={Vignette} />
     </div>
     {isReady && (
       <UI

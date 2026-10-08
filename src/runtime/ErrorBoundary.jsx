@@ -161,7 +161,7 @@ const styles = {
     fontWeight: 600,
     letterSpacing: "0.08em",
     color: "#050403",
-    background: "linear-gradient(90deg, #d4a820, #ffe370)",
+    background: "#e8c040",
     border: "none",
     borderRadius: "6px",
     cursor: "pointer",

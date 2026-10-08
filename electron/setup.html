@@ -22,7 +22,7 @@
       /* Width is the only thing that animates, so the bar stays smooth even while
          the download saturates the connection. */
       .bar > i { display: block; height: 100%; width: 0; border-radius: 99px;
-        background: linear-gradient(180deg, #d4af37, #b8901f); transition: width .25s ease; }
+        background: #c6a02b; transition: width .25s ease; }
       .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
       .pct { font-weight: 700; font-size: .86rem; color: #f4ead0; }
       .file { color: rgba(244, 234, 208, .5); font-size: .78rem;
@@ -33,7 +33,7 @@
       .actions { display: flex; gap: 10px; margin-top: 14px; }
       .actions button {
         font: 700 .82rem/1 system-ui, sans-serif; padding: 9px 14px; border-radius: 8px; cursor: pointer;
-        color: #131315; background: linear-gradient(180deg, #d4af37, #b8901f); border: 1px solid #d4af37;
+        color: #131315; background: #c6a02b; border: 1px solid #d4af37;
       }
       .actions button.quiet { color: #f4ead0; background: transparent; border-color: rgba(212, 175, 55, .3); }
       .actions button:disabled { opacity: .5; cursor: default; }

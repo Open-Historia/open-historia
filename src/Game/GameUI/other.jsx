@@ -34,7 +34,7 @@ const FallbackBadge = ({ label }) => (
     aria-label={label ? `${label} flag unavailable` : "Flag unavailable"}
     style={{
         alignItems: "center",
-        background: "linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035))",
+        background: "rgba(255,255,255,0.063)",
         border: "1px solid rgba(255,255,255,0.12)",
         borderRadius: "5px",
         color: "rgba(255,255,255,0.68)",
@@ -180,8 +180,8 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = fal
             cursor: "pointer",
             appearance: "none",
             background: active
-                ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
-                : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
+                ? "rgba(75,143,251,0.17)"
+                : "rgba(35,35,39,0.53)",
             transition: `${dockStyle.transition || ""}${dockStyle.transition ? ", " : ""}background 0.15s ease`,
         }}
         >
