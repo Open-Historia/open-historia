@@ -1918,10 +1918,14 @@ const LibraryTopBar = () => {
   // (useCustomBackground). Nothing to load means ESRI, as before.
   const loadPickerBackground = (scenarioId, descriptor) => {
     const kind = descriptor?.kind;
+    if (kind === "plain") {
+      setPickerBackground({ kind });
+      return;
+    }
     if (kind !== "image" && kind !== "vector") return;
     downloadScenarioJsonAsset(scenarioId, "backgroundData")
       .then((data) => {
-        if (kind === "image" && data?.dataUrl) setPickerBackground({ kind, imageUrl: data.dataUrl });
+        if (kind === "image" && data?.dataUrl) setPickerBackground({ kind, imageUrl: data.dataUrl, bounds: descriptor.bounds ?? null });
         else if (kind === "vector" && data?.geojson) setPickerBackground({ kind, geojson: data.geojson });
       })
       .catch(() => {});
@@ -2021,7 +2025,7 @@ const LibraryTopBar = () => {
     try {
       // The checked copy of the post's file, stamped with the link to renew:
       // the post, its file, and the release copy that was downloaded.
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author });
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
       await updateScenarioFromBundle(scenario.id, bundle);
       // A drawer open on this scenario still holds what was replaced. It is
       // loaded again, so its Save cannot write the old form over the new file.
@@ -2828,15 +2832,20 @@ const LibraryTopBar = () => {
       downloadScenarioJsonAsset(scenario.id, "flags"),
       downloadScenarioJsonAsset(scenario.id, "tags"),
       // The custom map background so re-opening the editor restores it.
-      world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+      // (A plain sea has a descriptor and nothing to download.)
+      world.background?.kind === "image" || world.background?.kind === "vector"
+        ? downloadScenarioJsonAsset(scenario.id, "backgroundData")
+        : Promise.resolve(null),
     ]).then(([regions, cities, colors, flags, tags, bgData]) => {
       const bgDesc = world.background;
       const background =
         bgDesc?.kind === "image" && bgData?.dataUrl
-          ? { kind: "image", dataUrl: bgData.dataUrl }
+          ? { kind: "image", dataUrl: bgData.dataUrl, ...(bgDesc.bounds ? { bounds: bgDesc.bounds } : {}) }
           : bgDesc?.kind === "vector" && bgData?.geojson
             ? { kind: "vector", geojson: bgData.geojson }
-            : null;
+            : bgDesc?.kind === "plain"
+              ? { kind: "plain" }
+              : null;
       setMapEditorSeed({
         name: scenario.name || "",
         author: world.author || "",
@@ -2850,6 +2859,9 @@ const LibraryTopBar = () => {
           ? world.polityOverrides
           : {},
         background,
+        // The map's projection (server/mapProjection.js), which the Workshop
+        // shows, converts and saves back.
+        projection: world.projection ?? null,
         basemap: world.basemap || null,
         // Carried like the flags above: a round-trip must not reset it.
         customCities: Boolean(world.customCities),
@@ -2944,6 +2956,9 @@ const LibraryTopBar = () => {
         // Custom map background descriptor (kind + placement); null clears it. The
         // heavy payload goes to the backgroundData asset just below.
         background: seed.world?.background ?? null,
+        // The projection the Workshop left the map in; a map that never had one
+        // keeps none, which is Mercator.
+        ...(seed.world?.projection ? { projection: seed.world.projection } : {}),
         // The chosen built-in basemap so the game renders it (not always ocean).
         basemap: seed.world?.basemap ?? null,
         // The starting units placed in the Workshop (world.units, source "scenario").

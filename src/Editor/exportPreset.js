@@ -14,6 +14,7 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
+import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -151,11 +152,17 @@ const buildBackgroundForGame = (customBackground) => {
   const bg = customBackground;
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
   if (bg.kind === "image" && bg.dataUrl) {
+    // Its bounds ride in the light descriptor: where the game lays the picture.
+    // None are written for a picture that fills the square, so a map that never
+    // had any saves exactly as it did.
+    const bounds = normalizeImageBounds(bg.bounds);
     return {
-      background: { kind: "image" },
+      background: { kind: "image", ...(bounds && !boundsFillSquare(bounds) ? { bounds } : {}) },
       backgroundData: { dataUrl: bg.dataUrl },
     };
   }
+  // A plain sea in place of the built-in tiles: a descriptor and no payload.
+  if (bg.kind === "plain") return { background: { kind: "plain" }, backgroundData: null };
   if (bg.kind === "vector" && bg.geojson && Array.isArray(bg.geojson.features)) {
     return {
       background: { kind: "vector" },
@@ -297,6 +304,11 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // clears any previously applied background. The heavy payload rides in the
     // seed's backgroundData below, uploaded as a separate scenario asset.
     background,
+    // The map's projection, as the game keeps it. Mercator is what a map is
+    // when it says nothing, so nothing is written for it.
+    ...(projectionIsDefault(doc.metadata?.projection)
+      ? {}
+      : { projection: { ...normalizeProjection(doc.metadata.projection), laidOut: true } }),
     // The chosen built-in basemap (an ESRI preset id) so the game renders THAT
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.

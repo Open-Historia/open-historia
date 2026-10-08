@@ -12,6 +12,7 @@ import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
 import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat, transformExtent } from "ol/proj";
+import { boundsFillSquare, normalizeImageBounds } from "../../../server/mapProjection.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
@@ -95,9 +96,16 @@ const CUSTOM_SEA = "#0b1a2b";
 // vector biomes each carrying its own `fill`. Every other scenario keeps the
 // ESRI canvas, exactly as before.
 const buildBaseLayer = (customBackground) => {
+  // A plain sea: no tiles, as the game map draws such a scenario.
+  if (customBackground?.kind === "plain") return new VectorImageLayer({ source: new VectorSource({ wrapX: false }) });
   if (customBackground?.kind === "image" && customBackground.imageUrl) {
+    // On the scenario's own bounds when it states them, as the game map lays it.
+    const bounds = normalizeImageBounds(customBackground.bounds);
+    const imageExtent = bounds && !boundsFillSquare(bounds)
+      ? transformExtent([bounds.west, bounds.south, bounds.east, bounds.north], "EPSG:4326", "EPSG:3857")
+      : WORLD_IMAGE_EXTENT;
     return new ImageLayer({
-      source: new ImageStatic({ url: customBackground.imageUrl, imageExtent: WORLD_IMAGE_EXTENT, projection: "EPSG:3857" }),
+      source: new ImageStatic({ url: customBackground.imageUrl, imageExtent, projection: "EPSG:3857" }),
     });
   }
   if (customBackground?.kind === "vector" && customBackground.geojson) {

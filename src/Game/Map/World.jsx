@@ -21,6 +21,8 @@ import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
+import { imageQuad } from "../../../server/mapProjection.js";
+import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
 configureMapRuntime();
@@ -242,18 +244,6 @@ const getReliefPaints = (basemapId) => {
 // NOT exactly ±90: mercatorYfromLat(±90) is ±Infinity, which makes MapLibre's
 // ImageSource.setCoordinates throw — so we stop a hair short (the custom-bg-base
 // layer fills the negligible remaining sliver).
-const WORLD_IMAGE_COORDS_FLAT = [
-  [-180, 85.0511],
-  [180, 85.0511],
-  [180, -85.0511],
-  [-180, -85.0511],
-];
-const WORLD_IMAGE_COORDS_GLOBE = [
-  [-180, 89.9],
-  [180, 89.9],
-  [180, -89.9],
-  [-180, -89.9],
-];
 
 const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
@@ -266,7 +256,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         "custom-bg": {
           type: "image",
           url: customBg.imageUrl,
-          coordinates: isGlobe ? WORLD_IMAGE_COORDS_GLOBE : WORLD_IMAGE_COORDS_FLAT,
+          // Where the scenario says its picture lies (world.background.bounds);
+          // with nothing said it fills the whole Mercator square, as it always
+          // did (server/mapProjection.js imageQuad).
+          coordinates: imageQuad(customBg.bounds, { globe: isGlobe }),
         },
       },
       layers: [
@@ -459,7 +452,12 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   return style;
 };
 
-function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
+function World({ mapRef, projection: requestedProjection, terrainEnabled, onInitialIdle }) {
+  // What the scenario allows of its map (world.projection): a flat sheet may
+  // not be wrapped round the 3D globe, whatever the player's setting says, and
+  // may not repeat sideways.
+  const { noGlobe, noWrap } = useWorldBackground();
+  const projection = noGlobe ? "mercator" : requestedProjection;
   const hasReportedInitialIdleRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const loadTimerRef = useRef(null);
@@ -1107,7 +1105,12 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         // The performance win comes from collapsing the country-label layer fanout,
         // not from allowing city/country labels to overlap while the camera moves.
         crossSourceCollisions={true}
-        renderWorldCopies
+        // A map that does not repeat (world.projection.wrap === false) draws one
+        // world, and MapLibre then keeps the camera on it: with no copies it holds
+        // the centre between the two edges by itself. (Bounds of -180..180 given
+        // by hand do the same until the map has no size, a hidden tab, a first
+        // layout, when they throw in its transform.)
+        renderWorldCopies={!noWrap}
         // Cap MapLibre's per-source out-of-view tile-retention cache. Left unset it
         // sizes dynamically to ~(ceil(w/tileSize)+1)*(ceil(h/tileSize)+1)*5 tiles PER
         // source — ~270 at 1080p but ~800 at a 3840x2160 desktop viewport, and

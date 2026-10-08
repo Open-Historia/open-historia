@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useWorldBackground } from "./useWorldState.js";
+import { normalizeImageBounds } from "../../../server/mapProjection.js";
 
 export function useCustomBackground() {
   const { background: bgDescriptor, basemap: worldBasemap } = useWorldBackground();
@@ -23,6 +24,13 @@ export function useCustomBackground() {
       return;
     }
 
+    // A plain sea in place of the built-in tiles (a map that is not Mercator
+    // and has no basemap of its own): declared, and nothing to load.
+    if (bgDescriptor?.kind === "plain") {
+      setState({ background: null, declared: true, basemap });
+      return undefined;
+    }
+
     // Commit to "no ESRI" from the light descriptor right away, then load the
     // heavy payload and swap in the actual image/vector.
     setState({ background: null, declared: true, basemap });
@@ -40,7 +48,7 @@ export function useCustomBackground() {
       if (cancelled || keyRef.current !== bgKey) return;
 
       if (bgDescriptor?.kind === "image" && data?.dataUrl) {
-        setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap });
+        setState({ background: { kind: "image", imageUrl: data.dataUrl, bounds: normalizeImageBounds(bgDescriptor.bounds) }, declared: true, basemap });
       } else if (bgDescriptor?.kind === "vector" && data?.geojson) {
         setState({ background: { kind: "vector", geojson: data.geojson }, declared: true, basemap });
       } else {

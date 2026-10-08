@@ -39,6 +39,7 @@ import {
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { useWorldBackground } from "../Map/useWorldState.js";
 import { endpointIsLocal } from "../AI/localEndpoint.js";
 import {
     isRatingEnabled,
@@ -313,6 +314,18 @@ const ChatLanguageSelector = () => {
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
+// The 3D Globe switch, which a scenario can take away: its map may be a flat
+// sheet that is not to be wrapped round a globe (world.projection.globe).
+const GlobeToggle = ({ enabled, onToggle }) => {
+    const { noGlobe } = useWorldBackground();
+    return (
+        <>
+        <Toggle label="3D Globe" enabled={enabled && !noGlobe} onToggle={noGlobe ? () => {} : onToggle} />
+        {noGlobe ? <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.9rem" }}>The 3D globe is disabled for this scenario&apos;s map.</div> : null}
+        </>
+    );
+};
+
 const Toggle = ({ label, enabled, onToggle }) => {
     const touch = useTouchPrimary();
     return (
@@ -2047,7 +2060,7 @@ const SettingsWorkspace = ({
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
-                    <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
+                    <GlobeToggle enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
                     <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
                 </SettingsSection>
                 <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">

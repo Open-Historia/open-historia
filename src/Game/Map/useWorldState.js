@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
+import { mapViewOf } from "../../../server/mapProjection.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -145,6 +146,9 @@ const deriveMapState = (state) => ({
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
+  // How the scenario lets its map be shown (world.projection: mapViewOf).
+  noGlobe: mapViewOf(state?.projection).noGlobe,
+  noWrap: mapViewOf(state?.projection).noWrap,
   ...(() => {
     const folded = foldOwnerTokens(state);
     return {
@@ -169,6 +173,8 @@ const sameMapState = (prev, next) =>
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
   prev.background === next.background &&
+  prev.noGlobe === next.noGlobe &&
+  prev.noWrap === next.noWrap &&
   prev.labelFont === next.labelFont &&
   prev.labelHaloColor === next.labelHaloColor &&
   prev.labelTextColor === next.labelTextColor &&
@@ -338,6 +344,8 @@ export function useWorldBackground() {
     return {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
+      noGlobe: Boolean(current?.noGlobe),
+      noWrap: Boolean(current?.noWrap),
     };
   });
 
@@ -347,17 +355,19 @@ export function useWorldBackground() {
     const handler = (data) => {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
+      const noGlobe = Boolean(data?.noGlobe);
+      const noWrap = Boolean(data?.noWrap);
 
       setState((prev) => {
         const backgroundSame =
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap) {
+        if (backgroundSame && prev.basemap === basemap && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
           return prev;
         }
 
-        return { background, basemap };
+        return { background, basemap, noGlobe, noWrap };
       });
     };
 

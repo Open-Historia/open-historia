@@ -23,6 +23,8 @@ import assert from "node:assert/strict";
 import {
     DIRECTION_KM,
     NEAR_KM,
+    PLACEMENT_DIRECTIVE,
+    VECTOR_MAX_KM,
     distanceKm,
     hashText,
     interiorPoint,
@@ -258,4 +260,72 @@ test("a gazetteer that throws on one odd region costs that reading, not the plac
     const brittle = { ...gazetteer, regionAt: (point) => { if (point[0] > 100) throw new Error("bad polygon"); return gazetteer.regionAt(point); } };
     assert.equal(resolvePlacement("Midburg", brittle).regionId, "wm-n");
     assert.ok(resolvePlacement("North Korea", brittle).error);
+});
+
+// --- vectors: a distance and a direction from a reference point ---
+
+test("a vector is read from its distance, its direction and the place it starts from", () => {
+    const vector = (phrase) => readPlacement(phrase).find((reading) => reading.kind === "vector");
+    assert.deepEqual(vector("120 km north-east of Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
+    assert.deepEqual(vector("about 120 kilometres NE of Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
+    assert.deepEqual(vector("60km due south of the 1st Guards Army"), { kind: "vector", km: 60, bearing: 180, name: "1st Guards Army" });
+    assert.deepEqual(vector("40 km west-north-west of Porthaven"), { kind: "vector", km: 40, bearing: 292.5, name: "Porthaven" });
+    assert.deepEqual(vector("40 km SSE from Porthaven"), { kind: "vector", km: 40, bearing: 157.5, name: "Porthaven" });
+    assert.deepEqual(vector("1,200 km east of Midburg"), { kind: "vector", km: 1200, bearing: 90, name: "Midburg" });
+    assert.deepEqual(vector("2,5 km north of Midburg"), { kind: "vector", km: 2.5, bearing: 0, name: "Midburg" });
+    // Miles and nautical miles are turned into kilometres.
+    assert.ok(Math.abs(vector("100 miles south of Midburg").km - 160.9344) < 1e-6);
+    assert.ok(Math.abs(vector("50 nm east of Porthaven").km - 92.6) < 1e-6);
+    // A bearing in degrees, said the ways it is said.
+    assert.deepEqual(vector("120 km on a bearing of 045 from Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
+    assert.deepEqual(vector("120 km at 45° from Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
+    assert.deepEqual(vector("bearing 270, 80 km from Midburg"), { kind: "vector", km: 80, bearing: 270, name: "Midburg" });
+    assert.deepEqual(vector("80 km heading 360 degrees from Midburg"), { kind: "vector", km: 80, bearing: 0, name: "Midburg" });
+    // Toward a second place.
+    assert.deepEqual(vector("80 km from Midburg toward Porthaven"), { kind: "vector", km: 80, name: "Midburg", toward: "Porthaven" });
+    // Not vectors: no distance, no direction, a bearing past the compass, a distance of nothing.
+    for (const phrase of ["east of Midburg", "120 km of Midburg", "120 km at 400 degrees from Midburg", "0 km east of Midburg", "near Midburg"]) {
+        assert.equal(vector(phrase), undefined, phrase);
+    }
+    // The longest reach is capped.
+    assert.equal(vector("99999 km east of Midburg").km, VECTOR_MAX_KM);
+});
+
+test("a vector lands that far, that way, from where the thing is", () => {
+    const midburg = [32, 51];
+    const east = place("100 km east of Midburg");
+    assert.equal(east.how, "vector");
+    assert.ok(Math.abs(distanceKm(midburg, [east.lng, east.lat]) - 100) < 1, "100 km away");
+    assert.ok(east.lng > 32 && Math.abs(east.lat - 51) < 1e-6, "due east");
+    assert.equal(east.regionName, "Westmark North", "and the region it lands in is named");
+
+    const south = place("150 km on a bearing of 180 from Midburg");
+    assert.ok(Math.abs(distanceKm(midburg, [south.lng, south.lat]) - 150) < 1);
+    assert.ok(south.lat < 51 && Math.abs(south.lng - 32) < 1e-6);
+    assert.equal(south.regionName, "Westmark South");
+
+    // From a unit, and from a region: its own point, and the middle of it.
+    const army = place("50 km north of 1st Guards Army");
+    assert.ok(Math.abs(army.lng - 35) < 1e-6 && army.lat > 51);
+    const fromRegion = place("30 km west of Eastland South");
+    assert.equal(fromRegion.how, "vector");
+    assert.ok(fromRegion.lng < 36.5 && fromRegion.lat > 48 && fromRegion.lat < 50);
+
+    // Toward another place: along the line to it, and never past it.
+    const along = place("60 km from Midburg toward Porthaven");
+    const porthaven = [36, 48.2];
+    assert.ok(Math.abs(distanceKm(midburg, [along.lng, along.lat]) - 60) < 1);
+    assert.ok(distanceKm([along.lng, along.lat], porthaven) < distanceKm(midburg, porthaven));
+    const past = place("5000 km from Midburg toward Porthaven");
+    assert.ok(distanceKm([past.lng, past.lat], porthaven) < 1, "it stops at the place it was heading for");
+
+    // A place the map does not know is still an error, and the plain direction is as it was.
+    assert.ok(place("100 km east of Nowhere").error);
+    assert.equal(place("east of Midburg").how, "direction");
+});
+
+test("the model is told it can place by a vector", () => {
+    assert.match(PLACEMENT_DIRECTIVE, /120 km north-east of Kharkiv/);
+    assert.match(PLACEMENT_DIRECTIVE, /bearing of 045/);
+    assert.match(PLACEMENT_DIRECTIVE, /80 km from Kyiv toward Kharkiv/);
 });
