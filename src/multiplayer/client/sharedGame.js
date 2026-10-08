@@ -29,6 +29,8 @@ import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./re
 import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
+import { probeNetwork } from "../transport/peer.js";
+import { joinFailure, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
 import { relayChannelFactory } from "../signaling/relays.js";
 import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
@@ -42,6 +44,12 @@ const IDLE = Object.freeze({
   round: null,
   notices: [],
   connection: "", // the session's state, or "loopback"
+  // What a guest's session knows while it joins (session/client.js onState):
+  // { heard, failures }. The lobby says which step it is on (joinProgress.js).
+  detail: null,
+  // What this device can tell about its own network (transport/peer.js
+  // probeNetwork): "" | open | symmetric | blocked | unknown.
+  network: "",
   engine: null, // the host's engine status (hosting only)
   // A guest's local game of the host's scenario, which the map is drawn from:
   // "" | preparing | ready. Countries are offered only once it is ready, so
@@ -291,15 +299,26 @@ export const hostControl = (action, args = null) => current?.screen?.control(act
 
 // --- Joining ---------------------------------------------------------------------
 
-// The host's scenario must be in this library: the map is drawn from it.
+// The host's scenario must be in this library: the map is drawn from it. It is
+// looked for by its id, and then by its name: a scenario the host made or
+// changed has an id of its own on every device it was copied to, and the one
+// scenario here with the host's name is that scenario.
+const sameName = (left, right) => String(left ?? "").trim().toLocaleLowerCase() === String(right ?? "").trim().toLocaleLowerCase();
 const prepareStandIn = async (owner, lobby, roomId) => {
   await refreshLibraryCatalog({ force: true }).catch(() => {});
   const library = getLibraryState();
-  const scenarioId = String(lobby?.scenario?.id || "");
-  const scenario = (library.scenarios ?? []).find((entry) => entry?.id === scenarioId);
-  if (!scenario) {
-    throw new Error(`This game is played on "${lobby?.scenario?.name || scenarioId || "a scenario"}", which is not in your library. Add it from the Community tab, then join again.`);
+  const scenarios = library.scenarios ?? [];
+  const hostName = String(lobby?.scenario?.name || "").trim();
+  let scenario = scenarios.find((entry) => entry?.id && entry.id === String(lobby?.scenario?.id || ""));
+  if (!scenario && hostName) {
+    const named = scenarios.filter((entry) => sameName(entry?.name, hostName));
+    if (named.length === 1) [scenario] = named;
   }
+  if (!scenario) {
+    logDebugEvent("shared game", `the host's scenario is not in this library: "${hostName}" (${String(lobby?.scenario?.id || "no id")})`, undefined, { problem: true });
+    throw new Error(scenarioMissing(hostName));
+  }
+  const scenarioId = String(scenario.id);
   const key = `oh:mp:standin:${roomId}`;
   let gameId = "";
   try {
@@ -344,6 +363,13 @@ export const joinSharedGame = async ({ token, name } = {}) => {
   set({ ...IDLE, mode: "opening", role: "guest", token: invite.token });
   setSharedGameRole("guest");
   current = { pendingViews: [], runtime: null, gameId: "", preparing: null };
+  const joining = current;
+  logDebugEvent("shared game", "joining a shared game with an invite code");
+  // What this device's own network is, for the words a failure is told in.
+  void probeNetwork().then((network) => {
+    logDebugEvent("shared game", `this device's network, by its own candidates: ${network}`);
+    if (current === joining) set({ network });
+  });
   const session = createClientSession({
     token: invite.token,
     device: deviceIdentity(),
@@ -351,9 +377,20 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     version: SHARED_GAME_VERSION,
     appMessages: HOST_MESSAGES,
     channelFactory: relayChannelFactory,
-    onState: (connection) => {
-      set({ connection });
-      if (["rejected", "lost", "invalid"].includes(connection)) set({ mode: "ended", error: connectionError(connection) });
+    // Every step of the joining goes in the diagnostics log: which of them
+    // never came is the whole of what a report of "it will not connect" needs.
+    log: (text) => logDebugEvent("shared game", text),
+    onState: (connection, detail = {}) => {
+      if (current !== joining) return;
+      set({ connection, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0 } });
+      if (!["rejected", "lost", "invalid"].includes(connection)) return;
+      logDebugEvent("shared game", `joining ended: ${connection} (${detail.reason || detail.message || "no reason given"})`, undefined, { problem: true });
+      set({ mode: "ended", error: joinFailure({ connection, reason: detail.reason, message: detail.message, network: state.network }) });
+    },
+    // Dropped by the session, and said here: a lobby that cannot be read
+    // would otherwise look like a host that was never found.
+    onProblem: () => {
+      if (current === joining && !state.lobby) set({ error: unreadableFromHost() });
     },
     onMessage: (message) => {
       current?.client.receive(message);
@@ -376,12 +413,6 @@ export const joinSharedGame = async ({ token, name } = {}) => {
   current.client = makeClient((message) => session.send(message));
   session.connect();
 };
-
-const connectionError = (connection) => ({
-  rejected: "The host turned this device away.",
-  lost: "The connection to the host was lost.",
-  invalid: "That invite code is not valid.",
-}[connection] || "");
 
 // --- Playing ---------------------------------------------------------------------
 

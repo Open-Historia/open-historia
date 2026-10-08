@@ -390,8 +390,11 @@ try {
   await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
   await sleep(300);
   await guest.eval(`(() => {
-    window.__seen = { loading: [], apiPrompt: false };
+    window.__seen = { loading: [], apiPrompt: false, steps: [] };
     const look = () => {
+      // The lobby box's line for the step of joining this is (client/joinProgress.js).
+      const step = /(Found the host[^.…]*|Connected to the host. [^.…]*)/.exec(document.body.textContent)?.[1];
+      if (step && !window.__seen.steps.includes(step)) window.__seen.steps.push(step);
       const screen = document.querySelector('.oh-loading-screen');
       if (screen && window.__seen.loading.at(-1) !== screen.textContent) window.__seen.loading.push(screen.textContent);
       if (document.querySelector('[aria-label="Set up your AI provider"]')) window.__seen.apiPrompt = true;
@@ -404,6 +407,19 @@ try {
   const lobby = await until(guest, "[...document.querySelectorAll('select')].some((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country'))", 90000);
   check("the guest finds the host through the relay and reaches the lobby", lobby, lobby ? `in ${((Date.now() - joinedAt) / 1000).toFixed(1)} s` : guest.logs.slice(-8).join(" | "));
   await withHelpers(guest);
+  // In the lobby with no country yet, the guest is in nobody's player list: the
+  // host's screen names them all the same, and both diagnostics logs have the
+  // steps of the joining (client/joinProgress.js).
+  const hostSeesWaiting = await until(host, "/choosing a country: (Guest|Player)/.test(document.body.textContent)", 15000);
+  check("the host's lobby names a player who is in and has not taken a country yet", hostSeesWaiting);
+  const logged = (tab, pattern) => tab.eval(`(() => { try { return (JSON.parse(localStorage.getItem('oh_debug_log_v1') || '{}').entries || []).filter((entry) => entry.category === 'shared game' && ${pattern}.test(String(entry.message))).length; } catch { return 0; } })()`);
+  await sleep(1500);
+  const guestSteps = { looking: await logged(guest, "/looking for the host/"), answered: await logged(guest, "/the host answered/"), connected: await logged(guest, "/connected to the host's computer/"), letIn: await logged(guest, "/let us in/") };
+  const hostSteps = { asked: await logged(host, "/(Guest|Player) is asking to join/"), joined: await logged(host, "/player (Guest|Player) joined/") };
+  const stepsShown = (await guest.eval("window.__seen.steps")) ?? [];
+  check("the guest's lobby box said which step of joining it was on, not only that it was finding the host", stepsShown.length > 0, JSON.stringify(stepsShown));
+  check("each step of the joining is in the diagnostics log, on the guest's screen and on the host's",
+    Object.values(guestSteps).every(Boolean) && Object.values(hostSteps).every(Boolean), JSON.stringify({ guestSteps, hostSteps }));
   const offered = await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); return select ? [...select.options].map((o) => o.value).filter(Boolean) : []; })()`);
   if (!offered.length) throw new Error("the guest was offered no country: the lobby never opened");
   GUEST_COUNTRY = offered.find((n) => /^Russia/.test(n)) || offered.find((n) => n !== HOST_COUNTRY);
@@ -740,6 +756,7 @@ try {
   await host.eval("window.__e2e.click('Stop')");
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
   check("when the host stops, the guest is told", ended);
+  check("and told why: the host closed the game", await until(guest, "document.body.textContent.includes('The host closed the game')", 5000));
 } catch (error) {
   check("the run itself", false, String(error?.stack || error));
 } finally {

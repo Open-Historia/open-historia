@@ -34,6 +34,7 @@ import { generateCountryStatSheet, readCountryForPlayer, runChatActionBatch, sim
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
+import { probeNetwork } from "../transport/peer.js";
 import { createInvite, parseInvite } from "../invite.js";
 import { loadDeviceIdentity } from "../identity.js";
 import { PLAYER_REQUESTS, SHARED_GAME_VERSION } from "../game/messages.js";
@@ -172,6 +173,14 @@ const boot = async () => {
   let token = "";
   let campaign = "";
   let relays = null;
+  // People the lobby's player list does not show: those whose connection is
+  // being opened, and those the host answered whose connection never opened
+  // (session/host.js report). The host's screen names them, because a lobby
+  // nobody can get into otherwise looks like one nobody came to.
+  let people = { joining: [], unreachable: [] };
+  // What this computer's own network looks like to a player connecting in
+  // (transport/peer.js probeNetwork): "" until it is known.
+  let network = "";
   let hostStatus = null;
   let failure = "";
 
@@ -208,6 +217,7 @@ const boot = async () => {
   // else in it (an undefined field included).
   const report = () => {
     const { settings: _settings, ...round } = hostStatus?.round ?? {};
+    const players = gameHost?.status().players ?? [];
     loopback.status({
       open: Boolean(gameHost),
       token,
@@ -216,7 +226,12 @@ const boot = async () => {
       error: failure || null,
       lobby: hostStatus?.lobby ?? null,
       round: hostStatus?.round ? round : null,
-      players: gameHost?.status().players ?? [],
+      players,
+      // In, and yet to take a country: the player list shows only seats.
+      choosing: players.filter((player) => player.id !== SCREEN && !player.seat).map((player) => clean(player.name)).filter(Boolean).slice(0, 64),
+      joining: people.joining,
+      unreachable: people.unreachable,
+      network,
     });
   };
 
@@ -314,8 +329,16 @@ const boot = async () => {
       onMessage: (player, message) => gameHost?.receive(player, message),
       onStatus: (status) => {
         relays = status?.relays ?? status ?? null;
+        people = {
+          joining: list(status?.joining).map(clean).filter(Boolean).slice(0, 64),
+          unreachable: list(status?.unreachable).map(clean).filter(Boolean).slice(0, 64),
+        };
         report();
       },
+      // Who asked to join, who was answered and who never got through: this
+      // window's log is sent to the host's screen, whose diagnostics log is
+      // the one a report is made from.
+      log: (text) => logDebugEvent("shared game", text),
     });
     // From here this window is the game's host: the engine reads who people
     // play from the game (runtime/humanPolities.js), and nowhere else does.
@@ -324,6 +347,11 @@ const boot = async () => {
     session.start();
     failure = "";
     report();
+    void probeNetwork().then((kind) => {
+      network = kind;
+      logDebugEvent("shared game", `this computer's network, by its own candidates: ${kind}`);
+      report();
+    });
   };
 
   const control = async (action, args) => {

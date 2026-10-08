@@ -2,13 +2,19 @@
 // Tests only. Enough of RTCPeerConnection for transport/peer.js: an offer and
 // an answer whose SDP names the connection that made it and carries a
 // fingerprint unique to it, and a data channel that links the two once the
-// offerer accepts the answer. drop() cuts a link the way a lost network does.
+// offerer accepts the answer. drop() cuts a link the way a lost network does,
+// and block() is two networks that will not connect at all: the offer and the
+// answer go through, and no channel ever opens.
 
 const later = (fn) => setTimeout(fn, 0);
 
 export const createFakeRtcNetwork = () => {
   const connections = new Map();
   let counter = 0;
+  // "" | "failed" (both ends are told after a moment, as ICE tells them) |
+  // "silent" (nobody is ever told anything).
+  let blocked = "";
+  let failAfterMs = 20;
   const fingerprint = (id) => Array.from({ length: 32 }, (_, index) => ((id * 31 + index * 7) % 256).toString(16).padStart(2, "0").toUpperCase()).join(":");
 
   class FakeChannel {
@@ -92,6 +98,17 @@ export const createFakeRtcNetwork = () => {
   }
 
   const link = (offerer, answerer) => {
+    if (blocked) {
+      if (blocked !== "failed") return;
+      setTimeout(() => {
+        for (const connection of [offerer, answerer]) {
+          if (connection.connectionState === "closed") continue;
+          connection.connectionState = "failed";
+          connection.onconnectionstatechange?.();
+        }
+      }, failAfterMs);
+      return;
+    }
     const remote = new FakeChannel(offerer.channel.label);
     answerer.channel = remote;
     offerer.channel.other = remote;
@@ -112,6 +129,14 @@ export const createFakeRtcNetwork = () => {
   return {
     RTCPeerConnection: FakeRTCPeerConnection,
     connections,
+    // From now on an answered connection never opens (see `blocked`).
+    block: (mode = "failed", { afterMs = 20 } = {}) => {
+      blocked = mode;
+      failAfterMs = afterMs;
+    },
+    unblock: () => {
+      blocked = "";
+    },
     // Cut every open connection (or one), as a lost network would.
     drop: (id) => {
       for (const connection of connections.values()) {

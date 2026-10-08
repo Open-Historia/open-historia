@@ -86,6 +86,14 @@ export const createNostrChannel = ({
   log = () => {},
   now = () => Date.now(),
   maxEventsPerSecond = 40,
+  // How far back a subscription reaches, in seconds. A relay compares it with
+  // the SENDER's clock (an event's created_at), so a listener whose clock is
+  // ahead of a sender's hears nothing from it until the difference has gone
+  // by: thirty seconds was less than two computers are commonly out by (a
+  // host's ran 24 seconds slow). The same five minutes the session allows a
+  // signed message (session/messages.js CLOCK_SKEW_MS); the payloads carry
+  // their own times, and those are what is checked.
+  reachBackSeconds = 300,
   timers = globalThis,
 } = {}) => {
   if (!/^[0-9a-f]{32}$/.test(String(topic))) throw new TypeError("A signaling topic is 32 hex characters.");
@@ -114,6 +122,10 @@ export const createNostrChannel = ({
   };
 
   const handleEvent = (url, event) => {
+    // The same event from another relay: every relay passes it, and it was
+    // checked when it first came. Not counted as a burst, or a full lobby's
+    // offers, five relays over, crowd out the answer a joiner is waiting for.
+    if (typeof event?.id === "string" && seen.has(event.id)) return;
     // Bursts from a relay (or from someone who holds the token) are cut here,
     // before anything costly is done with them.
     const second = Math.floor(now() / 1000);
@@ -169,7 +181,7 @@ export const createNostrChannel = ({
       socket.send(JSON.stringify(["REQ", subscription, {
         kinds: [SIGNAL_KIND],
         [`#${TOPIC_TAG}`]: [topic],
-        since: Math.floor(now() / 1000) - 30,
+        since: Math.floor(now() / 1000) - reachBackSeconds,
       }]));
       for (const frame of entry.queue.splice(0)) socket.send(frame);
       report();

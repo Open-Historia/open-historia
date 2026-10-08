@@ -146,3 +146,37 @@ test("a malformed topic or key is refused up front", () => {
   assert.throws(() => createNostrChannel({ topic: "nope", key: randomBytes(32), WebSocketImpl: network.WebSocket }), /topic/);
   assert.throws(() => createNostrChannel({ topic: toHex(randomBytes(16)), key: randomBytes(8), WebSocketImpl: network.WebSocket }), /key/);
 });
+
+test("a listener whose clock is ahead still hears a sender whose clock is behind", async () => {
+  // A relay holds a subscription's "since" against the SENDER's clock. With a
+  // reach of thirty seconds, a joiner a minute ahead of the host heard nothing
+  // from it for the first half minute, and a joiner further ahead never did.
+  const network = createFakeRelayNetwork();
+  const keys = room();
+  const host = channel(network, keys);
+  const joiner = channel(network, keys, { now: () => Date.now() + 120_000 });
+  await settle();
+  host.instance.publish({ t: "beacon" });
+  joiner.instance.publish({ t: "offer" });
+  await settle();
+  assert.deepEqual(joiner.received, [{ t: "beacon" }]);
+  assert.deepEqual(host.received, [{ t: "offer" }]);
+  host.instance.close();
+  joiner.instance.close();
+});
+
+test("one event passed on by every relay counts once against the burst limit", async () => {
+  // A lobby filling at once is many offers in a second, each from every relay:
+  // counted per copy, the host's answer was crowded out by copies of offers.
+  const network = createFakeRelayNetwork();
+  const keys = room();
+  const at = Date.now();
+  const host = channel(network, keys, { maxEventsPerSecond: 4, now: () => at });
+  const joiner = channel(network, keys);
+  await settle();
+  for (let n = 0; n < 4; n += 1) joiner.instance.publish({ t: "offer", n });
+  await settle(60);
+  assert.deepEqual(host.received.map((payload) => payload.n).sort(), [0, 1, 2, 3], "four events from three relays are four, not twelve");
+  host.instance.close();
+  joiner.instance.close();
+});
