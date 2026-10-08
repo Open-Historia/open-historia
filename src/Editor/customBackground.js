@@ -165,6 +165,7 @@ export const vectorLayerFromGeoJSON = (geojson) =>
 // deliberately picks a basemap — that IS an edit and should save.
 export const rebuildPersistedBackground = (saved, { persisted = true } = {}) => {
   if (!saved) return null;
+  if (saved.kind === "plain") return { kind: "plain", persisted };
   if (saved.kind === "vector") {
     return { kind: "vector", persisted, layer: vectorLayerFromGeoJSON(saved.geojson) };
   }

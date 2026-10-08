@@ -2585,6 +2585,29 @@ const OlMap = ({
       // Forget what the last save wrote, so the next one carries the whole map.
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
+      // Every region moved by one rule: a change of projection
+      // (MapEditor convertProjection). `moveXY` takes and answers a spot in this
+      // map's own units. It is not an undo step: the cities, the units and the
+      // basemap move with it outside this stack, so the history is cleared.
+      transformRegions: (moveXY) => {
+        const features = regionSource.getFeatures();
+        for (const f of features) {
+          f.getGeometry()?.applyTransform((input, output, stride = 2) => {
+            const out = output ?? input;
+            for (let i = 0; i < input.length; i += stride) {
+              const [x, y] = moveXY(input[i], input[i + 1]);
+              out[i] = x;
+              out[i + 1] = y;
+            }
+            return out;
+          });
+        }
+        clearHistory();
+        regionLayer.changed();
+        labelLayer.changed();
+        notifyRegions();
+        return features.length;
+      },
       // Reads the whole map before it touches the one on screen, so a map that
       // cannot be read throws with the current one still there (openDoc).
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
@@ -3281,7 +3304,7 @@ const OlMap = ({
     }
     // A custom uploaded map (image or vector) replaces the basemap — don't load
     // any ESRI tiles at all while it's active, to save the requests.
-    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector";
+    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
     const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
     if (esri && !online) {
@@ -3316,6 +3339,14 @@ const OlMap = ({
     const map = mapRef.current;
     if (!map || !customBackground) return undefined;
     const bg = customBackground;
+
+    // A plain sea: what a map away from Mercator has in place of the built-in
+    // tiles, which can only show the real Earth in Mercator. Nothing is drawn;
+    // the effect above has already taken the tiles away.
+    if (bg.kind === "plain") {
+      if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "plain" });
+      return undefined;
+    }
 
     if (bg.kind === "vector" || bg.kind === "raster") {
       bg.layer.setZIndex(5);

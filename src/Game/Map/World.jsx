@@ -23,6 +23,7 @@ import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 import { imageQuad } from "../../../server/mapProjection.js";
+import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
 configureMapRuntime();
@@ -515,7 +516,12 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
 // How long basemap tiles must keep loading before "Loading tiles…" shows.
 const LOADING_TOAST_DELAY_MS = 700;
 
-function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
+function World({ mapRef, projection: requestedProjection, terrainEnabled, onInitialIdle }) {
+  // What the scenario allows of its map (world.projection): a flat sheet may
+  // not be wrapped round the 3D globe, whatever the player's setting says, and
+  // may not repeat sideways.
+  const { noGlobe, noWrap } = useWorldBackground();
+  const projection = noGlobe ? "mercator" : requestedProjection;
   const hasReportedInitialIdleRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const loadTimerRef = useRef(null);
@@ -1100,7 +1106,12 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         // The performance win comes from collapsing the country-label layer fanout,
         // not from allowing city/country labels to overlap while the camera moves.
         crossSourceCollisions={true}
-        renderWorldCopies
+        // A map that does not repeat (world.projection.wrap === false) draws one
+        // world, and MapLibre then keeps the camera on it: with no copies it holds
+        // the centre between the two edges by itself. (Bounds of -180..180 given
+        // by hand do the same until the map has no size, a hidden tab, a first
+        // layout, when they throw in its transform.)
+        renderWorldCopies={!noWrap}
         // Cap MapLibre's per-source out-of-view tile-retention cache. Left unset it
         // sizes dynamically to ~(ceil(w/tileSize)+1)*(ceil(h/tileSize)+1)*5 tiles PER
         // source — ~270 at 1080p but ~800 at a 3840x2160 desktop viewport, and

@@ -93,3 +93,34 @@ test("the map's region types go to the game with the scenario, and a round trip 
   // What the Workshop reads back when it opens the scenario (MapEditor.jsx).
   assert.deepEqual(normalizeRegionTypes(seed.world.regionTypes), seed.world.regionTypes);
 });
+
+// --- the map's projection and where its picture lies (server/mapProjection.js) ---
+
+test("a save writes the projection and the picture's bounds, and nothing for a map that has neither", () => {
+  const plain = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, customBackground: { kind: "image", dataUrl: "data:image/png;base64,AAAA" } } }, noRegions);
+  assert.deepEqual(plain.world.background, { kind: "image" }, "a picture that fills the square is saved as it always was");
+  assert.equal("projection" in plain.world, false);
+
+  const bounds = { west: -180, south: -66.51326, east: 180, north: 66.51326 };
+  const laid = buildGameSeed({
+    ...doc([]),
+    metadata: { ...doc([]).metadata, projection: { type: "equirectangular" }, customBackground: { kind: "image", dataUrl: "data:image/png;base64,AAAA", bounds } },
+  }, noRegions);
+  assert.deepEqual(laid.world.background, { kind: "image", bounds });
+  assert.deepEqual(laid.world.projection, { type: "equirectangular", laidOut: true }, "marked laid out, so an import never converts it again");
+  assert.deepEqual(laid.backgroundData, { dataUrl: "data:image/png;base64,AAAA" });
+
+  const freeform = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: { type: "freeform", aspect: 1.5 } } }, noRegions);
+  assert.deepEqual(freeform.world.projection, { type: "freeform", aspect: 1.5, laidOut: true });
+
+  // Away from Mercator with no basemap of its own: a plain sea, no payload.
+  const sea = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: { type: "robinson" }, customBackground: { kind: "plain" } } }, noRegions);
+  assert.deepEqual(sea.world.background, { kind: "plain" });
+  assert.equal(sea.backgroundData, null);
+  assert.equal(sea.world.customRegions, true);
+});
+
+test("a Mercator map that only disables the globe or the looping still saves that", () => {
+  const seed = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: { type: "mercator", globe: false, wrap: false } } }, noRegions);
+  assert.deepEqual(seed.world.projection, { type: "mercator", globe: false, wrap: false, laidOut: true });
+});
