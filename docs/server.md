@@ -16,7 +16,7 @@ Open Historia ships with a small **Express** server (`server/server.js`) that is
 4. Installs a per-IP **rate limit** for network callers (`OH_RATE_LIMIT` per minute, default 1200; loopback is exempt).
 5. Calls `ensureScenarioStore()`, `ensureGameStore()`, `ensureMapEditorStore()`, `ensureBasemapStore()` — first-run seeding of `server/data/`.
 6. Installs the **CSRF / cross-origin-write guard** (`crossOriginWriteAllowed` in `server/security.js`). See [Security guard](#security--path-safety).
-7. Registers all `/api/*` routes, then the `/fmg` static mount (if vendored), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html`.
+7. Registers all `/api/*` routes, then the `/fmg` static mount and its 404 (if the generator's folder exists), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html`.
 8. Listens on `PORT` and the chosen host; an `EADDRINUSE` at startup is turned into a human message instead of a raw stack. Turning LAN sharing on or off later rebinds the listener in place (`rebindListener`).
 
 Route ordering matters: `/fmg/*` and `express.static` are mounted **before** the `*splat` fallback so real files aren't swallowed by `index.html`.
@@ -157,7 +157,7 @@ A 403 from anywhere but the machine running the server. The library's **Recently
 ### Static / SPA
 | Path | Purpose | Handler |
 | --- | --- | --- |
-| `/fmg/*` | Vendored Fantasy Map Generator (`../fmg/dist`), mounted only if it exists (only `node scripts/fetch-fmg.mjs` creates it; the Workshop hides its Generate tab otherwise) | `express.static(fmgDistDir)` |
+| `/fmg/*` | The game's prepared copy of the Fantasy Map Generator (`../fmg/dist`), mounted only if it exists (the desktop installers pack it; `node scripts/fetch-fmg.mjs` creates it in a source checkout; the Workshop hides its Generate tab otherwise). A file the copy does not carry is a 404, not the SPA page | `express.static(fmgDistDir)`, then a 404 |
 | `/*` (files) | `express.static(dist)` | `express.static(distDir)` |
 | `GET *splat` | SPA fallback → `dist/index.html` | registered last in `server/server.js` |
 

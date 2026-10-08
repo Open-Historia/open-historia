@@ -19,7 +19,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
 | Desktop / local server | Express 5 | `server/server.js` (inside Electron for the desktop app) |
 | Signing tools | Ed25519 through Node's `crypto`. No build of the game uses them since the website stopped checking a signed manifest; `@noble/ed25519` is still listed in `package.json` and nothing imports it | `trust/`, `server/trust.js`, `scripts/sign-release.mjs` |
-| Optional tools (source checkouts only) | Azgaar Fantasy Map Generator (vendored by hand; no build ships it, and the Workshop hides its Generate tab without it) | `fmg/`, `scripts/fetch-fmg.mjs` |
+| Map generator (desktop installers and source checkouts) | Azgaar Fantasy Map Generator: a prepared copy that reaches no outside host, packed by the installers; the Workshop hides its Generate tab where there is none (web, Android) | `fmg/`, `scripts/fetch-fmg.mjs`, `scripts/fmg-vendor.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js` |
 
 The heavy map binaries (`regions.pmtiles`, ~21 MB as the z8 trim every build reads, `countries.pmtiles`, `cities.pmtiles`, plus the seed and stock-world geojson) are **never in Git** and never part of the script bundle — see [Map assets & PMTiles](assets-and-data.md). They are assets of a GitHub "map-data" Release, and every build reads its own copy from its own `/assets` folder (`src/runtime/worldFiles.js`). The desktop app fetches them on first launch (a checkout keeps them in `public/assets/`, gitignored). The website and the Android app carry six web-sized files, pinned in `scripts/map-assets.web.json` and laid into the build by `scripts/stage-map-assets.mjs`. A Vite plugin (`dropMapBinaries`, `vite.config.ts`) deletes whatever copies a developer's `public/assets/` holds from every build output, so a file over Cloudflare Pages' 25 MiB/file limit never reaches the site.
@@ -115,7 +115,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, which use the website's stager and list, `scripts/stage-map-assets.mjs` and `scripts/map-assets.web.json`); no server of its own — see [mobile.md](mobile.md) |
-| `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
+| `fmg/` | The game's prepared copy of Azgaar's Fantasy Map Generator (gitignored; fetched by `scripts/fetch-fmg.mjs`, packed by the desktop installers, served at `/fmg` for the editor's Generate drawer) |
 | `trust/` | The Ed25519 root public key + `pinned-key.js`, read by the signing tools (`scripts/sign-release.mjs`, `server/trust.js`). No build of the game reads it any more |
 | `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |
