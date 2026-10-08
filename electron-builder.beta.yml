@@ -46,6 +46,7 @@ files:
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
   - public/lang/**
+  - fmg/dist/**
   - package.json
   - "!**/*.map"
 

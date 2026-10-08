@@ -132,6 +132,13 @@ jobs:
       - name: Run the tests
         run: npm test
 
+      # The map editor's Generate drawer runs the game's own copy of Azgaar's
+      # Fantasy Map Generator, and the installer packs it (build.files:
+      # fmg/dist/**). --required: a run that cannot fetch it stops here, rather
+      # than attach an installer whose editor has no Generate drawer.
+      - name: Vendor the map generator
+        run: node scripts/fetch-fmg.mjs --required
+
       - name: Build the client
         run: npm run build
 

@@ -124,7 +124,7 @@ test("it packages what the official build packages, and its script stamps its ch
   assert.match(stampChannel, /\["beta", "multiplayer"\]\.includes\(process\.argv\[2\]\)/);
   assert.equal(
     packageJson.scripts["dist:win:multiplayer"],
-    "node scripts/stamp-channel.mjs multiplayer && npm run build && electron-builder --win --config electron-builder.multiplayer.yml",
+    "node scripts/stamp-channel.mjs multiplayer && node scripts/fetch-fmg.mjs && npm run build && electron-builder --win --config electron-builder.multiplayer.yml",
   );
   assert.ok(fs.existsSync(new URL(`../${value(block(builderYml, "win"), "icon")}`, import.meta.url)), "the icon is missing");
 });

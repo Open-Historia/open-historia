@@ -1780,15 +1780,22 @@ app.delete("/api/basemaps/:id", (req, res) => {
   }
 });
 
-// Vendored Fantasy Map Generator (Azgaar, MIT), fetched to ../fmg/dist by
-// scripts/fetch-fmg.mjs — run by hand in a source checkout; no installer ships
-// it — and served same-origin so the map editor's "Generate" console can run
-// it in a hidden iframe and read its data. Present only after it's been
-// vendored; otherwise the editor's probe (fmgDriver.js checkFmgAvailable) sees
-// no generator and hides the Generate tab.
+// The game's copy of Azgaar's Fantasy Map Generator (MIT), put in ../fmg/dist by
+// scripts/fetch-fmg.mjs and packed by the desktop installers, served same-origin
+// so the map editor's Generate drawer can run it in a hidden iframe and read its
+// data. It is a prepared copy that reaches no outside host
+// (scripts/fmg-vendor.mjs). Where the folder is missing (a source checkout that
+// never ran the script) the editor's probe (fmgDriver.js checkFmgAvailable)
+// finds no generator and hides the drawer.
 // Mounted before the SPA fallback so /fmg/* isn't swallowed by index.html.
 const fmgDistDir = path.join(__dirname, "../fmg/dist");
-if (fs.existsSync(fmgDistDir)) app.use("/fmg", express.static(fmgDistDir));
+if (fs.existsSync(fmgDistDir)) {
+  app.use("/fmg", express.static(fmgDistDir));
+  // A file the copy does not carry is a 404, not the app's own page: the
+  // generator asks for an image or two the game leaves out, and the SPA
+  // fallback would answer each with index.html and a 200.
+  app.use("/fmg", (_req, res) => { res.status(404).type("text/plain").send("Not found"); });
+}
 
 app.use(express.static(distDir));
 
