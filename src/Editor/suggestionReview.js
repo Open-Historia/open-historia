@@ -11,13 +11,15 @@
 // puppets) through useMapDocument's setters, with what they replaced kept so
 // Undo can put it back.
 //
-// ctx = { api, doc, d, setBackground } — the OlMap api, the current document,
+// ctx = { api, doc, d, setBackground, convertProjection } — the OlMap api, the current document,
 // the useMapDocument hook's setters, and MapEditor's own background setter.
 
 import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -39,12 +41,14 @@ const regionOf = (ctx, id) => ctx.api?.getRegionSummary?.(String(id)) ?? null;
 // as they are (the hook makes a new one on every MapEditor regionEpoch): each
 // region's measured shape, and which regions each owner and each group has.
 export const createRegionCache = () => ({ shapes: new globalThis.Map(), owners: null, groups: null });
+// (ctx.moveRegion: the region as the suggested projection would have it,
+// inSuggestedProjection below; kept apart in the cache from the region as it is.)
 const regionShape = (ctx, id, cache) => {
-  const key = String(id);
+  const key = `${ctx.moveRegion ? "moved:" : ""}${id}`;
   if (cache?.shapes.has(key)) return cache.shapes.get(key);
-  const fc = ctx.api?.exportRegions?.([key]);
+  const fc = ctx.api?.exportRegions?.([String(id)]);
   const feature = fc?.features?.[0];
-  const shape = feature ? measureGeometry(feature.geometry) : null;
+  const shape = feature ? measureGeometry(ctx.moveRegion ? ctx.moveRegion(feature.geometry) : feature.geometry) : null;
   cache?.shapes.set(key, shape);
   return shape;
 };
@@ -75,6 +79,32 @@ const groupRegionIds = (ctx, key, cache) => {
   if (cache) return indexRegions(ctx, cache).groups.get(clean(key)) ?? [];
   return (ctx.api?.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.group) === key).map((region) => region.id);
 };
+// ---- a suggestion that changes the projection ----------------------------------
+// Every other change of such a suggestion is written for the map in its new
+// projection: scenarioChanges.js reads the post there, so that moving the map
+// is one change and not one for every region, city and unit. Until the author
+// accepts that change the map is still in the old projection, so the review
+// reads it through this: the document's cities, features and units where the
+// new projection puts them, and (regions) each region measured there. The map
+// itself is not touched, and the document's own projection is left as it is.
+export const projectionChangeOf = (changes) => (Array.isArray(changes) ? changes : []).find((change) => change?.kind === "projection") ?? null;
+const projectionKey = (value) => canonicalJson(normalizeProjection(value));
+export const inSuggestedProjection = (ctx, changes, { regions = true } = {}) => {
+  const change = projectionChangeOf(changes);
+  if (!change || !ctx?.doc) return ctx;
+  const from = normalizeProjection(ctx.doc.metadata?.projection);
+  const to = normalizeProjection(change.to);
+  if (sameProjection(from, to)) return ctx;
+  const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
+  return {
+    ...ctx,
+    doc: { ...ctx.doc, features: moveFeatureCoords(ctx.doc.features, from, to), units: moveUnits(ctx.doc.units, from, to) },
+    ...(regions ? { moveRegion: (geometry) => moveGeojson(geometry, move) } : {}),
+  };
+};
+// What a suggestion places on the map, and so places for its projection.
+const PLACED_KINDS = new Set(["borders", "city-add", "city-remove", "city-change", "cities-replace", "unit-add", "unit-change", "marker-add", "marker-change"]);
+
 const cityFeatures = (doc) => (doc?.features ?? []).filter((feature) => !clean(feature?.kind));
 const nearCity = (feature, city) => clean(feature?.name).toLowerCase() === clean(city?.name).toLowerCase()
   && Array.isArray(feature?.coord) && Array.isArray(city?.coord)
@@ -302,6 +332,11 @@ export const mapChangeStatus = (change, ctx, { renames = {}, cache = null } = {}
       if (sameValue(puppetView(current), puppetView(change.to))) return "applied";
       return sameValue(puppetView(current), puppetView(change.from)) ? "open" : "conflict";
     }
+    case "projection": {
+      const current = projectionKey(ctx.doc?.metadata?.projection);
+      if (current === projectionKey(change.to)) return "applied";
+      return current === projectionKey(change.from) ? "open" : "conflict";
+    }
     case "map-field": {
       const current = change.field === "author" ? clean(ctx.doc?.metadata?.author) : clean(ctx.doc?.metadata?.basemap);
       if (current === clean(change.to)) return "applied";
@@ -345,6 +380,10 @@ export const changeDependencies = (change, changes, ctx) => {
     default: break;
   }
   const needed = [];
+  // The map is moved to the suggested projection before anything is placed on it.
+  const projection = projectionChangeOf(changes);
+  if (projection && projection.id !== change.id && PLACED_KINDS.has(change.kind)
+    && !sameProjection(ctx.doc?.metadata?.projection, projection.to)) needed.push(projection.id);
   for (const key of polities) {
     if (ctx.doc?.polities?.[key]) continue;
     const adding = changes.find((entry) => (entry.kind === "polity-add" && entry.key === key) || (entry.kind === "polity-rename" && entry.to === key));
@@ -650,6 +689,16 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       d.setPuppets((rows) => rows.filter((row) => clean(row.id) !== change.key));
       return () => d.setPuppets((rows) => [...rows, before]);
     }
+    case "projection": {
+      // The Workshop's own conversion (MapEditor convertForReview): every
+      // region, city, feature and unit moved, the picture kept and laid where
+      // the suggestion says. Taken back the same way, the other way round.
+      if (!ctx.convertProjection) return null;
+      const from = normalizeProjection(ctx.doc?.metadata?.projection);
+      const fromBounds = ctx.doc?.metadata?.customBackground?.bounds ?? null;
+      ctx.convertProjection(from, change.to, change.bounds ?? null);
+      return () => ctx.convertProjection(change.to, from, fromBounds);
+    }
     case "map-field": {
       const field = change.field === "author" ? "author" : "basemap";
       const before = ctx.doc?.metadata?.[field] ?? "";
@@ -659,8 +708,9 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     case "background": {
       const before = ctx.doc?.metadata?.customBackground ?? null;
       const data = change.to?.data;
+      // (bounds: where the picture lies on a map that is not the Mercator square.)
       const saved = change.to?.kind === "image" && data?.dataUrl
-        ? { kind: "image", dataUrl: data.dataUrl }
+        ? { kind: "image", dataUrl: data.dataUrl, ...(change.to.bounds ? { bounds: change.to.bounds } : {}) }
         : change.to?.kind === "vector" && data?.geojson ? { kind: "vector", geojson: data.geojson } : null;
       ctx.setBackground?.(saved);
       return () => ctx.setBackground?.(before);
@@ -672,8 +722,9 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
 
 // ---- accepting a list, and what a save records --------------------------------
 
-// Countries and groups first: the rest of a suggestion's changes may need them.
-const APPLY_ORDER = ["polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
+// The projection first, then countries and groups: the rest of a suggestion's
+// changes may need them.
+const APPLY_ORDER = ["projection", "polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
 const applyRank = (change) => {
   const index = APPLY_ORDER.indexOf(change.kind);
   return index < 0 ? APPLY_ORDER.length : index;
@@ -707,6 +758,10 @@ export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set()
   const undoers = new globalThis.Map();
   const ids = [];
   const owners = new globalThis.Map(); // target owner -> changes
+  // The document this was handed stays as it was for the whole batch. Once the
+  // batch has moved the map to the suggested projection, the changes after it
+  // look their cities and units up where the conversion has put them.
+  let live = ctx;
   for (const change of order) {
     if (change.kind === "region-owner") {
       const to = clean(change.to);
@@ -716,7 +771,8 @@ export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set()
     }
     // Every change accepted here gets an undo, even one with nothing to take
     // back: only one accepted in an earlier review has none (canUndo).
-    undoers.set(change.id, applyMapChange(change, ctx, { renames: localRenames }) ?? (() => {}));
+    undoers.set(change.id, applyMapChange(change, live, { renames: localRenames }) ?? (() => {}));
+    if (change.kind === "projection") live = inSuggestedProjection(live, [change], { regions: false });
     if (change.kind === "polity-rename") localRenames[change.from] = change.to;
     ids.push(change.id);
   }
