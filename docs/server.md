@@ -14,7 +14,7 @@ Open Historia ships with a small **Express** server (`server/server.js`) that is
 2. Installs a **blanket CORS** middleware (`server/server.js:73-89`) — `Access-Control-Allow-Origin: *`, all methods, and three deliberate extras: `Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges` (so PMTiles range recovery can read `Content-Range` off a 416), and `Access-Control-Allow-Private-Network: true` (Chrome's Private Network Access preflight for loopback/LAN). `OPTIONS` short-circuits to `204`.
 3. Installs the **CSRF / cross-origin-write guard** (`server/server.js:112-128`, logic in `server/security.js`). See [Security guard](#security--path-safety).
 4. Calls `ensureScenarioStore()`, `ensureGameStore()`, `ensureMapEditorStore()`, `ensureBasemapStore()` — first-run seeding of `server/data/` (`server/server.js:91-94`).
-5. Registers all `/api/*` routes, then the `/fmg` static mount (if vendored), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html` (`server/server.js:813-820`).
+5. Registers all `/api/*` routes, then the `/fmg` static mount and its 404 (if the generator's folder exists), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html` (`server/server.js:813-820`).
 6. `app.listen(PORT)`; an `EADDRINUSE` is caught and turned into a human message instead of a raw stack (`server/server.js:828-836`).
 
 Route ordering matters: `/fmg/*` and `express.static` are mounted **before** the `*splat` fallback so real files aren't swallowed by `index.html`.
@@ -116,7 +116,7 @@ Imports are not reported from here any more: `/api/hub/import-log`, `/api/hub/im
 ### Static / SPA
 | Path | Purpose | Handler |
 | --- | --- | --- |
-| `/fmg/*` | Vendored Fantasy Map Generator (`../fmg/dist`), mounted only if it exists | `server/server.js:813-814` |
+| `/fmg/*` | The game's prepared copy of the Fantasy Map Generator (`../fmg/dist`), mounted only if it exists (the desktop installers pack it; `node scripts/fetch-fmg.mjs` creates it in a source checkout; the Workshop hides its Generate tab otherwise). A file the copy does not carry is a 404, not the SPA page | `express.static(fmgDistDir)`, then a 404 |
 | `/*` (files) | `express.static(dist)` | `server/server.js:816` |
 | `GET *splat` | SPA fallback → `dist/index.html` | `server/server.js:818` |
 

@@ -243,7 +243,7 @@ Rules of thumb:
 - **To change a map file:** upload the new asset to the `map-data` release, then update its `sha256` + `bytes` in `scripts/map-assets.json`. `fetch-map-assets.mjs` re-downloads any listed file that's missing or hash-mismatched.
 - **The builds actively drop these from the bundle** — `vite.config.ts`'s `dropMapBinaries` plugin deletes the pmtiles (and, for web, the editor seeds) after copy, because Cloudflare Pages rejects any file over 25 MiB and nothing loads a pmtiles archive from the bundle anyway (the desktop streams them off disk via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes, hash-verified). Don't defeat this plugin. See [Assets & data](assets-and-data.md).
 
-Related gitignored-but-not-in-LFS runtime artifacts you also shouldn't commit: `/fmg/` (vendored Fantasy Map Generator, fetched by `scripts/fetch-fmg.mjs`), `/src/runtime/web/generated/` (web seed), `/node-content/` (content-node store), and the offline signing keys `trust/*.key.pem` / `*.key` (**never commit a signing key**).
+Related gitignored-but-not-in-LFS runtime artifacts you also shouldn't commit: `/fmg/` (the game's copy of the Fantasy Map Generator, fetched and prepared by `scripts/fetch-fmg.mjs`; the desktop installers pack it), `/src/runtime/web/generated/` (web seed), `/node-content/` (content-node store), and the offline signing keys `trust/*.key.pem` / `*.key` (**never commit a signing key**).
 
 ---
 

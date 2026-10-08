@@ -19,7 +19,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
 | Desktop/mobile server | Express 5 | `server/server.js`, `mobile/nodejs-project/` |
 | Signing / trust | `@noble/ed25519` (content manifests, node directory) | `trust/`, `src/runtime/web/contentTrust.js` |
-| Bundled tools | Azgaar Fantasy Map Generator (vendored) | `fmg/`, `scripts/fetch-fmg.mjs` |
+| Map generator (desktop installers and source checkouts) | Azgaar Fantasy Map Generator: a prepared copy that reaches no outside host, packed by the installers; the Workshop hides its Generate tab where there is none (web, Android) | `fmg/`, `scripts/fetch-fmg.mjs`, `scripts/fmg-vendor.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js:82` |
 
 The heavy map binaries (`regions.pmtiles` ~101 MB, `countries.pmtiles`, `cities.pmtiles`, plus editor seed geojson) are **never bundled** — see [Map assets & PMTiles](assets-and-data.md). They live in `public/assets/`, are gitignored, and are fetched from a GitHub "map-data" Release on first launch. A Vite plugin (`dropMapBinaries`, `vite.config.ts:43`) deletes them from every build output so Cloudflare Pages' 25 MiB/file limit is never hit.
@@ -116,7 +116,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) + `nodejs-project/` embedded server |
 | `node-content/` + `server/node.js` | Content-node server (hash-addressed, read-only) — see [Content nodes](assets-and-data.md) |
-| `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
+| `fmg/` | The game's prepared copy of Azgaar's Fantasy Map Generator (gitignored; fetched by `scripts/fetch-fmg.mjs`, packed by the desktop installers, served at `/fmg` for the editor's Generate drawer) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
 | `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |

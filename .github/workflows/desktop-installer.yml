@@ -75,6 +75,13 @@ jobs:
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "'version: '+require('./package.json').version"
 
+      # The map editor's Generate drawer runs the game's own copy of Azgaar's
+      # Fantasy Map Generator, and the installer packs it (build.files:
+      # fmg/dist/**). --required: a run that cannot fetch it stops here, rather
+      # than attach an installer whose editor has no Generate drawer.
+      - name: Vendor the map generator
+        run: node scripts/fetch-fmg.mjs --required
+
       - name: Build the client
         run: npm run build
 
