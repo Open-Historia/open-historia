@@ -22,6 +22,7 @@ import { FEATURE_DEFINITIONS, normalizeFeatureSettings } from "../../server/game
 import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidance.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
+import { bundleProjection, convertScenarioBundle, layOutScenarioBundle, normalizeImageBounds, normalizeProjection } from "../../server/mapProjection.js";
 import {
   buildOwnerRenameMap,
   buildPolityMapRefs,
@@ -527,6 +528,7 @@ export const buildScenarioSnapshot = (bundle) => {
   const { regions, hasGeometry } = buildRegionTable(world, bundleAssetJson(assets.regionsGeojson));
   const citiesFC = bundleAssetJson(assets.citiesGeojson);
   const backgroundData = bundleAssetJson(assets.backgroundData);
+  const backgroundBounds = normalizeImageBounds(world.background?.bounds);
   return {
     meta: metaOf(scenario),
     features: normalizeFeatureSettings(scenario.features),
@@ -556,8 +558,12 @@ export const buildScenarioSnapshot = (bundle) => {
       cities: citiesFC && Array.isArray(citiesFC.features) ? citiesFC.features.map(cityView).filter(Boolean) : null,
       author: clean(world.author),
       basemap: clean(world.basemap),
+      // The map's projection (server/mapProjection.js) with its two switches,
+      // and where the picture lies on it. The picture is told apart by what
+      // it is, not by where it lies: the bounds follow the projection.
+      projection: normalizeProjection(world.projection),
       background: world.background?.kind && backgroundData
-        ? { kind: clean(world.background.kind), hash: hashText(canonicalJson(backgroundData)), data: backgroundData }
+        ? { kind: clean(world.background.kind), hash: hashText(canonicalJson(backgroundData)), data: backgroundData, ...(backgroundBounds ? { bounds: backgroundBounds } : {}) }
         : null,
     },
   };
@@ -1014,6 +1020,21 @@ const diffGroups = (base, next, changes) => {
 };
 
 const diffMapFields = (base, next, changes) => {
+  // The projection, the two switches about how the game shows the map
+  // included. Where the suggested picture lies goes with it: accepting it
+  // lays the author's picture on the same bounds.
+  const projectionFrom = normalizeProjection(base.map.projection);
+  const projectionTo = normalizeProjection(next.map.projection);
+  if (canonicalJson(projectionFrom) !== canonicalJson(projectionTo)) {
+    changes.push({
+      id: "map:projection",
+      area: "map",
+      kind: "projection",
+      from: projectionFrom,
+      to: projectionTo,
+      ...(next.map.background?.bounds ? { bounds: next.map.background.bounds } : {}),
+    });
+  }
   if (base.map.author !== next.map.author) {
     changes.push({ id: "map:author", area: "map", kind: "map-field", field: "author", from: base.map.author, to: next.map.author });
   }
@@ -1026,16 +1047,30 @@ const diffMapFields = (base, next, changes) => {
       area: "map",
       kind: "background",
       from: base.map.background ? { kind: base.map.background.kind, hash: base.map.background.hash } : null,
-      to: next.map.background ? { kind: next.map.background.kind, hash: next.map.background.hash, data: next.map.background.data } : null,
+      to: next.map.background
+        ? { kind: next.map.background.kind, hash: next.map.background.hash, data: next.map.background.data, ...(next.map.background.bounds ? { bounds: next.map.background.bounds } : {}) }
+        : null,
     });
   }
 };
 
 // The changes that turn `baseBundle` into `nextBundle`, details first, then the
 // map. Either argument may be a snapshot already (buildScenarioSnapshot).
+//
+// A map moved to another projection has every region, city and unit somewhere
+// else. The post is read in the suggested projection (convertScenarioBundle),
+// so the move is one change, the projection, and the rest are only what else
+// was changed, each written for the map in its new projection. A file that
+// only declares its projection is read laid out, the way the stores keep it.
 export const diffScenarioBundles = (baseBundle, nextBundle) => {
-  const base = baseBundle?.map?.regions instanceof Map ? baseBundle : buildScenarioSnapshot(baseBundle);
-  const next = nextBundle?.map?.regions instanceof Map ? nextBundle : buildScenarioSnapshot(nextBundle);
+  const isSnapshot = (value) => value?.map?.regions instanceof Map;
+  const next = isSnapshot(nextBundle) ? nextBundle : buildScenarioSnapshot(layOutScenarioBundle(nextBundle));
+  let base = baseBundle;
+  if (!isSnapshot(baseBundle)) {
+    const posted = bundleProjection(baseBundle);
+    base = buildScenarioSnapshot(convertScenarioBundle(baseBundle, next.map.projection));
+    base.map.projection = posted;
+  }
   const changes = [];
   diffDetails(base, next, changes);
   const renames = diffPolities(base, next, changes);
@@ -1127,6 +1162,7 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   const puppets = (byKind["puppet-add"] ?? 0) + (byKind["puppet-remove"] ?? 0) + (byKind["puppet-change"] ?? 0);
   if (puppets) lines.push(`${plural(puppets, "puppet state change", "puppet state changes")}`);
   if (byKind.background) lines.push("New basemap");
+  if (byKind.projection) lines.push("Map projection changed");
   if (byKind["map-field"]) lines.push(`${plural(byKind["map-field"], "map setting changed", "map settings changed")}`);
   return lines.length > maxLines ? [...lines.slice(0, maxLines - 1), `…and ${lines.length - maxLines + 1} more`] : lines;
 };

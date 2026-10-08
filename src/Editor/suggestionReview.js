@@ -21,6 +21,8 @@ import { newId } from "./useMapDocument.js";
 // every change to one, so none is ever built here.
 const markerToFeature = () => null;
 import { cityTierOf, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -38,11 +40,39 @@ export { REVIEW_SECTIONS, sectionOfChange } from "../runtime/suggestionSections.
 // ---- the map as it is open ----------------------------------------------------
 
 const regionOf = (ctx, id) => ctx.api?.getRegionSummary?.(String(id)) ?? null;
+// (ctx.moveRegion: the region as the suggested projection would have it,
+// inSuggestedProjection below.)
 const regionShape = (ctx, id) => {
   const fc = ctx.api?.exportRegions?.([String(id)]);
   const feature = fc?.features?.[0];
-  return feature ? measureGeometry(feature.geometry) : null;
+  return feature ? measureGeometry(ctx.moveRegion ? ctx.moveRegion(feature.geometry) : feature.geometry) : null;
 };
+// ---- a suggestion that changes the projection ----------------------------------
+// Every other change of such a suggestion is written for the map in its new
+// projection: scenarioChanges.js reads the post there, so that moving the map
+// is one change and not one for every region, city and unit. Until the author
+// accepts that change the map is still in the old projection, so the review
+// reads it through this: the document's cities, features and units where the
+// new projection puts them, and (regions) each region measured there. The map
+// itself is not touched, and the document's own projection is left as it is.
+export const projectionChangeOf = (changes) => (Array.isArray(changes) ? changes : []).find((change) => change?.kind === "projection") ?? null;
+const projectionKey = (value) => JSON.stringify(normalizeProjection(value));
+export const inSuggestedProjection = (ctx, changes, { regions = true } = {}) => {
+  const change = projectionChangeOf(changes);
+  if (!change || !ctx?.doc) return ctx;
+  const from = normalizeProjection(ctx.doc.metadata?.projection);
+  const to = normalizeProjection(change.to);
+  if (sameProjection(from, to)) return ctx;
+  const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
+  return {
+    ...ctx,
+    doc: { ...ctx.doc, features: moveFeatureCoords(ctx.doc.features, from, to), units: moveUnits(ctx.doc.units, from, to) },
+    ...(regions ? { moveRegion: (geometry) => moveGeojson(geometry, move) } : {}),
+  };
+};
+// What a suggestion places on the map, and so places for its projection.
+const PLACED_KINDS = new Set(["borders", "city-add", "city-remove", "city-change", "cities-replace", "unit-add", "unit-change", "marker-add", "marker-change"]);
+
 const cityFeatures = (doc) => (doc?.features ?? []).filter((feature) => !clean(feature?.kind));
 const nearCity = (feature, city) => clean(feature?.name).toLowerCase() === clean(city?.name).toLowerCase()
   && Array.isArray(feature?.coord) && Array.isArray(city?.coord)
@@ -244,6 +274,11 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       if (sameValue(puppetView(current), puppetView(change.to))) return "applied";
       return sameValue(puppetView(current), puppetView(change.from)) ? "open" : "conflict";
     }
+    case "projection": {
+      const current = projectionKey(ctx.doc?.metadata?.projection);
+      if (current === projectionKey(change.to)) return "applied";
+      return current === projectionKey(change.from) ? "open" : "conflict";
+    }
     case "map-field": {
       const current = change.field === "author" ? clean(ctx.doc?.metadata?.author) : clean(ctx.doc?.metadata?.basemap);
       if (current === clean(change.to)) return "applied";
@@ -283,6 +318,10 @@ export const changeDependencies = (change, changes, ctx) => {
     default: break;
   }
   const needed = [];
+  // The map is moved to the suggested projection before anything is placed on it.
+  const projection = projectionChangeOf(changes);
+  if (projection && projection.id !== change.id && PLACED_KINDS.has(change.kind)
+    && !sameProjection(ctx.doc?.metadata?.projection, projection.to)) needed.push(projection.id);
   for (const key of polities) {
     if (ctx.doc?.polities?.[key]) continue;
     const adding = changes.find((entry) => (entry.kind === "polity-add" && entry.key === key) || (entry.kind === "polity-rename" && entry.to === key));
@@ -571,6 +610,16 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       d.setPuppets((rows) => rows.filter((row) => clean(row.id) !== change.key));
       return () => d.setPuppets((rows) => [...rows, before]);
     }
+    case "projection": {
+      // The Workshop's own conversion (MapEditor convertForReview): every
+      // region, city, feature and unit moved, the picture kept and laid where
+      // the suggestion says. Taken back the same way, the other way round.
+      if (!ctx.convertProjection) return null;
+      const from = normalizeProjection(ctx.doc?.metadata?.projection);
+      const fromBounds = ctx.doc?.metadata?.customBackground?.bounds ?? null;
+      ctx.convertProjection(from, change.to, change.bounds ?? null);
+      return () => ctx.convertProjection(change.to, from, fromBounds);
+    }
     case "map-field": {
       const field = change.field === "author" ? "author" : "basemap";
       const before = ctx.doc?.metadata?.[field] ?? "";
@@ -580,8 +629,9 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     case "background": {
       const before = ctx.doc?.metadata?.customBackground ?? null;
       const data = change.to?.data;
+      // (bounds: where the picture lies on a map that is not the Mercator square.)
       const saved = change.to?.kind === "image" && data?.dataUrl
-        ? { kind: "image", dataUrl: data.dataUrl }
+        ? { kind: "image", dataUrl: data.dataUrl, ...(change.to.bounds ? { bounds: change.to.bounds } : {}) }
         : change.to?.kind === "vector" && data?.geojson ? { kind: "vector", geojson: data.geojson } : null;
       ctx.setBackground?.(saved);
       return () => ctx.setBackground?.(before);

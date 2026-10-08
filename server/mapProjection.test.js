@@ -7,6 +7,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  bundleProjection,
+  convertScenarioBundle,
   DEFAULT_PROJECTION,
   FREEFORM,
   MERCATOR_MAX_LAT,
@@ -317,4 +319,25 @@ test("a scenario can disable the 3D globe and the sideways repeat, and both ride
   // A file's declaration keeps them through being laid out.
   const laid = layOutScenarioBundle(bundleOf({ projection: { type: "equirectangular", globe: false }, background: { kind: "image" } }));
   assert.deepEqual(laid.data.world.projection, { type: "equirectangular", globe: false, laidOut: true });
+});
+
+test("a bundle converted to another projection is the bundle a file declaring it is laid out as", () => {
+  const plain = bundleOf({ background: { kind: "image" } });
+  const laid = layOutScenarioBundle(bundleOf({ projection: "equirectangular", background: { kind: "image" } }));
+  const converted = convertScenarioBundle(plain, "equirectangular");
+  assert.deepEqual(converted.assets.regionsGeojson, laid.assets.regionsGeojson);
+  assert.deepEqual(converted.assets.citiesGeojson, laid.assets.citiesGeojson);
+  assert.deepEqual(converted.data.world.units, laid.data.world.units);
+  assert.deepEqual(converted.data.world.projection, { type: "equirectangular", laidOut: true });
+  // The picture's bounds are not this function's: it only moves the places.
+  assert.deepEqual(converted.data.world.background, { kind: "image" });
+  // Nothing to move: the same bundle, and a declared one comes back laid out.
+  assert.equal(convertScenarioBundle(plain, "mercator"), plain);
+  assert.deepEqual(convertScenarioBundle(bundleOf({ projection: "equirectangular", background: { kind: "image" } }), { type: "equirectangular", globe: false }), laid);
+  // And back again is where it started, to the precision places are kept at.
+  const back = convertScenarioBundle(laid, "mercator");
+  const near = (a, b) => JSON.stringify(a, (key, value) => (typeof value === "number" ? Number(value.toFixed(4)) : value)) === JSON.stringify(b, (key, value) => (typeof value === "number" ? Number(value.toFixed(4)) : value));
+  assert.ok(near(back.data.world.units, plain.data.world.units));
+  assert.deepEqual(bundleProjection(plain), { type: "mercator" });
+  assert.deepEqual(bundleProjection(bundleOf({ projection: { type: "freeform", aspect: 2, wrap: false, laidOut: true } })), { type: "freeform", aspect: 2, wrap: false });
 });
