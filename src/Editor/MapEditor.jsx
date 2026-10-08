@@ -206,7 +206,60 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d.patchMetadata]);
-  const review = useSuggestionReview({ review: reviewSource, api, d, setBackground: setReviewBackground, regionEpoch });
+  // A suggestion's change of projection (suggestionReview.js): the map moved by
+  // the rule convertProjection moves it by, the picture kept as it is and laid
+  // where the suggestion says. Nothing is drawn again, so it happens at once,
+  // and taking it back is the same call the other way round.
+  const customBgRef = useRef(null);
+  customBgRef.current = customBg;
+  const convertForReview = useCallback((source, target, bounds = null) => {
+    if (!api) return;
+    const from = normalizeProjection(source);
+    const to = normalizeProjection(target);
+    if (sameProjection(from, to)) {
+      // Only the two switches about how the game shows the map.
+      d.patchMetadata({ projection: to });
+      return;
+    }
+    const EARTH = 6378137; // the map's units are metres on the Mercator plane
+    const moveXY = (x, y) => {
+      const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
+      return [X * EARTH, Y * EARTH];
+    };
+    const background = customBgRef.current;
+    const plan = planBasemapChange({ from, to, background, keepPicture: background?.kind === "image" });
+    let nextBg = background;
+    if (plan.kind === "bounds") {
+      // Mercator with no bounds given: the picture fills the square, as it did.
+      const lies = bounds ?? (to.type === "mercator" ? null : plan.bounds);
+      nextBg = rebuildPersistedBackground({ kind: "image", dataUrl: background.dataUrl, aspect: background.aspect, bounds: lies }, { persisted: false });
+    } else if (plan.kind === "vector") {
+      for (const feature of background.layer.getSource().getFeatures()) {
+        feature.getGeometry()?.applyTransform((input, output, stride = 2) => {
+          const out = output ?? input;
+          for (let i = 0; i < input.length; i += stride) {
+            const [x, y] = moveXY(input[i], input[i + 1]);
+            out[i] = x;
+            out[i + 1] = y;
+          }
+          return out;
+        });
+      }
+      nextBg = { ...background, persisted: false };
+    } else if (plan.kind === "plain") {
+      nextBg = { kind: "plain", persisted: false };
+    } else if (plan.kind === "tiles") {
+      nextBg = null;
+    }
+    api.transformRegions(moveXY);
+    d.setFeatures((list) => moveFeatureCoords(list, from, to));
+    d.setUnits((list) => moveUnits(list, from, to));
+    d.patchMetadata({ projection: to, ...(plan.kind === "tiles" ? { customBackground: null } : {}) });
+    if (nextBg !== background) setCustomBg(nextBg);
+    api.fitToData?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, d.setFeatures, d.setUnits, d.patchMetadata]);
+  const review = useSuggestionReview({ review: reviewSource, api, d, setBackground: setReviewBackground, convertProjection: convertForReview, regionEpoch });
   useSuggestionMarkup(api, review, regionEpoch);
   // The review opens beside the map once the scenario's map has loaded.
   useEffect(() => {

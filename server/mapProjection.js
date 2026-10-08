@@ -534,6 +534,41 @@ export const layOutScenarioBundle = (bundle) => {
   return { ...bundle, data, assets };
 };
 
+// The projection a bundle's map is in, whether its file only declares it or the
+// game has laid it out, with the two switches about how the game shows it.
+export const bundleProjection = (bundle) => normalizeProjection(bundle?.data?.world?.projection);
+
+// A bundle as it would be in another projection: laid out first when its file
+// only declares one, then every place moved by the rule the Workshop converts a
+// map by (convertDisplayPoint). The picture is not drawn again and its bounds
+// are left alone: this is for reading two versions of a scenario side by side
+// (scenarioChanges.js), where the places are what is compared. The laid-out
+// bundle itself when nothing has to move.
+export const convertScenarioBundle = (bundle, to) => {
+  const laid = layOutScenarioBundle(bundle);
+  const source = laid?.data?.world;
+  if (!source || typeof source !== "object") return laid;
+  const from = normalizeProjection(source.projection);
+  const target = normalizeProjection(to);
+  if (sameProjection(from, target)) return laid;
+  const move = (lon, lat) => convertDisplayPoint(from, target, lon, lat);
+  const world = movePlaces(source, move);
+  world.projection = { ...target, laidOut: true };
+  const background = source.background && typeof source.background === "object" ? source.background : null;
+  if (background) world.background = background;
+  const assets = { ...(laid.assets ?? {}) };
+  for (const key of ["regionsGeojson", "citiesGeojson"]) {
+    if (assets[key]) assets[key] = moveGeojsonAsset(assets[key], move);
+  }
+  const payload = assets.backgroundData?.mode === "embedded" ? assets.backgroundData.data : null;
+  if (background?.kind === "vector" && payload && typeof payload === "object" && payload.geojson) {
+    assets.backgroundData = { ...assets.backgroundData, data: { ...payload, geojson: moveGeojson(payload.geojson, move) } };
+  }
+  const data = { ...laid.data, world };
+  if (Array.isArray(data.events)) data.events = movePlaces(data.events, move);
+  return { ...laid, data, assets };
+};
+
 // The community hub's maintainers can say of a post what its file does not: a
 // post labelled "flat map" is imported as equirectangular, a sheet with its
 // rows evenly spaced. A label is a person's judgement; nothing in a file lets

@@ -49,7 +49,7 @@ export const KNOWN_KINDS = new Set([
   "unit-add", "unit-remove", "unit-change",
   "marker-add", "marker-remove", "marker-change",
   "puppet-add", "puppet-remove", "puppet-change",
-  "map-field", "background",
+  "map-field", "background", "projection",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 // A Politics change names the ledger it goes into and the entry, both of
@@ -71,7 +71,8 @@ const validChange = (change) => isRecord(change)
   && (change.kind !== "field" || isDetailFieldPath(change.path))
   && (change.kind !== "politics" || validPoliticsChange(change))
   && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && safeEntryKey(change.entry)))
-  && (change.kind !== "borders" || Array.isArray(change.regions));
+  && (change.kind !== "borders" || Array.isArray(change.regions))
+  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"));
 
 export const normalizeSuggestion = (raw) => {
   if (!isRecord(raw) || raw.schema !== SUGGESTION_SCHEMA) {

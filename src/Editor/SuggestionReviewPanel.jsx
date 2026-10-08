@@ -28,6 +28,7 @@ import CircleStyle from "ol/style/Circle";
 import { fromLonLat } from "ol/proj";
 import Panel from "./Panel.jsx";
 import { labelDim, pillButton } from "./editorStyles.js";
+import { PROJECTIONS, sameProjection } from "../../server/mapProjection.js";
 import {
   REVIEW_SECTIONS,
   acceptMapChanges,
@@ -35,6 +36,7 @@ import {
   createRegionCache,
   decisionOf,
   decisionsFor,
+  inSuggestedProjection,
   mapChangeStatus,
   sectionOfChange,
 } from "./suggestionReview.js";
@@ -43,7 +45,7 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // ---- the review's state ---------------------------------------------------------
 
-export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch }) => {
+export const useSuggestionReview = ({ review, api, d, setBackground, convertProjection, regionEpoch }) => {
   const changes = useMemo(
     () => (review?.suggestion?.changes ?? []).filter((change) => change.area === "map"),
     [review?.suggestion],
@@ -58,7 +60,7 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
   // useMapDocument hands back a new object every render, but its setters are
   // stable and the document changes only when it changes: key on that.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ctx = useMemo(() => ({ api, doc: d.doc, d, setBackground }), [api, d.doc, setBackground]);
+  const ctx = useMemo(() => ({ api, doc: d.doc, d, setBackground, convertProjection }), [api, d.doc, setBackground, convertProjection]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
   const renamesRef = useRef(renames);
@@ -75,7 +77,11 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
   const statusesRef = useRef({});
   const statuses = useMemo(() => {
     if (!api || !review) return {};
-    const next = Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, ctx, { renames, cache: regionCache })]));
+    // A suggestion that moves the map to another projection is written for the
+    // map there: until that is accepted, the rest is checked against the map
+    // as the new projection would have it (inSuggestedProjection).
+    const placed = inSuggestedProjection(ctx, changes);
+    const next = Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, change.kind === "projection" ? ctx : placed, { renames, cache: regionCache })]));
     const previous = statusesRef.current;
     const ids = Object.keys(next);
     if (ids.length === Object.keys(previous).length && ids.every((id) => previous[id] === next[id])) return previous;
@@ -338,6 +344,11 @@ const changeText = (change, doc) => {
     case "puppet-add": return `${name(change.to?.puppet)} becomes a puppet of ${name(change.to?.overlord)}`;
     case "puppet-remove": return `${name(change.from?.puppet)} is no longer a puppet of ${name(change.from?.overlord)}`;
     case "puppet-change": return `Change how ${name(change.to?.puppet)} answers to ${name(change.to?.overlord)}`;
+    case "projection": {
+      if (sameProjection(change.from, change.to)) return "Change how the game shows the map (3D globe, looping)";
+      const projection = PROJECTIONS.find((entry) => entry.id === change.to?.type)?.name ?? change.to?.type;
+      return `Map projection: ${projection}`;
+    }
     case "map-field": return change.field === "author" ? `Map author: ${change.to || "—"}` : `New basemap: ${change.to || "—"}`;
     case "background": return change.to ? "New custom basemap" : "Remove the custom basemap";
     default: return change.id;

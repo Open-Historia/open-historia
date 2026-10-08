@@ -18,7 +18,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
+import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -427,4 +429,109 @@ test("a save records what the map already has as accepted and what it lost as re
   const statuses = { a: "applied", b: "missing", c: "applied", d: "conflict", e: "applied" };
   assert.deepEqual(decisionsFor(changes, decisions, statuses), { accepted: ["c", "a"], rejected: ["e", "b"] }, "the author's own decision stands over the map's");
   assert.deepEqual(changes.map((change) => decisionOf(change, decisions, statuses)), ["accepted", "rejected", "accepted", null, "rejected"]);
+});
+
+// ---- a suggestion that changes the projection ----------------------------------
+
+// A map with places far enough from the equator for a projection to move them,
+// and MapEditor's convertForReview over the fakes: every region, city, feature
+// and unit moved by the one rule, the picture laid on the bounds it is given.
+const projectionSetup = () => {
+  const { api, state, d } = setup();
+  d.setFeatures((list) => [...list, { id: "feat2", name: "Northport", type: "Coordinate", coord: [20, 60], population: 5000, tags: ["city"] }]);
+  d.setUnits((list) => [...list, { id: "u2", name: "Northern Army", type: "infantry", ownerCode: "Alpha", lng: 20, lat: 60, strength: 100 }]);
+  d.patchMetadata({ customBackground: { kind: "image", dataUrl: "data:image/png;base64,AAAA" } });
+  api.applyRegionPatch({ upsert: [{ type: "Feature", geometry: square(20, 59, 2), properties: { id: "r9", name: "North", owner: "Alpha" } }] });
+  const calls = [];
+  const convertProjection = (from, to, bounds) => {
+    calls.push({ from: normalizeProjection(from).type, to: normalizeProjection(to).type, bounds });
+    const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
+    for (const feature of api.regions.values()) feature.geometry = moveGeojson(feature.geometry, move);
+    d.setFeatures((list) => moveFeatureCoords(list, from, to));
+    d.setUnits((list) => moveUnits(list, from, to));
+    d.patchMetadata({ projection: normalizeProjection(to), customBackground: { ...state.doc.metadata.customBackground, bounds } });
+  };
+  const ctx = { api, d, convertProjection, get doc() { return state.doc; } };
+  return { api, state, d, ctx, calls };
+};
+const FLAT = { type: "equirectangular", globe: false };
+const flatPlace = (lon, lat) => convertDisplayPoint("mercator", FLAT, lon, lat);
+
+test("a change of projection is the Workshop's own conversion, and Undo converts back", () => {
+  const { api, state, ctx, calls } = projectionSetup();
+  const change = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const undo = applyMapChange(change, ctx);
+  assert.deepEqual(calls, [{ from: "mercator", to: "equirectangular", bounds: sheetBounds(FLAT) }]);
+  assert.deepEqual(state.doc.metadata.projection, FLAT);
+  assert.deepEqual(state.doc.units[1].lat, flatPlace(20, 60)[1]);
+  assert.ok(Math.abs(state.doc.units[1].lat - 60) > 5, "the unit moved with the map");
+  assert.equal(mapChangeStatus(change, ctx), "applied");
+  // The two switches count: the same projection with the globe allowed is not what was suggested.
+  assert.equal(mapChangeStatus({ ...change, to: { type: "equirectangular" } }, ctx), "conflict");
+  undo();
+  assert.equal(calls[1].to, "mercator");
+  assert.equal(calls[1].bounds, null, "the picture goes back where it lay");
+  assert.deepEqual(state.doc.metadata.projection, { type: "mercator" });
+  assert.ok(Math.abs(state.doc.units[1].lat - 60) < 1e-4);
+  assert.ok(Math.abs(api.exportRegions(["r9"]).features[0].geometry.coordinates[0][0][1] - 59) < 1e-4);
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  // Without the Workshop's conversion there is nothing to accept it with.
+  assert.equal(applyMapChange(change, { ...ctx, convertProjection: undefined, doc: state.doc }), null);
+});
+
+test("the rest of such a suggestion is read where the new projection puts the map, and accepted after the map is moved", () => {
+  const { api, state, ctx, calls } = projectionSetup();
+  const [lng, lat] = flatPlace(20, 60);
+  const projection = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  // Written for the map in its new projection, as scenarioChanges.js writes them.
+  const unitNow = { id: "u2", name: "Northern Army", type: "infantry", ownerCode: "Alpha", lng, lat, strength: 100 };
+  const unit = { id: "unit-change:u2", area: "map", kind: "unit-change", key: "u2", label: "Northern Army", from: unitNow, to: { ...unitNow, name: "Arctic Army" } };
+  const cityNow = { name: "Northport", coord: [lng, lat], population: 5000, capital: false };
+  const city = { id: "city-change:northport", area: "map", kind: "city-change", name: "Northport", from: cityNow, to: { ...cityNow, population: 9000 } };
+  const movedSquare = moveGeojson(square(20, 59, 2), (x, y) => flatPlace(x, y));
+  const grown = moveGeojson(square(20, 59, 3), (x, y) => flatPlace(x, y));
+  const borders = {
+    id: "borders:r9", area: "map", kind: "borders",
+    regions: [{ id: "r9", name: "North", op: "change", feature: { type: "Feature", geometry: grown, properties: { id: "r9", name: "North", owner: "Alpha" } }, fromShape: measureGeometry(movedSquare), toShape: measureGeometry(grown) }],
+  };
+  const changes = [projection, unit, city, borders];
+
+  // Against the map as it is, still in the old projection, they would read as
+  // the author's own edits; through the suggested projection they are open.
+  assert.equal(mapChangeStatus(unit, ctx), "conflict");
+  const placed = inSuggestedProjection(ctx, changes);
+  const cache = createRegionCache();
+  assert.equal(mapChangeStatus(unit, placed), "open");
+  assert.equal(mapChangeStatus(city, placed), "open");
+  assert.equal(mapChangeStatus(borders, placed, { cache }), "open");
+  assert.deepEqual(state.doc.metadata.projection, undefined, "reading it that way moves nothing");
+  assert.equal(state.doc.units[1].lat, 60);
+
+  // Each needs the map moved first, and a list is accepted in that order.
+  assert.deepEqual(changeDependencies(unit, changes, ctx), ["map:projection"]);
+  assert.deepEqual(changeDependencies(borders, changes, ctx), ["map:projection"]);
+  assert.deepEqual(planAccept([city, unit], ctx, { changes }).map((change) => change.id), ["map:projection", "city-change:northport", "unit-change:u2"]);
+  const result = acceptMapChanges([borders, city, unit], ctx, { changes });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result.accepted, ["map:projection", "borders:r9", "city-change:northport", "unit-change:u2"]);
+  assert.deepEqual(state.doc.metadata.projection, FLAT);
+  // The city and the unit were found where the conversion had put them: edited, not added again.
+  assert.equal(state.doc.units.length, 2);
+  assert.deepEqual(state.doc.units[1], { ...state.doc.units[1], name: "Arctic Army", lng, lat });
+  assert.equal(state.doc.features.filter((feature) => feature.name === "Northport").length, 1);
+  assert.equal(state.doc.features.find((feature) => feature.name === "Northport").population, 9000);
+  assert.deepEqual(measureGeometry(api.exportRegions(["r9"]).features[0].geometry).bbox, measureGeometry(grown).bbox);
+  for (const change of changes) assert.equal(mapChangeStatus(change, inSuggestedProjection(ctx, changes), { cache: createRegionCache() }), "applied", change.id);
+  // Once the map is there, nothing waits on the projection any more.
+  assert.deepEqual(changeDependencies(unit, changes, ctx), []);
+});
+
+test("a suggested basemap is laid on the bounds the suggestion gives", () => {
+  const { state, ctx } = setup();
+  let shown = null;
+  const data = { dataUrl: "data:image/png;base64,BBBB" };
+  const change = { id: "map:background", area: "map", kind: "background", from: null, to: { kind: "image", hash: hashText(canonicalJson(data)), data, bounds: sheetBounds("equirectangular") } };
+  applyMapChange(change, { ...ctx, doc: state.doc, setBackground: (saved) => { shown = saved; } });
+  assert.deepEqual(shown, { kind: "image", dataUrl: data.dataUrl, bounds: sheetBounds("equirectangular") });
 });

@@ -330,3 +330,11 @@ test("every kind of change has a line in the comment", () => {
   const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
   assert.match(comment, /^- Institution logos changed$/m);
 });
+
+test("a change of projection is kept when it names one, and dropped when it does not", () => {
+  const change = (to) => ({ id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to });
+  const read = (to) => normalizeSuggestion({ schema: SUGGESTION_SCHEMA, changes: [change(to)] }).changes;
+  assert.deepEqual(read({ type: "equirectangular", globe: false }).map((entry) => entry.kind), ["projection"]);
+  assert.deepEqual(read(null), []);
+  assert.deepEqual(read({ aspect: 2 }), []);
+});
