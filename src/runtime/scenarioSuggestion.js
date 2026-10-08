@@ -49,7 +49,7 @@ const KNOWN_KINDS = new Set([
   "polity-add", "polity-remove", "polity-change", "polity-rename",
   "city-add", "city-remove", "city-change", "cities-replace",
   "unit-add", "unit-remove", "unit-change",
-  "map-field", "background",
+  "map-field", "background", "projection",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const validChange = (change) => isRecord(change)
@@ -57,7 +57,8 @@ const validChange = (change) => isRecord(change)
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
   && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
-  && (change.kind !== "borders" || Array.isArray(change.regions));
+  && (change.kind !== "borders" || Array.isArray(change.regions))
+  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"));
 
 export const normalizeSuggestion = (raw) => {
   if (!isRecord(raw) || raw.schema !== SUGGESTION_SCHEMA) {

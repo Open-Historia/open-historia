@@ -17,6 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { countChanges, diffScenarioBundles, measureGeometry, sameShape, summarizeChangesForComment } from "./scenarioChanges.js";
+import { layOutScenarioBundle, sheetBounds } from "../../server/mapProjection.js";
 
 const square = (x, y, size = 1) => ({
   type: "Polygon",
@@ -308,4 +309,55 @@ test("the comment's summary says what changed in a few plain lines", () => {
   next.data.world.regionOwnershipOverrides.r1 = "Beta";
   const lines = summarizeChangesForComment(diffScenarioBundles(baseBundle(), next));
   assert.deepEqual(lines, ["Name changed", "2 regions change owner"]);
+});
+
+// ---- a map moved to another projection ---------------------------------------------
+
+const withPicture = (bundle) => {
+  bundle.data.world.background = { kind: "image" };
+  bundle.assets.backgroundData = embedded({ dataUrl: "data:image/png;base64,AAAA" });
+  return bundle;
+};
+
+test("a map moved to another projection is one change, and what else changed is told apart from the move", () => {
+  const post = withPicture(baseBundle());
+  // The copy is the same map laid out as a flat sheet: every region, the city,
+  // the unit and the map feature are somewhere else now.
+  const declared = clone(post);
+  declared.data.world.projection = "equirectangular";
+  const copy = layOutScenarioBundle(declared);
+  const moved = featuresOf(copy)[2].geometry.coordinates[0][2];
+  assert.ok(Math.abs(moved[1] - 11) > 0.05, "the far region really moved");
+  const changes = diffScenarioBundles(post, copy);
+  assert.deepEqual(ids(changes), ["map:projection"]);
+  assert.equal(changes[0].kind, "projection");
+  assert.deepEqual(changes[0].from, { type: "mercator" });
+  assert.deepEqual(changes[0].to, { type: "equirectangular" });
+  // Where the picture lies goes with it, and the picture itself is not a change.
+  assert.deepEqual(changes[0].bounds, sheetBounds("equirectangular"));
+  assert.deepEqual(summarizeChangesForComment(changes), ["Map projection changed"]);
+
+  // Something else changed on top: it is told apart, and written for the map
+  // in its new projection.
+  copy.data.world.units[0].name = "First Army";
+  const both = diffScenarioBundles(post, copy);
+  assert.deepEqual(ids(both), ["map:projection", "unit-change:u1"]);
+  const unit = both.find((change) => change.kind === "unit-change");
+  assert.ok(Math.abs(unit.from.lat - unit.to.lat) < 1e-4, "only the name differs");
+  assert.ok(Math.abs(unit.to.lat - copy.data.world.units[0].lat) < 1e-4, "at its place on the flat map");
+  assert.equal(unit.to.name, "First Army");
+});
+
+test("a file that only declares its projection reads as its laid-out copy, and the two switches are a change of their own", () => {
+  const declared = withPicture(baseBundle());
+  declared.data.world.projection = "equirectangular";
+  assert.deepEqual(diffScenarioBundles(declared, layOutScenarioBundle(declared)), []);
+
+  const post = baseBundle();
+  const flat = clone(post);
+  flat.data.world.projection = { type: "mercator", globe: false, wrap: false };
+  const changes = diffScenarioBundles(post, flat);
+  assert.deepEqual(ids(changes), ["map:projection"]);
+  assert.deepEqual(changes[0].to, { type: "mercator", globe: false, wrap: false });
+  assert.equal(changes[0].bounds, undefined);
 });
