@@ -9,6 +9,9 @@
 //   "Kharkiv"                        the place itself (a city, a base, a unit, a region)
 //   "near Kharkiv"                   beside it, not on top of it
 //   "east of Kharkiv"                a short way off in that direction
+//   "120 km north-east of Kharkiv"   a VECTOR: that far, that way, from the place
+//   "120 km on a bearing of 045 from Kharkiv"   the same, by compass degrees
+//   "80 km from Kyiv toward Kharkiv"  that far along the line to another place
 //   "eastern Ukraine" / "Donetsk Oblast, north"   that part of a region or a country
 //   "coast of Crimea"                on land, at the sea's edge
 //   "off Sevastopol"                 at sea, a short way out
@@ -185,6 +188,45 @@ const DIRECTION_WORDS = Object.freeze({
     // What a model says when it is thinking of the map as a picture.
     top: "north", upper: "north", bottom: "south", lower: "south", left: "west", right: "east",
 });
+// A VECTOR is a distance and a direction from a reference point: "120 km
+// north-east of Kharkiv". "East of Kharkiv" alone is a short way off
+// (DIRECTION_KM); a vector says how far, which is what puts a thing where
+// nothing has a name: a camp out in a desert, a fleet's station, a world of a
+// drawn galaxy two sectors off the last one the map marks. The direction is
+// one of the sixteen points of the compass, or a bearing in degrees (0 north,
+// 90 east), or the line toward a second place.
+const COMPASS_16 = Object.freeze({
+    n: 0, nne: 22.5, ne: 45, ene: 67.5, e: 90, ese: 112.5, se: 135, sse: 157.5,
+    s: 180, ssw: 202.5, sw: 225, wsw: 247.5, w: 270, wnw: 292.5, nw: 315, nnw: 337.5,
+});
+// "north-north-east", "NNE", "south west": the words down to their letters.
+const readBearingWord = (word) => {
+    const letters = asText(word).toLowerCase().replace(/north/g, "n").replace(/south/g, "s").replace(/east/g, "e").replace(/west/g, "w").replace(/[\s-]+/g, "");
+    return Object.hasOwn(COMPASS_16, letters) ? COMPASS_16[letters] : null;
+};
+const COMPASS_16_PATTERN = "((?:north|south|east|west|[nsew])(?:[\\s-]?(?:north|south|east|west|[nsew])){0,2})";
+const DISTANCE_PATTERN = "(\\d{1,3}(?:,\\d{3})+|\\d+(?:[.,]\\d+)?)\\s*(km|kms|kilomet(?:er|re)s?|mi|miles?|nm|nmi|nautical miles?)";
+const KM_PER_UNIT = { km: 1, mi: 1.609344, nm: 1.852 };
+// The farthest a vector reaches: a quarter of the way round the world.
+export const VECTOR_MAX_KM = 10000;
+const readDistanceKm = (amount, unit) => {
+    const digits = /^\d{1,3}(?:,\d{3})+$/.test(amount) ? amount.replace(/,/g, "") : amount.replace(",", ".");
+    const word = asText(unit).toLowerCase();
+    const per = word.startsWith("k") ? KM_PER_UNIT.km : word.startsWith("n") ? KM_PER_UNIT.nm : KM_PER_UNIT.mi;
+    const km = Number(digits) * per;
+    return Number.isFinite(km) && km > 0 ? Math.min(VECTOR_MAX_KM, km) : null;
+};
+// The compass bearing from one point to another, on the same flat reckoning
+// distanceKm uses.
+const bearingBetween = (from, to) => {
+    let dLng = to[0] - from[0];
+    if (dLng > 180) dLng -= 360;
+    if (dLng < -180) dLng += 360;
+    const dx = dLng * kmPerDegLng((from[1] + to[1]) / 2);
+    const dy = (to[1] - from[1]) * KM_PER_DEG_LAT;
+    return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+};
+
 const readDirection = (word) => DIRECTION_WORDS[asText(word).toLowerCase().replace(/[\s-]+/g, "")] ?? "";
 
 // The part of a bbox on that side: a half for a cardinal, a quarter for a diagonal.
@@ -223,6 +265,32 @@ export const readPlacement = (phrase) => {
     let match;
 
     if ((match = text.match(/^(?:half ?way |midway )?between (.+?) and (.+)$/i))) add({ kind: "between", first: stripArticle(match[1]), second: stripArticle(match[2]) });
+    // A vector: "120 km north-east of Kharkiv", "about 80 miles due south of
+    // the Don", "40 nm WNW of Malta".
+    const rough = "^(?:about |around |roughly |some |approximately |nearly |~\\s?)?";
+    if ((match = text.match(new RegExp(`${rough}${DISTANCE_PATTERN},? (?:to the |due |directly )?${COMPASS_16_PATTERN}(?:ward|wards)? (?:of|from) (.+)$`, "i")))) {
+        const km = readDistanceKm(match[1], match[2]);
+        const bearing = readBearingWord(match[3]);
+        if (km && bearing !== null) add({ kind: "vector", km, bearing, name: stripArticle(match[4]) });
+    }
+    // "120 km on a bearing of 045 from Kharkiv", "120 km at 45 degrees from
+    // Kharkiv", "bearing 045, 120 km from Kharkiv".
+    if ((match = text.match(new RegExp(`${rough}${DISTANCE_PATTERN},? (?:on |at |along )?(?:a |an )?(?:bearing|heading|azimuth|course)?(?: of)? ?(\\d{1,3}(?:\\.\\d+)?)\\s?(?:°|º|deg|degs|degrees)?(?: true)? (?:from|of) (.+)$`, "i")))) {
+        const km = readDistanceKm(match[1], match[2]);
+        const bearing = Number(match[3]);
+        if (km && bearing >= 0 && bearing <= 360) add({ kind: "vector", km, bearing: bearing % 360, name: stripArticle(match[4]) });
+    }
+    if ((match = text.match(new RegExp(`^(?:on |at |along )?(?:a |an )?(?:bearing|heading|azimuth|course)(?: of)? (\\d{1,3}(?:\\.\\d+)?)\\s?(?:°|º|deg|degs|degrees)?(?: true)?,? (?:and |for |at )?${DISTANCE_PATTERN} (?:from|of) (.+)$`, "i")))) {
+        const km = readDistanceKm(match[2], match[3]);
+        const bearing = Number(match[1]);
+        if (km && bearing >= 0 && bearing <= 360) add({ kind: "vector", km, bearing: bearing % 360, name: stripArticle(match[4]) });
+    }
+    // "80 km from Kyiv toward Kharkiv", "80 km out of Kyiv on the road to Kharkiv".
+    if ((match = text.match(new RegExp(`${rough}${DISTANCE_PATTERN} (?:from|out of|beyond|past) (.+?) (?:toward|towards|in the direction of|on the way to|on the road to|heading for) (.+)$`, "i")))) {
+        const km = readDistanceKm(match[1], match[2]);
+        if (km) add({ kind: "vector", km, name: stripArticle(match[3]), toward: stripArticle(match[4]) });
+    }
+
     if ((match = text.match(/^(?:at sea |in the waters |in waters |waters |offshore |just )?off(?: the coast of| the shore of| of)? (.+)$/i))) add({ kind: "offshore", name: stripArticle(match[1]) });
     if ((match = text.match(/^(?:on |along |at )?(?:the )?(?:coast|coastline|shore|seaboard|littoral) of (.+)$/i))) add({ kind: "coast", name: stripArticle(match[1]) });
     if ((match = text.match(/^(?:the )?(.+?)(?:'s)? (?:coast|coastline|shore|seaboard)$/i))) add({ kind: "coast", name: stripArticle(match[1]) });
@@ -370,6 +438,22 @@ const resolveReading = (reading, gazetteer, seed) => {
         return point ? done(point, thing.point ? "at" : "inside", gazetteer, thing.name) : null;
     }
 
+    if (reading.kind === "vector") {
+        // From where the thing is: a city, a unit or a structure is its own
+        // point, a region the middle of it, a country its heartland.
+        const origin = positionOf(thing, seed);
+        if (!origin) return null;
+        let { bearing, km } = reading;
+        if (reading.toward) {
+            const target = positionOf(gazetteer.find(reading.toward), seed);
+            if (!target) return null;
+            // Never past the place it is heading for: that far or farther is the place.
+            if (km >= distanceKm(origin, target)) return done(target, "vector", gazetteer, thing.name);
+            bearing = bearingBetween(origin, target);
+        }
+        return done(offsetPoint(origin, bearing, km), "vector", gazetteer, thing.name);
+    }
+
     if (reading.kind === "near" || reading.kind === "direction") {
         const km = reading.kind === "near" ? NEAR_KM : DIRECTION_KM;
         if (!thing.point) {
@@ -496,6 +580,7 @@ export const PLACEMENT_DIRECTIVE = [
     "Every unit you spawn or move and every structure you build can be placed with `at`: a phrase naming places the map knows. The engine finds the exact point, keeps it inside the right borders, and moves it clear of anything already standing there. Prefer `at` to coordinates: a guessed longitude puts an army in the sea.",
     "- \"Kharkiv\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
     "- \"near Kharkiv\" — beside it. \"east of Kharkiv\" — a short way off in that direction. \"toward Kharkiv\" — a move's objective; it gets as far as the days allow.",
+    "- \"120 km north-east of Kharkiv\" or \"120 km on a bearing of 045 from Kharkiv\" — an exact distance and direction from any place the map knows: a city, a structure, a unit, the middle of a region. \"80 km from Kyiv toward Kharkiv\" — that far along the line to another. Use it when where something stands matters and no name is there.",
     "- \"eastern Ukraine\", \"Donetsk Oblast, north\" — that part of a country or region.",
     "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison.",
     "- \"coast of Crimea\" — on land at the sea's edge. \"off Sevastopol\" — AT SEA, for fleets.",
