@@ -1,7 +1,10 @@
 /*! Open Historia — a shared game's lobby and round bar © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Over the game while a shared game is open (client/sharedGame.js):
 //   - the lobby: who plays what, a country to take, and for the host the invite
-//     token to send and the button that starts the game;
+//     token to send and the button that starts the game. Until the host's
+//     lobby has arrived, a player is told which step of joining they are on,
+//     and the host is told who is connecting and who could not
+//     (client/joinProgress.js);
 //   - once it has started, the round bar: where the round is, how long is left,
 //     who is ready, and the player's own Ready. The host also has pause and
 //     "end the round now";
@@ -17,6 +20,7 @@ import {
   sharedRequest,
   useSharedGame,
 } from "../client/sharedGame.js";
+import { OWN_MAP_NOTE, hostLines, joinStage } from "../client/joinProgress.js";
 
 const glass = {
   background: "rgba(19,19,21,0.86)",
@@ -34,6 +38,7 @@ const button = {
 const primary = { ...button, background: "rgba(43,193,243,0.2)", borderColor: "rgba(43,193,243,0.6)", color: "#e6f8ff" };
 const small = { color: "rgba(255,255,255,0.6)", fontSize: "0.76rem" };
 const isolate = { unicodeBidi: "isolate" };
+const problemText = { color: "#fca5a5" };
 
 const PHASES = {
   lobby: "Lobby",
@@ -64,6 +69,10 @@ const Lobby = ({ shared, me }) => {
   const [choice, setChoice] = useState("");
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
+  // Which step of joining this is, once it is past looking for the host.
+  const stage = lobby ? "" : joinStage(shared);
+  const waiting = !lobby && role !== "host" && !error;
+  const people = role === "host" ? hostLines(engine) : [];
 
   const pick = async () => {
     setStatus("");
@@ -84,8 +93,9 @@ const Lobby = ({ shared, me }) => {
     <div style={{ ...glass, left: "50%", maxHeight: "80vh", maxWidth: "min(34rem, calc(100vw - 2rem))", overflowY: "auto", padding: "1.2rem 1.3rem", position: "fixed", top: "12vh", transform: "translateX(-50%)", width: "100%", zIndex: 4000 }}>
       <div style={{ fontSize: "1.15rem", fontWeight: 800, marginBottom: "0.2rem" }}><span style={isolate}>{lobby?.settings?.name || "Shared game"}</span></div>
       <div style={small}>
-        {lobby ? <><span style={isolate}>{lobby.scenario?.name || "Scenario"}</span> · {lobby.settings?.roundMinutes} min rounds · {lobby.settings?.daysPerRound} days a round</> : "Finding the host…"}
+        {lobby ? <><span style={isolate}>{lobby.scenario?.name || "Scenario"}</span> · {lobby.settings?.roundMinutes} min rounds · {lobby.settings?.daysPerRound} days a round</> : stage || "Finding the host…"}
       </div>
+      {waiting ? <div style={{ ...small, marginTop: "0.35rem" }}>{OWN_MAP_NOTE}</div> : null}
 
       {role === "host" && token ? (
         <div style={{ marginTop: "1rem" }}>
@@ -98,6 +108,10 @@ const Lobby = ({ shared, me }) => {
           <div style={{ ...small, marginTop: "0.35rem" }}>
             Relays: {engine?.relays ? `${engine.relays.connected ?? 0} of ${engine.relays.total ?? 0} connected` : "connecting…"}
           </div>
+          {/* Players' names are in these lines: never text for the translator. */}
+          {people.map((line) => (
+            <div key={line.text} data-no-translate="" style={{ ...small, ...isolate, ...(line.problem ? problemText : null), marginTop: "0.35rem" }}>{line.text}</div>
+          ))}
         </div>
       ) : null}
 

@@ -5,7 +5,8 @@
 // WebRTC: one token lets many players in, up to the seats; someone else holding
 // the token cannot pose as the host; a player who drops comes back as the same
 // player; the host can remove and ban, and make a new token that shuts the old
-// one out without touching anyone already in.
+// one out without touching anyone already in. And joining never waits without
+// an end: each way it can fail has its own reason, on both screens.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -65,13 +66,14 @@ const world = ({ seats = 4, hostLimits = {} } = {}) => {
   const peerFactory = (options) => createPeer({ ...options, RTCPeerConnectionImpl: rtc.RTCPeerConnection });
   const hostKey = createIdentity();
   const invite = createInvite(hostKey.publicKey);
-  const events = { joins: [], leaves: [], messages: [] };
+  const events = { joins: [], leaves: [], messages: [], status: null };
   const host = track(createHostSession({
     invite: parseInvite(invite.token), host: hostKey, room: { name: "The Cold War", seats, version: VERSION },
     appMessages, channelFactory, peerFactory,
     onJoin: (player, detail) => events.joins.push({ ...player, ...detail }),
     onLeave: (player, reason) => events.leaves.push({ ...player, reason }),
     onMessage: (player, message) => events.messages.push({ from: player.name, message }),
+    onStatus: (status) => { events.status = status; },
     limits: { beaconIntervalMs: 200, pingIntervalMs: 100_000, ...hostLimits },
   }));
   const join = (name, { token = invite.token, device = createIdentity(), version = VERSION, ...extra } = {}) => {
@@ -281,4 +283,115 @@ test("when the host closes the game, players are told", async () => {
   setup.host.stop();
   assert.ok(await until(() => player.client.state === "lost"));
   assert.equal(player.log.states.at(-1).reason, "host-closed");
+});
+
+// --- Joining says where it stopped ------------------------------------------------
+
+test("a player's screen is told each step: the host's lobby heard, connecting, let in", async () => {
+  const setup = world();
+  setup.host.start();
+  const player = setup.join("Ana");
+  assert.ok(await until(() => player.client.state === "connected"));
+  const steps = player.log.states.map((entry) => entry.state);
+  assert.deepEqual([...new Set(steps)], ["finding", "connecting", "joining", "connected"]);
+  assert.equal(player.log.states[0].heard, false, "nothing is known at first");
+  assert.equal(player.log.states.at(-1).heard, true);
+  assert.equal(player.log.states.at(-1).failures, 0);
+  setup.host.stop();
+});
+
+test("no host on the code is \"host-not-found\"; a host that answers nobody is \"no-answer\"", async () => {
+  const nobody = world();
+  const lost = nobody.join("Ana", { findTimeoutMs: 300 });
+  assert.ok(await until(() => lost.client.state === "lost"));
+  assert.equal(lost.log.states.at(-1).reason, "host-not-found");
+  assert.equal(lost.log.states.at(-1).heard, false);
+
+  // Its beacon is heard; every offer is over its limit and is ignored.
+  const silent = world({ hostLimits: { offersPerMinute: 0 } });
+  silent.host.start();
+  const waiting = silent.join("Ben", { findTimeoutMs: 800 });
+  assert.ok(await until(() => waiting.client.state === "lost"));
+  assert.equal(waiting.log.states.at(-1).reason, "no-answer");
+  assert.ok(waiting.log.states.some((entry) => entry.state === "finding" && entry.heard), "the screen was told the lobby is there");
+  assert.equal(waiting.log.room.name, "The Cold War");
+  silent.host.stop();
+});
+
+test("answered, and the two computers never connect: the player is told so, and the host sees who", async () => {
+  const setup = world();
+  setup.rtc.block("failed");
+  setup.host.start();
+  const player = setup.join("Ana", { maxConnectFailures: 2 });
+  assert.ok(await until(() => player.client.state === "lost"));
+  assert.equal(player.log.states.at(-1).reason, "cannot-connect");
+  assert.equal(player.log.states.at(-1).failures, 2);
+  assert.ok(player.log.states.some((entry) => entry.state === "finding" && entry.failures === 1), "the screen was told of the first failure");
+  assert.ok(await until(() => setup.events.status?.unreachable?.includes("Ana")), JSON.stringify(setup.events.status));
+  assert.equal(setup.host.players().length, 0);
+
+  // The network lets them through after all: they get in, and leave the list.
+  setup.rtc.unblock();
+  const again = setup.join("Ana", { device: player.device });
+  assert.ok(await until(() => again.client.state === "connected"));
+  assert.deepEqual(setup.events.status.unreachable, []);
+  setup.host.stop();
+});
+
+test("a connection that never says it failed is given up on by the clock", async () => {
+  const setup = world();
+  setup.rtc.block("silent");
+  setup.host.start();
+  const player = setup.join("Ana", { connectTimeoutMs: 150, maxConnectFailures: 1 });
+  assert.ok(await until(() => player.client.state === "lost"));
+  assert.equal(player.log.states.at(-1).reason, "cannot-connect");
+  setup.host.stop();
+});
+
+test("a host that answered once and then went quiet is not waited on for ever", async () => {
+  const setup = world();
+  setup.rtc.block("failed");
+  setup.host.start();
+  const player = setup.join("Ana", { maxConnectFailures: 5, findTimeoutMs: 2500 });
+  assert.ok(await until(() => player.log.states.some((entry) => entry.failures === 1)));
+  // The host is gone (no goodbye reaches someone who was never in): the next
+  // offers go into silence, and that wait has an end of its own.
+  setup.host.stop();
+  assert.ok(await until(() => player.client.state === "lost"));
+  assert.equal(player.log.states.at(-1).reason, "no-answer");
+});
+
+test("people the host cannot reach do not take the seats of those it can", async () => {
+  const setup = world({ seats: 2 });
+  setup.host.start();
+  // Three joiners whose connections never open, each held by the host for as
+  // long as it waits for one: more of them than there are seats.
+  setup.rtc.block("silent");
+  const stuck = ["Ana", "Ben", "Cleo"].map((name) => setup.join(name));
+  assert.ok(await until(() => setup.events.status?.joining?.length === 3), JSON.stringify(setup.events.status));
+  assert.ok(await until(() => stuck.every(({ client }) => client.state === "connecting")));
+  // Two who can connect still get the two seats.
+  setup.rtc.unblock();
+  const fine = ["Dan", "Eve"].map((name) => setup.join(name));
+  assert.ok(await until(() => fine.every(({ client }) => client.state === "connected")), JSON.stringify(fine.map(({ log }) => log.states.at(-1))));
+  assert.deepEqual(setup.host.players().map((player) => player.name).sort(), ["Dan", "Eve"]);
+  // And the seats are still the limit for whoever comes next.
+  const late = setup.join("Finn");
+  assert.ok(await until(() => late.client.state === "rejected"));
+  assert.equal(late.log.states.at(-1).reason, "full");
+  setup.host.stop();
+});
+
+test("a message from the host that this build cannot read is reported, not swallowed", async () => {
+  const setup = world();
+  setup.host.start();
+  const problems = [];
+  // A player on a build that does not know the host's "blob" message.
+  const player = setup.join("Ana", { appMessages: { chat: appMessages.chat }, onProblem: (problem) => problems.push(problem) });
+  assert.ok(await until(() => player.client.state === "connected"));
+  setup.host.send(player.client.player, { t: "blob", data: "x" });
+  assert.ok(await until(() => problems.length === 1));
+  assert.equal(problems[0].type, "blob");
+  assert.equal(player.log.messages.length, 0);
+  setup.host.stop();
 });

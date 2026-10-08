@@ -25,8 +25,17 @@ import { createPeer } from "../transport/peer.js";
 import { PROTOCOL_VERSION, SIGNAL, createMessageSchema, isFresh, signed } from "./messages.js";
 
 const DEFAULT_LIMITS = Object.freeze({
-  offersPerMinute: 30,
+  // New connections a minute, from everyone. A lobby that fills at once is a
+  // dozen people asking in the same minute, and each one whose connection
+  // does not open asks again: thirty was fewer than a full lobby needs.
+  offersPerMinute: 120,
   offersPerDevicePerMinute: 10,
+  // Connections being opened at once, over and above the seats. Someone whose
+  // network cannot reach the host holds one for pendingTimeoutMs; counted
+  // against the seats, a few of them shut out everyone who could have got in.
+  pendingBeyondSeats: 16,
+  // How long a joiner who could not be reached stays on the host's list.
+  unreachableMemoryMs: 5 * 60_000,
   messagesPerSecond: 30,
   messageBurst: 60,
   // The largest thing a player sends is its own Projects board (a few hundred
@@ -89,10 +98,22 @@ export const createHostSession = ({
   const seated = () => [...players.values()].filter((player) => player.status === "connected").length;
   const publicPlayer = (player) => ({ id: player.id, name: player.name, device: player.device, status: player.status, rttMs: player.rttMs ?? null });
 
+  // Joiners the host answered whose connection never opened: device → { name,
+  // at }. The host's screen says so, because from the host's side they are
+  // otherwise invisible, and it is the host's network as often as theirs.
+  const unreachable = new Map();
+  const unreachableNow = () => {
+    const cutoff = now() - limits.unreachableMemoryMs;
+    for (const [device, entry] of unreachable) if (entry.at < cutoff) unreachable.delete(device);
+    return [...unreachable.values()].map((entry) => entry.name);
+  };
+
   const report = () => onStatus({
     relays: channel?.status() ?? { connected: 0, total: 0 },
     players: [...players.values()].map(publicPlayer),
     pending: pending.size,
+    joining: [...pending.values()].map((entry) => entry.name),
+    unreachable: unreachableNow(),
     token: currentInvite.token,
   });
 
@@ -136,9 +157,19 @@ export const createHostSession = ({
     const entry = pending.get(session);
     if (!entry) return;
     pending.delete(session);
+    // An answer kept for a connection that is gone would only be sent again
+    // to a joiner who then waits on nothing.
+    answered.delete(session);
     timers.clearTimeout(entry.timer);
     entry.peer?.close();
     report();
+  };
+
+  // Answered, and the connection never opened: the two networks do not connect
+  // directly. Kept for the host's screen until they get in or it grows old.
+  const couldNotReach = (entry) => {
+    log(`${entry.name} asked to join and was answered, but no connection to their computer opened`);
+    unreachable.set(entry.device, { name: entry.name, at: now() });
   };
 
   // The reason goes out first and the connection closes a moment later: a
@@ -225,6 +256,7 @@ export const createHostSession = ({
       name: hello.name, peer: entry.peer, decoder: entry.decoder, session: entry.session,
       status: "connected", tokens: limits.messageBurst, bucketAt: now(), lastSeen: now(),
     });
+    unreachable.delete(hello.device);
     entry.bind(player);
     sendTo(player.peer, { t: "welcome", v: PROTOCOL_VERSION, player: player.id, room: { name: roomInfo.name, seats: roomInfo.seats } });
     log(`player ${player.name} ${resumed ? "is back" : "joined"}`);
@@ -269,29 +301,49 @@ export const createHostSession = ({
       return;
     }
     if (pending.has(offer.session)) return;
-    if (!withinRate(offer.device)) return log("an offer over the rate limit was ignored");
+    if (!withinRate(offer.device)) return log(`an offer from ${offer.name} was over the rate limit and was ignored`);
     if (banned.has(offer.device) || isBanned(offer.device)) return deny(offer.session, "banned");
-    if (offer.version !== roomInfo.version) return deny(offer.session, "version");
-    if (!byDevice.has(offer.device) && seated() + pending.size >= roomInfo.seats) return deny(offer.session, "full");
+    if (offer.version !== roomInfo.version) {
+      log(`${offer.name} is on another version of the game (${offer.version}, this is ${roomInfo.version}) and was turned away`);
+      return deny(offer.session, "version");
+    }
+    // The seats are who is IN. Connections still opening are held to a limit
+    // of their own: the hello decides who gets a seat (handleHello), so a
+    // joiner who cannot be reached costs nobody theirs.
+    if (!byDevice.has(offer.device) && seated() >= roomInfo.seats) return deny(offer.session, "full");
+    if (pending.size >= roomInfo.seats + limits.pendingBeyondSeats) return deny(offer.session, "busy");
+
+    // The connection opening again for a device already being opened is the
+    // same person trying anew: the older try is let go.
+    for (const [session, other] of pending) {
+      if (other.device !== offer.device || other.opened) continue;
+      if (other.answered) couldNotReach(other);
+      dropPending(session);
+    }
 
     let bound = null;
     const entry = {
       session: offer.session,
       device: offer.device,
       name: offer.name,
+      opened: false,
       decoder: createDecoder({ maxMessageLength: limits.maxMessageChars }),
       bind: (player) => { bound = player; },
       timer: timers.setTimeout(() => {
         if (pending.get(offer.session) === entry) {
-          log(`joiner ${offer.name}: never finished joining`);
+          if (entry.answered) couldNotReach(entry);
+          else log(`${offer.name} asked to join, and no answer could be made in time`);
           dropPending(offer.session);
         }
       }, limits.pendingTimeoutMs),
     };
+    log(`${offer.name} is asking to join`);
     entry.peer = peerFactory({
       ...peerOptions,
       timers,
       onOpen: () => {
+        entry.opened = true;
+        log(`connected to ${offer.name}'s computer; waiting for their hello`);
         timers.clearTimeout(entry.timer);
         entry.timer = timers.setTimeout(() => {
           if (pending.get(offer.session) === entry) {
@@ -302,7 +354,10 @@ export const createHostSession = ({
       },
       onMessage: (frame) => (bound ? handleMessage(bound, frame) : handleHello(entry, frame)),
       onClose: (reason) => {
-        if (pending.get(offer.session) === entry) return dropPending(offer.session);
+        if (pending.get(offer.session) === entry) {
+          if (entry.answered && !entry.opened) couldNotReach(entry);
+          return dropPending(offer.session);
+        }
         if (bound && bound.peer === entry.peer && players.get(bound.id) === bound && bound.status === "connected") {
           bound.status = "away";
           onLeave(publicPlayer(bound), reason);
@@ -320,6 +375,7 @@ export const createHostSession = ({
       const payload = signPayload("answer", { t: "answer", v: PROTOCOL_VERSION, session: offer.session, sdp, ts: now() });
       answered.set(offer.session, { payload, expires: now() + limits.answerCacheMs });
       for (const [session, cache] of answered) if (cache.expires < now()) answered.delete(session);
+      entry.answered = true;
       channel?.publish(payload);
     } catch (error) {
       log(`could not answer ${offer.name}: ${error?.message || error}`);
@@ -345,7 +401,11 @@ export const createHostSession = ({
       running = true;
       openChannel();
       publishBeacon();
-      beaconTimer = timers.setInterval(publishBeacon, limits.beaconIntervalMs);
+      beaconTimer = timers.setInterval(() => {
+        publishBeacon();
+        // The list of joiners who could not be reached grows old by itself.
+        if (unreachable.size) report();
+      }, limits.beaconIntervalMs);
       pingTimer = timers.setInterval(() => {
         pingCounter = (pingCounter + 1) % 2 ** 31;
         for (const player of players.values()) {
