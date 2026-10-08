@@ -13,7 +13,7 @@
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { looksLikeZip, unzipBundle, zipBundle } from "./bundleZip.js";
-import { bytesToBase64 } from "./bundleFiles.js";
+import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
 import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./hubFiles.js";
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
@@ -235,6 +235,42 @@ const readBasemapDataFile = async (url) => {
   throw new Error("That basemap file is missing its data.");
 };
 
+// A scenario zip's basemap as the scenario itself carries it: the
+// backgroundData asset of its scenario.json, embedded or lifted out as a file
+// of the zip (assets/background.json; bundleFiles.js). That is how a scenario
+// exported from the library travels, and how one made outside the game does:
+// only the Publish button also lays the picture beside it as basemap.<ext>.
+// The menu looked for that file alone, so such a post was listed as carrying a
+// basemap and then answered "That scenario has no basemap inside it."
+// `zip` is an unzipBundle() handle. null when the scenario has none.
+export const readScenarioZipBackground = async (zip) => {
+  const names = zip.names();
+  const name = names.find((n) => /(^|\/)scenario\.json$/i.test(n)) ?? names.find((n) => /^[^/]+\.json$/i.test(n));
+  if (!name) return null;
+  let bundle;
+  try {
+    bundle = await restoreBundleFiles(JSON.parse(await zip.text(name)), zip);
+  } catch {
+    return null;
+  }
+  const asset = bundle?.assets?.backgroundData;
+  if (asset?.mode !== "embedded" || asset.data == null) return null;
+  let payload = asset.data;
+  if (typeof payload === "string") {
+    // A bundle written before JSON assets stopped being base64'd.
+    try {
+      payload = JSON.parse(base64ToUtf8(payload));
+    } catch {
+      return null;
+    }
+  }
+  if (!payload || typeof payload !== "object") return null;
+  const vector = bundle?.data?.world?.background?.kind === "vector";
+  if (payload.geojson && (vector || !payload.dataUrl)) return { kind: "vector", payload: { geojson: payload.geojson } };
+  if (typeof payload.dataUrl === "string" && payload.dataUrl.startsWith("data:image/")) return { kind: "image", payload: { dataUrl: payload.dataUrl } };
+  return null;
+};
+
 // Resolve a post to its payload: { kind, dataUrl } | { kind:"vector", geojson }.
 // New image basemaps carry the image inline; new vectors carry a .geojson file;
 // old posts carry a { basemap, payload } .basemap.json bundle.
@@ -253,6 +289,9 @@ const loadBasemapPayload = async (post) => {
       const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
       return { meta: {}, kind: "vector", payload: { geojson } };
     }
+    // Not laid beside the scenario: read it out of the scenario itself.
+    const carried = await readScenarioZipBackground(zip);
+    if (carried) return { meta: {}, ...carried };
     throw new Error("That scenario has no basemap inside it.");
   }
   // An image the post links as a file (e.g. an .svg GitHub attaches rather than

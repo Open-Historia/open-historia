@@ -1,6 +1,7 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
+import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
 import { resolveChildPath as resolveWithinDirectory } from "./security.js";
@@ -4038,6 +4039,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     throw new Error("Unsupported scenario bundle schema.");
   }
 
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
+
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
@@ -4152,6 +4157,10 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
+
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
   if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
