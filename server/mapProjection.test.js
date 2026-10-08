@@ -22,6 +22,8 @@ import {
   imageQuad,
   isWorldProjection,
   layOutScenarioBundle,
+  mapViewOf,
+  projectionIsDefault,
   moveGeojson,
   movePlaces,
   normalizeImageBounds,
@@ -294,4 +296,25 @@ test("a hub post labelled flat map is imported as an evenly spaced sheet, and on
     const other = bundleOf(world);
     assert.equal(declareFlatMapFromPost(other, post), other, JSON.stringify(world));
   }
+});
+
+test("a scenario can disable the 3D globe and the sideways repeat, and both ride with the projection", () => {
+  assert.deepEqual(mapViewOf(undefined), { noGlobe: false, noWrap: false });
+  assert.deepEqual(mapViewOf("robinson"), { noGlobe: false, noWrap: false });
+  assert.deepEqual(mapViewOf({ type: "mercator", globe: false }), { noGlobe: true, noWrap: false });
+  assert.deepEqual(mapViewOf({ type: "freeform", aspect: 2, wrap: false, laidOut: true }), { noGlobe: false, noWrap: true });
+  // Written only when switched off, and kept through normalizing.
+  assert.deepEqual(normalizeProjection({ type: "mercator", globe: false, wrap: true }), { type: "mercator", globe: false });
+  assert.deepEqual(normalizeProjection({ type: "freeform", aspect: 1.5, globe: false, wrap: false }), { type: "freeform", aspect: 1.5, globe: false, wrap: false });
+  assert.deepEqual(normalizeProjection({ type: "robinson", globe: "no" }), { type: "robinson" });
+  // They are not a change of projection.
+  assert.equal(sameProjection({ type: "robinson", globe: false }, "robinson"), true);
+  // A map with nothing to say is not written down; one with a switch off is.
+  assert.equal(projectionIsDefault(undefined), true);
+  assert.equal(projectionIsDefault({ type: "mercator" }), true);
+  assert.equal(projectionIsDefault({ type: "mercator", wrap: false }), false);
+  assert.equal(projectionIsDefault("equirectangular"), false);
+  // A file's declaration keeps them through being laid out.
+  const laid = layOutScenarioBundle(bundleOf({ projection: { type: "equirectangular", globe: false }, background: { kind: "image" } }));
+  assert.deepEqual(laid.data.world.projection, { type: "equirectangular", globe: false, laidOut: true });
 });

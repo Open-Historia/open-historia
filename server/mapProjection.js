@@ -183,14 +183,33 @@ export const isWorldProjection = (type) => Object.hasOwn(MATH, String(type));
 // A projection as the game keeps it: { type } and, for freeform, the sheet's
 // aspect (width / height). Anything it does not know is Mercator. A file may
 // write the bare name.
+//
+// Two things about how the map is SHOWN ride with it, each written only when
+// it is switched off: `globe: false` (the game never wraps this map round a 3D
+// globe: a flat sheet is not one) and `wrap: false` (the map does not repeat
+// sideways when the player pans past its edge).
+const viewFlags = (raw) => ({ ...(raw.globe === false ? { globe: false } : {}), ...(raw.wrap === false ? { wrap: false } : {}) });
 export const normalizeProjection = (value) => {
   const raw = typeof value === "string" ? { type: value } : value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const type = String(raw.type ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
   if (type === FREEFORM) {
     const aspect = Number(raw.aspect);
-    return { type: FREEFORM, aspect: Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, 0.05, 20) : 2 };
+    return { type: FREEFORM, aspect: Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, 0.05, 20) : 2, ...viewFlags(raw) };
   }
-  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION };
+  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION, ...viewFlags(raw) };
+};
+
+// What the game map is told of them.
+export const mapViewOf = (projection) => {
+  const raw = projection && typeof projection === "object" && !Array.isArray(projection) ? projection : {};
+  return { noGlobe: raw.globe === false, noWrap: raw.wrap === false };
+};
+
+// Whether a projection is worth writing down at all: Mercator with both
+// switches on is what a map is when it says nothing.
+export const projectionIsDefault = (projection) => {
+  const spec = normalizeProjection(projection);
+  return spec.type === DEFAULT_PROJECTION && spec.globe !== false && spec.wrap !== false;
 };
 
 // Whether world.projection is a map already laid out (the game's own record)
@@ -271,6 +290,25 @@ export const convertPlane = (from, to, X, Y) => {
   const a = sheetHalf(source);
   const b = sheetHalf(target);
   return [X * (b.hx / a.hx), Y * (b.hy / a.hy)];
+};
+
+// Whether a spot of the plane is on a projection's map at all: inside its
+// sheet, and for a world projection inside its outline (the corners of a
+// Robinson or Mollweide sheet are not on the globe). Redrawing a picture in
+// another projection leaves such spots empty.
+export const planeOnMap = (projection, X, Y) => {
+  const spec = normalizeProjection(projection);
+  const { hx, hy } = sheetHalf(spec);
+  if (abs(X) > hx + 1e-9 || abs(Y) > hy + 1e-9) return false;
+  if (spec.type === FREEFORM) return true;
+  const [lambda] = MATH[spec.type].inverse(X / SCALE[spec.type], Y / SCALE[spec.type]);
+  return abs(lambda) <= PI + 1e-6;
+};
+
+// Bounds as a rectangle of the plane (Mercator's own units).
+export const boundsOnPlane = (bounds) => {
+  const box = normalizeImageBounds(bounds) ?? { west: -180, south: -MERCATOR_MAX_LAT, east: 180, north: MERCATOR_MAX_LAT };
+  return { west: box.west * RAD, east: box.east * RAD, south: latDegToPlane(box.south), north: latDegToPlane(box.north) };
 };
 
 // The same for a stored place (degrees).

@@ -96,6 +96,8 @@ const CUSTOM_SEA = "#0b1a2b";
 // vector biomes each carrying its own `fill`. Every other scenario keeps the
 // ESRI canvas, exactly as before.
 const buildBaseLayer = (customBackground) => {
+  // A plain sea: no tiles, as the game map draws such a scenario.
+  if (customBackground?.kind === "plain") return new VectorImageLayer({ source: new VectorSource({ wrapX: false }) });
   if (customBackground?.kind === "image" && customBackground.imageUrl) {
     // On the scenario's own bounds when it states them, as the game map lays it.
     const bounds = normalizeImageBounds(customBackground.bounds);
