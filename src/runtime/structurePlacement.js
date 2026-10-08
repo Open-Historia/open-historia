@@ -12,7 +12,8 @@
 // Runs under bare node: the puppet ledger and the world store both do.
 
 import { livePuppetsFor } from "./puppets.js";
-import { readWorldState, writeWorldState } from "./gameState.js";
+import { mutateWorldState } from "./gameState.js";
+import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
 
 const text = (value) => String(value ?? "").trim();
 const same = (a, b) => text(a).toLowerCase() === text(b).toLowerCase() && text(a) !== "";
@@ -56,9 +57,26 @@ export const moveStructure = (markers, id, { lng, lat } = {}) => {
 };
 
 // The popup's Accept (no point) and the map's Move (the clicked point), written
-// straight into the world: a correction of the map, not an order.
+// straight into the world: a correction of the map, not an order. Through the
+// write queue, on the world as it stands when the write's turn comes, so it
+// cannot put back a world another writer has changed since.
+//
+// In a shared game the world is the host's: the page asks (request "settle"),
+// the host checks the structure is the player's to settle and writes it, and
+// the next view shows it. A refusal is thrown with the host's reason.
 export const saveSettledStructure = async (id, point = null) => {
-    const world = await readWorldState({ force: true });
-    const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
-    await writeWorldState({ ...world, markers });
+    if (inSharedGame()) {
+        const answer = await requestFromHost("settle", {
+            marker: String(id ?? ""),
+            move: Boolean(point),
+            lng: Number(point?.lng) || 0,
+            lat: Number(point?.lat) || 0,
+        });
+        if (!answer.ok) throw new Error(answer.error || "The host did not settle the structure.");
+        return;
+    }
+    await mutateWorldState((world) => {
+        const markers = point ? moveStructure(world.markers, id, point) : acceptStructure(world.markers, id);
+        return { ...world, markers };
+    });
 };

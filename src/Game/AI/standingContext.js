@@ -171,9 +171,26 @@ export const describeStatHistory = (world, name, limit = STAT_HISTORY_ROWS) => {
 // last few rows of its history, and its reputation and intelligence rating. The
 // numbers the player sees in the Stats panel, so a figure the advisor quotes or
 // charts is never one that contradicts it.
-export const describeOurFigures = (world, player) => {
+//
+// `statistics` is the sheet in full, the [Official National Statistics] block
+// (runtime/countryStats.js describeCountryStatsForAdvisor): a scenario's own
+// stats under their own labels and units, the capital, GDP per capita, the
+// sector shares and the recorded trend, with its own instruction to quote them.
+// The advisor's prompt builds it, because it has to load the scenario's sheet
+// definition. Given it, the block carries that in place of the one-line sheet
+// and the history rows, so the figures stand in the prompt once.
+export const describeOurFigures = (world, player, { statistics = "" } = {}) => {
   const name = asText(player);
   if (!name) return "";
+  const official = String(statistics ?? "").trim();
+  if (official) {
+    return [
+      "[Our Country's Figures]",
+      describeReputationStanding(world, name),
+      describeIntelligenceStanding(world, name),
+      official,
+    ].filter(Boolean).join("\n");
+  }
   const sheet = describeStatSheet(asObject(world?.countryStats)[name], name);
   const history = describeStatHistory(world, name);
   return [

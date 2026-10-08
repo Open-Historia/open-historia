@@ -20,6 +20,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
+import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -248,8 +249,10 @@ import {
   buildPromptContext,
   filterToRenderedRegions,
   formatDateReadable,
+  joinPolityNames,
   resolveHelperValues,
 } from "./promptContext.js";
+import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
 import {
   HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
@@ -291,7 +294,6 @@ import {
   linkStructuresToProjects,
   enforceUnitVolume,
   readInterceptsState,
-  writeInterceptsState,
   normalizeActionEntry,
   normalizeEventEntry,
   normalizeActions,
@@ -314,12 +316,14 @@ import {
   readWorldState,
   resumeStandingOrders,
   viewAsSeen,
+  mutateActionsState,
+  mutateAdvisorState,
   mutateCanonicalTurnState,
-  writeActionsState,
-  writeChatsState,
-  writeEventsState,
-  writeGameData,
-  writeWorldState,
+  mutateChatsState,
+  mutateEventsState,
+  mutateInterceptsState,
+  mutateWorldState,
+  runInCanonicalWriteQueue,
   writeCanonicalTurnState,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
@@ -3099,6 +3103,13 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
   }
 
+  // Several people play (sharedGameDirective.js): in the passes that simulate
+  // the world, the prompt's one player is each of them. Nothing in single player.
+  if (SHARED_WORLD_TASKS.has(taskKey)) {
+    const sharedDirective = normalizeString(variables?.sharedGameDirective);
+    if (sharedDirective) systemPrompt = `${systemPrompt}\n\n${sharedDirective}`;
+  }
+
   // The scenario author's priority rules (worldDirection.js), for every task
   // that writes the world or speaks for a polity; a time skip has them, with the
   // world's share and the tempo, in its live records. Near the end, where a long
@@ -4637,7 +4648,6 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
   if (!summaryText) return true;
   const current = await readGameStateBundle({ force: true });
   if (leftCampaign(campaignId)) return false;
-  const currentWorld = normalizeWorldState(current.world);
   // Superseded when a synchronous consolidation covered these events (or, for
   // a chats-only pass, these chats) in the meantime.
   const throughEventId = normalizeString(resume?.throughEventId);
@@ -4646,23 +4656,34 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
     closedChats: normalizeArray(resume?.chatIds).map((id) => ({ id })),
   };
   if (!deferredConsolidationStillDue(pass, current)) return true;
-  const entry = consolidationEntryFor(resume, summaryText, source, currentWorld.consolidatedHistory);
-  const documentUpdate = applyHistoryDocumentUpdate(currentWorld, {
-    document: resultPayload?.document,
-    summary: summaryText,
-    source,
-    throughDate: entry.throughDate,
-    throughEventId: entry.throughEventId,
-    throughRound: entry.throughRound,
-    baseRevision: resume?.baseRevision ?? 0,
-  });
   if (isSimulationBusy() || leftCampaign(campaignId)) return false;
-  await writeWorldState(normalizeWorldState({
-    ...currentWorld,
-    consolidatedHistory: [...currentWorld.consolidatedHistory, entry],
-    historyDocument: documentUpdate.historyDocument,
-  }));
-  logDebugEvent("ai", `Deferred consolidation applied (${source}): ${resume?.eventCount ?? 0} events, ${resume?.chatCount ?? 0} chats; history document ${documentUpdate.mode}.`);
+  // Written over the world as it stands inside the write queue, not the copy
+  // read above: anything saved while this ran is kept, and a pass that folded
+  // the same events meanwhile is seen here too.
+  let appliedMode = "";
+  await mutateWorldState((latest) => {
+    const latestWorld = normalizeWorldState(latest);
+    if (!deferredConsolidationStillDue(pass, { ...current, world: latestWorld })) return null;
+    const entry = consolidationEntryFor(resume, summaryText, source, latestWorld.consolidatedHistory);
+    const documentUpdate = applyHistoryDocumentUpdate(latestWorld, {
+      document: resultPayload?.document,
+      summary: summaryText,
+      source,
+      throughDate: entry.throughDate,
+      throughEventId: entry.throughEventId,
+      throughRound: entry.throughRound,
+      baseRevision: resume?.baseRevision ?? 0,
+    });
+    appliedMode = documentUpdate.mode;
+    return normalizeWorldState({
+      ...latestWorld,
+      consolidatedHistory: [...latestWorld.consolidatedHistory, entry],
+      historyDocument: documentUpdate.historyDocument,
+    });
+  });
+  if (appliedMode) {
+    logDebugEvent("ai", `Deferred consolidation applied (${source}): ${resume?.eventCount ?? 0} events, ${resume?.chatCount ?? 0} chats; history document ${appliedMode}.`);
+  }
   return true;
 };
 
@@ -7552,11 +7573,12 @@ export const rollBackToSnapshot = async (index = 0) => {
     // copies the turn filed go with it. Either way, a copy of a document the
     // restored file no longer holds as stolen is taken out (reportDelivery.js).
     const snapshotIntercepts = s.intercepts && typeof s.intercepts === "object" && !Array.isArray(s.intercepts) ? s.intercepts : null;
-    const filedIntercepts = snapshotIntercepts ?? await readInterceptsState({ force: true }).catch(() => ({}));
-    const reconciledIntercepts = withoutOrphanedDocuments(filedIntercepts, normalizeWorldState(s.world ?? {}).reports);
-    if (snapshotIntercepts || reconciledIntercepts !== filedIntercepts) {
-      await writeInterceptsState(reconciledIntercepts);
-    }
+    const restoredReports = normalizeWorldState(s.world ?? {}).reports;
+    await mutateInterceptsState((filed) => {
+      const base = snapshotIntercepts ?? filed;
+      const reconciled = withoutOrphanedDocuments(base, restoredReports);
+      return snapshotIntercepts || reconciled !== base ? reconciled : null;
+    });
     // The flags as they were, when an undone turn renamed a polity and moved its
     // flag. Without them an undone rename left the country with no flag, and
     // Intervene re-ran the rename against flags that had already moved. Every
@@ -7578,10 +7600,11 @@ export const rollBackToSnapshot = async (index = 0) => {
     // government's hands go with them; its conversation is otherwise the
     // player's and is not rolled back.
     try {
-      const advisorMessages = await readAdvisorMessages({ force: true });
-      const restoredWorld = normalizeWorldState(s.world ?? {});
-      const keptMessages = withoutOrphanedNotices(advisorMessages, restoredWorld.reports, normalizeString(s.game?.country));
-      if (Array.isArray(advisorMessages) && keptMessages !== advisorMessages) await writeJson(JSON_URLS.advisor, keptMessages);
+      await mutateAdvisorState((advisorMessages) => {
+        if (!Array.isArray(advisorMessages)) return null;
+        const keptMessages = withoutOrphanedNotices(advisorMessages, restoredReports, normalizeString(s.game?.country));
+        return keptMessages !== advisorMessages ? keptMessages : null;
+      });
     } catch (error) {
       console.warn("[rollback] the advisor's notices could not be reconciled:", error?.message || error);
     }
@@ -7750,10 +7773,14 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     });
     if (!built) throw new Error("Could not build the message.");
 
-    let nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
-    await writeChatsState(nextChats);
-
-    let finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    // Folded into the chats as they are NOW, not as they were before the leader
+    // was asked: a note that arrived during the call stays.
+    let finalChat = null;
+    await mutateChatsState((latest) => {
+      const nextChats = foldGeneratedChatsIntoStorage(latest, [built], {});
+      finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey) ?? null;
+      return nextChats;
+    });
 
     // The advisor's send button is a one-on-one exchange like the panel's, so a
     // reply here can make, answer or settle a demand too (runtime/demandCheck.js).
@@ -7764,15 +7791,18 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
         .catch(() => [])
       : [];
     if (demandEvents.length) {
-      const logged = normalizeChats([{
-        ...finalChat,
-        events: [...(finalChat.events?.length ? finalChat.events : eventsFromLegacyChat(finalChat)), ...demandEvents],
-      }])[0];
-      if (logged) {
-        nextChats = nextChats.map((chat) => (chat === finalChat ? logged : chat));
-        await writeChatsState(nextChats);
+      const threadId = finalChat.id;
+      await mutateChatsState((latest) => {
+        const target = latest.find((chat) => chat.id === threadId);
+        if (!target) return null;
+        const logged = normalizeChats([{
+          ...target,
+          events: [...(target.events?.length ? target.events : eventsFromLegacyChat(target)), ...demandEvents],
+        }])[0];
+        if (!logged) return null;
         finalChat = logged;
-      }
+        return latest.map((chat) => (chat === target ? logged : chat));
+      });
     }
     return { chat: finalChat, reply };
   } finally {
@@ -8090,7 +8120,7 @@ const applySimulationResult = async ({
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
   // write at the end merges these onto whatever is actually stored by then rather
-  // than putting the stale snapshot back. See the re-read before writeChatsState.
+  // than putting the stale snapshot back. See the re-read before writeCanonicalTurnState.
   const generatedChats = [];
 
   // Everything that could keep an event or an operation out has now run, so what
@@ -8241,7 +8271,7 @@ const applySimulationResult = async ({
         movedAt: movedThisTurn,
       },
     ), result.clearActions ? plannedActionSnapshot : [], { queuedActions: result.clearActions ? plannedActionSnapshot : null }),
-    { playerCode: baseGame.country },
+    { playerCode: baseGame.country, playerCodes: humanCountriesOf(baseGame) },
   );
 
   // The war ledger merges BEFORE espionage, so a war declared this turn already
@@ -8274,8 +8304,9 @@ const applySimulationResult = async ({
   // independent of the relationship - they are about the two services.
   const espionageIdentityIndex = buildPolityIdentityIndex(worldWithImpacts);
   const canonicalEspionagePolity = (name) => canonicalCampaignPolity(name, worldWithImpacts, espionageIdentityIndex);
-  const playerLedgerPolity = canonicalEspionagePolity(baseGame.country);
-  const espionageCandidates = [...new Set([
+  // Worked out against one polity: the player's, and in a shared game each
+  // other person's in turn (resolveEspionage's candidatesFor).
+  const espionageCandidatesAgainst = (playerLedgerPolity) => [...new Set([
     ...Object.keys(worldWithImpacts.polityOverrides ?? {}),
     ...Object.keys(worldWithImpacts.intelligence ?? {}),
     ...Object.values(worldWithImpacts.regionOwnershipOverrides ?? {}),
@@ -8305,6 +8336,8 @@ const applySimulationResult = async ({
     }
     return { polity, hostility, hostile: hostility >= 0.75 };
   });
+  const espionageCandidatesFor = (person) => espionageCandidatesAgainst(canonicalEspionagePolity(person));
+  const espionageCandidates = espionageCandidatesFor(baseGame.country);
   // With espionage switched off for this game nothing is rolled: the agents
   // already in the world stay where they are, silent, and no new one arrives.
   const espionage = isActiveFeatureEnabled("espionage")
@@ -8313,6 +8346,11 @@ const applySimulationResult = async ({
       date: nextGame.gameDate,
       playerPolity: normalizeString(baseGame.country),
       candidates: espionageCandidates,
+      // Several people play: an agent caught in any of their countries waits
+      // for that person, and others plant agents in each (spycraft.js). With
+      // one player the list is the player alone, and nothing changes.
+      playerPolities: humanCountriesOf(baseGame),
+      candidatesFor: espionageCandidatesFor,
     })
     : { spies: normalizeArray(worldWithImpacts.spies), events: [], notices: [] };
   worldWithImpacts.spies = espionage.spies;
@@ -8444,7 +8482,7 @@ const applySimulationResult = async ({
   // Built HERE rather than beside freshEvents above, because the loop that just
   // ran appends to it. `[...priorEvents, ...freshEvents]` is a copy, so a snapshot
   // taken before the loop cannot see an exposure or a discovery — and that copy is
-  // what writeEventsState persists and what this function returns.
+  // what the canonical commit persists and what this function returns.
   const nextEvents = [...priorEvents, ...freshEvents];
   // Same reason, for this turn's own record: simulationHistory is built as an
   // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
@@ -8710,9 +8748,23 @@ const applySimulationResult = async ({
   // belongs to the period rather than to one event with its last.
   const lastTurnEventId = normalizeString(normalizeArray(worldWithImpacts.simulationHistory?.[0]?.eventIds).at(-1));
 
+  // In a shared game (runtime/humanPolities.js) a thread the turn opens is
+  // written to the host's own player, and its opening lines are the AI's. A
+  // country another person plays is never one of the governments speaking in
+  // it: that person writes their own lines, in a thread they open themselves.
+  const otherPeople = new Set(humanCountriesOf(baseGame).map(regionKey).filter((key) => key !== regionKey(baseGame.country)));
+  const withoutOtherPeople = (chatLike) => {
+    if (!otherPeople.size) return chatLike;
+    const countries = normalizeArray(chatLike?.countries)
+      .filter((country) => !otherPeople.has(regionKey(normalizeString(typeof country === "string" ? country : country?.name || country?.code))));
+    return countries.length ? { ...chatLike, countries } : null;
+  };
+
   for (const event of freshEvents) {
     for (const createdChat of event.impacts.createdChats) {
-      const nextChat = await buildGeneratedChat(createdChat, event.id, worldWithImpacts, {
+      const opened = withoutOtherPeople(createdChat);
+      if (!opened) continue;
+      const nextChat = await buildGeneratedChat(opened, event.id, worldWithImpacts, {
         fallbackTitle: event.title,
         playerName: baseGame.country,
         revealWith: event.id,
@@ -8724,7 +8776,7 @@ const applySimulationResult = async ({
   // Unprompted outreach: polities reaching out on their own initiative during
   // the simulated period, not tied to any event (treaty feelers, summit
   // invitations). Same chat machinery, no linked event.
-  for (const chatLike of normalizeArray(result.outreach)) {
+  for (const chatLike of normalizeArray(result.outreach).map(withoutOtherPeople).filter(Boolean)) {
     const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
       playerName: baseGame.country,
       revealWith: lastTurnEventId,
@@ -9125,10 +9177,8 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   const source = fallbackReason ? "fallback" : "ai";
   if (fallbackReason) topics = topics.map((topic) => ({ ...topic, source }));
 
-  const world = normalizeWorldState(await readWorldState());
   assertCampaignUnchanged(campaign, activeCampaignId(), "set of suggestions");
-  world.actionSuggestions = topics;
-  await writeWorldState(world);
+  await mutateWorldState((latest) => ({ ...latest, actionSuggestions: topics }));
 
   return { topics, source, fallbackReason, rawResponse: fallbackReason ? normalizeString(generation?.rawResponse) : "" };
 };
@@ -10567,6 +10617,9 @@ let countryStatsWorker = null;
 let countryStatsWorkerBroken = false;
 let countryStatsWorkerRequestId = 0;
 const countryStatsWorkerPending = new Map();
+// How long the page's write queue waits on the worker's own world PUT before
+// giving up on it (persistCountryStatsBackground): every page write waits too.
+const COUNTRY_STATS_PERSIST_TIMEOUT_MS = 60_000;
 // Set aside for the session after three failures in a row, not one
 // (statsWorkerJobs.js); failing to construct it at all still sets it aside.
 const countryStatsWorkerFailures = createWorkerFailureStreak(3);
@@ -10818,8 +10871,16 @@ const persistCountryStatsBackground = async ({
       ? performance.now()
       : Date.now();
 
-  const result = await new Promise((resolve, reject) => {
+  // The worker reads world.json, merges the sheet and PUTs the whole document
+  // back itself. That round trip runs while the page's write queue is held, so
+  // nothing the page queues meanwhile (a unit order, a note, another sheet)
+  // lands between the worker's read and its PUT and is erased by it. A worker
+  // that never answers is stopped at the timeout rather than holding every page
+  // write; the caller then persists on the main thread.
+  const result = await runInCanonicalWriteQueue(() => new Promise((resolve, reject) => {
+    let timer = null;
     const abort = () => {
+      clearTimeout(timer);
       // As for preparation: the worker is stopped only when no other job is
       // waiting on it (statsWorkerJobs.js).
       if (abandonWorkerJob(countryStatsWorkerPending, id)) {
@@ -10844,15 +10905,22 @@ const persistCountryStatsBackground = async ({
 
     countryStatsWorkerPending.set(id, {
       resolve: (value) => {
+        clearTimeout(timer);
         signal?.removeEventListener?.("abort", abort);
         resolve(value);
       },
       reject: (error) => {
+        clearTimeout(timer);
         signal?.removeEventListener?.("abort", abort);
         reject(error);
       },
     });
     signal?.addEventListener?.("abort", abort, { once: true });
+    timer = setTimeout(() => {
+      resetCountryStatsWorker({
+        reason: new Error(`Country Stats worker did not save ${code} within ${COUNTRY_STATS_PERSIST_TIMEOUT_MS / 1000} s.`),
+      });
+    }, COUNTRY_STATS_PERSIST_TIMEOUT_MS);
 
     const enqueueStartedAt =
       typeof performance !== "undefined" && performance.now
@@ -10882,7 +10950,7 @@ const persistCountryStatsBackground = async ({
         `[stats persist R2.40] ${code}: small commit enqueue ${enqueueElapsed.toFixed(1)} ms.`,
       );
     }
-  });
+  }));
 
   throwIfAborted(signal);
   const endedAt =
@@ -11966,13 +12034,21 @@ export const generateListenInFeed = async ({ place, language: askedLanguage, sig
 // same intercept rather than needing a new one.
 // The seal the intercepts are stored under. Minted at deploy time by the UI and
 // by the jump when a foreign agent appears; this is the fallback for a save that
-// has spies from before seals existed. A world write, so it runs only where
-// nothing else is writing the world.
+// has spies from before seals existed. Minted inside the write queue: two
+// callers that each found no seal used to mint two, and whatever the losing one
+// sealed could never be opened again.
 const ensureSpySeal = async () => {
-  const world = normalizeWorldState(await readWorldState({ force: true }));
-  if (isSeal(world.spySeal)) return world.spySeal;
-  const spySeal = newSeal();
-  await writeWorldState({ ...world, spySeal });
+  const cached = normalizeWorldState(await readWorldState({ force: false }));
+  if (isSeal(cached.spySeal)) return cached.spySeal;
+  let spySeal = null;
+  await mutateWorldState((latest) => {
+    if (isSeal(latest.spySeal)) {
+      spySeal = latest.spySeal;
+      return null;
+    }
+    spySeal = newSeal();
+    return { ...latest, spySeal };
+  });
   return spySeal;
 };
 
@@ -12171,22 +12247,26 @@ const storeSpyReport = async (bundle, spy, payload, { campaignId = "" } = {}) =>
     ? await sealPoliticalAssessment(seal, reportId, politicalAssessment)
     : null;
 
-  // Re-read at write time: another gather may have landed for a different target.
-  const current = normalizeIntercepts(await readInterceptsState({ force: true }));
   if (leftCampaign(campaignId)) return null;
-  // Each report replaces the agent's traffic, but not stolen documents already on file.
-  const stolen = normalizeArray(current[name]?.exchanges).filter(isDocumentExchange).slice(0, STOLEN_DOCUMENTS_KEPT);
-  const entry = {
-    reportId,
-    spyId: normalizeString(spy?.id),
-    gatheredAt: normalizeString(bundle.game?.gameDate),
-    round: Number(bundle.game?.round) || 0,
-    planted: spy?.status === "turned",
-    exchanges: [...stolen, ...sealed],
-    ...(sealedPoliticalAssessment ? { politicalAssessment: sealedPoliticalAssessment } : {}),
-  };
   assertCampaignUnchanged(campaignId, activeCampaignId(), "report");
-  await writeInterceptsState({ ...current, [name]: entry });
+  // Applied to the file as it is at write time: another gather may have landed
+  // for a different target.
+  let entry = null;
+  await mutateInterceptsState((latest) => {
+    const current = normalizeIntercepts(latest);
+    // Each report replaces the agent's traffic, but not stolen documents already on file.
+    const stolen = normalizeArray(current[name]?.exchanges).filter(isDocumentExchange).slice(0, STOLEN_DOCUMENTS_KEPT);
+    entry = {
+      reportId,
+      spyId: normalizeString(spy?.id),
+      gatheredAt: normalizeString(bundle.game?.gameDate),
+      round: Number(bundle.game?.round) || 0,
+      planted: spy?.status === "turned",
+      exchanges: [...stolen, ...sealed],
+      ...(sealedPoliticalAssessment ? { politicalAssessment: sealedPoliticalAssessment } : {}),
+    };
+    return { ...current, [name]: entry };
+  });
   return entry;
 };
 // How many stolen documents an agent's file keeps, newest first.
@@ -12201,20 +12281,28 @@ const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "", 
   if (!stolen.length || !stillCampaign(campaignId)) return;
   try {
     const seal = isSeal(world?.spySeal) ? world.spySeal : await ensureSpySeal();
-    const current = normalizeIntercepts(await readInterceptsState({ force: true }));
-    const next = { ...current };
+    // Sealed first, outside the write queue; filed into the file as it is now.
+    const prepared = [];
     for (const delivery of stolen) {
       const key = normalizeString(delivery.agentTarget || delivery.target);
       // Shown in the Spies tab once the reveal reaches the event it came with.
       const exchange = documentExchange(delivery, { date: game?.gameDate, eventId: deliveryEventId(delivery, lastEventId) });
-      const entry = next[key] ?? { gatheredAt: normalizeString(game?.gameDate), round: Number(game?.round) || 0, planted: false, exchanges: [] };
-      if (entry.exchanges.some((existing) => existing.id === exchange.id)) continue;
-      const documents = entry.exchanges.filter(isDocumentExchange);
-      const traffic = entry.exchanges.filter((existing) => !isDocumentExchange(existing));
-      next[key] = { ...entry, exchanges: [await sealExchange(seal, exchange), ...documents].slice(0, STOLEN_DOCUMENTS_KEPT).concat(traffic) };
+      prepared.push({ key, id: exchange.id, sealed: await sealExchange(seal, exchange) });
     }
     assertCampaignUnchanged(campaignId, activeCampaignId(), "report");
-    await writeInterceptsState(next);
+    await mutateInterceptsState((latest) => {
+      const next = { ...normalizeIntercepts(latest) };
+      let filed = false;
+      for (const { key, id, sealed } of prepared) {
+        const entry = next[key] ?? { gatheredAt: normalizeString(game?.gameDate), round: Number(game?.round) || 0, planted: false, exchanges: [] };
+        if (entry.exchanges.some((existing) => existing.id === id)) continue;
+        const documents = entry.exchanges.filter(isDocumentExchange);
+        const traffic = entry.exchanges.filter((existing) => !isDocumentExchange(existing));
+        next[key] = { ...entry, exchanges: [sealed, ...documents].slice(0, STOLEN_DOCUMENTS_KEPT).concat(traffic) };
+        filed = true;
+      }
+      return filed ? next : null;
+    });
   } catch (error) {
     console.warn("[spycraft] a stolen document could not be filed:", error?.message || error);
   }
@@ -12228,13 +12316,14 @@ const postDocumentNotices = async (deliveries, { lastEventId = "", date = "", ca
   const notices = documentNotices(deliveries, { lastEventId, date });
   if (!notices.length || !stillCampaign(campaignId)) return;
   try {
-    // A failed read throws here rather than posting the notices over an empty
-    // conversation.
-    const list = await readAdvisorMessages({ force: true });
-    const posted = new Set(list.filter((message) => message?.role === "notice").map((message) => message.id));
-    const fresh = notices.filter((notice) => !posted.has(notice.id));
     assertCampaignUnchanged(campaignId, activeCampaignId(), "notice");
-    if (fresh.length) await writeJson(JSON_URLS.advisor, [...list, ...fresh]);
+    // The conversation as it is at write time. A read that fails throws inside
+    // the queue rather than posting the notices over an empty conversation.
+    await mutateAdvisorState((list) => {
+      const posted = new Set(list.filter((message) => message?.role === "notice").map((message) => message.id));
+      const fresh = notices.filter((notice) => !posted.has(notice.id));
+      return fresh.length ? [...list, ...fresh] : null;
+    });
   } catch (error) {
     console.warn("[advisor] a new paper could not be flagged:", error?.message || error);
   }
@@ -12457,9 +12546,17 @@ const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal
   await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the service was being assessed.");
-  const fresh = normalizeWorldState(await readWorldState({ force: true }));
-  if (isIntelligenceRated(fresh, name)) return intelligenceOf(fresh, name);
-  await writeWorldState({ ...fresh, intelligence: { ...(fresh.intelligence ?? {}), [name]: rating } });
+  // Applied to the world as it is inside the write queue: a turn may have
+  // rated the service meanwhile, and its number wins.
+  let ratedMeanwhile = null;
+  await mutateWorldState((latest) => {
+    if (isIntelligenceRated(latest, name)) {
+      ratedMeanwhile = intelligenceOf(latest, name);
+      return null;
+    }
+    return { ...latest, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
+  });
+  if (ratedMeanwhile !== null) return ratedMeanwhile;
   const service = normalizeString(assessment?.service);
   logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
     rationale: normalizeString(assessment?.rationale),
@@ -12519,6 +12616,48 @@ export const ensureCountryStatSheet = (target, { reason = "", rateIntelligence =
     }
     return sheet;
   });
+
+// A shared game's host, answering a player whose Stats pane opened a country
+// with no sheet (multiplayer/host/engineMain.js): the sheet, and with it the
+// rating of its service when it has none, in the one request. The player asked,
+// so this is not background AI and no allowance is consulted; whoever asks,
+// one reading of a polity runs at a time. Resolves to the sheet; rejects with
+// the reason when it could not be written.
+const playerReadingsInFlight = new Map();
+export const readCountryForPlayer = (target) => {
+  const name = normalizeString(target);
+  if (!name) return Promise.reject(new Error("There is no country to read."));
+  const key = firstReadingKey("a player's stat sheet", name);
+  if (playerReadingsInFlight.has(key)) return playerReadingsInFlight.get(key);
+  const run = (async () => {
+    const [world, definition] = await Promise.all([
+      readWorldState({ force: true }).then(normalizeWorldState),
+      loadStatSheetDefinition(),
+    ]);
+    const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
+    const complete = definition.custom
+      ? isCompleteCustomCountryStatSheet(persisted, statSheetKeys(definition))
+      : isCompleteCountryStatSheet(persisted);
+    if (complete) return persisted;
+    await waitForSimulationIdle();
+    const rate = !isIntelligenceRated(world, name);
+    const campaign = activeCampaignId();
+    let assessment = null;
+    const sheet = await generateCountryStatSheet({
+      code: name,
+      name,
+      ...(rate ? { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } } : {}),
+    });
+    if (assessment) {
+      await storeFirstIntelligenceRating(name, assessment, { campaign }).catch((error) => {
+        logDebugEvent("espionage", `${name}: the rating that came with the stat sheet was not kept: ${error?.message || error}`);
+      });
+    }
+    return sheet;
+  })().finally(() => playerReadingsInFlight.delete(key));
+  playerReadingsInFlight.set(key, run);
+  return run;
+};
 
 // The background stat-sheet reading now running for this polity, or null. The
 // Stats pane's Economy view waits on it rather than asking for the same sheet
@@ -12631,17 +12770,19 @@ ${JSON.stringify(previousValues)}`
       console.warn("[stats custom] worker persistence failed; using canonical main-thread fallback.", workerPersistError);
     }
 
-    const world = await readWorldState({ force: false });
-    const nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
-      continuity: { assessedDate: currentDate, assessedRound: currentRound },
-    });
-    world.countryStatsHistory = appendCountryStatHistorySample(
-      world.countryStatsHistory,
-      statCode,
-      nextSheet,
-      { date: currentDate, round: currentRound },
-    );
-    await writeWorldState(world, { emitEvents: false });
+    let nextSheet = null;
+    await mutateWorldState((world) => {
+      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
+        continuity: { assessedDate: currentDate, assessedRound: currentRound },
+      });
+      world.countryStatsHistory = appendCountryStatHistorySample(
+        world.countryStatsHistory,
+        statCode,
+        nextSheet,
+        { date: currentDate, round: currentRound },
+      );
+      return world;
+    }, { emitEvents: false });
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
         detail: { country: statCode, sheet: nextSheet, source: "scenario-custom-stats-main-thread-persist" },
@@ -12854,17 +12995,19 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // If a mapped territorial basis exists, the one-time bootstrap must reassess it.
   if (statCode && legacyContinuityBootstrap && !hasAuthoritativeTerritorialFingerprint) {
     try {
-      const world = await readWorldState({ force: true });
-      const migrated = applyCountryStatPatchToWorld(world, statCode, {}, {
-        continuity: {
-          assessedDate: currentDate,
-          assessedRound: currentRound,
-          stateFingerprint,
-          territorialFingerprint,
-          accountedEventIds: rawEconomicEvidence.relevantIds,
-        },
+      let migrated = null;
+      await mutateWorldState((world) => {
+        migrated = applyCountryStatPatchToWorld(world, statCode, {}, {
+          continuity: {
+            assessedDate: currentDate,
+            assessedRound: currentRound,
+            stateFingerprint,
+            territorialFingerprint,
+            accountedEventIds: rawEconomicEvidence.relevantIds,
+          },
+        });
+        return world;
       });
-      await writeWorldState(world);
       console.info(`[stats 7A.2] continuity metadata migrated for ${statCode}; no authoritative mapped territory was available, so the existing baseline was reused.`);
       return migrated || previous;
     } catch (error) {
@@ -13272,23 +13415,25 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       );
 
       try {
-        const world = await readWorldState({ force: false });
-        const nextSheet = applyCountryStatPatchToWorld(
-          world,
-          statCode,
-          guarded.sheet,
-          {
-            replaceComponents: true,
-            continuity,
-          },
-        );
-        world.countryStatsHistory = appendCountryStatHistorySample(
-          world.countryStatsHistory,
-          statCode,
-          nextSheet,
-          { date: currentDate, round: currentRound },
-        );
-        await writeWorldState(world, { emitEvents: false });
+        let nextSheet = null;
+        await mutateWorldState((world) => {
+          nextSheet = applyCountryStatPatchToWorld(
+            world,
+            statCode,
+            guarded.sheet,
+            {
+              replaceComponents: true,
+              continuity,
+            },
+          );
+          world.countryStatsHistory = appendCountryStatHistorySample(
+            world.countryStatsHistory,
+            statCode,
+            nextSheet,
+            { date: currentDate, round: currentRound },
+          );
+          return world;
+        }, { emitEvents: false });
 
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
@@ -13345,8 +13490,7 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
   }
 
   if (persist) {
-    const nextActions = [...(await readActionsState({ force: true })), action];
-    await writeActionsState(nextActions);
+    await mutateActionsState((actions) => [...actions, action]);
   }
 
   // `source` says whether the model wrote it or the canned template did, so the
@@ -13497,9 +13641,26 @@ export const runChatActionBatch = async ({
     : eventsFromLegacyChat(stored);
   const projected = projectChatThread(events);
   const lifecycleResponseActors = new Set((lifecycleDecisionContext?.cases || []).map((entry) => regionKey(entry?.polity)).filter(Boolean));
-  const aiParticipants = projected.countries
+  // In a shared game (runtime/humanPolities.js) other people sit at this table
+  // too: every member a person plays, and the thread's owner when the one
+  // writing now is one of its members. A stored thread is written around its
+  // owner (chat.player, or the host's seat), who is in no member list. Each
+  // person writes their own lines: the model never answers for one, and a
+  // thread between people alone asks it nothing.
+  const savedGame = bundle.savedGame || bundle.game;
+  const peopleKeys = new Set(humanCountriesOf(savedGame).map(regionKey));
+  const threadOwner = peopleKeys.size > 1
+    ? normalizeString(stored.player) || normalizeString(savedGame?.country)
+    : "";
+  const memberNames = projected.countries
     .map((country) => normalizeString(country?.name))
-    .filter((name) => name && regionKey(name) !== regionKey(player))
+    .filter((name) => name && regionKey(name) !== regionKey(player));
+  const otherPeople = [
+    ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
+    ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
+  ].filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
+  const aiParticipants = memberNames
+    .filter((name) => !otherPeople.some((person) => regionKey(person) === regionKey(name)))
     .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
     .filter((name) => !formalBusinessRequested || autonomousBallotActors.has(regionKey(name)));
   if (!aiParticipants.length) return { events: [], applied: [], rejected: [], actions: [] };
@@ -13543,7 +13704,7 @@ export const runChatActionBatch = async ({
   // every AI participant and the player, who is exactly who a covert Puppet most
   // needs to deceive.
   const briefingWorld = normalizeWorldState(bundle.world);
-  const inTheRoom = [...aiParticipants, player];
+  const inTheRoom = [...aiParticipants, ...otherPeople, player];
   const subordinationBlocks = aiParticipants
     .map((speaker) => describePuppetBriefing(puppetBriefingFor(briefingWorld, speaker, { present: inTheRoom }), speaker))
     .filter(Boolean);
@@ -13571,7 +13732,8 @@ export const runChatActionBatch = async ({
   const recent = shownMessages.slice(-24);
   const lines = recent.map((message) => {
     const absent = absentFrom(message);
-    return `[${message.id}] ${message.speaker || (message.role === "user" ? player : "someone")}: ${message.text}`
+    // A line with no name on it was written by the thread's own player.
+    return `[${message.id}] ${message.speaker || (message.role === "user" ? threadOwner || player : "someone")}: ${message.text}`
       + (absent.length ? ` (not heard by ${absent.join(", ")})` : "");
   });
   const transcript = [
@@ -13583,6 +13745,7 @@ export const runChatActionBatch = async ({
   const rosterText = [
     ...aiParticipants.map((name) => `- ${name} — AI-controlled: you act for it`),
     `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
+    ...otherPeople.map((name) => `- ${name} — HUMAN-controlled (another player): never speak or act for it; it answers for itself`),
   ].join("\n");
 
   const focusInstitution = stored.institutionId
@@ -13676,7 +13839,7 @@ export const runChatActionBatch = async ({
       describeLeaderStanding(bundle.world, { player, speakers: aiParticipants }),
       // The regions where any of them is the lawful owner, the holder or a
       // claimant and those differ, as a one-to-one leader is told.
-      await describeTerritoryForConversation(bundle.world, loadRegionCatalog, [player, ...aiParticipants]),
+      await describeTerritoryForConversation(bundle.world, loadRegionCatalog, [player, ...aiParticipants, ...otherPeople]),
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
       institutionLifecyclePrompt,
       formalInstitutionPrompt,
@@ -13710,7 +13873,7 @@ export const runChatActionBatch = async ({
   const turnTime = normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate);
   const outcome = applyChatActionBatch(partitioned.conversational, {
     aiParticipants,
-    humanParticipants: [player],
+    humanParticipants: [player, ...otherPeople],
     knownPolities: known,
     messageIds: shownMessages.map((message) => message.id),
     polls: projected.polls,
@@ -14001,8 +14164,26 @@ export const consolidateHistoryNow = async () => {
     if (!plan.due) return { consolidated: false, events: 0, chats: 0, retained };
     const before = normalizeWorldState(bundle.world).consolidatedHistory.length;
     const nextWorld = await compactHistoryIfNeeded(bundle, { force: true });
-    const consolidated = nextWorld.consolidatedHistory.length > before;
-    if (consolidated) await writeWorldState(nextWorld);
+    let consolidated = nextWorld.consolidatedHistory.length > before;
+    // Folding only ever adds history entries and rewrites the document, so only
+    // those go onto the world as it is now; whatever else changed while the
+    // model was writing stays. A deferred fold that landed meanwhile already
+    // covers these weeks, and two summaries of them would double the campaign's
+    // memory of them: then this one is dropped.
+    if (consolidated) {
+      await mutateWorldState((latest) => {
+        const history = normalizeArray(latest.consolidatedHistory);
+        if (history.length !== before) {
+          consolidated = false;
+          return null;
+        }
+        return normalizeWorldState({
+          ...latest,
+          consolidatedHistory: [...history, ...nextWorld.consolidatedHistory.slice(before)],
+          historyDocument: nextWorld.historyDocument,
+        });
+      });
+    }
     return {
       consolidated,
       events: plan.eventsToConsolidate.length,
@@ -14089,8 +14270,7 @@ export const createInteractive = async ({ eventId = "", angle = "", force = true
       startedOn: normalizeString(bundle.game?.gameDate),
     };
 
-    const world = normalizeWorldState(await readWorldState({ force: true }));
-    await writeWorldState({ ...world, activeInteractive: interactive, interactiveOffer: null });
+    await mutateWorldState((world) => ({ ...world, activeInteractive: interactive, interactiveOffer: null }));
     logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" opened on "${normalizeString(event.title)}"${asked ? " from the player's angle" : ""}.`);
     return interactive;
   } finally {
@@ -14102,10 +14282,13 @@ export const createInteractive = async ({ eventId = "", angle = "", force = true
 // changes. No request.
 export const declineInteractiveOffer = async () => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
-  const world = normalizeWorldState(await readWorldState({ force: true }));
-  if (!world.interactiveOffer) return { interactiveOffer: null };
-  await writeWorldState({ ...world, interactiveOffer: null });
-  logDebugEvent("turn", "Interactive event let pass.");
+  let declined = false;
+  await mutateWorldState((world) => {
+    if (!world.interactiveOffer) return null;
+    declined = true;
+    return { ...world, interactiveOffer: null };
+  });
+  if (declined) logDebugEvent("turn", "Interactive event let pass.");
   return { interactiveOffer: null };
 };
 
@@ -14116,10 +14299,13 @@ const hasSceneInProgress = (world) => isSceneInProgress(normalizeWorldState(worl
 // Set the scene aside: it ends with nothing written. No request.
 export const setAsideActiveInteractive = async () => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
-  const world = normalizeWorldState(await readWorldState({ force: true }));
-  if (!world.activeInteractive) return { interactive: null };
-  await writeWorldState({ ...world, activeInteractive: null });
-  logDebugEvent("turn", `Interactive event: scene "${world.activeInteractive.title || "untitled"}" set aside.`);
+  let setAside = null;
+  await mutateWorldState((world) => {
+    if (!world.activeInteractive) return null;
+    setAside = world.activeInteractive;
+    return { ...world, activeInteractive: null };
+  });
+  if (setAside) logDebugEvent("turn", `Interactive event: scene "${setAside.title || "untitled"}" set aside.`);
   return { interactive: null };
 };
 
@@ -14294,8 +14480,7 @@ export const endActiveInteractive = async () => {
     const interactive = normalizeWorldState(bundle.world).activeInteractive;
     if (!interactive) throw new Error("No scene is in progress.");
     if (!normalizeArray(interactive.history).length) {
-      const world = normalizeWorldState(await readWorldState({ force: true }));
-      await writeWorldState({ ...world, activeInteractive: null });
+      await mutateWorldState((world) => ({ ...world, activeInteractive: null }));
       return { resolved: false };
     }
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
@@ -14314,16 +14499,18 @@ export const endActiveInteractive = async () => {
 // at once, which is the one request any beat costs.
 export const rewindActiveInteractive = async ({ beatIndex, choice = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
-  const world = normalizeWorldState(await readWorldState({ force: true }));
-  const interactive = world.activeInteractive;
-  if (!interactive) throw new Error("No interactive event is in progress.");
-  const rewound = rewindInteractive(interactive, Number(beatIndex));
-  if (!rewound) {
-    throw new Error(canRewindInteractiveTo(interactive, Number(beatIndex))
-      ? "That beat cannot be returned to."
-      : "That beat was played before the scene kept what was on screen at each beat, so it cannot be returned to; a later one can.");
-  }
-  await writeWorldState({ ...world, activeInteractive: rewound });
+  let rewound = null;
+  await mutateWorldState((world) => {
+    const interactive = world.activeInteractive;
+    if (!interactive) throw new Error("No interactive event is in progress.");
+    rewound = rewindInteractive(interactive, Number(beatIndex));
+    if (!rewound) {
+      throw new Error(canRewindInteractiveTo(interactive, Number(beatIndex))
+        ? "That beat cannot be returned to."
+        : "That beat was played before the scene kept what was on screen at each beat, so it cannot be returned to; a later one can.");
+    }
+    return { ...world, activeInteractive: rewound };
+  });
   logDebugEvent("turn", `Interactive event "${rewound.title || "untitled"}": beat ${Number(beatIndex) + 1} taken back${normalizeString(choice) ? " and chosen again" : ""}.`);
   if (normalizeString(choice)) return advanceActiveInteractive(normalizeString(choice));
   return { interactive: rewound };
@@ -14383,11 +14570,12 @@ export const advanceActiveInteractive = async (choiceText) => {
   });
 
   if (!payload?.resolved) {
-    const nextWorld = {
-      ...world,
+    // Only the scene is this beat's to write: the rest of the world is taken
+    // as it stands now, not as it was read before the model call.
+    const nextWorld = await mutateWorldState((latest) => ({
+      ...latest,
       activeInteractive: nextInteractive,
-    };
-    await writeWorldState(nextWorld);
+    }));
     return {
       interactive: nextInteractive,
       world: nextWorld,
@@ -14452,8 +14640,12 @@ const playerTerritoryNames = async (world, playerNames) => {
 
 // The focus, the player's names and the test the counter uses, once per jump.
 const readPlayerFocusContext = async (bundle) => {
-  const playerName = normalizeString(bundle?.game?.country);
-  const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
+  // A shared game's focus is every polity people play (humanPolities.js).
+  const people = humanCountriesOf(bundle?.game);
+  const playerName = people.length > 1 ? joinPolityNames(people) : normalizeString(bundle?.game?.country);
+  const playerNames = people.length > 1
+    ? [...new Set(people.flatMap((name) => [name, toCountryName(name)]).map(normalizeString).filter(Boolean))]
+    : [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
   const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
   // The scenario's default under this game's own choice (gameFeatures.js).
   return {
@@ -16075,6 +16267,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // but one that fails lands the turn as written rather than holding a turn the
   // player has no reason to retry.
   if (normalizeString(state.generation?.source) === "fallback") checks.accept();
+  // The engine hosting a shared game has no Timeline and nobody to press Retry:
+  // a held turn there would only fail the round for every player and be asked
+  // again whole. A check that fails lands the turn as written.
+  if (hostingSharedGame()) checks.accept();
   // A folded skip's review makes no request, so it is not one of the checks:
   // nothing in it can fail, hold the turn or be asked again. The review a
   // refused folded skip still asks for is one. There is always a review
@@ -16310,7 +16506,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     variables,
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
-    stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // The host's own setting, read from the host's device, is not the other
+    // players': a shared game's round never stops on it (and nobody could answer).
+    stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures) && !hostingSharedGame(),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };
@@ -17746,40 +17944,45 @@ export const applyGameMasterPreview = async (preview) => {
       at: auditRecord.appliedAt,
     });
 
-    // Canonical persistence only. Deliberately omit actions/game writes and rollback
-    // snapshots: a GM edit is administrative authority, not a turn.
-    // Avoid rewriting unrelated assets when this transaction did not touch them.
+    // Canonical persistence only. No rollback snapshot and no oh:turn-complete:
+    // a GM edit is administrative authority, not a turn. The documents the
+    // transaction did not touch are committed as they currently stand.
     const touchedEvents = events.length > 0;
     const touchedChats = generatedChats.length > 0 || Boolean(renamedChats);
     const touchedColors = JSON.stringify(nextColors) !== JSON.stringify(colors);
-    const writes = [writeWorldState(nextWorld)];
-    if (touchedEvents) writes.push(writeEventsState(nextEvents, { preserveApprovedEvents: true }));
-    if (touchedChats) writes.push(writeChatsState(chatsToWrite));
-    if (touchedColors) writes.push(writeJson(JSON_URLS.colors, nextColors, { pretty: true }));
-    // The one game write the GM console makes: the player's own polity was renamed.
-    if (renamedGame) writes.push(writeGameData(renamedGame));
-    if (renamedFlags) writes.push(writeJson(JSON_URLS.flags, renamedFlags, { pretty: true }));
 
+    // Flags live outside the canonical generation, so they go first and are put
+    // back if the generation does not commit.
+    if (renamedFlags) await writeJson(JSON_URLS.flags, renamedFlags, { pretty: true });
     try {
-      await Promise.all(writes);
+      // One journaled generation (all or nothing), queued behind every other
+      // canonical write. The fingerprint is checked again against the state it
+      // commits onto: anything written since the preview's check refuses it.
+      await mutateCanonicalTurnState((latest) => {
+        const latestFingerprint = gameMasterStateFingerprint({
+          game: latest.game,
+          world: normalizeWorldState(latest.world),
+          events: latest.events,
+          colors: latest.colors,
+        });
+        if (latestFingerprint !== normalizeString(preview.baseFingerprint)) {
+          throw new Error("Canonical state changed while this GM transaction was being applied. Nothing was applied; regenerate the preview against the current world.");
+        }
+        return {
+          world: nextWorld,
+          ...(touchedEvents ? { events: nextEvents } : {}),
+          ...(touchedChats ? { chats: chatsToWrite } : {}),
+          ...(touchedColors ? { colors: nextColors } : {}),
+          // The one game write the GM console makes: the player's own polity was renamed.
+          ...(renamedGame ? { game: renamedGame } : {}),
+        };
+      }, { preserveApprovedEvents: true });
     } catch (error) {
-      // Storage is file-based rather than transactional. Restore every asset this GM
-      // transaction may have touched so a single failed write does not leave half an
-      // intervention in canon. Best-effort rollback errors are logged separately.
-      const rollbackWrites = [writeWorldState(bundle.world)];
-      if (touchedEvents) rollbackWrites.push(writeEventsState(bundle.events, { preserveApprovedEvents: true }));
-      if (touchedChats) rollbackWrites.push(writeChatsState(bundle.chats));
-      if (touchedColors) rollbackWrites.push(writeJson(JSON_URLS.colors, colors, { pretty: true }));
-      if (renamedGame) rollbackWrites.push(writeGameData(bundle.game));
-      if (renamedFlags) rollbackWrites.push(writeJson(JSON_URLS.flags, flagsBefore ?? {}, { pretty: true }));
-      const rollbackResults = await Promise.allSettled(rollbackWrites);
-      const rollbackFailed = rollbackResults.some((result) => result.status === "rejected");
-      if (rollbackFailed) console.error("[GM] persistence rollback was incomplete.", rollbackResults);
-      throw new Error(
-        rollbackFailed
-          ? `GM persistence failed and rollback was incomplete: ${error?.message || error}`
-          : `GM persistence failed; the pre-apply state was restored: ${error?.message || error}`,
-      );
+      if (renamedFlags) {
+        await writeJson(JSON_URLS.flags, flagsBefore ?? {}, { pretty: true })
+          .catch((restoreError) => console.error("[GM] flags could not be restored.", restoreError));
+      }
+      throw new Error(`GM persistence failed; nothing was applied: ${error?.message || error}`);
     }
 
     if (typeof window !== "undefined") {
@@ -17887,16 +18090,24 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       return debug ? { processed: 0, reason: "event-not-yet-revealed", retryAfterMs: 5000 } : null;
     }
 
-    const removeQueueEntry = async (worldInput, { events = null, reactionResult = "", chatId = "", failure = null } = {}) => {
-      const nextWorld = {
-        ...worldInput,
-        pendingEventOutreach: normalizeArray(worldInput?.pendingEventOutreach)
-          .filter((entry) => normalizeString(entry?.id) !== dueQueueId),
-      };
-      await writeWorldState(nextWorld);
+    // The queue and the event are changed where they stand when the write's
+    // turn comes, never written back from a copy read before the model call:
+    // the editor can queue another reaction, or edit another event, meanwhile.
+    const updateQueueEntry = (patch) => mutateWorldState((world) => ({
+      ...world,
+      pendingEventOutreach: normalizeArray(world.pendingEventOutreach).map((entry) =>
+        normalizeString(entry?.id) === dueQueueId ? { ...entry, ...patch(entry) } : entry),
+    }));
 
-      if (event && events && reactionResult) {
-        const updatedEvents = normalizeArray(events).map((candidate) =>
+    const removeQueueEntry = async ({ reactionResult = "", chatId = "", failure = null } = {}) => {
+      await mutateWorldState((world) => ({
+        ...world,
+        pendingEventOutreach: normalizeArray(world.pendingEventOutreach)
+          .filter((entry) => normalizeString(entry?.id) !== dueQueueId),
+      }));
+
+      if (event && reactionResult) {
+        await mutateEventsState((events) => normalizeArray(events).map((candidate) =>
           eventReactionKey(candidate) === dueKey
             ? {
                 ...candidate,
@@ -17912,8 +18123,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
                 },
               }
             : candidate
-        );
-        await writeEventsState(updatedEvents);
+        ));
       }
 
       if (typeof window !== "undefined") {
@@ -17924,7 +18134,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     };
 
     if (!event || !event?.npcReaction?.enabled) {
-      await removeQueueEntry(bundle.world);
+      await removeQueueEntry();
       return debug ? { processed: 1, reason: event ? "reaction-disabled" : "event-missing" } : null;
     }
 
@@ -18006,24 +18216,14 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       const lastError = normalizeString(error?.message);
       const next = eventReactionAfterFailure(queued.attempts);
       if (next.giveUp) {
-        await removeQueueEntry(latestWorld, {
-          events: await readEventsState({ force: true }),
-          reactionResult: "failed",
-          failure: { attempts: next.attempts, lastError },
-        });
+        await removeQueueEntry({ reactionResult: "failed", failure: { attempts: next.attempts, lastError } });
         return debug ? { processed: 1, reason: "ai-error-gave-up", message: lastError } : null;
       }
-      const latestQueue = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
-        normalizeString(entry?.id) === dueQueueId
-          ? {
-              ...entry,
-              attempts: next.attempts,
-              deliverAfter: new Date(Date.now() + next.retryAfterMs).toISOString(),
-              lastError,
-            }
-          : entry
-      );
-      await writeWorldState({ ...latestWorld, pendingEventOutreach: latestQueue });
+      await updateQueueEntry(() => ({
+        attempts: next.attempts,
+        deliverAfter: new Date(Date.now() + next.retryAfterMs).toISOString(),
+        lastError,
+      }));
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
       }
@@ -18042,17 +18242,12 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     const latestEvent = findCurrentEvent(latestEvents);
 
     if (!queueStillPending || !latestEvent || !latestEvent?.npcReaction?.enabled) {
-      if (queueStillPending) await removeQueueEntry(latestWorld);
+      if (queueStillPending) await removeQueueEntry();
       return debug ? { processed: 1, reason: "cancelled-during-generation" } : null;
     }
 
     if (eventSignature(latestEvent) !== beforeSignature) {
-      const rescheduled = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
-        normalizeString(entry?.id) === dueQueueId
-          ? { ...entry, deliverAfter: new Date(Date.now() + 1000).toISOString(), lastError: "" }
-          : entry
-      );
-      await writeWorldState({ ...latestWorld, pendingEventOutreach: rescheduled });
+      await updateQueueEntry(() => ({ deliverAfter: new Date(Date.now() + 1000).toISOString(), lastError: "" }));
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
       }
@@ -18062,17 +18257,12 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     event = latestEvent;
 
     if (!payload?.chat) {
-      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      await removeQueueEntry({ reactionResult: "silent" });
       return debug ? { processed: 1, reason: "model-chose-silence" } : null;
     }
 
     if (isSimulationBusy()) {
-      const deferred = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
-        normalizeString(entry?.id) === dueQueueId
-          ? { ...entry, deliverAfter: new Date(Date.now() + 5000).toISOString() }
-          : entry
-      );
-      await writeWorldState({ ...latestWorld, pendingEventOutreach: deferred });
+      await updateQueueEntry(() => ({ deliverAfter: new Date(Date.now() + 5000).toISOString() }));
       if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
       return debug ? { processed: 0, reason: "simulation-started-during-generation", retryAfterMs: 5000 } : null;
     }
@@ -18085,14 +18275,16 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     );
 
     if (!built) {
-      await removeQueueEntry(latestWorld, { events: latestEvents, reactionResult: "silent" });
+      await removeQueueEntry({ reactionResult: "silent" });
       return debug ? { processed: 1, reason: "generated-chat-invalid-treated-as-silence" } : null;
     }
 
     const messageDate = normalizeString(event.date) || normalizeString(bundle.game?.gameDate);
-    const currentChats = normalizeChats(await readChatsState({ force: true }));
-    const nextChats = foldGeneratedChatsIntoStorage(currentChats, [built], { stampTime: messageDate });
-    await writeChatsState(nextChats);
+    let nextChats = [];
+    await mutateChatsState((currentChats) => {
+      nextChats = foldGeneratedChatsIntoStorage(currentChats, [built], { stampTime: messageDate });
+      return nextChats;
+    });
 
     const builtParticipantKey = chatParticipantNamesKey(built);
     const mergedChat = builtParticipantKey
@@ -18102,8 +18294,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       : null;
     const actualChatId = normalizeString(mergedChat?.id || built.id);
 
-    await removeQueueEntry(latestWorld, {
-      events: latestEvents,
+    await removeQueueEntry({
       reactionResult: "sent",
       chatId: actualChatId,
     });
@@ -18709,6 +18900,12 @@ export const maybeGeneratePregameHistory = async () => {
       return await applyScenarioPrehistory(storedPayload, { startDate, campaignId });
     }
 
+    // "Pre-game history" off (Gameplay features): nothing is asked of the model
+    // and nothing is read out of the briefing. Only the asking is switched off:
+    // a pre-history the scenario keeps is its author's own, written above
+    // whatever the switch says.
+    if (!isActiveFeatureEnabled("pregameHistory")) return null;
+
     // The backstory now doubles as the round-zero bootstrap of the war and
     // diplomacy ledgers: a campaign that opens mid-war starts with that war on
     // the books, and a standing alliance is a fact from day one.
@@ -18974,10 +19171,12 @@ const idlePulseBackoff = createIdlePulseBackoff();
 // applyEventImpactsToWorld with a synthetic event rather than a hand-rolled
 // applier, so the detection gate, the owner-name resolution and the patrol-order
 // minting all behave exactly as they do on a real turn.
-const applyIdlePulseUnitOps = async (bundle, unitOps) => {
-  // Deliberately NOT bundle.world: a jump may have committed while the model was
-  // thinking, and writing a world built on the stale snapshot would undo it.
-  const freshWorld = await readWorldState({ force: true });
+//
+// `freshWorld` is deliberately NOT bundle.world: a jump may have committed, or
+// the player deployed a unit, while the model was thinking, and a world built on
+// the stale snapshot would undo it. The caller passes the world as it stands
+// inside the write queue (mutateWorldState).
+const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps) => {
   const tick = (Number(freshWorld.idlePulseTick) || 0) + 1;
   const gameDate = normalizeString(bundle.game?.gameDate);
   const round = Number(bundle.game?.round) || 0;
@@ -18998,19 +19197,18 @@ const applyIdlePulseUnitOps = async (bundle, unitOps) => {
   });
   return enforceUnitVolume(
     { ...drifted, idlePulseTick: tick },
-    { playerCode: normalizeString(bundle.game?.country) },
+    { playerCode: normalizeString(bundle.game?.country), playerCodes: humanCountriesOf(bundle.game) },
   );
 };
 
 // One short intelligence report in the event feed, so a build-up the player can
 // see on the map also tells them WHY it is there. Only ever written when the
 // model judged the movement near enough for their services to have seen it.
+// Appended to the log as it stands inside the write queue.
 const appendSightingEvent = async (bundle, sighting, unitOps, campaign = "") => {
-  const events = await readEventsState({ force: true });
   if (leftCampaign(campaign)) return;
   // The AI's own event, carrying the ops it reports (idlePulse.js says why).
-  const next = normalizeEvents([...events, sightingEvent(bundle.game?.gameDate, sighting, unitOps)]);
-  await writeEventsState(next);
+  await mutateEventsState((events) => normalizeEvents([...events, sightingEvent(bundle.game?.gameDate, sighting, unitOps)]));
 };
 
 export const maybeSendIdleDiplomacy = async () => {
@@ -19116,7 +19314,7 @@ export const maybeSendIdleDiplomacy = async () => {
     // --- movement ---------------------------------------------------------
     // Only what the world may do: never the player's forces (idlePulse.js).
     // With nothing left there is nothing to apply and no sighting to report.
-    const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), bundle.game?.country);
+    const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), humanCountriesOf(bundle.game));
     idlePulseBackoff.note(fingerprint, unitOps.length === 0 && !payload.chat);
     if (unitOps.length > 0 && !isSimulationBusy() && !leftCampaign(campaign)) {
       // Placed by name, and kept off each other, like a turn's own ops.
@@ -19126,14 +19324,17 @@ export const maybeSendIdleDiplomacy = async () => {
         console.warn("[ai] idle pulse ops could not be placed by name; they stand as written.", error);
       }
       try {
-        const nextWorld = await applyIdlePulseUnitOps(bundle, unitOps);
-        // Re-check immediately before the write, exactly as the chat half does:
-        // a jump that started while we were applying owns the world now.
-        if (!isSimulationBusy() && !leftCampaign(campaign)) {
-          await writeWorldState(nextWorld);
-          if (payload.sighting && !isSimulationBusy()) {
-            await appendSightingEvent(bundle, payload.sighting, unitOps, campaign);
-          }
+        let moved = false;
+        await mutateWorldState((latest) => {
+          // Re-checked at the write itself, exactly as the chat half does: a
+          // jump that started while the model was thinking owns the world now,
+          // and a campaign the player has left is not this pulse's to move.
+          if (isSimulationBusy() || leftCampaign(campaign)) return null;
+          moved = true;
+          return applyIdlePulseUnitOps(latest, bundle, unitOps);
+        });
+        if (moved && payload.sighting && !isSimulationBusy()) {
+          await appendSightingEvent(bundle, payload.sighting, unitOps, campaign);
         }
       } catch (error) {
         // Movement is a bonus; never let it cost the player a diplomatic note.
@@ -19173,30 +19374,37 @@ export const maybeSendIdleDiplomacy = async () => {
       logDebugEvent("diplomacy", `Idle diplomacy routed ${opening.speaker} into ${institutionRoute.name || institutionRoute.id} Council instead of Contacts.`, { institutionId: institutionRoute.id }, { verbose: true });
       return { ...built, institutionId: institutionRoute.id, id: committed?.channel?.id || built.id };
     }
-    const chats = normalizeChats(await readChatsState({ force: true }));
-    const collidesWithLifecycleNegotiation = chats.some((chat) => (
-      chat?.status !== "closed"
-      && isLifecycleNegotiationChat(chat)
-      && chatParticipantKey(chat.countries) === chatParticipantKey(built.countries)
-    ));
-    if (collidesWithLifecycleNegotiation) {
-      logGeneratedChat(built, "dropped — lifecycle negotiations only accept native lifecycle decisions");
-      return null;
-    }
-    // A note from a country the player already has an open thread with (1:1 or a
-    // standing group) lands in that thread; only a genuinely new set of
-    // participants opens a fresh chat. Matching 1:1 threads only meant a group
-    // approach always opened a duplicate — the participant-set key handles both.
-    // dropEchoes discards a note that just repeats what is already in that
-    // thread; silence is what this whole path defaults to anyway.
-    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {
-      stampTime: normalizeString(bundle.game?.gameDate),
-      dropEchoes: true,
+    // Folded into the chats as they stand when the write's turn comes: the
+    // player may have sent a message while the model was thinking.
+    let outcome = "";
+    await mutateChatsState((chats) => {
+      const collidesWithLifecycleNegotiation = chats.some((chat) => (
+        chat?.status !== "closed"
+        && isLifecycleNegotiationChat(chat)
+        && chatParticipantKey(chat.countries) === chatParticipantKey(built.countries)
+      ));
+      if (collidesWithLifecycleNegotiation) {
+        outcome = "lifecycle";
+        return null;
+      }
+      // A note from a country the player already has an open thread with (1:1 or a
+      // standing group) lands in that thread; only a genuinely new set of
+      // participants opens a fresh chat. Matching 1:1 threads only meant a group
+      // approach always opened a duplicate — the participant-set key handles both.
+      // dropEchoes discards a note that just repeats what is already in that
+      // thread; silence is what this whole path defaults to anyway.
+      const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {
+        stampTime: normalizeString(bundle.game?.gameDate),
+        dropEchoes: true,
+      });
+      if (nextChats.dropped || isSimulationBusy() || leftCampaign(campaign)) return null;
+      outcome = "sent";
+      return nextChats;
     });
-    if (nextChats.dropped) return null;
-    if (isSimulationBusy() || leftCampaign(campaign)) return null;
-    await writeChatsState(nextChats);
-    return built;
+    if (outcome === "lifecycle") {
+      logGeneratedChat(built, "dropped — lifecycle negotiations only accept native lifecycle decisions");
+    }
+    return outcome === "sent" ? built : null;
   } catch {
     return null; // silence is always the safe outcome
   } finally {

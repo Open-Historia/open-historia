@@ -15,7 +15,8 @@
 // prefetchGameplay() warms the chunk after first world idle so the player's
 // first turn does not also pay the download.
 
-import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { readWorldStateView } from "../../runtime/gameState.js";
 
 let modulePromise = null;
 
@@ -24,6 +25,28 @@ const gameplay = () => {
   return modulePromise;
 };
 
+// A page playing a shared game (multiplayer/) never runs the game itself: the
+// host's engine does, and the page's screens send it requests instead. So
+// everything here that writes the game refuses there, with a reason, rather
+// than spending the player's AI key on a change the host would never accept.
+// What only reads, or answers on the player's own screen (suggestions,
+// wording an order, reading its own intercepts), still runs.
+export class SharedGameRefusal extends Error {
+  constructor() {
+    super("In a shared game the host's computer runs the game; this is done there.");
+    this.name = "SharedGameRefusal";
+  }
+}
+const hostOnly = (run) => async (...args) => {
+  if (inSharedGame()) throw new SharedGameRefusal();
+  return run(...args);
+};
+// What a screen starts on its own, with nobody waiting on the answer (a first
+// reading of a country when its panel opens, a rating of its services): there
+// it is simply not done, and settles with nothing. A refusal nobody catches is
+// a crash in the log for something the player never asked for.
+const hostQuietly = (run) => async (...args) => (inSharedGame() ? null : run(...args));
+
 export const prefetchGameplay = () => {
   // Deliberately swallowed: a warm-up that fails must not surface as an error.
   // The real call retries the import and reports properly.
@@ -31,67 +54,94 @@ export const prefetchGameplay = () => {
 };
 
 // --- Timeline ---------------------------------------------------------------
-export const simulateTimelineJump = async (...args) => (await gameplay()).simulateTimelineJump(...args);
-export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
-export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
-export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
-export const retryPendingChecksJump = async (...args) => (await gameplay()).retryPendingChecksJump(...args);
-export const retryHeldPlayerEvents = async (...args) => (await gameplay()).retryHeldPlayerEvents(...args);
-export const heldSkipToRerun = async (...args) => (await gameplay()).heldSkipToRerun(...args);
-export const applyParkedTurn = async (...args) => (await gameplay()).applyParkedTurn(...args);
-export const loadParkedTurn = async (...args) => (await gameplay()).loadParkedTurn(...args);
-export const discardKeptTurn = async (...args) => (await gameplay()).discardKeptTurn(...args);
-export const maybeGeneratePregameHistory = async (...args) => {
-  // This is the only production entry point for the automatic Round-Zero
-  // bootstrap. Gate it before importing the large gameplay chunk so an author
-  // who disables pre-game history spends no AI request and starts with exactly
-  // the canonical state already authored into the scenario.
-  if (!isActiveFeatureEnabled("pregameHistory")) return null;
-  return (await gameplay()).maybeGeneratePregameHistory(...args);
-};
+export const simulateTimelineJump = hostOnly(async (...args) => (await gameplay()).simulateTimelineJump(...args));
+export const simulateAutoJump = hostOnly(async (...args) => (await gameplay()).simulateAutoJump(...args));
+export const retryPendingJumpSegment = hostOnly(async (...args) => (await gameplay()).retryPendingJumpSegment(...args));
+export const retryPendingProjectsJump = hostOnly(async (...args) => (await gameplay()).retryPendingProjectsJump(...args));
+export const retryPendingChecksJump = hostOnly(async (...args) => (await gameplay()).retryPendingChecksJump(...args));
+export const retryHeldPlayerEvents = hostOnly(async (...args) => (await gameplay()).retryHeldPlayerEvents(...args));
+export const heldSkipToRerun = hostOnly(async (...args) => (await gameplay()).heldSkipToRerun(...args));
+export const applyParkedTurn = hostOnly(async (...args) => (await gameplay()).applyParkedTurn(...args));
+// A kept skip is the host's, in the host's own store: a page playing a shared
+// game is told there is none, and never takes one in or throws one away.
+export const loadParkedTurn = hostQuietly(async (...args) => (await gameplay()).loadParkedTurn(...args));
+export const discardKeptTurn = hostOnly(async (...args) => (await gameplay()).discardKeptTurn(...args));
+// The only production entry point for a fresh game's backstory. The "Pre-game
+// history" switch is read inside it, after the scenario's own record: off stops
+// the request to the model, never a pre-history the scenario keeps. The
+// backstory is the game's own record, so a page playing a shared game writes
+// none (as hostQuietly does, written out so this stays one plain forward).
+export const maybeGeneratePregameHistory = async (...args) => (inSharedGame() ? null : (await gameplay()).maybeGeneratePregameHistory(...args));
 // A scenario's own pre-history, written in the Workshop: not the game being played.
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
-export const rollBackToSnapshot = async (...args) => (await gameplay()).rollBackToSnapshot(...args);
+export const rollBackToSnapshot = hostOnly(async (...args) => (await gameplay()).rollBackToSnapshot(...args));
 // Intervene: stop the last turn after the events revealed so far (intervene.js).
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);
-export const interveneAfterEvent = async (...args) => (await gameplay()).interveneAfterEvent(...args);
+export const interveneAfterEvent = hostOnly(async (...args) => (await gameplay()).interveneAfterEvent(...args));
 
 // --- Interactive events -----------------------------------------------------
 // A moment played out as a scene (GameUI/interactive.jsx): offered now and then
 // by a time skip (runtime/interactiveOffer.js), taken up or let pass by the
 // player, played beat by beat, taken back (interactiveRewind.js), ended into
 // the record or set aside.
-export const createInteractive = async (...args) => (await gameplay()).createInteractive(...args);
-export const declineInteractiveOffer = async (...args) => (await gameplay()).declineInteractiveOffer(...args);
-export const advanceActiveInteractive = async (...args) => (await gameplay()).advanceActiveInteractive(...args);
-export const rewindActiveInteractive = async (...args) => (await gameplay()).rewindActiveInteractive(...args);
-export const endActiveInteractive = async (...args) => (await gameplay()).endActiveInteractive(...args);
-export const setAsideActiveInteractive = async (...args) => (await gameplay()).setAsideActiveInteractive(...args);
+export const createInteractive = hostOnly(async (...args) => (await gameplay()).createInteractive(...args));
+export const declineInteractiveOffer = hostOnly(async (...args) => (await gameplay()).declineInteractiveOffer(...args));
+export const advanceActiveInteractive = hostOnly(async (...args) => (await gameplay()).advanceActiveInteractive(...args));
+export const rewindActiveInteractive = hostOnly(async (...args) => (await gameplay()).rewindActiveInteractive(...args));
+export const endActiveInteractive = hostOnly(async (...args) => (await gameplay()).endActiveInteractive(...args));
+export const setAsideActiveInteractive = hostOnly(async (...args) => (await gameplay()).setAsideActiveInteractive(...args));
 
 // --- Chat and diplomacy -----------------------------------------------------
 // One request acts for every AI participant in a thread (AI/chatActions.js).
-export const runChatActionBatch = async (...args) => (await gameplay()).runChatActionBatch(...args);
-export const checkDemandReply = async (...args) => (await gameplay()).checkDemandReply(...args);
-export const ensureCountryAssessed = async (...args) => (await gameplay()).ensureCountryAssessed(...args);
-export const processPendingEventOutreach = async (...args) => (await gameplay()).processPendingEventOutreach(...args);
+export const runChatActionBatch = hostOnly(async (...args) => (await gameplay()).runChatActionBatch(...args));
+export const checkDemandReply = hostQuietly(async (...args) => (await gameplay()).checkDemandReply(...args));
+export const ensureCountryAssessed = hostQuietly(async (...args) => (await gameplay()).ensureCountryAssessed(...args));
+export const processPendingEventOutreach = hostOnly(async (...args) => (await gameplay()).processPendingEventOutreach(...args));
 
 // --- Actions ----------------------------------------------------------------
 export const generateActionSuggestions = async (...args) => (await gameplay()).generateActionSuggestions(...args);
 export const refinePlayerAction = async (...args) => (await gameplay()).refinePlayerAction(...args);
 
 // --- Game master (cheats panel, itself already lazy) -------------------------
-export const previewGameMasterCommand = async (...args) => (await gameplay()).previewGameMasterCommand(...args);
-export const applyGameMasterPreview = async (...args) => (await gameplay()).applyGameMasterPreview(...args);
-export const consolidateHistoryNow = async (...args) => (await gameplay()).consolidateHistoryNow(...args);
+export const previewGameMasterCommand = hostOnly(async (...args) => (await gameplay()).previewGameMasterCommand(...args));
+export const applyGameMasterPreview = hostOnly(async (...args) => (await gameplay()).applyGameMasterPreview(...args));
+export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay()).consolidateHistoryNow(...args));
 
 // --- Stats and intelligence -------------------------------------------------
-export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);
+export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-export const generateCountryStatSheet = async (...args) => (await gameplay()).generateCountryStatSheet(...args);
+// A stat sheet is the game's own record, so in a shared game the host writes
+// it, on the host's AI key: the page asks (the host answers once it is
+// written, which takes as long as the model does) and reads the sheet out of
+// its next view. A refusal is thrown with the host's reason, as any failed
+// reading is, and the Stats pane shows it.
+const SHEET_ANSWER_MS = 5 * 60 * 1000;
+const sheetFromHost = async ({ code, name, forceReassess = false, signal } = {}) => {
+  const country = String(code || name || "").trim();
+  const answer = await requestFromHost("sheet", { country, fresh: forceReassess === true }, { timeoutMs: SHEET_ANSWER_MS });
+  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  if (!answer.ok) throw new Error(answer.error || "The host did not write the stat sheet.");
+  // The sheet comes with the view the host sends right after its answer.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const world = await readWorldStateView({ force: true }).catch(() => null);
+    const sheet = world?.countryStats?.[country];
+    if (sheet && typeof sheet === "object") return sheet;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("The host wrote the stat sheet, but it has not arrived yet. Open the country again in a moment.");
+};
+export const generateCountryStatSheet = async (...args) => (inSharedGame()
+  ? sheetFromHost(...args)
+  : (await gameplay()).generateCountryStatSheet(...args));
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
+// A briefing on a country, in prose: asked with the player's own key from what
+// the player's own screen holds, and written nowhere. A page playing a shared
+// game asks it like any other.
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
 // Listen in: one request for what people in a place are posting (runtime/listenIn.js).
+// It writes nothing to the game: asked with the player's own key, kept on the
+// player's own device, so a page playing a shared game asks it like any other.
 export const generateListenInFeed = async (...args) => (await gameplay()).generateListenInFeed(...args);

@@ -122,6 +122,8 @@ test("the one-on-one briefing counts the player as present", () => {
 test("every AI participant in a group turn is briefed, the player in the room", () => {
     const source = read("../Game/AI/gameplay.js");
     assert.match(source, /puppetBriefingFor\(briefingWorld, speaker, \{ present: inTheRoom \}\)/);
-    assert.match(source, /const inTheRoom = \[\.\.\.aiParticipants, player\]/);
+    // Everyone at the table: in a shared game that is the other people too
+    // (none in single player), and a covert Puppet must deceive each of them.
+    assert.match(source, /const inTheRoom = \[\.\.\.aiParticipants, \.\.\.otherPeople, player\]/);
     assert.match(source, /\[crossChatKnowledge, subordinationKnowledge\]/, "and it reaches the group prompt");
 });

@@ -600,6 +600,25 @@ export const releaseAiRecords = () => {
   history = null;
 };
 
+// A record another window of the app stored: a shared game's engine window
+// (multiplayer/host/engineMain.js) makes that game's AI calls and shares this
+// store. The console's copy follows only this window's own writes, so that
+// record is read on its own and taken in. Resolves whether it was: false while
+// the console is closed (its next opening reads the whole store) and when the
+// record is not stored yet.
+export const adoptStoredAiRecord = async (recordId) => {
+  const id = String(recordId ?? "");
+  if (!id || (!history && !historyPending)) return false;
+  try {
+    const record = await withStore("readonly", (store) => store.get(id));
+    if (!record || typeof record !== "object") return false;
+    followStore((stored) => stored.set(record.id, record));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const setGenerationRating = async (recordId, rating) => {
   const value = Math.round(Number(rating));
   if (!Number.isFinite(value)) return false;

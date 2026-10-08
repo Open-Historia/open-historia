@@ -11,14 +11,31 @@
 #
 # Windows-only (System.Drawing), which is where this is developed. The output is an
 # ordinary PNG; regenerating it any other way is fine.
+#
+# The multiplayer build's icon is the same banner in another colour and word:
+#
+#   powershell -ExecutionPolicy Bypass -File scripts/make-beta-icon.ps1 -Text MULTIPLAYER `
+#     -OutFile electron\multiplayer-assets\icon-multiplayer.png -Top "22,160,210" -Bottom "10,112,160" -Edge "5,60,90"
+#
+# Colours are "r,g,b" text: -File hands every argument over as a string.
+param(
+  [string]$Text = "BETA",
+  [string]$OutFile = "electron\beta-assets\icon-beta.png",
+  [string]$Top = "139,92,246",
+  [string]$Bottom = "109,40,217",
+  [string]$Edge = "46,16,101"
+)
+$topRgb = @($Top.Split(",") | ForEach-Object { [int]$_ })
+$bottomRgb = @($Bottom.Split(",") | ForEach-Object { [int]$_ })
+$edgeRgb = @($Edge.Split(",") | ForEach-Object { [int]$_ })
 Add-Type -AssemblyName System.Drawing
 
 $root = Split-Path -Parent $PSScriptRoot
-$outDir = Join-Path $root "electron\beta-assets"
+$dst = Join-Path $root $OutFile
+$outDir = Split-Path -Parent $dst
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 $src = Join-Path $root "public\icon-512.png"
-$dst = Join-Path $outDir "icon-beta.png"
 
 function New-RoundedRect($x, $y, $ww, $hh, $r) {
   $p = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -54,14 +71,14 @@ $path = New-RoundedRect $barX $barY $barW $barH $radius
 $fill = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
   (New-Object System.Drawing.Point($barX, $barY)),
   (New-Object System.Drawing.Point($barX, ($barY + $barH))),
-  [System.Drawing.Color]::FromArgb(255, 139, 92, 246),
-  [System.Drawing.Color]::FromArgb(255, 109, 40, 217))
+  [System.Drawing.Color]::FromArgb(255, $topRgb[0], $topRgb[1], $topRgb[2]),
+  [System.Drawing.Color]::FromArgb(255, $bottomRgb[0], $bottomRgb[1], $bottomRgb[2]))
 $g.FillPath($fill, $path)
 $penW = [Math]::Max(1.0, [float]($h * 0.012))
-$g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 46, 16, 101), $penW)), $path)
+$g.DrawPath((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, $edgeRgb[0], $edgeRgb[1], $edgeRgb[2]), $penW)), $path)
 
 # Grow the type until it fills ~72% of the banner width or hits its height.
-$text = "BETA"
+$text = $Text
 $target = $barW * 0.72
 $size = 6.0
 for ($i = 0; $i -lt 80; $i++) {
@@ -79,4 +96,4 @@ $g.DrawString($text, $font, [System.Drawing.Brushes]::White, (New-Object System.
 
 $bmp.Save($dst, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose(); $base.Dispose(); $font.Dispose()
-"public/icon-512.png -> electron/beta-assets/icon-beta.png  (${w}x${h}, ${size}px type)"
+"public/icon-512.png -> $OutFile  (${w}x${h}, ${size}px type)"

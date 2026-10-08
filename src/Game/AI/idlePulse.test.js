@@ -122,6 +122,6 @@ test("the pulse is wired to them", () => {
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(source, /events: \[idlePulseEvent\(gameDate, unitOps\)\]/);
   assert.match(source, /advanceStandingOrders\(keepDetectedEvents\(freshWorld, impacted\)/);
-  assert.match(source, /const unitOps = idlePulseUnitOps\(bundle\.world, normalizeArray\(payload\.unitOps\), bundle\.game\?\.country\)/);
+  assert.match(source, /const unitOps = idlePulseUnitOps\(bundle\.world, normalizeArray\(payload\.unitOps\), humanCountriesOf\(bundle\.game\)\)/);
   assert.doesNotMatch(source, /title: "", description: "", impacts: \{ unitOps \}/);
 });

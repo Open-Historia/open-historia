@@ -12,6 +12,12 @@ const path = require("node:path");
 // nothing derives one from the other.
 const BETA_APP_NAME = "Open Historia Beta";
 
+// The multiplayer build (`npm run dist:win:multiplayer`) is a third application,
+// named the same way: its own profile, saves, settings and map folder, beside the
+// official app and the beta, never over them. It has to match `productName` in
+// electron-builder.multiplayer.yml (server/multiplayerPackaging.test.js).
+const MULTIPLAYER_APP_NAME = "Open Historia Multiplayer";
+
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the beta build (`npm run dist:win:beta` and the beta release workflow); the
 // stable build ships no such file, reads "stable", and every branch that asks is
@@ -28,4 +34,4 @@ const readChannel = (dir, env = process.env) => {
   }
 };
 
-module.exports = { BETA_APP_NAME, readChannel };
+module.exports = { BETA_APP_NAME, MULTIPLAYER_APP_NAME, readChannel };
