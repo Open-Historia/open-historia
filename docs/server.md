@@ -75,7 +75,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | GET | `/api/games` | Game catalog (`{ games, activeGameId }`) | `getGameCatalog` |
 | GET | `/api/games/:gameId` | One game's summary + all 7 core JSON assets + its scenario summary | `getGameDetails` |
 | POST | `/api/games` | Create a game from a scenario (or seed from `seedGameId`; a copy keeps its source's scenario even when that scenario is gone, and a refused create leaves nothing on disk) → 201 | `createGame` |
-| PUT | `/api/games/active` | Set the active game (stamps `lastPlayedAt`/`playCount`) | `setActiveGame` |
+| PUT | `/api/games/active` | Set the active game (stamps `lastPlayedAt`/`playCount`). Refused with 400 while this computer hosts a shared game (the engine window is open): the hosted game stays the open one, so making a game with `setActive`, opening one through `PUT /api/games/:gameId` and deleting the hosted game are refused too (`setActiveGameHold`) | `setActiveGame` |
 | PUT | `/api/games/:gameId` | Update meta / `world` / `game` / `prompts` / `storage.*`; `scenarioId` re-points the game at a scenario this library holds (anything else is refused) | `updateGame` |
 | GET | `/api/games/:gameId/export` | Export one game as a bundle (the zip around it is built in the client, `src/runtime/gameZip.js`, so the web build makes the same file) | `exportGameBundle` |
 | POST | `/api/games/import` | Import a game bundle as a new game → 201; never switches the active game | `importGameBundle` |

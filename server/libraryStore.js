@@ -2121,12 +2121,38 @@ const recordGamePlayed = (gameId) => {
   }
 };
 
+// While this computer hosts a shared game, the game it hosts stays the open
+// one. The host's engine window (src/multiplayer/host/engineMain.js) runs the
+// campaign that was open when the hosting began and stamps every turn with its
+// id. Every page this server serves shares the one open game, so a second
+// window on the same computer joining the host's own lobby (it makes a
+// stand-in game and opens it) switched the game under the engine, and from
+// then on each save the host made was refused: "Turn commit belongs to game A,
+// but B is active". The orders, the seats and the round itself were lost.
+//
+// server.js gives the check (it knows whether the engine window is open); it
+// returns the reason the open game may not change, or "".
+let activeGameHold = () => "";
+const setActiveGameHold = (check) => {
+  activeGameHold = typeof check === "function" ? check : () => "";
+};
+// Throws when `nextGameId` would take the place of a game that is held open.
+// Nothing is held when no game is open, or when the open game is the one named.
+const assertActiveGameMayChange = (nextGameId) => {
+  const reason = String(activeGameHold() || "");
+  if (!reason) return;
+  const openGameId = getGameManifest().activeGameId;
+  if (!openGameId || openGameId === nextGameId) return;
+  throw new Error(reason);
+};
+
 const setActiveGame = (gameId) => {
   ensureGameStore();
 
   if (!fs.existsSync(getGameDirectory(gameId))) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  assertActiveGameMayChange(gameId);
 
   const manifest = getGameManifest();
   manifest.activeGameId = gameId;
@@ -2272,6 +2298,8 @@ const createGame = ({
 
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
+  // Refused before anything is on disk: a game made to be opened at once.
+  if (setActive) assertActiveGameMayChange(resolvedGameId);
 
   // Everything that can refuse the request is resolved before anything is on
   // disk. A clone used to copy the source's files — game.json included — and
@@ -2527,6 +2555,8 @@ const updateGame = (
   if (!fs.existsSync(getGameDirectory(gameId))) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  // Refused before anything is written: an edit that also opens the game.
+  if (setActive) assertActiveGameMayChange(gameId);
 
   // Re-pointing a game at another scenario: "Import & play" on a game whose map
   // this library lacked, once the map is here. Only ever at a scenario this
@@ -2900,6 +2930,8 @@ const deleteGame = (gameId) => {
   if (!resolved.startsWith(resolvedRoot) || !fs.existsSync(resolved)) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  // Deleting the open game opens the next one: not under a game being hosted.
+  if (getGameManifest().activeGameId === gameId) assertActiveGameMayChange("");
 
   moveDirectoryToTrash(resolved, "game", gameId);
   invalidateOwnerSchemaCache("game", gameId);
@@ -4552,6 +4584,7 @@ export {
   resolveScenarioUploadAsset,
   resolveRuntimeBinaryAsset,
   setActiveGame,
+  setActiveGameHold,
   setSelectedScenario,
   updateGame,
   updateScenario,

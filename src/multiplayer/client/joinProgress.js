@@ -86,6 +86,11 @@ export const joinFailure = ({ connection = "", reason = "", message = "", networ
 // The host sent something this build could not read, before the lobby came.
 export const unreadableFromHost = () => "The host sent something this version of the game cannot read. Both of you need the same version: update the game, then join again.";
 
+// This page is served by a computer that is hosting a shared game. Joining
+// opens a game of the page's own to draw the map from, and every page of one
+// computer shares its one open game: it would be taken from under the host.
+export const hostingHere = () => "This computer is hosting a shared game. Another window on the same computer shares its library, so it cannot join a shared game while that one is open. Join from another computer, or stop sharing first.";
+
 // The host's scenario is not on this device.
 export const scenarioMissing = (name) => `The host is playing "${String(name || "a scenario").slice(0, 120)}", and that scenario is not in your library, so its map cannot be shown here. Add it from the Community tab, or import the host's copy of it, then join again.`;
 

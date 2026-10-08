@@ -25,7 +25,7 @@ const matches = (filter, event) => {
 export const createFakeRelayNetwork = ({ verify = true } = {}) => {
   const relays = new Map();
   const relayFor = (url) => {
-    if (!relays.has(url)) relays.set(url, { url, up: true, sockets: new Set(), events: [], tamper: null });
+    if (!relays.has(url)) relays.set(url, { url, up: true, sockets: new Set(), events: [], tamper: null, refusing: "", refused: 0 });
     return relays.get(url);
   };
 
@@ -83,6 +83,11 @@ export const createFakeRelayNetwork = ({ verify = true } = {}) => {
           this.deliver(JSON.stringify(["OK", event.id, false, "invalid: bad id or signature"]));
           return;
         }
+        if (this.relay.refusing) {
+          this.relay.refused += 1;
+          this.deliver(JSON.stringify(["OK", event.id, false, this.relay.refusing]));
+          return;
+        }
         this.deliver(JSON.stringify(["OK", event.id, true, ""]));
         this.relay.events.push(event);
         const outgoing = this.relay.tamper ? this.relay.tamper(event) : event;
@@ -118,6 +123,11 @@ export const createFakeRelayNetwork = ({ verify = true } = {}) => {
     // broken relay might.
     inject: (url, frame) => {
       for (const socket of relayFor(url).sockets) socket.deliver(frame);
+    },
+    // Refuse every event published to a relay with these words (as a relay
+    // that limits how much one address may publish does), or "" to stop.
+    refuse: (url, words) => {
+      relayFor(url).refusing = String(words ?? "");
     },
     // Rewrite events as a relay passes them on.
     tamper: (url, fn) => {

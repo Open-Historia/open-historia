@@ -45,6 +45,13 @@ const FRAME_LIMIT = 64 * 1024;
 const CONTENT_LIMIT = 32 * 1024;
 const PAYLOAD_LIMIT = 24 * 1024;
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10_000, 30_000];
+// How long nothing is published to a relay that refused an event for
+// publishing too much. A host that went on regardless had a public relay's
+// "rate-limited" turn into "banned: too many rate-limit violations" fourteen
+// seconds later. The relay is still listened to, and the others carry what is
+// said: any one of them is enough.
+const QUIET_AFTER_RATE_LIMIT_MS = 60_000;
+const QUIET_AFTER_BAN_MS = 15 * 60_000;
 
 const HEX64 = str(64, { min: 64, pattern: /^[0-9a-f]+$/ });
 const EVENT = obj({
@@ -121,6 +128,13 @@ export const createNostrChannel = ({
     onStatus({ connected, total: relays.length });
   };
 
+  const quieten = (entry, said) => {
+    const ms = /^\s*(banned|blocked)\b/i.test(said) ? QUIET_AFTER_BAN_MS : /^\s*rate-limited\b/i.test(said) ? QUIET_AFTER_RATE_LIMIT_MS : 0;
+    if (!ms || now() + ms <= (entry.quietUntil ?? 0)) return;
+    entry.quietUntil = now() + ms;
+    log(`relay ${entry.url}: nothing more is published to it for ${Math.round(ms / 60_000)} min`);
+  };
+
   const handleEvent = (url, event) => {
     // The same event from another relay: every relay passes it, and it was
     // checked when it first came. Not counted as a burst, or a full lobby's
@@ -193,7 +207,11 @@ export const createNostrChannel = ({
       if (!parsed.ok || !Array.isArray(parsed.value)) return;
       const [type, ...rest] = parsed.value;
       if (type === "EVENT" && rest[0] === subscription) handleEvent(url, rest[1]);
-      else if (type === "OK" && rest[1] === false) log(`relay ${url} refused an event: ${String(rest[2] ?? "").slice(0, 120)}`);
+      else if (type === "OK" && rest[1] === false) {
+        const said = String(rest[2] ?? "").slice(0, 120);
+        log(`relay ${url} refused an event: ${said}`);
+        quieten(entry, said);
+      }
       else if (type === "NOTICE" || type === "CLOSED") log(`relay ${url}: ${String(rest.at(-1) ?? "").slice(0, 120)}`);
     };
     socket.onclose = () => {
@@ -231,7 +249,13 @@ export const createNostrChannel = ({
     event.sig = toHex(schnorr.sign(fromHex(event.id), secret));
     const frame = JSON.stringify(["EVENT", event]);
     let sent = 0;
+    // Relays that asked us to slow down are passed over (quieten), unless
+    // every relay that is open has: then saying it anyway is all there is.
+    const quiet = (entry) => (entry.quietUntil ?? 0) > now();
+    const open = [...sockets.values()].filter((entry) => entry.open && entry.socket);
+    const allQuiet = open.length > 0 && open.every(quiet);
     for (const entry of sockets.values()) {
+      if (quiet(entry) && !allQuiet) continue;
       if (entry.open && entry.socket) {
         entry.socket.send(frame);
         sent += 1;
