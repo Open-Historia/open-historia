@@ -30,7 +30,7 @@ import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sh
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
-import { joinFailure, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
+import { hostingHere, joinFailure, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
 import { relayChannelFactory } from "../signaling/relays.js";
 import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
@@ -357,9 +357,29 @@ const prepareStandIn = async (owner, lobby, roomId) => {
   return current === owner;
 };
 
+// A join that is still asking its own server whether it may begin.
+let joinStarting = false;
+
 export const joinSharedGame = async ({ token, name } = {}) => {
-  if (sharedGameActive()) throw new Error("A shared game is already open.");
+  if (sharedGameActive() || joinStarting) throw new Error("A shared game is already open.");
   const invite = parseInvite(String(token ?? "").trim()); // throws a readable InviteError
+  // A page served by a computer that is hosting cannot join: the game it
+  // would open to draw the map from would take the place of the hosted one
+  // (the server refuses that too: server.js HOSTING_HOLDS_THE_GAME). A second
+  // window on a host's own computer did exactly this, and every save the host
+  // made afterwards was refused. Anywhere with no desktop app behind the page
+  // (the website, a phone) there is nothing to ask, and nothing is hosted.
+  joinStarting = true;
+  try {
+    const here = await fetch("/api/multiplayer/engine").then((response) => response.json()).catch(() => null);
+    if (here?.open) {
+      logDebugEvent("shared game", "not joining: this computer is hosting a shared game", undefined, { problem: true });
+      throw new Error(hostingHere());
+    }
+  } finally {
+    joinStarting = false;
+  }
+  if (sharedGameActive()) throw new Error("A shared game is already open.");
   set({ ...IDLE, mode: "opening", role: "guest", token: invite.token });
   setSharedGameRole("guest");
   current = { pendingViews: [], runtime: null, gameId: "", preparing: null };

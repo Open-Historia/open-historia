@@ -370,6 +370,30 @@ try {
   const relayLine = await host.eval("(document.body.textContent.match(/Relays: [^A-Z]*?connected/) || [''])[0]");
   check("the host reaches its signaling relays", relaysUp, `${PUBLIC_RELAYS ? "public" : "local"}: ${relayLine}`);
 
+  // A second window on the host's own computer: this same server's page, in
+  // another tab. Joining makes a game of the page's own and opens it, and one
+  // server has one open game, so it would take the hosted game's place and
+  // every save the host made afterwards would be refused. It is told why
+  // instead, and the server refuses the switch whoever asks.
+  const hostedGame = await host.eval("fetch('/api/library').then((r) => r.json()).then((c) => c.activeGameId)");
+  const twin = await openTab(`${HOST}/`);
+  await standInModel(twin);
+  await until(twin, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  await withHelpers(twin);
+  await until(twin, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000);
+  await twin.eval("window.__e2e.click('Lobbies')");
+  await until(twin, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
+  await twin.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); return true; })()`);
+  await sleep(300);
+  await twin.eval("window.__e2e.click('Join')");
+  const toldWhy = await until(twin, "document.body.textContent.includes('This computer is hosting a shared game')", 15000);
+  const forced = await twin.eval(`fetch('/api/games', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'A game of the second window', setActive: true }) }).then((r) => r.status)`);
+  const stillHosted = await host.eval("fetch('/api/library').then((r) => r.json()).then((c) => c.activeGameId)");
+  check("a second window on the host's own computer cannot join, and the hosted game stays the open one",
+    toldWhy && forced === 400 && hostedGame && stillHosted === hostedGame, JSON.stringify({ toldWhy, forced, hostedGame, stillHosted }));
+  await twin.send("Page.close");
+  twin.close();
+
   // The guest.
   const guest = await openTab(`${GUEST}/`);
   await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);

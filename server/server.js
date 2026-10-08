@@ -44,6 +44,7 @@ import {
   resolveScenarioUploadAsset,
   resolveRuntimeBinaryAsset,
   setActiveGame,
+  setActiveGameHold,
   setSelectedScenario,
   updateGame,
   updateScenario,
@@ -669,6 +670,13 @@ app.post("/api/app-update/restart", (req, res) => {
 // stops. Like the updater, the handle is on globalThis because this server runs
 // inside the desktop app's own process; everywhere else there is none.
 const sharedGameEngine = () => globalThis.__ohSharedGameEngine || null;
+
+// While the engine window is open this computer is hosting, and the game it
+// hosts stays the open one (libraryStore.js setActiveGameHold): no page this
+// server serves may open, make-and-open or delete another in its place. Read
+// each time, so a window that closed by itself holds nothing.
+export const HOSTING_HOLDS_THE_GAME = "This computer is hosting a shared game, and the game it hosts stays its open game. Stop sharing first.";
+setActiveGameHold(() => (sharedGameEngine()?.status?.().open ? HOSTING_HOLDS_THE_GAME : ""));
 
 app.get("/api/multiplayer/engine", (req, res) => {
   const engine = sharedGameEngine();
