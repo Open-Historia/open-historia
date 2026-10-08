@@ -17,12 +17,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { zipBundle } from "./bundleZip.js";
+import { unzipBundle, zipBundle } from "./bundleZip.js";
 import {
   basemapPostInstallable,
   dedupeScenarioBundleBackground,
   fetchCommunityBasemaps,
   installCommunityBasemap,
+  readScenarioZipBackground,
   resolveScenarioBundleBackground,
   unresolvedBundleBackground,
 } from "./communityBasemaps.js";
@@ -302,4 +303,48 @@ test("a reference that cannot be fetched is kept, with the reason, instead of de
   assert.equal(unresolvedBundleBackground(resolved), null);
   assert.equal(unresolvedBundleBackground({ assets: {} }), null);
   assert.equal(unresolvedBundleBackground(null), null);
+});
+
+// --- a scenario post's basemap, however its zip carries it ---
+
+const zipHandle = async (files) => unzipBundle(new Uint8Array(await (await zipBundle(files)).arrayBuffer()));
+const PICTURE = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+
+test("a scenario zip's basemap is read out of the scenario when no basemap file lies beside it", async () => {
+  // A scenario exported from the library, as the Star Wars post's zip was: the
+  // picture is the backgroundData asset, lifted out as assets/background.json.
+  const lifted = await zipHandle({
+    "scenario.json": JSON.stringify({
+      schema: "open-historia-scenario-bundle/2",
+      data: { world: { background: { kind: "image" } } },
+      assets: { backgroundData: { contentType: "application/json", fileName: "background.json", mode: "file", file: "assets/background.json", format: "json" } },
+    }),
+    "assets/background.json": JSON.stringify({ dataUrl: PICTURE }),
+    "cover.jpg": new Uint8Array([1, 2, 3]),
+  });
+  assert.deepEqual(await readScenarioZipBackground(lifted), { kind: "image", payload: { dataUrl: PICTURE } });
+
+  // Embedded as JSON, and as base64 of JSON (a bundle from before assets were lifted).
+  const embedded = await zipHandle({ "scenario.json": JSON.stringify({ data: { world: { background: { kind: "image" } } }, assets: { backgroundData: { mode: "embedded", data: { dataUrl: PICTURE } } } }) });
+  assert.deepEqual(await readScenarioZipBackground(embedded), { kind: "image", payload: { dataUrl: PICTURE } });
+  const old = await zipHandle({ "my-map.json": JSON.stringify({ assets: { backgroundData: { mode: "embedded", encoding: "base64", data: Buffer.from(JSON.stringify({ dataUrl: PICTURE })).toString("base64") } } }) });
+  assert.deepEqual(await readScenarioZipBackground(old), { kind: "image", payload: { dataUrl: PICTURE } });
+
+  // A vector basemap is read as one.
+  const geojson = { type: "FeatureCollection", features: [] };
+  const vector = await zipHandle({ "scenario.json": JSON.stringify({ data: { world: { background: { kind: "vector" } } }, assets: { backgroundData: { mode: "embedded", data: { geojson } } } }) });
+  assert.deepEqual(await readScenarioZipBackground(vector), { kind: "vector", payload: { geojson } });
+});
+
+test("a scenario zip with no basemap, or one that cannot be read, has none", async () => {
+  for (const files of [
+    { "scenario.json": JSON.stringify({ data: { world: {} }, assets: { regions: { mode: "default" } } }) },
+    { "scenario.json": JSON.stringify({ assets: { backgroundData: { mode: "communityRef", url: "https://example.com/x" } } }) },
+    { "scenario.json": JSON.stringify({ assets: { backgroundData: { mode: "file", file: "assets/background.json", format: "json" } } }) },
+    { "scenario.json": JSON.stringify({ assets: { backgroundData: { mode: "embedded", data: { dataUrl: "javascript:alert(1)" } } } }) },
+    { "scenario.json": "{ not json" },
+    { "notes.txt": "nothing here" },
+  ]) {
+    assert.equal(await readScenarioZipBackground(await zipHandle(files)), null, Object.keys(files).join(","));
+  }
 });

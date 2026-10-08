@@ -22,6 +22,7 @@ import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
+import { imageQuad } from "../../../server/mapProjection.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
 configureMapRuntime();
@@ -297,18 +298,6 @@ const getReliefPaints = (basemapId) => {
 // NOT exactly ±90: mercatorYfromLat(±90) is ±Infinity, which makes MapLibre's
 // ImageSource.setCoordinates throw — so we stop a hair short (the custom-bg-base
 // layer fills the negligible remaining sliver).
-const WORLD_IMAGE_COORDS_FLAT = [
-  [-180, 85.0511],
-  [180, 85.0511],
-  [180, -85.0511],
-  [-180, -85.0511],
-];
-const WORLD_IMAGE_COORDS_GLOBE = [
-  [-180, 89.9],
-  [180, 89.9],
-  [180, -89.9],
-  [-180, -89.9],
-];
 
 const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
@@ -321,7 +310,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         "custom-bg": {
           type: "image",
           url: customBg.imageUrl,
-          coordinates: isGlobe ? WORLD_IMAGE_COORDS_GLOBE : WORLD_IMAGE_COORDS_FLAT,
+          // Where the scenario says its picture lies (world.background.bounds);
+          // with nothing said it fills the whole Mercator square, as it always
+          // did (server/mapProjection.js imageQuad).
+          coordinates: imageQuad(customBg.bounds, { globe: isGlobe }),
         },
       },
       layers: [

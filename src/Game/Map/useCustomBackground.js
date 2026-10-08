@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { useWorldBackground } from "./useWorldState.js";
+import { normalizeImageBounds } from "../../../server/mapProjection.js";
 
 export function useCustomBackground() {
   const { background: bgDescriptor, basemap: worldBasemap } = useWorldBackground();
@@ -40,7 +41,7 @@ export function useCustomBackground() {
       if (cancelled || keyRef.current !== bgKey) return;
 
       if (bgDescriptor?.kind === "image" && data?.dataUrl) {
-        setState({ background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap });
+        setState({ background: { kind: "image", imageUrl: data.dataUrl, bounds: normalizeImageBounds(bgDescriptor.bounds) }, declared: true, basemap });
       } else if (bgDescriptor?.kind === "vector" && data?.geojson) {
         setState({ background: { kind: "vector", geojson: data.geojson }, declared: true, basemap });
       } else {
