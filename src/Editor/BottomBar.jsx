@@ -91,6 +91,7 @@ const BottomBar = ({
       <Chip icon="types" label={`Types: ${counts.types}`} active={openPanel === "types"} onClick={() => onOpenPanel("types")} />
       <Chip icon="layers" label="Layers" active={openPanel === "layers"} onClick={() => onOpenPanel("layers")} />
       <Chip icon="image" label="Reference" active={openPanel === "reference"} onClick={() => onOpenPanel("reference")} />
+      <Chip icon="layers" label="Projection" active={openPanel === "projection"} onClick={() => onOpenPanel("projection")} />
 
       <div style={{ flex: 1 }} />
 

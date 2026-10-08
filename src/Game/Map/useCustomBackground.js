@@ -24,6 +24,13 @@ export function useCustomBackground() {
       return;
     }
 
+    // A plain sea in place of the built-in tiles (a map that is not Mercator
+    // and has no basemap of its own): declared, and nothing to load.
+    if (bgDescriptor?.kind === "plain") {
+      setState({ background: null, declared: true, basemap });
+      return undefined;
+    }
+
     // Commit to "no ESRI" from the light descriptor right away, then load the
     // heavy payload and swap in the actual image/vector.
     setState({ background: null, declared: true, basemap });

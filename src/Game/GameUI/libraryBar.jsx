@@ -1918,6 +1918,10 @@ const LibraryTopBar = () => {
   // (useCustomBackground). Nothing to load means ESRI, as before.
   const loadPickerBackground = (scenarioId, descriptor) => {
     const kind = descriptor?.kind;
+    if (kind === "plain") {
+      setPickerBackground({ kind });
+      return;
+    }
     if (kind !== "image" && kind !== "vector") return;
     downloadScenarioJsonAsset(scenarioId, "backgroundData")
       .then((data) => {
@@ -2828,7 +2832,10 @@ const LibraryTopBar = () => {
       downloadScenarioJsonAsset(scenario.id, "flags"),
       downloadScenarioJsonAsset(scenario.id, "tags"),
       // The custom map background so re-opening the editor restores it.
-      world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+      // (A plain sea has a descriptor and nothing to download.)
+      world.background?.kind === "image" || world.background?.kind === "vector"
+        ? downloadScenarioJsonAsset(scenario.id, "backgroundData")
+        : Promise.resolve(null),
     ]).then(([regions, cities, colors, flags, tags, bgData]) => {
       const bgDesc = world.background;
       const background =
@@ -2836,7 +2843,9 @@ const LibraryTopBar = () => {
           ? { kind: "image", dataUrl: bgData.dataUrl, ...(bgDesc.bounds ? { bounds: bgDesc.bounds } : {}) }
           : bgDesc?.kind === "vector" && bgData?.geojson
             ? { kind: "vector", geojson: bgData.geojson }
-            : null;
+            : bgDesc?.kind === "plain"
+              ? { kind: "plain" }
+              : null;
       setMapEditorSeed({
         name: scenario.name || "",
         author: world.author || "",

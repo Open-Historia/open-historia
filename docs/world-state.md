@@ -149,6 +149,8 @@ Only a **game's** `world.json` is written during play; the scenario copy stays p
 | `customCities` | `boolean` | *(pass-through)* | Render authored cities instead of the modern city set (`exportPreset.js`). Surfaced by `useWorldState`. |
 | `basemap` | `string \| null` | *(pass-through)* | ESRI basemap preset id (`ESRI_BASEMAPS`, `assets.js`); falls back to `ocean` in-game. |
 | `background` / `backgroundData` | `string \| null` / payload | *(pass-through)* | Custom map background (image-by-extent or vector overlay) that replaces Earth; heavy payload rides in a separate scenario asset (`exportPreset.js`). |
+| `background.bounds` | `{ west, south, east, north }` | *(pass-through)* | Where an image background lies, in degrees as stored. Absent: it fills the whole Mercator square, as before. `background.kind` may also be `"plain"`: a plain sea in place of the built-in tiles, for a map that is not Mercator and has no basemap of its own. |
+| `projection` | `string \| { type, aspect?, globe?, wrap?, laidOut? }` | *(pass-through)* | The map's projection (`server/mapProjection.js`). Absent is Mercator. With `laidOut: true` every place in the world and the map files is already stored where the projection puts it; a bare name or an object without it is a file's declaration, applied once on import. `globe: false` keeps the game map flat; `wrap: false` stops it repeating sideways (`mapViewOf`). |
 
 ### 2b. AI-evolved diplomacy / identity fields
 

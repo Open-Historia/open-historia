@@ -14,7 +14,7 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
-import { DEFAULT_PROJECTION, boundsFillSquare, normalizeImageBounds, normalizeProjection } from "../../server/mapProjection.js";
+import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -161,6 +161,8 @@ const buildBackgroundForGame = (customBackground) => {
       backgroundData: { dataUrl: bg.dataUrl },
     };
   }
+  // A plain sea in place of the built-in tiles: a descriptor and no payload.
+  if (bg.kind === "plain") return { background: { kind: "plain" }, backgroundData: null };
   if (bg.kind === "vector" && bg.geojson && Array.isArray(bg.geojson.features)) {
     return {
       background: { kind: "vector" },
@@ -304,9 +306,9 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     background,
     // The map's projection, as the game keeps it. Mercator is what a map is
     // when it says nothing, so nothing is written for it.
-    ...(normalizeProjection(doc.metadata?.projection).type !== DEFAULT_PROJECTION
-      ? { projection: { ...normalizeProjection(doc.metadata.projection), laidOut: true } }
-      : {}),
+    ...(projectionIsDefault(doc.metadata?.projection)
+      ? {}
+      : { projection: { ...normalizeProjection(doc.metadata.projection), laidOut: true } }),
     // The chosen built-in basemap (an ESRI preset id) so the game renders THAT
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.
