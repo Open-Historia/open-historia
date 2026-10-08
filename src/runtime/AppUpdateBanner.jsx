@@ -94,7 +94,7 @@ const bar = {
   gap: "0.75rem",
   padding: "0.55rem max(0.9rem, env(safe-area-inset-left)) 0.55rem max(0.9rem, env(safe-area-inset-right))",
   paddingTop: "max(0.55rem, env(safe-area-inset-top))",
-  background: "linear-gradient(180deg, #161618, #101012)",
+  background: "#131315",
   borderBottom: "1px solid rgba(212,175,55,0.35)",
   color: "#f4ead0",
   font: "600 0.85rem/1.3 system-ui, sans-serif",
@@ -104,7 +104,7 @@ const text = { flex: 1, minWidth: 0 };
 const sub = { display: "block", fontWeight: 400, fontSize: "0.72rem", color: "rgba(244,234,208,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const btn = {
   flex: "0 0 auto",
-  background: "linear-gradient(180deg, #d4af37, #b8901f)",
+  background: "#c6a02b",
   border: "1px solid rgba(212,175,55,0.6)",
   borderRadius: "9px",
   color: "#1a1206",
@@ -143,7 +143,7 @@ const coverCard = { width: "100%", maxWidth: "26rem" };
 const coverTitle = { margin: "0 0 0.4rem", fontSize: "1.15rem", fontWeight: 700 };
 const coverText = { margin: 0, color: "rgba(244,234,208,0.62)", fontSize: "0.86rem" };
 const track = { height: "10px", margin: "1.3rem 0 0.6rem", borderRadius: "99px", overflow: "hidden", background: "rgba(244,234,208,0.12)", border: "1px solid rgba(212,175,55,0.3)" };
-const fill = { display: "block", height: "100%", borderRadius: "99px", background: "linear-gradient(180deg, #d4af37, #b8901f)", transition: "width 250ms" };
+const fill = { display: "block", height: "100%", borderRadius: "99px", background: "#c6a02b", transition: "width 250ms" };
 const coverPct = { fontWeight: 700, fontSize: "0.86rem" };
 const quietBtn = { ...btn, marginTop: "1rem", color: "#f4ead0", background: "transparent", border: "1px solid rgba(212,175,55,0.3)" };
 const betaOffer = { marginTop: "1.1rem", paddingTop: "0.9rem", borderTop: "1px solid rgba(244,234,208,0.12)" };

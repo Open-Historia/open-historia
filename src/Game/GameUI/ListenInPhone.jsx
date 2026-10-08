@@ -76,8 +76,8 @@ if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
     to   { opacity: 1; }
   }
   @keyframes listenInShimmer {
-    from { background-position: 180% 0; }
-    to   { background-position: -80% 0; }
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 1; }
   }
   .listen-in-scroll { scrollbar-width: none; }
   .listen-in-scroll::-webkit-scrollbar { display: none; }
@@ -216,9 +216,8 @@ const SkeletonPost = ({ width }) => {
     animationDuration: "1.4s",
     animationIterationCount: "infinite",
     animationName: "listenInShimmer",
-    animationTimingFunction: "linear",
-    background: "linear-gradient(90deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.13) 40%, rgba(255,255,255,0.06) 80%)",
-    backgroundSize: "260% 100%",
+    animationTimingFunction: "ease-in-out",
+    background: "rgba(255,255,255,0.1)",
     borderRadius: "999px",
     height: h,
     width: w,

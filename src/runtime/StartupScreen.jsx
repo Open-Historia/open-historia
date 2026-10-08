@@ -117,23 +117,6 @@ const StartupScreen = ({
         z-index: 0;
       }
 
-      /* Bottom-half gradient so UI reads over artwork */
-      .ss-gradient {
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(
-          to bottom,
-          rgba(0,0,0,0)       0%,
-                                    rgba(0,0,0,0)       35%,
-                                    rgba(4,3,2,0.55)    55%,
-                                    rgba(4,3,2,0.88)    72%,
-                                    rgba(4,3,2,0.97)    85%,
-                                    rgba(4,3,2,1)       100%
-        );
-        pointer-events: none;
-        z-index: 1;
-      }
-
       /* Subtle grain overlay for cinematic texture */
       .ss-grain {
         position: absolute;
@@ -153,7 +136,10 @@ const StartupScreen = ({
         left: 0;
         right: 0;
         z-index: 10;
-        padding: 0 calc(5vw + ${SAFE_RIGHT}) calc(2.8rem + ${SAFE_BOTTOM}) calc(5vw + ${SAFE_LEFT});
+        /* One flat dark strip, so the UI reads over any artwork. */
+        background: rgba(6,6,7,0.84);
+        border-top: 1px solid rgba(255,255,255,0.08);
+        padding: 1.6rem calc(5vw + ${SAFE_RIGHT}) calc(2.2rem + ${SAFE_BOTTOM}) calc(5vw + ${SAFE_LEFT});
         display: flex;
         flex-direction: column;
         gap: 1.1rem;
@@ -258,16 +244,7 @@ const StartupScreen = ({
       .ss-rule {
         width: 100%;
         height: 1px;
-        background: linear-gradient(
-          90deg,
-          transparent 0%,
-          rgba(180,135,40,0.2) 8%,
-                                    rgba(210,165,55,0.55) 30%,
-                                    rgba(235,190,65,0.75) 50%,
-                                    rgba(210,165,55,0.55) 70%,
-                                    rgba(180,135,40,0.2) 92%,
-                                    transparent 100%
-        );
+        background: rgba(210,165,55,0.45);
       }
 
       /* PROGRESS ROW */
@@ -300,35 +277,10 @@ const StartupScreen = ({
       .ss-progress-fill {
         height: 100%;
         border-radius: 3px;
-        background: linear-gradient(90deg,
-                                    #7a5008 0%,
-                                    #b8860a 25%,
-                                    #d4a820 55%,
-                                    #f0cc40 80%,
-                                    #ffe370 100%
-        );
+        background: #d4a820;
         transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
         position: relative;
         overflow: hidden;
-      }
-
-      /* Animated shimmer sweep */
-      .ss-progress-fill::after {
-        content: '';
-  position: absolute;
-  top: 0; bottom: 0; left: -100%;
-  width: 60%;
-  background: linear-gradient(90deg,
-                              transparent 0%,
-                              rgba(255,255,255,0.3) 50%,
-                              transparent 100%
-  );
-  animation: sweep 2.2s ease-in-out infinite;
-      }
-
-      @keyframes sweep {
-        0%   { left: -60%; }
-        100% { left: 160%; }
       }
 
       /* Glow head at tip of fill */
@@ -427,7 +379,6 @@ const StartupScreen = ({
         style={{ backgroundImage: `url('${src}')`, opacity: index === currentBg ? 1 : 0 }}
         />
       ))}
-      <div className="ss-gradient" />
       <div className="ss-grain" />
       <div className="ss-copyright">Image © 2026 Nicholas Krol</div>
 

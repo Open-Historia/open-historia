@@ -23,7 +23,7 @@ test("library landing uses one meaningful browse collection instead of duplicate
   // A shelf's heading can carry an action (Recently deleted's Empty), and
   // keeps its divider.
   assert.match(source, /const MenuRow = \(\{ action, children, description, emptyText, icon, title \}\) =>/);
-  assert.match(source, /linear-gradient\(90deg, rgba\(255,255,255,0\.12\), rgba\(255,255,255,0\.02\)\)/);
+  assert.match(source, /<div style=\{\{ background: "rgba\(255,255,255,0\.08\)", flex: 1, height: 1 \}\} \/>/);
   assert.match(source, /const LibraryCollection = \(\{ children, controls, description, emptyText, title \}\) =>/);
   assert.match(source, /const LIBRARY_GRID_TEMPLATE = "repeat\(auto-fill, minmax\(min\(100%, 16\.5rem\), 1fr\)\)"/);
   assert.match(source, /gridTemplateColumns: LIBRARY_GRID_TEMPLATE/);
@@ -53,8 +53,9 @@ test("games and scenarios expose search, filters and in-place sorting", () => {
 
 test("scenario cards deliberately strengthen contrast behind authored text", () => {
   assert.match(source, /const SCENARIO_CARD_TEXT_SHADOW = "0 1px 2px rgba\(0,0,0,0\.96\), 0 6px 18px rgba\(0,0,0,0\.82\), 0 16px 34px rgba\(0,0,0,0\.64\)"/);
-  assert.match(source, /rgba\(4,6,12,0\.46\) 30%/);
-  assert.match(source, /rgba\(5,8,14,0\.86\) 72%/);
+  // One even tint over the cover, on the scenario card and on the game card.
+  assert.match(source, /const COVER_TINT = "inset 0 0 0 100vmax rgba\(4,6,12,0\.\d+\)"/);
+  assert.equal(source.split("boxShadow: COVER_TINT,").length - 1, 2);
   assert.match(source, /color: "rgba\(248,248,250,0\.96\)"/);
   assert.match(source, /textShadow: SCENARIO_CARD_TEXT_SHADOW/);
 });
