@@ -22,6 +22,7 @@ import {
 import { normalizeHubKey, normalizeHubPublished, normalizeHubSuggestionRef } from "../../server/hubProvenance.js";
 import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, importCountOf, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
 import { HUB_API, HUB_URL, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
+import { FLAT_MAP_LABEL, declareFlatMapFromPost, postSaysFlatMap } from "../../server/mapProjection.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
 export const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
@@ -97,6 +98,10 @@ export const parsePost = (issue, hubIndex) => {
     // silently drops labels set by anyone without push access (API, issue
     // forms and URL params alike), so authors can't pin their own posts.
     pinned: (issue.labels ?? []).some((label) => (label.name ?? label) === "pinned"),
+    // "flat map", another label only the hub's maintainers can set: the post's
+    // map is a sheet with its rows evenly spaced, and is laid out as one on
+    // import when its file does not say so itself (server/mapProjection.js).
+    flatMap: postSaysFlatMap(issue),
     // Verified against GitHub's author_association — only posts actually made
     // by the hub owner or a repo collaborator count. Writing "official" in a
     // title does nothing.
@@ -227,9 +232,12 @@ export const downloadHubBundle = async (bundleUrl) => {
 // Import & play for a game whose map the library lacks. The copy is found
 // first and then asked for by its own address, so the address stamped is the
 // one the bytes came from, even if the index is read again in between.
-export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt } = {}) => {
+export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false } = {}) => {
   const release = await requireReleaseCopy(bundleUrl);
-  const bundle = await downloadHubBundle(release);
+  const downloaded = await downloadHubBundle(release);
+  // What the hub's maintainers said of the post (parseScenarioPost flatMap),
+  // for a file that declares no projection of its own.
+  const bundle = flatMap ? declareFlatMapFromPost(downloaded, { labels: [FLAT_MAP_LABEL] }) : downloaded;
   bundle.hubOrigin = {
     postId,
     bundleUrl,

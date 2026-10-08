@@ -44,7 +44,8 @@ import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
 import ImageStatic from "ol/source/ImageStatic";
-import { fromLonLat, toLonLat } from "ol/proj";
+import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
+import { boundsFillSquare, normalizeImageBounds } from "../../server/mapProjection.js";
 import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
@@ -2967,17 +2968,22 @@ const OlMap = ({
       };
     }
 
-    // Plain image: stretch it across the whole world so it fully replaces the
-    // basemap (a fantasy map you draw regions on). No placement frame — it always
-    // covers the entire map; the regions/labels sit above it (z >= 10).
+    // Plain image: it fully replaces the basemap (a fantasy map you draw regions
+    // on); the regions/labels sit above it (z >= 10). It lies on its bounds when
+    // the map states them (a projection's sheet, a freeform shape), and is
+    // stretched across the whole world when it states none, as it always was.
+    const imageBounds = normalizeImageBounds(bg.bounds);
+    const imageExtent = imageBounds && !boundsFillSquare(imageBounds)
+      ? transformExtent([imageBounds.west, imageBounds.south, imageBounds.east, imageBounds.north], "EPSG:4326", "EPSG:3857")
+      : WORLD_EXTENT_3857;
     const imageLayer = new ImageLayer({
-      source: new ImageStatic({ url: bg.url, imageExtent: WORLD_EXTENT_3857, projection: "EPSG:3857" }),
+      source: new ImageStatic({ url: bg.url, imageExtent, projection: "EPSG:3857" }),
     });
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
     // Only fresh uploads write back into the document; a restored (persisted)
     // background is already in the doc/scenario, so don't re-dirty it on open.
-    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
+    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl, ...(imageBounds ? { bounds: imageBounds } : {}) });
     return () => {
       map.removeLayer(imageLayer);
     };

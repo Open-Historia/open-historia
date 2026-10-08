@@ -8,6 +8,7 @@
 import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPut, idbPutPair, idbDelete, kvGet, kvPut } from "./idb.js";
 import { serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
+import { layOutScenarioBundle } from "../../../server/mapProjection.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
   parseJsonValue, serializeJsonValue,
@@ -1218,6 +1219,9 @@ const importScenarioBundle = async (bundle) => {
   // Accept every schema we can read, not just the one we write — a v1 bundle
   // imports fine, arriving unmarked and named by the migration on first read.
   if (!bundle || typeof bundle !== "object" || !isScenarioBundleSchema(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
   // Hub provenance the community tab attaches to a direct import — stamped
   // LAST so the import's own meta writes don't clear it.
   const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
@@ -1251,6 +1255,9 @@ const importScenarioBundle = async (bundle) => {
 // stamped last (server twin: updateScenarioFromBundle).
 const updateScenarioFromBundle = async (scenarioId, bundle) => {
   if (!bundle || typeof bundle !== "object" || !isScenarioBundleSchema(bundle.schema)) throw new Error("Unsupported scenario bundle.");
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
   const existing = await getScenario(scenarioId);
   if (!existing) throw new Error(`Scenario not found: ${scenarioId}`);
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};

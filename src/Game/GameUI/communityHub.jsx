@@ -498,7 +498,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // Update button while the copy is unedited; once the player edits it the
       // link stays, marked edited, so they can suggest their changes back to
       // the post (server/hubProvenance.js).
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author });
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
       // Nothing is reported anywhere: the download of the post's file from the
       // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);

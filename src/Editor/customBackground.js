@@ -18,6 +18,7 @@ import Style from "ol/style/Style";
 import Stroke from "ol/style/Stroke";
 import Fill from "ol/style/Fill";
 import { PMTilesRasterSource } from "ol-pmtiles";
+import { normalizeImageBounds } from "../../server/mapProjection.js";
 
 // Accept string for the upload <input>. Kept in sync with the switch below.
 export const BACKGROUND_ACCEPT =
@@ -174,7 +175,8 @@ export const rebuildPersistedBackground = (saved, { persisted = true } = {}) => 
       url: saved.dataUrl,
       dataUrl: saved.dataUrl,
       aspect: saved.aspect || 1,
-      extentWgs84: saved.extentWgs84 || null,
+      // Where the picture lies (world.background.bounds); null fills the square.
+      bounds: normalizeImageBounds(saved.bounds),
     };
   }
   return null;
