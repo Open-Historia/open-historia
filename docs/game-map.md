@@ -114,7 +114,7 @@ Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(c
 
 ## 3. The base style (`buildWorldStyle`)
 
-`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline)` (`World.jsx`) returns a MapLibre style JSON. The basemap it is given is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this browser only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID = "ocean"`. A player pick also replaces the scenario's own background.
+`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline)` (`World.jsx`) returns a MapLibre style JSON. The basemap it is given is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this browser only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID = "ocean"`. A player pick replaces a built-in basemap only (`basemapOverrideFor`, `assets.js`): a scenario with a map of its own (`world.background`: a picture, a drawn map, or the plain sea of a flat sheet) keeps it, since its regions are drawn for that map, and Settings shows the pick switched off there.
 
 | # | Condition | Sources | Layers |
 |---|---|---|---|

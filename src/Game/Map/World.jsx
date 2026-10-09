@@ -14,8 +14,8 @@ import {
   basemapMaxZoom,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
+  basemapOverrideFor,
   esriTileTemplate,
-  isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
@@ -596,17 +596,24 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
   // the scenario's basemap does, unless the player picked one in Settings → Map.
+  // A scenario with a map of its own keeps it whatever the player picked.
   // `declared` flips on from the background descriptor in world.json (before
   // the heavy payload) so the map drops ESRI immediately rather than flashing
   // satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
   // The player's basemap pick (Settings → Map) is local to this browser and
-  // reversible. Empty — the default — leaves the scenario author's background
-  // and basemap authoritative; only a real built-in id replaces them, so a
-  // stray value left in localStorage by an older build changes nothing.
+  // reversible. Empty — the default — leaves the scenario author's basemap
+  // authoritative; only a real built-in id replaces it, so a stray value left
+  // in localStorage by an older build changes nothing.
+  //
+  // It replaces a built-in basemap only. A scenario with a map of its own (a
+  // picture, a drawn map, or the plain sea of a flat sheet: `bgDeclared`)
+  // keeps it: its regions are drawn for that map, and a built-in basemap under
+  // them is the Earth under another world. The pick stays stored, and applies
+  // again in a scenario that has none (settings.jsx BasemapField says so).
   const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-  const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
+  const validBasemapOverride = basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared });
   const useScenarioBackground = !validBasemapOverride;
   const effectiveCustomBg = useScenarioBackground ? customBg : null;
   const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
