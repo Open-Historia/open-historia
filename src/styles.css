@@ -176,7 +176,7 @@ body {
   position: absolute;
   width: 8rem;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(235, 235, 238, 0.9), transparent);
+  background: rgba(235, 235, 238, 0.6);
   animation: startupPulse 2.2s ease-in-out infinite;
 }
 
@@ -239,7 +239,7 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.25), transparent);
+  background: rgba(0, 0, 0, 0.12);
   transform: translateX(-100%);
   animation: startupShimmer 1.4s linear infinite;
 }

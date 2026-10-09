@@ -34,7 +34,7 @@ const FallbackBadge = ({ label }) => (
     aria-label={label ? `${label} flag unavailable` : "Flag unavailable"}
     style={{
         alignItems: "center",
-        background: "linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035))",
+        background: "rgba(255,255,255,0.063)",
         border: "1px solid rgba(255,255,255,0.12)",
         borderRadius: "5px",
         color: "rgba(255,255,255,0.68)",

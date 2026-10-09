@@ -178,7 +178,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
     >
       <div
         style={{
-          background: "linear-gradient(180deg, rgba(46,46,50,0.96), rgba(17,17,19,0.97))",
+          background: "rgba(32,32,35,0.965)",
           border: "1px solid var(--oh-hud-border)",
           borderRadius: "16px",
           boxShadow: "var(--oh-hud-shadow)",

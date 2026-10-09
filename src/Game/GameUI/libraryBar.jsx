@@ -150,9 +150,22 @@ const TOP_BAR_OFFSET = `calc(0.5rem + ${SAFE_TOP})`;
 
 const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
+// The flat tint over a card's cover picture, so its text reads on any picture
+// (an inset shadow, which lies over the picture). The Accent, the colour its
+// author picked, glows in the corner over that: the one fade the interface
+// keeps (noGradients.test.js).
+const COVER_TINT = "inset 0 0 0 100vmax rgba(4,6,12,0.58)";
+const accentGlowStyle = (accentColor, { at, alpha, reach }) => ({
+  background: `radial-gradient(circle at ${at}, ${accentColor}${alpha}, transparent ${reach})`,
+  inset: 0,
+  opacity: 0.6,
+  pointerEvents: "none",
+  position: "absolute",
+});
+
 const surfaceStyle = {
   background:
-    "linear-gradient(180deg, rgba(50, 50, 55, 0.58) 0%, rgba(17, 17, 19, 0.48) 100%)",
+    "rgba(34,34,37,0.53)",
   border: "1px solid var(--oh-hud-border)",
   boxShadow: "var(--oh-hud-shadow-soft)",
   backdropFilter: "var(--oh-hud-blur)",
@@ -678,15 +691,15 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
-            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
+          boxShadow: COVER_TINT,
           inset: 0,
           opacity: 0.92,
           position: "absolute",
         }}
       />
+      <div aria-hidden="true" style={accentGlowStyle(scenario.accentColor, { at: "14% 18%", alpha: "bb", reach: "34%" })} />
       <div
         style={{
           display: "flex",
@@ -934,15 +947,15 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.72) 100%), ` +
-            `radial-gradient(circle at 16% 20%, ${game.accentColor}aa, transparent 32%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
+          boxShadow: COVER_TINT,
           inset: 0,
           opacity: 0.96,
           position: "absolute",
         }}
       />
+      <div aria-hidden="true" style={accentGlowStyle(game.accentColor, { at: "16% 20%", alpha: "aa", reach: "32%" })} />
       <div
         style={{
           display: "flex",
@@ -3643,7 +3656,7 @@ const LibraryTopBar = () => {
         <div
           style={{
             background:
-              "linear-gradient(180deg, #111113 0%, #0d0d0f 100%)",
+              "#0f0f11",
             color: "#fff",
             display: "flex",
             flexDirection: "column",
