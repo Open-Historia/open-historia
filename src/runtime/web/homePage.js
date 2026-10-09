@@ -10,6 +10,10 @@ import { bootText, bootTranslated } from "./bootTexts.js";
 const ENTERED_KEY = "oh:entered";
 const FONTS_HREF = "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap";
 
+// The independence notice, as it stands on the website: a legal text, shown as
+// written in every language.
+const INDEPENDENCE_NOTICE = "Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.";
+
 // The project mark, in place of the classical-building emoji.
 const MARK_SRC = "/icon-192.png";
 
@@ -68,6 +72,7 @@ const css = `
       .oh-btn.primary:hover{background:#962839}
       .oh-foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin-top:20px;font-family:var(--display);font-size:.78rem;letter-spacing:.05em;color:var(--sepia2)}
       .oh-foot a{border:0;color:var(--sepia2)}.oh-foot a:hover{color:var(--ink)}
+      .oh-legal{margin:16px auto 0;max-width:430px;font-size:.74rem;line-height:1.5;color:var(--sepia2);text-align:center}
       .oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}
       .oh-demo{margin:14px 0 0;padding:11px 13px;border:1px solid var(--line2);border-left:3px solid var(--bronze);border-radius:8px;background:rgba(201,147,47,.10);text-align:left}
       .oh-demo b{color:var(--ink)}
@@ -170,6 +175,7 @@ const demoAcknowledged = () => {
                         el("div", { className: "oh-rule" }),
                         play,
                         foot,
+                        el("p", { className: "oh-legal", textContent: INDEPENDENCE_NOTICE }),
         );
         overlay = el("div", { className: "oh-home", id: "oh-home-root" }, card);
         // Already in the player's language (index.js loaded the pack before this).

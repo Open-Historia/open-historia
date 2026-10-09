@@ -303,3 +303,22 @@ footer a {
     padding: 0.8rem;
   }
 }
+
+/* The independence notice: boxed where a page names the other game (.notice),
+   and a line of its own in every footer (.foot-legal). */
+.notice {
+  margin: 0 0 1.6rem;
+  padding: 0.75rem 1.125rem;
+  border: 1px solid #1a2440;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  opacity: 0.86;
+}
+.notice b { font-weight: 600; }
+.foot-legal {
+  max-width: 60rem;
+  margin: 0.75rem auto 0;
+  line-height: 1.55;
+}
