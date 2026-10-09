@@ -100,6 +100,8 @@ Applied on `onMove` **and** `onIdle`, so the soft ratio is in effect from the ve
 
 ## 3. The base style (`buildWorldStyle`)
 
+The basemap the style is built for is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this device only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID`. The pick replaces a built-in basemap only (`basemapOverrideFor`, `assets.js`): a scenario with a map of its own (`world.background`: a picture, a drawn map, or the plain sea of a flat sheet) keeps it, since its regions are drawn for that map, and Settings shows the pick switched off there (`BasemapField`).
+
 `buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline)` (`World.jsx`) returns a MapLibre style JSON. It picks **one of five** branches:
 
 | # | Condition | Sources | Layers |
