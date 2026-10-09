@@ -327,13 +327,25 @@ const ChatLanguageSelector = () => {
     );
 };
 
-// On a touch screen the whole row is the switch: the pill alone is 28 px tall,
-// under a thumb's width, and the label beside it is what a thumb goes for. The
-// pill keeps its size and stops shrinking when a long label wraps beside it.
-// disabled: the switch shows its state but is held there by something else
-// (the system's reduced-motion setting), so it does not respond.
-// `inactive`: the switch keeps its stored choice and can still be flipped, but
-// something else stops it working for now, which the line under the label says.
+// The Basemap pick, which replaces a scenario's built-in basemap on this
+// device. A scenario with a map of its own (a picture, a drawn map, the plain
+// sea of a flat sheet) keeps it (World.jsx), so there the pick is switched off
+// and says why. What was picked stays stored for the scenarios it applies to.
+const BasemapField = ({ value, onChange }) => {
+    const { background } = useWorldBackground();
+    const ownMap = Boolean(background?.kind);
+    return (
+        <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
+            <select id="game-basemap-style" value={ownMap ? "" : value} disabled={ownMap} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: ownMap ? "not-allowed" : "pointer", opacity: ownMap ? 0.6 : 1 }}>
+                <option value="" style={{ color: "black" }}>Scenario default</option>
+                {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+            </select>
+            <div style={helperStyle}>{ownMap ? "This scenario uses its own basemap, which cannot be replaced." : "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."}</div>
+        </div>
+    );
+};
+
 // The 3D Globe switch, which a scenario can take away: its map may be a flat
 // sheet that is not to be wrapped round a globe (world.projection.globe).
 const GlobeToggle = ({ enabled, onToggle }) => {
@@ -349,6 +361,13 @@ const GlobeToggle = ({ enabled, onToggle }) => {
     );
 };
 
+// On a touch screen the whole row is the switch: the pill alone is 28 px tall,
+// under a thumb's width, and the label beside it is what a thumb goes for. The
+// pill keeps its size and stops shrinking when a long label wraps beside it.
+// disabled: the switch shows its state but is held there by something else
+// (the system's reduced-motion setting), so it does not respond.
+// `inactive`: the switch keeps its stored choice and can still be flipped, but
+// something else stops it working for now, which the line under the label says.
 const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) => {
     const touch = useTouchPrimary();
     return (
@@ -2386,14 +2405,7 @@ const SettingsWorkspace = ({
             {activeSection === "map" && (
                 <>
                 <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
-                    <div style={fieldGroupStyle}>
-                        <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-                        <select id="game-basemap-style" value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-                            <option value="" style={{ color: "black" }}>Scenario default</option>
-                            {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
-                        </select>
-                        <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
-                    </div>
+                    <BasemapField value={basemapStyle} onChange={updateBasemapStyle} />
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
                         list only suggests common safe ones. Empty = whatever the

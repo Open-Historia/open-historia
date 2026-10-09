@@ -306,7 +306,7 @@ Small localStorage-backed settings read reactively instead of threaded as props 
 
 | `MAP_SETTING_KEYS` key | localStorage key | Default | Read with | Effect |
 |---|---|---|---|---|
-| `basemapStyle` | `map_basemap_style` | empty (the scenario's basemap) | `getMapSettingValue` / `useMapSettingValue` | A built-in ESRI basemap id overrides the scenario author's basemap on this device |
+| `basemapStyle` | `map_basemap_style` | empty (the scenario's basemap) | `getMapSettingValue` / `useMapSettingValue` | A built-in ESRI basemap id overrides the scenario author's built-in basemap on this device; never a scenario's own map (`basemapOverrideFor`) |
 | `labelFont` | `map_label_font` | empty (the scenario's font, itself Georgia by default) | `getMapSettingValue` / `useMapSettingValue` | A font family overrides the scenario's country-label font on this device |
 | `hideCountryLabels` | `map_hide_country_labels` | off | `getMapSetting` / `useMapSetting` | Hide country name labels |
 | `disableIdleRotation` | `map_disable_idle_rotation` | off | `getMapSetting` / `useMapSetting` | Stop the idle globe spin |

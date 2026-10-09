@@ -10665,6 +10665,7 @@
  "This scenario has no editable polity roster yet.",
  "This scenario is already in your library",
  "This scenario pack does not contain any custom flag images that can be selected individually.",
+ "This scenario uses its own basemap, which cannot be replaced.",
  "This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.",
  "This scenario's community basemap could not be downloaded. {{reason}} The game tries again the next time you start it and open the scenario.",
  "This scenario's groups",

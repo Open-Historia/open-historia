@@ -118,6 +118,14 @@ export const DEFAULT_BASEMAP_ID = "ocean";
 const BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
+// The player's basemap pick (Settings > Map) as it applies to the scenario on
+// screen: a built-in basemap's id, or "" for the scenario's own. It replaces a
+// built-in basemap only. A scenario with a map of its own (a picture, a drawn
+// map, the plain sea of a flat sheet) keeps it: its regions are drawn for that
+// map, and a built-in basemap under them is the Earth under another world.
+export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false } = {}) => (
+  !scenarioHasOwnMap && isBuiltinBasemapId(pickedId) ? pickedId : ""
+);
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
