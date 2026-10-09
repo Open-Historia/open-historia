@@ -502,6 +502,27 @@ footer {
 footer a { color: var(--sepia); }
 footer a:hover { color: var(--ink); }
 
+/* The independence notice: boxed where a page names the other game (.notice),
+   and a line of its own in every footer (.foot-legal). */
+.notice {
+  margin: 0 0 1.6rem;
+  padding: 0.75rem 1.125rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--marble) 60%, transparent);
+  color: var(--sepia);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+.notice b { color: var(--ink); font-weight: 600; }
+.foot-legal {
+  max-width: 60rem;
+  margin: 0.75rem auto 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--sepia2, var(--sepia));
+}
+
 /* ---------- narrow screens ---------- */
 
 @media (max-width: 900px) {

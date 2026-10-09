@@ -249,6 +249,13 @@
   .hero-note{font-size:.96rem;color:var(--sepia2);margin-top:0.5rem;font-style:italic}
   #heroNote{max-width:40rem;margin-left:auto;margin-right:auto}
   .hero-note a{color:var(--bronze);border-bottom:1px solid rgba(201,147,47,.45)}
+  /* The independence notice: under the hero, where the page names the other
+     game, and again in the footer. Plain to read, quiet enough not to compete
+     with the headline. */
+  .notice{max-width:46rem;margin:1.375rem auto 0;padding:0.75rem 1.125rem;border:1px solid var(--line);border-radius:var(--radius);
+    background:rgba(17,17,19,.55);color:var(--sepia);font-size:.86rem;line-height:1.55;text-align:left}
+  .notice b{color:var(--ink);font-weight:600}
+  @media(max-width:560px){.notice{font-size:.8rem;padding:0.625rem 0.875rem}}
 
   /* Screenshot gallery. It drifts on its own when idle, scrollable and infinite */
   .gallery{position:relative;margin:3.125rem 0 0;
@@ -411,6 +418,7 @@
   .foot{display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center}
   .foot a{color:var(--sepia)}.foot a:hover{color:var(--ink)}
   .fnav{display:flex;gap:1.5rem;flex-wrap:wrap}
+  .foot-legal{flex-basis:100%;margin:0.25rem 0 0;font-size:.82rem;line-height:1.55;color:var(--sepia2)}
 </style>
 </head>
 <body>
@@ -457,6 +465,7 @@
       </div>
     </div>
     <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
+    <p class="notice" role="note"><b>Open Historia is an independent, open-source project</b> and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
     <div class="gallery">
       <div class="gtrack" id="gtrack" tabindex="0" role="group" aria-label="Screenshots">
         <div class="gcard">
@@ -639,6 +648,7 @@
       <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
       <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
     </div>
+    <p class="foot-legal">Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
   </div>
 </footer>
 
