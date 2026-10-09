@@ -47,6 +47,8 @@ export const REMINDER_MAX_CHARS = 600;
 export const GM_CHANGE_KINDS = Object.freeze([
   "gm-console",
   "territory",
+  "groups",
+  "puppets",
   "polity",
   "stats",
   "feature",
@@ -175,6 +177,8 @@ export const gmChangesSince = (world, sinceAt) => {
 const KIND_LABELS = Object.freeze({
   "gm-console": "GM console",
   territory: "territory",
+  groups: "groups",
+  puppets: "puppet states",
   polity: "country editor",
   stats: "statistics",
   feature: "map features",

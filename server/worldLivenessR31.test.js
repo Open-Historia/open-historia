@@ -133,3 +133,51 @@ test("world motion repair schema physically allows only one storyline semantic u
   assert.equal(validation.valid, false);
   assert.match(validation.error, /not allowed|unexpected property|additional/i);
 });
+
+// From a player's log: the player mediated a Gulf crisis, the storyline listed
+// the player as a participant, and from then on every event that said
+// "British" was bound to the Gulf crisis — shipyards, fusion, Nigeria.
+const gulfCrisis = {
+  id: "saudi-iran-crisis-2016",
+  status: "active",
+  kind: "politics",
+  pressure: 60,
+  momentum: 20,
+  title: "Saudi-Iranian Diplomatic Crisis",
+  participants: ["Saudi Arabia", "Iran", "United Arab Emirates", "British Empire"],
+  state: "The Omani auditing panel continued routine inspections in the Strait of Hormuz.",
+};
+
+test("naming the player is not enough to bind an event to a storyline the player is in", () => {
+  const candidate = {
+    events: [{
+      title: "British Admiralty Advances Portsmouth Leviathan Hull Assembly",
+      description: "Naval engineers at Portsmouth integrated automated quantum diagnostic grids with shipyard assembly lines for upcoming Leviathan-class hulls.",
+      storylineIds: [],
+    }],
+  };
+  const result = bindSelectedStorylineEvents(candidate, {
+    selectedStorylines: [gulfCrisis],
+    world: {},
+    gameCountry: "British Empire",
+  });
+  assert.equal(result.bound, 0);
+  assert.deepEqual(candidate.events[0].storylineIds, []);
+});
+
+test("an event about the storyline's own subject still binds when the player is in it", () => {
+  const candidate = {
+    events: [{
+      title: "Saudi Arabia and Iran Trade Accusations Over Strait of Hormuz Inspections",
+      description: "Riyadh and Tehran accused each other of obstructing the Omani auditing panel's inspections in the Strait of Hormuz.",
+      storylineIds: [],
+    }],
+  };
+  const result = bindSelectedStorylineEvents(candidate, {
+    selectedStorylines: [gulfCrisis],
+    world: {},
+    gameCountry: "British Empire",
+  });
+  assert.equal(result.bound, 1);
+  assert.deepEqual(candidate.events[0].storylineIds, ["saudi-iran-crisis-2016"]);
+});

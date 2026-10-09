@@ -5,8 +5,8 @@ import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM } from "../../runtime/mobileUi.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
-import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { bundledFlagUrl, flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { useLibraryState } from "../../runtime/library.js";
 
 const baseStyle = {
@@ -53,7 +53,7 @@ const FallbackBadge = ({ label }) => (
 // dockStyle places the standalone badge beside the advisor drawer (main.jsx).
 const DEFAULT_DOCK_STYLE = { right: "0.5rem" };
 
-const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = false }) {
+const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = false, onToggle = null }) {
     const { activeGame } = useLibraryState();
     const activeGameId = String(activeGame?.id || "");
     const activeGameCountry = String(activeGame?.country || "").trim();
@@ -143,62 +143,51 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         setImageFailed(false);
     }, [country]);
 
-    // In dock mode the badge is part of the responsive bottom command surface.
-    // The old standalone badge still stays hidden on phones.
-    if ((!embedded && isMobile) || !country) return null;
+    // Hidden on phones, where it would cover the date: there the country name
+    // in the date widget opens the drawer (time.jsx).
+    if (isMobile || !country) return null;
 
-    // Landless → never borrow the code-derived country flag; fall through to the
+    // Landless → only a flag chosen for the polity (a new faction's or group's),
+    // never the code-derived country flag; without one, fall through to the
     // neutral FallbackBadge (both null makes the render pick it).
-    const resolvedFlag = landless
-        ? { imageUrl: null }
-        : resolvePolityFlag({
-            polity: { polityKey: country, code: country, name: displayName || country },
-            world: worldState || {},
-            flags: flagCatalog || {},
-        });
-    const flagUrl = landless ? null : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
+    const flagArgs = {
+        polity: { polityKey: country, code: country, name: displayName || country },
+        world: worldState || {},
+        flags: flagCatalog || {},
+    };
+    const resolvedFlag = landless ? resolveChosenPolityFlag(flagArgs) : resolvePolityFlag(flagArgs);
+    const flagUrl = landless ? resolvedFlag.imageUrl : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
     const flagEmoji = landless ? null : flagEmojiFromGid(country);
 
     return (
-        <div
-        className={embedded ? "oh-dock-polity" : undefined}
-        title={displayName}
-        style={embedded ? {
-            alignItems: "center",
-            display: "flex",
-            gap: "0.58rem",
-            minWidth: 0,
-            maxWidth: isMobile ? "3.2rem" : "13.2rem",
-            padding: isMobile ? "0 0.22rem" : "0 0.72rem 0 0.34rem",
-            color: "white",
-            fontFamily: "inherit",
-            overflow: "hidden",
-        } : {
+        <button
+        type="button"
+        title={`${displayName} · Open country panel`}
+        aria-label={`Open ${displayName} country panel`}
+        onClick={onToggle}
+        style={{
             ...baseStyle,
             ...dockStyle,
             bottom: `calc(4.75rem + ${SAFE_BOTTOM})`,
             // Rides beside the advisor drawer, so a wide drawer carries it over
             // the Actions/Projects/chat panels (9998); an open panel stays on top.
             zIndex: 9997,
-            height: "2.75rem",
-            width: "2.75rem",
-            padding: "0.35rem",
+            height: "4rem",
+            width: "4rem",
+            padding: "0.48rem",
             boxSizing: "border-box",
             overflow: "hidden",
+            cursor: "pointer",
+            appearance: "none",
+            background: active
+                ? "rgba(75,143,251,0.17)"
+                : "rgba(35,35,39,0.53)",
+            transition: `${dockStyle.transition || ""}${dockStyle.transition ? ", " : ""}background 0.15s ease`,
         }}
         >
-        <div style={embedded ? {
-            alignItems: "center",
-            display: "flex",
-            flex: "0 0 auto",
-            height: "1.5rem",
-            justifyContent: "center",
-            overflow: "hidden",
-            width: "2.25rem",
-        } : { display: "contents" }}>
         {flagUrl && !imageFailed ? (
             <img
-            src={flagUrl}
+            src={bundledFlagUrl(flagUrl)}
             alt={displayName}
             onError={() => setImageFailed(true)}
             style={{ borderRadius: "5px", boxShadow: "0 0 0 1px rgba(255,255,255,0.16)", height: "100%", objectFit: "cover", width: "100%" }}
@@ -208,18 +197,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         ) : (
             <FallbackBadge label={displayName} />
         )}
-        </div>
-        {embedded && !isMobile && (
-            <div className="oh-dock-polity-meta" style={{ minWidth: 0, lineHeight: 1.05 }}>
-                <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.75rem", fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {displayName}
-                </div>
-                <div style={{ color: "rgba(216,216,219,0.42)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.04em", marginTop: "0.18rem", textTransform: "uppercase" }}>
-                    Player polity
-                </div>
-            </div>
-        )}
-        </div>
+        </button>
     );
 });
 

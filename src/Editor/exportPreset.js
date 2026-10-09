@@ -14,6 +14,11 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
+import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
+import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
+import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { populationByYearField } from "../runtime/cityPopulation.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
@@ -124,10 +129,12 @@ const cityTier = (f) => {
   return pop >= 1000000 ? 3 : pop >= 100000 ? 2 : 1;
 };
 
-// The document's point features (cities) as the game-ready cities.geojson.
+// The document's cities as the game-ready cities.geojson. A map feature that is
+// not a city (a base, a port: mapFeatures.js) goes to world.markers instead.
 const buildCitiesForGame = (features) => ({
   type: "FeatureCollection",
   features: (features || [])
+    .filter((f) => !isMapFeature(f))
     .filter((f) => Array.isArray(f.coord) && f.coord.length === 2 && f.coord[0] != null && f.coord[1] != null)
     .map((f) => ({
       type: "Feature",
@@ -137,9 +144,62 @@ const buildCitiesForGame = (features) => ({
         population: f.population || 0,
         capital: (f.tags || []).includes("capital") ? "primary" : "",
         tier: cityTier(f),
+        // The population by year, which the game reads for its date
+        // (runtime/cityPopulation.js).
+        ...(f.populationByYear && typeof f.populationByYear === "object" && Object.keys(f.populationByYear).length
+          ? { populationByYear: { ...f.populationByYear } }
+          : {}),
+        // What the Features panel edits besides, written only when it says
+        // something the rest does not: the tags beyond city/capital, a symbol
+        // other than the square, the country. The game passes them through
+        // (normalizeCustomCityFeature keeps unknown properties); they are here
+        // so reopening the scenario's map gives them back (gameCityToFeature).
+        ...(authoredCityTags(f) ? { tags: authoredCityTags(f) } : {}),
+        ...(f.symbol && f.symbol !== "square" ? { symbol: String(f.symbol) } : {}),
+        ...(f.country ? { country: String(f.country) } : {}),
       },
     })),
 });
+
+// The tags a city is given back from `capital` alone: ["city"], or
+// ["city", "capital"].
+const defaultCityTags = (capital) => (capital ? ["city", "capital"] : ["city"]);
+const authoredCityTags = (f) => {
+  const tags = Array.isArray(f.tags) ? f.tags.map((t) => String(t)) : [];
+  if (!tags.length) return null;
+  const fallback = defaultCityTags(tags.includes("capital"));
+  return tags.length === fallback.length && tags.every((t) => fallback.includes(t)) ? null : tags;
+};
+
+// One city of a scenario's cities.geojson as a Workshop feature — the way
+// opening a scenario's map reads its cities back (MapEditor.jsx). null when it
+// has no point. The size, the population by year, and the tags, symbol and
+// country buildCitiesForGame wrote all come back.
+export const gameCityToFeature = (f, id) => {
+  const props = f?.properties || {};
+  const coord = Array.isArray(f?.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null;
+  if (!coord) return null;
+  const capital = props.capital === "primary";
+  const tags = Array.isArray(props.tags) && props.tags.length ? props.tags.map((t) => String(t)) : defaultCityTags(capital);
+  if (capital && !tags.includes("capital")) tags.push("capital");
+  const tier = Number(props.tier);
+  return {
+    id,
+    name: props.city ? String(props.city) : "",
+    type: "Coordinate",
+    symbol: typeof props.symbol === "string" && props.symbol ? props.symbol : "square",
+    coord,
+    country: typeof props.country === "string" ? props.country : "",
+    owner: null,
+    regionId: null,
+    population: props.population || 0,
+    tags,
+    // Its size and its population by year come back too: a round trip
+    // lost the tier, and would lose the series.
+    ...(tier >= 1 && tier <= 3 ? { tier: Math.round(tier) } : {}),
+    ...populationByYearField(props),
+  };
+};
 
 // Turn the editor's persisted custom background (doc.metadata.customBackground)
 // into what the game needs: a light descriptor for world.json (just the kind) and
@@ -232,6 +292,34 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
 
+  // Every dispute the map declares, as the world's own list too. The AI, the
+  // region card and the Region Inspector read world.regionClaimants, and in the
+  // game a world row wins over the map file — so a scenario that inherited the
+  // built-in world's rows hid the author's edits to those regions, and a dispute
+  // drawn only in the map was one the AI never heard of.
+  const regionClaimants = {};
+  for (const feature of gameRegions.features) {
+    const list = feature.properties?.claimants;
+    if (Array.isArray(list) && list.length) regionClaimants[feature.properties.id] = [...new Set(list)];
+  }
+
+  // Groups (runtime/groups.js): the registry, with any group a region names that
+  // the registry lacks (still a group to the game, in its default colour), and
+  // which group's area each region is in. They live in the world alone: the
+  // regions file carries no `group`.
+  const groupRegistry = { ...(doc.groups && typeof doc.groups === "object" && !Array.isArray(doc.groups) ? doc.groups : {}) };
+  const groupAreaRows = {};
+  for (const feature of regionsFC?.features || []) {
+    const props = feature.properties || {};
+    const id = props.id != null ? String(props.id) : feature.id != null ? String(feature.id) : "";
+    const group = String(props.group || "").trim();
+    if (!id || !group) continue;
+    groupAreaRows[id] = group;
+    if (!findGroupKey(groupRegistry, group)) groupRegistry[group] = { name: group };
+  }
+  const groups = normalizeGroups(groupRegistry);
+  const groupAreas = normalizeGroupAreas(groupAreaRows, groups);
+
   // Scenario Workshop / owner schema 4: region ownership is a stable
   // polity KEY. The visible/current name belongs to the polity registry and may
   // change without re-keying a single region.
@@ -293,8 +381,25 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
     polityOverrides,
+    // The map's disputes (above). A scenario is a starting point, so nothing in
+    // it is a dispute that already ended.
+    regionClaimants,
+    settledRegionClaims: [],
+    // The groups and the areas they control (above).
+    groups,
+    groupAreas,
     // The starting units the author placed (Units panel / Unit tool).
     units: buildUnitsForGame(doc.units),
+    // The structures the author placed with the Map feature tool, and any the
+    // scenario already had (the Workshop opened with them).
+    markers: buildMarkersForGame(doc.features),
+    // The puppet states the scenario starts with (Countries panel).
+    puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
+    // The map's region types (Region Types panel). Each region names its type
+    // by typeId in the regions file; the game draws a type's colour, opacity,
+    // border and zoom range, and tells the AI its movement rules
+    // (runtime/regionTypes.js). The Workshop opens with them again.
+    regionTypes: normalizeRegionTypes(doc.types),
     // A custom background replaces Earth, so it must also hide the stock modern
     // political overlay (country fills, borders, "Russia"/"France" labels) — those
     // are gated on customRegions in the game, so force it on whenever there's a

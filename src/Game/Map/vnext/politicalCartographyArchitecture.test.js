@@ -8,7 +8,11 @@ const worker = fs.readFileSync(new URL("./polityBoundariesWorker.js", import.met
 const displayMesh = fs.readFileSync(new URL("./regionDisplayMesh.js", import.meta.url), "utf8");
 const displayMeshPolicy = fs.readFileSync(new URL("./regionDisplayMeshPolicy.js", import.meta.url), "utf8");
 const renderRepair = fs.readFileSync(new URL("./regionRenderRepair.js", import.meta.url), "utf8");
-const polityTextLayer = fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8");
+// The React component and the record sync it drives (polityTextSync.js).
+const polityTextLayer = [
+  fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../labels/polityTextSync.js", import.meta.url), "utf8"),
+].join("\n");
 const polityTextCustomLayer = fs.readFileSync(new URL("../labels/polityTextCustomLayer.js", import.meta.url), "utf8");
 const polityTextPlacement = fs.readFileSync(new URL("../labels/polityTextPlacement.js", import.meta.url), "utf8");
 const polityTextRecords = fs.readFileSync(new URL("../labels/polityTextRecords.js", import.meta.url), "utf8");
@@ -19,6 +23,7 @@ const world = fs.readFileSync(new URL("../World.jsx", import.meta.url), "utf8");
 const natGeoDarkStyle = fs.readFileSync(new URL("../natGeoDarkStyle.js", import.meta.url), "utf8");
 const mapLayerOrder = fs.readFileSync(new URL("../mapLayerOrder.js", import.meta.url), "utf8");
 const runtimeAssets = fs.readFileSync(new URL("../../../runtime/assets.js", import.meta.url), "utf8");
+const preload = fs.readFileSync(new URL("../../../runtime/preload.js", import.meta.url), "utf8");
 const editorBasemaps = fs.readFileSync(new URL("../../../Editor/basemaps.js", import.meta.url), "utf8");
 
 // These are intentionally source-level architecture guards. They catch accidental
@@ -41,7 +46,8 @@ test("Pipeline v2 discards obsolete worker revisions rather than publishing them
   assert.match(nations, /scheduler\.complete\(result\?\.requestId\)/);
   assert.match(
     nations,
-    /if \(!completion\.accepted\) \{[\s\S]*?cartographyDiscarded = true[\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
+    // What a discard does is ownershipPresentationHolds.test.js's to check.
+    /if \(!completion\.accepted\) \{[\s\S]*?ownershipPresentation\.discardCartography\([\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
   );
   assert.match(nations, /const request = completion\.request/);
 });
@@ -65,7 +71,7 @@ test("catalog metadata stays early while scenario readiness waits for safe geome
   assert.match(worker, /if \(type === "initialize"\) \{[\s\S]*scheduleRegionRenderRepair/);
   assert.match(nations, /ptrBlocksInitialReadiness/);
   assert.match(nations, /!ptrPolityTextStatus\.mounted[\s\S]*!ptrPolityTextStatus\.failed/);
-  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl\)/);
+  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl, \{ failed: bordersFailedRef\.current \}\)/);
   // The source and the worker fetch through the worker-fetchable URL (a blob:
   // copy on the website); the runtime URL stays the identity above.
   assert.match(nations, /useWorkerFetchableUrl\(regionsGeojsonUrl\)/);
@@ -130,12 +136,63 @@ test("PTR GPU resources are uploaded lazily in bounded batches", () => {
 });
 
 test("WebGL context loss remains instrumented for freeze diagnostics", () => {
-  assert.match(world, /webglcontextlost/);
-  assert.match(world, /webglcontextrestored/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-lost"/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-restored"/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextlost", onLost\)/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
+  // The listeners themselves are covered by mapInstrumentation.test.js; World
+  // attaches them to every map instance it mounts.
+  assert.match(world, /attachMapInstrumentation\(\{/);
+  assert.match(world, /\}, \[handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast\]\);/);
+});
+
+test("country fills are written again when MapLibre rebuilds the sources holding their feature-state", () => {
+  // A restored WebGL context, or a style MapLibre cannot diff (3D Terrain),
+  // brings every source back as a new object with no feature-state. The
+  // applied-fill ledgers go with the old objects, or the whole map stays grey.
+  assert.match(nations, /mapInstance\.on\("styledata", schedule\)/);
+  assert.match(nations, /if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /seen\.custom && seen\.custom !== next\.custom\) \|\| \(seen\.repair && seen\.repair !== next\.repair/);
+  assert.match(nations, /appliedCustomFillStateRef\.current = new Map\(\);\s*setCustomFillSourceEpoch/);
+  assert.match(nations, /if \(seen\.tiles && seen\.tiles !== next\.tiles\) \{\s*appliedTileFillStateRef\.current = new Map\(\);\s*setTileFillSourceEpoch/);
+  assert.match(nations, /\}, \[\s*customFillSourceEpoch,\s*customFlag,/);
+  assert.match(nations, /shouldMountStockRegions, tileFillSourceEpoch\]\);/);
+  // A pass still slicing when its ledger was reset must not put the old one back.
+  assert.match(nations, /if \(appliedCustomFillStateRef\.current === applied\) appliedCustomFillStateRef\.current = appliedAfterSync;/);
+  assert.match(nations, /if \(appliedTileFillStateRef\.current === applied\) appliedTileFillStateRef\.current = appliedAfterSync;/);
+  assert.doesNotMatch(nations, /^\s*applied(Custom|Tile)FillStateRef\.current = appliedAfterSync;/m);
+});
+
+test("an ownership transition caught by a lost WebGL context or a style rebuild still ends, and the queue moves on", () => {
+  // MapLibre drops the custom flood layer with its callbacks (onRemove on a lost
+  // context; silently on a rebuilt style), so the sweep that waits for them is
+  // ended by the fill-source watcher once the sources come back.
+  assert.match(nations, /sweep\.finish = finish;/);
+  assert.match(nations, /if \(seen\.custom !== next\.custom && ownershipSweepRef\.current\.active\) ownershipSweepRef\.current\.finish\?\.\(\);\s*appliedCustomFillStateRef\.current = new Map\(\);/);
+  // With no style nothing can be read or drawn: finish() waits for the restore
+  // instead of committing half a sweep, and the sweep's own frames stand down.
+  assert.match(nations, /const finish = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| committed\) return;[\s\S]{0,400}?if \(!mapInstance\.style\) return;\s*committed = true;/);
+  assert.match(nations, /data\?\.requestId !== requestId\) return;[\s\S]{0,200}?if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /const waitForLayer = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| !mapInstance\.style\) return;/);
+  assert.match(nations, /const hydrate = \(\) => \{\s*frame = 0;[\s\S]{0,120}?if \(!mapInstance\.style\) return;/);
+});
+
+test("the map survives a render or a map effect while the WebGL context is lost", () => {
+  // Between a context loss and its restore MapLibre has no style, and getLayer,
+  // getSource and setFeatureState throw. A turn landing in that window renders
+  // the map again: a throw while rendering took the whole map down.
+  assert.match(nations, /const hasMapLayer = \(id\) => Boolean\(map\?\.getMap\?\.\(\)\?\.style && map\.getLayer\(id\)\);/);
+  const jsxStart = nations.search(/\n {2}return \(\r?\n\s*<>/);
+  assert.ok(jsxStart > 0, "the map component's JSX");
+  const jsx = nations.slice(jsxStart, nations.indexOf("export default WorldMap"));
+  assert.doesNotMatch(jsx, /\bmap\??\.(getLayer|getSource)\b/);
+  assert.ok((jsx.match(/hasMapLayer\(/g) ?? []).length >= 11, "layer lookups while rendering go through hasMapLayer");
+  // Effects that run in that window wait for the style like a missing source.
+  assert.match(nations, /if \(\s*!mapInstance\.style\s*\|\| !mapInstance\.getSource\?\.\("custom-regions-source"\)/);
+  assert.match(nations, /if \(!mapInstance\.style \|\| !mapInstance\.getSource\?\.\("regions-source"\)\) \{/);
+  assert.equal((nations.match(/const applySlice = \(\) => \{\s*if \(cancelled \|\| !mapInstance\.style\) return;/g) ?? []).length, 3, "the owners' fills, the stock tiles' fills and the region types' state");
+  assert.equal((nations.match(/mapInstance\?\.style \? mapInstance\.getSource\?\.\("polity-boundaries-source"\) : null/g) ?? []).length, 2);
+  assert.doesNotMatch(nations, /mapInstance\?\.getSource\?\.\("polity-boundaries-source"\)/);
+  // Labels published in that window wake the polity text renderer: it waits
+  // for the style like an unloaded one, and its catch cannot throw again.
+  assert.match(polityTextLayer, /if \(!runtime\.layer \|\| \(mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\)\) return true;/);
+  assert.match(polityTextLayer, /failed: !runtime\.layer,\s*mounted: Boolean\(runtime\.layer && mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\),/);
 });
 
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
@@ -143,6 +200,17 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /loadNatGeoDarkStyle/);
   assert.match(world, /effectiveBasemap === "natgeo-dark"/);
   assert.match(world, /"atlas-relief-dark"/);
+  assert.match(world, /basemapId === "midnight-terrain"/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.96/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.16/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.92/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.20/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-contrast": 0\.38/);
+  assert.match(world, /5\.40, 0\.70[\s\S]*?6\.50, 0\.74[\s\S]*?12, 0\.78/);
+  assert.match(world, /"#000205"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*previewFilter: "brightness\(0\.15\) saturate\(0\.14\) contrast\(1\.10\)"/);
   assert.match(natGeoDarkStyle, /3d1a30626bbc46c582f148b9252676ce/);
   assert.match(natGeoDarkStyle, /classifyNatGeoDarkLabelLayer/);
   assert.match(natGeoDarkStyle, /kind === "street"/);
@@ -171,6 +239,15 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /noteBasemapTransitionProgress\(94\)/);
   assert.match(runtimeAssets, /id: "natgeo-dark"/);
   assert.match(editorBasemaps, /id: "natgeo-dark"/);
+  assert.match(runtimeAssets, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
+});
+
+test("the groups' layers are handed a hasMapLayer the map component defines", () => {
+  // GroupAreaLayers finds its place in the layer order through it; passed but
+  // never defined, it threw on the map's first render and took the world view down.
+  assert.match(nations, /hasMapLayer=\{hasMapLayer\}/);
+  assert.match(nations, /const hasMapLayer = \(id\) => Boolean\(map\?\.getMap\?\.\(\)\?\.style && map\.getLayer\(id\)\);/);
 });
 
 test("label geometry is worker-owned and Nations never fits live polity polygons on the main thread", () => {
@@ -214,12 +291,15 @@ test("legal ownership animation keeps canonical ownership separate from bounded 
   assert.match(nations, /ownership-transition-sweep-source/);
   assert.match(nations, /ownership-transition-sweep-fill/);
   assert.match(nations, /ownershipTransitionHidden/);
-  assert.match(nations, /ownershipTransitionQueueRef\.current\.push/);
+  // The hold and queue bookkeeping lives in ownershipPresentationHolds.js.
+  assert.match(nations, /ownershipPresentation\.addTransition\(/);
+  assert.match(nations, /ownershipPresentation\.nextTransition\(\)/);
+  assert.match(nations, /ownershipPresentation\.finishTransition\(queued\) === "publish"/);
   assert.match(
     nations,
     /new Worker\(new URL\("\.\/vnext\/ownershipTransitionWorker\.js"/,
   );
-  assert.match(nations, /prefers-reduced-motion/);
+  assert.match(nations, /if \(reduceMotionEnabled\(\)\) \{/);
   assert.match(ownershipTransitionWorker, /transitionT/);
 
   // Animation stays presentation-only; canonical political colour is not rewritten as an effect.
@@ -241,15 +321,20 @@ test("mid-campaign PTR updates publish immediately, cancel stale solves, and ref
   assert.match(polityTextLayer, /onWorker\(worker, cancel\)/);
   assert.match(
     polityTextLayer,
-    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional\)/,
+    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional, changedKeys\)/,
   );
   assert.match(polityTextLayer, /placementTimeoutMs: initialMount \? 30000 : 4000/);
   assert.match(polityTextContinuity, /previousFingerprints\.get\(key\) !== fingerprint/);
   assert.doesNotMatch(polityTextLayer, /\[debugBaseline, enabled, fontFamilies, haloColor, map, mode, onStatusChange, records, textColor\]/);
 });
 
-test("custom political maps do not build an unused stock-country label atlas", () => {
-  assert.match(nations, /if \(customFlag\) \{[\s\S]*setPointLabelData\(EMPTY_FEATURE_COLLECTION\)[\s\S]*setCurvedLabelData\(EMPTY_FEATURE_COLLECTION\)/);
+test("no map builds the stock-country label atlas no served world draws", () => {
+  // Every served world is a custom one; the stock label layers stay only as
+  // empty anchors, and startup no longer builds their atlas.
+  assert.doesNotMatch(nations, /loadCountryLabelCollections|setPointLabelData|setCurvedLabelData/);
+  assert.match(nations, /id="country-curved-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.match(nations, /id="country-point-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.doesNotMatch(preload, /warmCountryLabelCollections|id: "country-labels"/);
 });
 
 test("dirty boundary filtering is owner-list based rather than capped to four overlapping owners", () => {
@@ -329,6 +414,26 @@ test("hybrid map fallback keeps exact ownership and stock hit-testing even when 
   assert.match(nations, /const candidateLayers = \(scenarioOwnsRegionGeometryAtAllZooms/);
   assert.match(nations, /"regions-fill"/);
   assert.doesNotMatch(nations, /const candidateLayers = \(hasDrawnGeometry/);
+});
+
+test("custom scenario fills use the merged owner lookup instead of live overrides alone", () => {
+  // Regression: an edited/authored region can carry its valid starting owner only
+  // in scenario metadata. Click resolution already used ownerByRegionId, while the
+  // fill-state sync used regionOwnershipOverrides alone and painted that region
+  // neutral grey. Both presentation paths must share the same precedence:
+  // live override first, otherwise scenario owner.
+  assert.match(
+    nations,
+    /for \(const \[regionId, owner\] of ownerByRegionId\) \{[\s\S]*if \(!id \|\| !owner\) continue;[\s\S]*next\.set\(id, ownerColorCss\(owner\)\);/,
+  );
+  assert.match(nations, /cachedTarget\.owners !== ownerByRegionId/);
+  assert.match(nations, /owners: ownerByRegionId/);
+
+  const fillSyncStart = nations.indexOf("// The URL-backed authored source uses the same merged ownership lookup");
+  const fillSyncEnd = nations.indexOf("// Presentation-only legal sovereignty transition", fillSyncStart);
+  assert.ok(fillSyncStart >= 0 && fillSyncEnd > fillSyncStart);
+  const fillSync = nations.slice(fillSyncStart, fillSyncEnd);
+  assert.doesNotMatch(fillSync, /Object\.entries\(regionOwnershipOverrides/);
 });
 
 test("stock-vs-authored provenance is explicit rather than inferred from punctuation in region ids", () => {

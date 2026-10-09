@@ -8,13 +8,91 @@
 // This file OWNS the turn state rather than mirroring it, so a new write site
 // that forgets to update it is a ReferenceError rather than silent drift.
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import { campaignChanged } from "../../runtime/campaignGuard.js";
 
 // A counter, not a boolean: independent generators overlap.
 let activeSimulations = 0;
 
-// A jump held on a failed segment, and a turn held at the Projects board.
-let pendingJumpSegment = null;
-let pendingProjectsJump = null;
+// A turn HELD for the player: generated, NOT written, waiting on Retry or
+// Discard. Keyed by kind so each retry finds its own. The kinds:
+//   segment  one segment of a split jump did not come back; the ones before it
+//            are in hand (gameplay.js runJumpSegments)
+//   board    the Projects & Operations board did not update (applySimulationResult)
+//   checks   a check after the events failed: the turn review, or with Save AI
+//            requests off one of the separate checks (turnChecks.js)
+//   events   with "Stop when my events fail" on, the player's own events were
+//            refused or their orders left without an outcome
+//            (AI/playerTurnFailures.js)
+// An error that holds a turn carries its kind as `heldKind`.
+//
+// Each belongs to the campaign it was generated for, one of each kind per
+// campaign, keyed by the campaign's id ("" when it could not tell). A hold is
+// only its campaign's business: it keeps THAT campaign busy and shows its
+// notice there, and another campaign opened meanwhile plays as usual. A
+// finished turn parked because another campaign was open when it was ready to
+// be written is kept the same way, beside them.
+export const HELD_TURN = Object.freeze({ segment: "segment", board: "board", checks: "checks", events: "events" });
+const heldTurns = new Map(Object.values(HELD_TURN).map((kind) => [kind, new Map()]));
+const parkedTurns = new Map();
+const DISCARD_NOTES = Object.freeze({
+  [HELD_TURN.segment]: "Held jump discarded; nothing was written and its finished segments are gone.",
+  [HELD_TURN.board]: "Held turn discarded; the board was never updated and nothing was written.",
+  [HELD_TURN.checks]: "Held turn discarded; a check after its events failed and nothing was written.",
+  [HELD_TURN.events]: "Held turn discarded; the player's events in it had failed and nothing was written.",
+});
+
+// The holds of one kind, by campaign.
+const holdsOf = (kind) => {
+  let holds = heldTurns.get(kind);
+  if (!holds) {
+    holds = new Map();
+    heldTurns.set(kind, holds);
+  }
+  return holds;
+};
+
+// Which campaign is open. gameplay.js supplies it (it reads the library), so
+// this file stays a leaf. Until it does, every hold counts wherever it is asked
+// about, which is how holds behaved before they knew their campaign.
+let currentCampaign = () => "";
+export const setCampaignResolver = (resolve) => {
+  currentCampaign = typeof resolve === "function" ? resolve : () => "";
+};
+
+const campaignOfHold = (value) => String(
+  value?.campaignId ?? value?.context?.campaignId ?? value?.applyArgs?.campaignId ?? "",
+).trim();
+
+// The hold of the open campaign. An unknown id on either side is "cannot tell",
+// as in campaignGuard.js, and counts.
+const heldHere = (holds) => {
+  const current = currentCampaign();
+  for (const [campaignId, hold] of holds) {
+    if (!campaignChanged(campaignId, current)) return hold;
+  }
+  return null;
+};
+
+const releaseHere = (holds) => {
+  const current = currentCampaign();
+  let had = false;
+  for (const campaignId of [...holds.keys()]) {
+    if (campaignChanged(campaignId, current)) continue;
+    holds.delete(campaignId);
+    had = true;
+  }
+  return had;
+};
+
+// Setting null releases the hold of `campaignId`, or of the open campaign.
+const setHold = (holds, value, campaignId) => {
+  if (value == null) {
+    if (campaignId === undefined) releaseHere(holds);
+    else holds.delete(String(campaignId ?? "").trim());
+    return;
+  }
+  holds.set(String(campaignId ?? campaignOfHold(value)).trim(), value);
+};
 
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
@@ -28,15 +106,43 @@ export const endSimulation = () => {
   activeSimulations = Math.max(0, activeSimulations - 1);
 };
 
-export const getPendingJumpSegment = () => pendingJumpSegment;
-export const setPendingJumpSegment = (value) => {
-  pendingJumpSegment = value ?? null;
+export const getHeldTurn = (kind) => heldHere(holdsOf(kind));
+export const holdTurn = (kind, value, campaignId) => {
+  setHold(holdsOf(kind), value, campaignId);
 };
 
-export const getPendingProjectsJump = () => pendingProjectsJump;
-export const setPendingProjectsJump = (value) => {
-  pendingProjectsJump = value ?? null;
+// The two oldest kinds, by the names their callers know them by.
+export const getPendingJumpSegment = () => getHeldTurn(HELD_TURN.segment);
+export const setPendingJumpSegment = (value, campaignId) => {
+  holdTurn(HELD_TURN.segment, value, campaignId);
 };
+
+export const getPendingProjectsJump = () => getHeldTurn(HELD_TURN.board);
+export const setPendingProjectsJump = (value, campaignId) => {
+  holdTurn(HELD_TURN.board, value, campaignId);
+};
+
+// A finished turn whose campaign was not open when it was ready to be written
+// (gameplay.js finishTimelineJump): { campaignId, applyArgs }, the arguments of
+// the apply that was refused. Also stored with its campaign (AI/parkedTurn.js),
+// and taken back in from there after a restart (gameplay.js loadParkedTurn).
+// Offered when that campaign is next opened, and applied or discarded by the
+// player (gameplay.js applyParkedTurn and discardKeptTurn, called by time.jsx).
+export const getParkedTurn = () => heldHere(parkedTurns);
+export const parkFinishedTurn = (value) => {
+  if (value?.applyArgs && typeof value.applyArgs === "object") parkedTurns.set(campaignOfHold(value), value);
+};
+// Takes the open campaign's parked turn off the shelf, so it is applied once.
+export const takeParkedTurn = () => {
+  const parked = heldHere(parkedTurns);
+  if (parked) parkedTurns.delete(campaignOfHold(parked));
+  return parked;
+};
+
+// Said in the Timeline when a kept turn is dropped because its campaign has
+// moved on since the skip read it (gameplay.js loadParkedTurn, applyParkedTurn).
+export const PARKED_TURN_STALE_NOTE = "The time skip that finished while another campaign was open was discarded, because this campaign has moved on since that skip began. Run the skip again.";
+
 
 export const setChatGenerationInFlight = (inFlight) => {
   const next = inFlight === true;
@@ -61,14 +167,34 @@ export const subscribeChatGeneration = (listener) => {
   };
 };
 
-export const hasPendingJumpSegment = () => pendingJumpSegment !== null;
-export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
+export const hasPendingJumpSegment = () => getHeldTurn(HELD_TURN.segment) !== null;
+export const hasPendingProjectsJump = () => getHeldTurn(HELD_TURN.board) !== null;
+
+// Any kind of turn held for the open campaign.
+const anyHeldHere = () => {
+  for (const holds of heldTurns.values()) {
+    if (heldHere(holds) !== null) return true;
+  }
+  return false;
+};
 
 // A held jump counts as busy: the idle pulse checks this before it writes, so it
-// cannot write into a world that is about to be replaced by the held turn.
+// cannot write into a world that is about to be replaced by the held turn. Only
+// the open campaign's holds count.
 export const isSimulationBusy = () => activeSimulations > 0
-  || pendingProjectsJump !== null
-  || pendingJumpSegment !== null;
+  || anyHeldHere()
+  || heldHere(parkedTurns) !== null;
+
+// What a player's edit to the world says instead of saving while a turn runs or
+// waits: the turn writes back the world it read when it started, so the edit
+// would be gone the moment the turn lands. Worded like the standing goal's lock
+// (GameUI/actions.jsx). Orders are not locked: the turn reads them again before
+// it writes (runtime/turnCommit.js).
+export const TURN_RUNNING_NOTE = "A turn is running. This can be changed once it ends.";
+
+export const assertNoTurnRunning = () => {
+  if (isSimulationBusy()) throw new Error(TURN_RUNNING_NOTE);
+};
 
 export const isChatGenerationLikely = () => chatGenerationInFlight;
 
@@ -77,22 +203,70 @@ export const isChatGenerationLikely = () => chatGenerationInFlight;
 // Android app rests in the background on this (runtime/native/backgroundPause.js).
 export const isGenerating = () => activeSimulations > 0 || chatGenerationInFlight;
 
-// Both discards stay synchronous: time.jsx fires them next to a setState, and an
+// A retry takes its held turn out before the attempt, so a turn can never be
+// applied twice. A Cancel must put it back: the notice stays up offering Retry,
+// and without the turn behind it the next press found nothing ("There is no
+// turn waiting…") and the turn was lost. A failure that holds the turn again
+// holds it itself; anything else is an ordinary failure and the turn is gone.
+export const attemptHeldTurn = async (kind, held, attempt, { signal = null, onCancel = null } = {}) => {
+  // Taken out, and put back, under the campaign it was held for.
+  const holds = holdsOf(kind);
+  let campaignId = campaignOfHold(held);
+  for (const [key, hold] of holds) {
+    if (hold === held) campaignId = key;
+  }
+  if (!holds.delete(campaignId)) releaseHere(holds);
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!error?.heldKind && (signal?.aborted || error?.name === "AbortError")) {
+      onCancel?.();
+      holds.set(campaignId, held);
+    }
+    throw error;
+  }
+};
+
+// Discards stay synchronous: time.jsx fires them next to a setState, and an
 // async one would leave isSimulationBusy() true for a tick afterwards. Nothing
 // was written either way, so there is nothing to undo.
-export const discardPendingJumpSegment = () => {
-  const had = pendingJumpSegment !== null;
-  pendingJumpSegment = null;
-  if (had) logDebugEvent("turn", "Held jump discarded; nothing was written and its finished segments are gone.");
+export const discardHeldTurn = (kind) => {
+  const had = releaseHere(holdsOf(kind));
+  if (had) logDebugEvent("turn", DISCARD_NOTES[kind] ?? "Held turn discarded; nothing was written.");
   return had;
 };
 
-export const discardPendingProjectsJump = () => {
-  const had = pendingProjectsJump !== null;
-  pendingProjectsJump = null;
-  if (had) logDebugEvent("turn", "Held turn discarded; the board was never updated and nothing was written.");
+export const discardPendingJumpSegment = () => discardHeldTurn(HELD_TURN.segment);
+export const discardPendingProjectsJump = () => discardHeldTurn(HELD_TURN.board);
+
+// Every turn held for the open campaign, when a new one starts: its notice
+// would offer buttons with nothing behind them.
+export const discardHeldTurns = () => {
+  for (const kind of Object.values(HELD_TURN)) discardHeldTurn(kind);
+};
+
+export const discardParkedTurn = () => {
+  const had = releaseHere(parkedTurns);
+  if (had) logDebugEvent("turn", "Parked turn discarded; it was never written.");
   return had;
 };
 
-// Compared by identity in a render path (time.jsx).
+// Written into a fallback's rawResponse when there is no model output to show
+// (gameplay.js), and compared by identity in a render path (time.jsx) so the
+// debug report labels its section honestly rather than matching on the wording.
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
+export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
+// The request did reach the model, and the connection closed while its answer
+// was arriving (providerErrors.js connectionClosedError). The first note above
+// sends the reader to the URL, the key and the model name, none of which can be
+// wrong when an answer had started; a player's report of a local model going
+// down mid-turn carried it all the same.
+// Not named *_NOTE like its two neighbours: a constant so named is taken for
+// interface text and put in the language catalog (scripts/i18n/extractStrings.mjs),
+// and this is only ever read in a saved report.
+export const RESPONSE_CUT_SHORT_REMARK = "(no complete response body — the connection closed while the model was still answering, so there was nothing whole to parse. The provider URL, API key and model name were right: the request reached the model. See the failure reason above.)";
+
+// True when a fallback's rawResponse is one of the notes above rather than
+// model text that failed to parse or validate.
+export const isResponseBodyNote = (rawResponse) =>
+  rawResponse === NO_RESPONSE_BODY_NOTE || rawResponse === EMPTY_RESPONSE_BODY_NOTE || rawResponse === RESPONSE_CUT_SHORT_REMARK;

@@ -19,9 +19,16 @@ import {
   embedScenarioBundleVector,
   resolveScenarioBundleBackground,
 } from "./communityBasemaps.js";
-import { normalizeHubKey, normalizeHubPublished, normalizeHubSuggestionRef } from "../../server/hubProvenance.js";
+import {
+  MAX_HUB_SUGGESTIONS,
+  isBlockedContributor,
+  normalizeHubKey,
+  normalizeHubPublished,
+  normalizeHubSuggestionRef,
+  normalizeHubUnlinked,
+} from "../../server/hubProvenance.js";
 import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, importCountOf, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
-import { HUB_API, HUB_URL, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
+import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { FLAT_MAP_LABEL, declareFlatMapFromPost, postSaysFlatMap } from "../../server/mapProjection.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
@@ -63,7 +70,8 @@ export const parsePost = (issue, hubIndex) => {
   // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
   // metadata, not copy. Falls back to the whole body for old, non-form posts.
   const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
-  const description = (descSection ? descSection[1] : body)
+  const prose = (descSection ? descSection[1] : body)
+    .replace(/\r\n?/g, "\n")
     .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
     .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
     .replace(/^Flags-Count:.*$/gim, "")             // flag-pack tag (see communityFlags.js)
@@ -72,11 +80,17 @@ export const parsePost = (issue, hubIndex) => {
     .replace(/<img[^>]*>/gi, "")
     .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
     .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
-    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
-    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
-    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
-    .replace(/\s+/g, " ")
+    .replace(/^#+[ \t]*.*$/gim, "")                   // any leftover headings
+    .replace(/\b(?:Scenario|Bundle) file:[ \t]*/gi, "") // older "Scenario file:" label
+    .replace(/_No response_/gi, "");                 // GitHub's placeholder for empty fields
+  // The author's own line breaks kept — setup notes and how to play read as
+  // they wrote them on the detail view. Cards and search get one line.
+  const fullDescription = prose
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
+  const description = fullDescription.replace(/\s+/g, " ");
   // Never the attachment itself: no copy, no picture.
   const coverImageUrl = releaseCopyOf(hubIndex, firstHubImage(body));
   // The import count is how many times the post's file has been downloaded from
@@ -109,6 +123,7 @@ export const parsePost = (issue, hubIndex) => {
     upvotes: issue.reactions?.["+1"] ?? 0,
     comments: issue.comments ?? 0,
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
+    fullDescription,
     bundleUrl,
     // The checked copy of that file in the hub's releases: what Import and
     // Update download, and null for a post that has none to offer.
@@ -156,9 +171,7 @@ export const fetchHubPosts = async ({ force = false } = {}) => {
 //                 replaces their changes).
 //   "newer"     — the post's file is not the one the copy was imported from.
 //   "basemap"   — the copy's community basemap could not be downloaded
-//                 (missingBasemap), which Update tries again. The stores of
-//                 this branch do not record one yet, so until they do this
-//                 reason is never the answer here.
+//                 (missingBasemap), which Update tries again.
 // The last two are for an unedited copy only: an edited one is never offered a
 // newer file, its player suggests their changes to the post instead.
 export const hubUpdateReason = (scenario, post) => {
@@ -168,6 +181,43 @@ export const hubUpdateReason = (scenario, post) => {
   if (origin.editedAt) return null;
   if (post.bundleUrl !== origin.bundleUrl) return "newer";
   return scenario.missingBasemap ? "basemap" : null;
+};
+
+// Whether a copy is offered an Update. The Scenarios tab's cards and the
+// Community tab's badges both ask this.
+export const hubUpdateAvailable = (scenario, post) => Boolean(hubUpdateReason(scenario, post));
+
+// The library's scenarios that came from each hub post, by post id.
+export const hubCopiesByPostId = (scenarios) => {
+  const byPost = new Map();
+  for (const scenario of Array.isArray(scenarios) ? scenarios : []) {
+    const postId = Number(scenario?.hubOrigin?.postId);
+    if (!Number.isInteger(postId) || postId <= 0) continue;
+    byPost.set(postId, [...(byPost.get(postId) ?? []), scenario]);
+  }
+  return byPost;
+};
+
+// What the library holds of one post, and the copy to play:
+//   null        — nothing;
+//   "current"   — an unedited copy of the post's current file;
+//   "update"    — only unedited copies the post has moved past;
+//   "unchecked" — the copy to play has an old link (hubUpdateReason), edited
+//                 or not: the Scenarios tab asks for its Update;
+//   "edited"    — only copies the player has changed.
+// An unedited copy wins over an edited one, and among several the one touched
+// last (updatedAt is a real timestamp, not a game date).
+export const hubCopyStatus = (copies, post) => {
+  const list = Array.isArray(copies) ? copies : [];
+  if (!list.length) return { status: null, copy: null };
+  const latest = (entries) =>
+    entries.reduce((best, entry) => (String(entry?.updatedAt ?? "") > String(best?.updatedAt ?? "") ? entry : best), entries[0]);
+  const unedited = list.filter((entry) => !entry?.hubOrigin?.editedAt);
+  const current = unedited.filter((entry) => !hubUpdateAvailable(entry, post));
+  if (current.length) return { status: "current", copy: latest(current) };
+  const copy = latest(unedited.length ? unedited : list);
+  if (hubUpdateReason(copy, post) === "unchecked") return { status: "unchecked", copy };
+  return { status: unedited.length ? "update" : "edited", copy };
 };
 
 // A file on the hub (a bundle, a suggestion), through the allowlisted
@@ -184,45 +234,51 @@ export const downloadHubFile = async (fileUrl, { copy = true } = {}) => {
   return response.arrayBuffer();
 };
 
-// Download + assemble a hub post's scenario bundle through the server's
-// allowlisted /api/hub/file proxy: the checked copy of the file `bundleUrl`
-// names, a .zip unpacked (re-embedding the basemap that rides alongside
-// scenario.json) and a referenced community basemap inlined. Suggest changes
-// reads the file a copy came from this way (it is what a suggestion is
-// measured against); an import goes through downloadHubScenario, which also
-// says where the bundle came from.
-export const downloadHubBundle = async (bundleUrl) => {
-  const bytes = await downloadHubFile(bundleUrl);
-  // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-  // basemap file + preview); everything else is a plain JSON bundle. The basemap
-  // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
-  // Told apart by the bytes: what was downloaded is the hub's copy, which is
-  // not bound to carry the name the post gave its file.
-  let bundle;
-  if (looksLikeZip(new Uint8Array(bytes))) {
-    const zip = await unzipBundle(bytes);
-    const scenarioText = await zip.text("scenario.json");
-    if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-    bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-    const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-    } else {
-      const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-      if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-    }
+// A scenario file's bytes as one self-contained bundle, ready for import. A
+// scenario ships as a .zip (scenario.json, the raw basemap file, a preview and
+// its heavy assets as real entries); an older one is a plain JSON bundle. Told
+// apart by the bytes, never the file name, so a renamed download still reads.
+// The basemap is an image (basemap.png/jpg…) or a generated vector
+// (basemap.geojson), re-embedded here.
+export const unpackScenarioBundle = async (bytes) => {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!looksLikeZip(view)) return JSON.parse(new TextDecoder().decode(view));
+  const zip = await unzipBundle(view);
+  const scenarioText = await zip.text("scenario.json");
+  if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+  const bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
+  const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+  if (imageName) {
+    embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
   } else {
-    bundle = JSON.parse(new TextDecoder().decode(bytes));
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+    if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
   }
-  // A file never says for itself which post it came from: the game stamps that
-  // on a bundle after it has downloaded a post's checked copy
-  // (downloadHubScenario), and a link a file brought along would pass for one.
+  return bundle;
+};
+
+// unpackScenarioBundle, then the one step a hub scenario may still need: a
+// shared scenario can reference a community basemap instead of embedding it,
+// so fetch and inline it before importing or the map is blank. Every way a
+// hub scenario arrives goes through here — downloaded by the game, or a
+// post's .zip the player downloaded and imported from disk.
+//
+// A file never says for itself which post it came from: the game stamps that
+// on a bundle after it has downloaded a post's checked copy
+// (downloadHubScenario), and a link a file brought along would pass for one.
+export const readScenarioBundleBytes = async (bytes) => {
+  const bundle = await unpackScenarioBundle(bytes);
   if (bundle && typeof bundle === "object") delete bundle.hubOrigin;
-  // A shared scenario may reference a community basemap instead of embedding
-  // it — fetch and inline it before importing so the map isn't blank.
   await resolveScenarioBundleBackground(bundle);
   return bundle;
 };
+
+// Download + assemble a hub post's scenario bundle through the server's
+// allowlisted /api/hub/file proxy: the checked copy of the file `bundleUrl`
+// names. Suggest changes reads the file a copy came from this way (it is what
+// a suggestion is measured against); an import goes through
+// downloadHubScenario, which also says where the bundle came from.
+export const downloadHubBundle = async (bundleUrl) => readScenarioBundleBytes(await downloadHubFile(bundleUrl));
 
 // A post's scenario file, ready for import and stamped with where it came from
 // (bundle.hubOrigin, which the stores keep with the scenario:
@@ -299,24 +355,38 @@ export const parseSuggestionComment = (comment, postId) => {
 
 const commentCache = new Map(); // postId -> { at, comments }
 
+// Every page of a post's comments. A page that fails fails the read, so the
+// caller never records a comment count it has not read all of.
 export const fetchPostComments = async (postId, { force = false } = {}) => {
   const id = Number(postId);
   const cached = commentCache.get(id);
   if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.comments;
-  const response = await fetch(`${HUB_API}/issues/${id}/comments?per_page=100`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!response.ok) {
+  const list = await fetchHubPages(`${HUB_API}/issues/${id}/comments?per_page=100`).catch((error) => {
+    if (error?.status === undefined) throw error;
     throw new Error(
-      response.status === 403
+      error.status === 403
         ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not read the post's comments (HTTP ${response.status}).`,
+        : `Could not read the post's comments (HTTP ${error.status}).`,
     );
-  }
-  const comments = await response.json();
-  const list = Array.isArray(comments) ? comments : [];
+  });
   commentCache.set(id, { at: Date.now(), comments: list });
   return list;
+};
+
+// A record keeps at most MAX_HUB_SUGGESTIONS. Past that, the ones the author
+// already reviewed or dismissed (`reviews`, the scenario's hubReviews) go
+// first, then the oldest, so a new suggestion is never the one left out.
+export const trimSuggestions = (list, reviews = {}) => {
+  if (list.length <= MAX_HUB_SUGGESTIONS) return list;
+  const settled = (ref) => (["done", "dismissed"].includes(reviews?.[ref.id]?.status) ? 1 : 0);
+  const drop = new Set(list
+    .map((ref, index) => ({ ref, index }))
+    .sort((a, b) => settled(b.ref) - settled(a.ref)
+      || String(a.ref.createdAt ?? "").localeCompare(String(b.ref.createdAt ?? ""))
+      || a.index - b.index)
+    .slice(0, list.length - MAX_HUB_SUGGESTIONS)
+    .map((entry) => entry.ref.id));
+  return list.filter((ref) => !drop.has(ref.id));
 };
 
 // A player's own post record brought up to date from the hub: the posts that
@@ -334,12 +404,21 @@ export const fetchPostComments = async (postId, { force = false } = {}) => {
 // recorded while one is waiting, and the next look reads the comments again.
 // A suggestion already held is put away the same way when the hub no longer
 // lists it, or lists another file for its comment (the comment was edited).
-export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments } = {}) => {
+//
+// This is the only thing that attaches a post to a scenario by itself, so it
+// is where an unlinked post must not come back: `unlinked` is the scenario's
+// hubUnlinked, and a post in it is never found again, whatever key it carries
+// now (the stores refuse it as well, server/hubProvenance.js). The record is
+// never emptied here either: only the player's Unlink does that.
+export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments, reviews = {}, unlinked = null } = {}) => {
   const current = normalizeHubPublished(published);
   if (!current) return { published: null, changed: false };
   const list = Array.isArray(posts) ? posts : [];
   const byId = new Map(list.map((post) => [Number(post.id), post]));
-  const matched = current.key ? list.filter((post) => post.scenarioKey === current.key).map((post) => Number(post.id)) : [];
+  const gone = new Set(normalizeHubUnlinked(unlinked)?.postIds ?? []);
+  const matched = current.key
+    ? list.filter((post) => post.scenarioKey === current.key).map((post) => Number(post.id)).filter((postId) => !gone.has(postId))
+    : [];
   const postIds = [...new Set([...matched.sort((a, b) => b - a), ...current.postIds])].slice(0, 10);
   const newest = byId.get(postIds.find((id) => byId.has(id)));
   const commentCounts = { ...(current.commentCounts ?? {}) };
@@ -372,10 +451,12 @@ export const refreshPublishedRecord = async (published, posts, { fetchComments =
     ...current,
     postIds,
     ...(newest ? { author: newest.author, title: newest.title } : {}),
-    suggestions,
+    suggestions: trimSuggestions(suggestions.filter((ref) => !isBlockedContributor(current, ref.author)), reviews),
     commentCounts,
     ...(fetchedAny || matched.length ? { checkedAt: new Date().toISOString() } : {}),
   });
+  // A write of null is an Unlink, and that is for good: no check may ask for one.
+  if (!next) return { published: current, changed: false };
   const strip = (record) => JSON.stringify({ ...record, checkedAt: undefined });
   return { published: next, changed: strip(next) !== strip(current) };
 };

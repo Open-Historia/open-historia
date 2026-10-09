@@ -9,6 +9,7 @@ import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { saveBlobToDisk } from "../runtime/saveFile.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
+import { latestPopulation, populationByYearField } from "../runtime/cityPopulation.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
 
@@ -630,7 +631,8 @@ const collectImportedCityPoints = (features, polities) => {
     const tier = Number.isFinite(explicitTier) && explicitTier >= 1 && explicitTier <= 3
       ? Math.round(explicitTier)
       : symbolTier;
-    const population = Number(props.population);
+    const series = populationByYearField(props);
+    const population = Number(props.population) || latestPopulation(series.populationByYear);
     const scale = Number(props.scale);
     const labelScale = Number(props.lbSize ?? props.labelScale);
     const sourceRegionId = primitiveKey(props.sourceRegionId ?? props.regionId ?? props.regionID);
@@ -647,6 +649,7 @@ const collectImportedCityPoints = (features, polities) => {
       regionId: sourceRegionId || null,
       sourceRegionId: sourceRegionId || null,
       population: Number.isFinite(population) && population > 0 ? population : 0,
+      ...series,
       tier,
       tags,
       ...(Number.isFinite(scale) && scale > 0 ? { scale } : {}),
@@ -1019,10 +1022,23 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       const backup = api.serializeRegions?.();
       if (backup) {
         const pointBackups = (currentPointFeatures || []).map(cityFeatureToGeoJSON).filter(Boolean);
-        downloadGeoJSON(
-          { ...backup, features: [...(backup.features || []), ...pointBackups] },
-          `continuum-pre-province-import-${safeStamp()}.geojson`,
-        );
+        // Awaited: the import replaces the whole map with no undo, so a backup
+        // that failed to save (the app's file write can fail on a full disk, or
+        // run out of memory encoding a large map) has to stop it or be waved
+        // through knowingly.
+        try {
+          await downloadGeoJSON(
+            { ...backup, features: [...(backup.features || []), ...pointBackups] },
+            `open-historia-pre-province-import-${safeStamp()}.geojson`,
+          );
+        } catch (e) {
+          const reason = e?.message || String(e);
+          if (!window.confirm(`The backup of the current map could not be saved (${reason}). Replace the map anyway, with no backup and no undo?`)) {
+            setProgress({ fraction: 0, message: "" });
+            setStatus("Nothing was replaced: the backup of the current map could not be saved.");
+            return;
+          }
+        }
       }
 
       setProgress({ fraction: 0.45, message: "Replacing region geometry…" });
@@ -1140,7 +1156,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 </label>
               </div>
               <div style={{ fontSize: 10.8, color: "#fbbf24", lineHeight: 1.4 }}>
-                R1 uses a rectangular geographic fit. It is enough to import a complete province network, but exact control-point warping/alignment is the next importer pass for foreign projections.
+                The image is read as an equirectangular map, its rows spaced evenly in latitude between the north and south bounds, and the overlay is drawn the same way. An image in Web Mercator or another projection will not line up.
               </div>
             </div>
 

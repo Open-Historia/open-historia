@@ -117,7 +117,7 @@ const groupedProviders = () => {
   return [...groups.entries()];
 };
 
-export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missing = "an API key", onConfigure, onDismiss, onSaved }) => {
+export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missing = "an API key", onConfigure, onDismiss }) => {
   const [provider, setProvider] = useState(DEFAULT_PROVIDER);
   const [apiKey, setApiKey] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -149,9 +149,10 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
   const save = () => {
     if (!canSave) return;
     try {
+      // Nothing to call back: main.jsx closes the prompt once the provider
+      // it watches is ready.
       applyQuickAiSetup({ provider, apiKey, endpoint, model });
       setError("");
-      onSaved?.();
     } catch (failure) {
       setError(failure?.message || "The settings could not be saved.");
     }

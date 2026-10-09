@@ -12,19 +12,16 @@
 // what the world state does not carry — the game's own polity, queued orders,
 // chats, flags and the stock map's baked regions. Shared with the server, so no
 // src/ imports, like ownerMigration.js.
-
 const str = (value) => String(value ?? "").trim();
 // The same identity as ownerNames.js ownerIdentityKey: case, diacritics and
 // punctuation do not make a different country.
 const identity = (value) => str(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const unique = (list) => [...new Set(list.map(str).filter(Boolean))];
-
 export const samePolityName = (a, b) => {
   const left = identity(a);
   return Boolean(left) && left === identity(b);
 };
-
 const mapName = (value, from, to) => (samePolityName(value, from) ? to : value);
 const mapList = (list, from, to) => (Array.isArray(list) ? unique(list.map((value) => mapName(value, from, to))) : list);
 // A map keyed by polity names, re-keyed: the country's own value — under its
@@ -55,11 +52,9 @@ const mapValues = (record, from, to) => {
   return out;
 };
 const mapRows = (rows, mapper) => (Array.isArray(rows) ? rows.map((row) => (isRecord(row) ? mapper(row) : row)) : rows);
-
 // The key a name resolves to in a registry keyed by names, or "".
 export const findPolityKey = (polityOverrides, name) =>
   Object.keys(isRecord(polityOverrides) ? polityOverrides : {}).find((key) => samePolityName(key, name)) ?? "";
-
 // Every record whose display name is not its key — a save from before renames
 // re-keyed, or a code-shaped key with a real name — is a rename waiting to be
 // run. Two records answering to one name are left alone, and so is a display
@@ -81,7 +76,6 @@ export const displayNameMigrations = (world, { isReserved = () => false } = {}) 
   }
   return out;
 };
-
 const renamedRecord = (record, fromKey, to) => {
   const previous = unique([fromKey, record.name]).filter((name) => !samePolityName(name, to));
   const notNew = (name) => !samePolityName(name, to);
@@ -93,7 +87,6 @@ const renamedRecord = (record, fromKey, to) => {
     formerNames: unique([...(Array.isArray(record.formerNames) ? record.formerNames : []), ...previous]).filter(notNew),
   };
 };
-
 // The Workshop is where a country's name is authored, not where its history
 // happens, so a rename there keeps no trace of the old name (the user,
 // 2026-09-24: "when renaming a country in the map editor, it shouldnt save the
@@ -123,14 +116,114 @@ const rekeyRegistry = (registry, fromKey, to, fallback, rename = renamedRecord) 
   next[to] = rename(record, fromKey, to);
   return next;
 };
-
 const refuseClash = (registry, fromKey, to) => {
   const clash = Object.keys(registry).find((key) => samePolityName(key, to) && !samePolityName(key, fromKey));
   if (clash) throw new Error(`"${to}" is already the name of another polity ("${clash}"); a rename cannot merge two countries.`);
 };
 
+// Political Actors are canonical political truth and carry much more than the
+// public country name (private perceptions, pressures, party state, traits,
+// government composition, etc.). A polity rename must therefore MOVE the
+// existing actor record, never recreate it from visible stats. This helper is
+// intentionally local to the shared rename seam so every rename path — event,
+// Workshop and GM — preserves the same actor identity.
+const findPoliticalActorKey = (politicalActors, polityName) => {
+  if (!isRecord(politicalActors) || !isRecord(politicalActors.byPolity)) return "";
+  const registry = politicalActors.byPolity;
+  return Object.keys(registry).find((key) => {
+    const actor = registry[key];
+    return samePolityName(key, polityName)
+      || samePolityName(actor?.polityKey, polityName)
+      || samePolityName(actor?.name, polityName);
+  }) ?? "";
+};
+
+const rekeyPoliticalActors = (politicalActors, fromKey, to) => {
+  if (!isRecord(politicalActors) || !isRecord(politicalActors.byPolity)) return politicalActors;
+  const registry = politicalActors.byPolity;
+  const sourceKey = findPoliticalActorKey(politicalActors, fromKey);
+  if (!sourceKey) return politicalActors;
+
+  const clash = Object.keys(registry).find((key) => {
+    if (key === sourceKey) return false;
+    const actor = registry[key];
+    return samePolityName(key, to)
+      || samePolityName(actor?.polityKey, to)
+      || samePolityName(actor?.name, to);
+  });
+  if (clash) {
+    throw new Error(`"${to}" already has Political Actor state under "${clash}"; a rename cannot merge two political ledgers.`);
+  }
+
+  const source = isRecord(registry[sourceKey]) ? registry[sourceKey] : {};
+  const moved = {
+    ...source,
+    polityKey: to,
+    ...(samePolityName(source.name, fromKey) ? { name: to } : {}),
+  };
+  const byPolity = {};
+  for (const [key, value] of Object.entries(registry)) {
+    if (key !== sourceKey) byPolity[key] = value;
+  }
+  byPolity[to] = moved;
+  return { ...politicalActors, byPolity };
+};
+
+// Remove only the Political World profile for one polity. This is intentionally
+// narrower than deleting the polity itself: the manual Political World manager
+// needs to clear a stale/generated actor without touching territory, flags,
+// diplomacy or any other scenario-owned state.
+export const removePoliticalActorFromWorld = (world, polityName) => {
+  if (!isRecord(world)) return { world, removedKey: "" };
+  const politicalActors = world.politicalActors;
+  const sourceKey = findPoliticalActorKey(politicalActors, polityName);
+  if (!sourceKey) return { world, removedKey: "" };
+  const byPolity = { ...politicalActors.byPolity };
+  delete byPolity[sourceKey];
+  return {
+    world: {
+      ...world,
+      politicalActors: { ...politicalActors, byPolity },
+    },
+    removedKey: sourceKey,
+  };
+};
+
+// A subordination names both parties, and whoever knows of it.
+const renamePuppetRow = (row, from, to) => ({
+  ...row,
+  overlord: mapName(row.overlord, from, to),
+  puppet: mapName(row.puppet, from, to),
+  ...(Array.isArray(row.knownTo)
+    ? {
+        knownTo: row.knownTo.map((entry) => (
+          typeof entry === "string" ? mapName(entry, from, to) : isRecord(entry) ? { ...entry, polity: mapName(entry.polity, from, to) } : entry
+        )),
+      }
+    : {}),
+});
 // The rename in a world: returns { world, from, to } with `from` the key the
 // old name resolved to. Throws when the new name is another polity's.
+// A polity that is also a group (the player leading a group, src/runtime/groups.js
+// playerGroupKey) is one actor under one name: its group is re-keyed with it, the
+// old name kept as a former name, and the area it controls follows.
+const renameGroupKey = (groups, from, to) => {
+  if (!isRecord(groups)) return groups;
+  const own = Object.keys(groups).find((key) => samePolityName(key, from));
+  if (!own) return groups;
+  const out = {};
+  for (const [key, value] of Object.entries(groups)) {
+    if (key !== own) {
+      out[key] = value;
+      continue;
+    }
+    const formerNames = unique([...(Array.isArray(value?.formerNames) ? value.formerNames : []), own])
+      .filter((name) => !samePolityName(name, to))
+      .slice(-12);
+    out[to] = { ...(isRecord(value) ? value : {}), name: to, ...(formerNames.length ? { formerNames } : {}) };
+  }
+  return out;
+};
 export const renamePolityInWorld = (world, fromName, toName) => {
   const from = str(fromName);
   const to = str(toName);
@@ -139,7 +232,6 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   const fromKey = findPolityKey(overrides, from) || from;
   refuseClash(overrides, fromKey, to);
   const polityOverrides = rekeyRegistry(overrides, fromKey, to, { aliases: [], code: fromKey, color: "", name: "", note: "" });
-
   const next = { ...world, polityOverrides };
   const put = (field, value) => {
     if (value !== undefined) next[field] = value;
@@ -160,17 +252,48 @@ export const renamePolityInWorld = (world, fromName, toName) => {
     ...(agreement.beneficiary ? { beneficiary: one(agreement.beneficiary) } : {}),
   })));
   put("storylines", mapRows(world?.storylines, (storyline) => ({ ...storyline, participants: mapList(storyline.participants, fromKey, to) })));
+  put("puppets", mapRows(world?.puppets, (row) => renamePuppetRow(row, fromKey, to)));
   put("projects", mapRows(world?.projects, (project) => ({ ...project, ownerCode: one(project.ownerCode) })));
   for (const field of ["countryStats", "countryTags", "internationalReputation", "intelligence", "playerGoals"]) {
     put(field, mapKeys(world?.[field], fromKey, to));
   }
+  put("politicalActors", rekeyPoliticalActors(world?.politicalActors, fromKey, to));
+  const groups = renameGroupKey(world?.groups, fromKey, to);
+  if (groups !== world?.groups) {
+    put("groups", groups);
+    put("groupAreas", mapValues(world?.groupAreas, fromKey, to));
+  }
   return { world: next, from: fromKey, to };
 };
 
+// The Workshop owns map/polity authoring, but several canonical records live
+// outside its document. Replay its explicit identity operations before the map
+// fields are overlaid onto the scenario. A map removal clears the corresponding
+// Political World profile here; the Workshop's saved map already owns territory,
+// registry, flags/tags and puppet deletion.
+export const reconcileMapPolityAuthoringOps = (world, operations) => {
+  let next = world;
+  for (const operation of Array.isArray(operations) ? operations : []) {
+    if (operation?.op === "rename") {
+      const from = str(operation.from);
+      const to = str(operation.to);
+      if (from && to && !samePolityName(from, to)) next = renamePolityInWorld(next, from, to).world;
+    } else if (operation?.op === "remove") {
+      const key = str(operation.key);
+      if (key) next = removePoliticalActorFromWorld(next, key).world;
+    }
+  }
+  return next;
+};
 // The stores the world does not hold. Each returns its input untouched when
 // nothing matched.
 export const renamePolityInColors = (colors, from, to) => mapKeys(colors, from, to);
-export const renamePolityInFlags = (flags, from, to) => mapKeys(flags, from, to);
+// Flags are the exception to the leftover rule above: flags.json holds only
+// authored flags, never a stock palette, so a flag under the new name while the
+// old name has none is this country's own, moved there by the same rename run
+// before (an undo or Intervene applying the turn again). It stays.
+export const renamePolityInFlags = (flags, from, to) => (
+  isRecord(flags) && !Object.keys(flags).some((key) => samePolityName(key, from)) ? flags : mapKeys(flags, from, to));
 export const renamePolityInGame = (game, from, to) =>
   (isRecord(game) && samePolityName(game.country, from) ? { ...game, country: to } : game);
 export const renamePolityInChats = (chats, from, to) =>
@@ -192,7 +315,6 @@ export const renamePolityInActions = (actions, from, to) =>
     participants: mapList(action.participants, from, to),
     invitees: mapList(action.invitees, from, to),
   }));
-
 // On a stock map most regions carry no override: their owner is the country
 // baked into the tiles. Renaming such a country has to say so for every one
 // of them, or the tiles keep painting the old name where nothing overrode it.
@@ -208,7 +330,6 @@ export const expandBakedRegionsForRename = (world, regions, from, to) => {
   }
   return added ? { ...world, regionOwnershipOverrides: overrides } : world;
 };
-
 // The Workshop's document: the registry record moves to the new name and the
 // colour, flag, tags and city markers keyed by the old one follow. The record
 // keeps no old name (authoredRecord). The map's regions live in OpenLayers and
@@ -232,5 +353,8 @@ export const renamePolityInDocument = (doc, fromName, toName) => {
     ...(typeof feature.country === "string" ? { country: mapName(feature.country, fromKey, to) } : {}),
     ...(typeof feature.owner === "string" ? { owner: mapName(feature.owner, fromKey, to) } : {}),
   })));
+  // The starting units and the puppet states follow their polity too.
+  put("units", mapRows(doc?.units, (unit) => ({ ...unit, ownerCode: mapName(unit.ownerCode, fromKey, to) })));
+  put("puppets", mapRows(doc?.puppets, (row) => renamePuppetRow(row, fromKey, to)));
   return next;
 };

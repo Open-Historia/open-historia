@@ -5,11 +5,16 @@
 // territory yet). It collects the choice and hands one object to onCreate; the
 // parent (libraryBar) owns persistence, because a faction is written across the
 // game's world.json, colors.json and flags.json.
+//
+// mode="group" is the same form for the "Play as a group" tab: the lore is the
+// group's description (what the AI is told it is), and the regions are the area
+// it controls, not land it owns (runtime/groups.js).
 
 import { lazy, Suspense, useState } from "react";
 import { createPortal } from "react-dom";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 
 // The editor's flag picker drops in unchanged — it is prop-driven and pulls in no
 // editor stores. It returns a flag STRING (a flagcdn URL or a PNG data URL) or
@@ -41,7 +46,18 @@ const pill = (active) => ({
   padding: "0.35rem 0.85rem",
 });
 
-const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
+const GROUP_CREATOR_TEXTS = {
+  namePlaceholder: "e.g. Cartel del Norte, the Northern Resistance…",
+  descriptionLabel: "Description",
+  descriptionPlaceholder: "What is this group — a cartel, a militia, a movement, an outbreak? What does it want? The AI reads this.",
+  areaLabel: "Starting area",
+  noArea: "No area yet",
+  someArea: "Choose its area",
+  noAreaText: "The group starts with no area on the map. It can take one as the story goes.",
+};
+
+const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy, mode = "faction" }) => {
+  const group = mode === "group";
   const [name, setName] = useState("");
   const [color, setColor] = useState("#a1a1aa");
   const [flag, setFlag] = useState(null); // string (URL / data URL) or null
@@ -87,7 +103,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
           autoFocus={!isTouchPrimary()}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Free Cascadia, the Provisional Government…"
+          placeholder={group ? GROUP_CREATOR_TEXTS.namePlaceholder : "e.g. Free Cascadia, the Provisional Government…"}
           style={field}
         />
       </div>
@@ -108,7 +124,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
           {/* Wraps on a narrow phone rather than pushing Remove off the card. */}
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
             {flag ? (
-              <img src={flag} alt="" style={{ width: 34, height: 22, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />
+              <img src={bundledFlagUrl(flag)} alt="" style={{ width: 34, height: 22, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />
             ) : (
               <span aria-hidden="true" style={{ fontSize: "1.4rem" }}>🏳️</span>
             )}
@@ -123,31 +139,32 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
       </div>
 
       <div>
-        <div style={label}>Lore</div>
+        <div style={label}>{group ? GROUP_CREATOR_TEXTS.descriptionLabel : "Lore"}</div>
         <textarea
           value={lore}
           onChange={(e) => setLore(e.target.value)}
-          placeholder="Who is this power? Its history, cause, and ambitions. This steers the story the AI tells."
+          placeholder={group ? GROUP_CREATOR_TEXTS.descriptionPlaceholder : "Who is this power? Its history, cause, and ambitions. This steers the story the AI tells."}
           rows={3}
           style={{ ...field, resize: "vertical", minHeight: "3.4rem" }}
         />
       </div>
 
       <div>
-        <div style={label}>Starting territory</div>
+        <div style={label}>{group ? GROUP_CREATOR_TEXTS.areaLabel : "Starting territory"}</div>
         <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.4rem" }}>
-          <button type="button" className="oh-tap-row" onClick={() => setLandless(true)} style={pill(landless)}>Start landless</button>
-          <button type="button" className="oh-tap-row" onClick={() => setLandless(false)} style={pill(!landless)}>Claim regions</button>
+          <button type="button" className="oh-tap-row" onClick={() => setLandless(true)} style={pill(landless)}>{group ? GROUP_CREATOR_TEXTS.noArea : "Start landless"}</button>
+          <button type="button" className="oh-tap-row" onClick={() => setLandless(false)} style={pill(!landless)}>{group ? GROUP_CREATOR_TEXTS.someArea : "Claim regions"}</button>
         </div>
         {landless ? (
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.76rem" }}>
-            You begin with no territory — a stateless power. Your campaign is to gain
-            or retake land.
+            {group ? GROUP_CREATOR_TEXTS.noAreaText : "You begin with no territory — a stateless power. Your campaign is to gain or retake land."}
           </div>
         ) : (
           <>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem", marginBottom: "0.3rem" }}>
-              {regionIds.size} region{regionIds.size === 1 ? "" : "s"} claimed
+              {group
+                ? (regionIds.size === 1 ? "1 region controlled" : `${regionIds.size} regions controlled`)
+                : (regionIds.size === 1 ? "1 region claimed" : `${regionIds.size} regions claimed`)}
             </div>
             <Suspense fallback={<div style={{ color: "rgba(255,255,255,0.5)", padding: "2rem 0", textAlign: "center" }}>Loading map…</div>}>
               <CountryPickerMap

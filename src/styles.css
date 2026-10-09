@@ -500,6 +500,14 @@ button:active:not(:disabled) {
   pointer-events: none !important;
 }
 
+/* A button that is working (the library's scenario Update, libraryBar.jsx
+   ButtonIcon "working"): its ring turns, the same turn as the logo's, until
+   the work is done. Under reduced motion the rule above stops it and the ring
+   stays as drawn; the button's label says what it is doing either way. */
+.oh-working-ring {
+  animation: oh-logo-spin 0.7s linear infinite;
+}
+
 /* Touch screens (a finger is the main pointer): every control a thumb has to
    hit is at least 44 px across. The classes sit on the controls a phone needs
    to reach, above all the close buttons, which were 14-26 px; with a mouse the

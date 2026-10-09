@@ -271,11 +271,16 @@ const DISPLAY_KEYS = new Set([
   "actionLabel", "buttonLabel", "heroTitle", "heroSubtitle", "shortLabel", "longLabel", "question", "answer",
   "explanation", "detail", "details", "note", "warning", "helper", "help", "intro", "tagline", "headline",
   "prompt_label", "noun", "plural", "singular", "verb", "phase", "stage", "step", "publicDescription",
+  // A difficulty level's profile (runtime/difficulty.js), shown in the GM panel.
+  "playerLeniency", "npcCompetence", "consequencePressure", "diplomaticFirmness",
 ]);
 // A camelCase key ending in "Label" (mappedLabel, centerSubLabel) holds display
 // text too, and may be a single lowercase word ("landscape").
 const LABEL_KEY = /^[a-z][A-Za-z0-9]*Label$/;
 const isDisplayKey = (key) => DISPLAY_KEYS.has(key) || LABEL_KEY.test(key ?? "");
+// Keys whose value is a list of display sentences: a difficulty level's
+// `effects` (runtime/difficulty.js), bullets in the GM panel.
+const DISPLAY_LIST_KEYS = new Set(["effects"]);
 const STATUS_CALLS = new Set([
   "setStatus", "setError", "setMessage", "setNotice", "setToast", "showToast", "notify", "alert", "confirm",
   "setHint", "setLabel", "setWarning", "setInfo", "setBanner", "setNote", "setSaveMessage", "setStatusText",
@@ -516,6 +521,14 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     },
     ObjectProperty(p) {
       const key = p.node.key?.name ?? p.node.key?.value;
+      if (DISPLAY_LIST_KEYS.has(key) && !p.node.computed && p.node.value?.type === "ArrayExpression") {
+        if (insideNoTranslate(p)) return;
+        for (const el of p.node.value.elements) {
+          const shape = el ? shapeOf(el, code) : null;
+          if (shape) addShape(shape, el, { requireProse: true });
+        }
+        return;
+      }
       if (!isDisplayKey(key) || p.node.computed) return;
       if (insideNoTranslate(p)) return;
       const shape = shapeOf(p.node.value, code);
@@ -625,12 +638,18 @@ const MESSAGE_FILES = [
   "src/runtime/institutionalChannels.js", "src/runtime/institutionalGovernance.js",
   "src/runtime/institutionAuthoring.js", "src/runtime/politicalWorldCapability.js",
   "src/Game/GameUI/advisorInstitutionDrafts.js", "src/Game/GameUI/countryEditorPolitical.js",
+  // The GM tools' Puppet States editor: what it refuses with shows in the panel.
+  "src/Game/GameUI/puppetStatesTool.js",
 ];
 const JS_REGISTRY_FILES = [
   "src/Game/AI/gameplayPrompts.js", "src/Game/AI/promptGuidance.js", "src/Game/AI/providerConfig.js",
   "src/Game/AI/structuredMode.js", "src/Game/AI/playerFocus.js", "src/Game/AI/simulationStatus.js",
   "src/Game/AI/historyConsolidation.js", "src/Game/AI/interactiveRewind.js", ...MESSAGE_FILES,
 ];
+// Plain .js split out of a .jsx panel so node can test it: its prose is the
+// panel's own and is read the way the panel's is, every string that reads like
+// prose included (the pieces a line is built from are looked up on their own).
+const PROSE_FILES = ["src/Game/GameUI/turnReveal.js"];
 const FACTORIES = { segment: [1, 4] }; // promptGuidance.js: segment(id, label, start, end, hint)
 
 export const interfaceFiles = (root) => {
@@ -654,10 +673,18 @@ export const extractTree = (root) => {
     const rel = path.relative(root, file).split(path.sep).join("/");
     const code = fs.readFileSync(file, "utf8");
     const jsx = rel.endsWith(".jsx");
-    const result = extractFromSource(code, rel, { jsx, catchAll: jsx, factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
+    const result = extractFromSource(code, rel, { jsx, catchAll: jsx || PROSE_FILES.includes(rel), factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
     if (result.error) errors.push(result.error);
     for (const [t, where] of result.exact) if (!exact.has(t)) exact.set(t, where);
     for (const [t, where] of result.patterns) if (!patterns.has(t)) patterns.set(t, where);
   }
   return { exact, patterns, errors };
+};
+
+// How an extracted string is written into public/lang/catalog-en.json, or null
+// when it is not worth a catalog entry (build-catalog.mjs, and the test that
+// keeps the committed catalog in step with the source).
+export const catalogText = (text) => {
+  const trimmed = String(text).trim();
+  return trimmed.length > 1 && /[A-Za-z]{2}/.test(trimmed) ? trimmed : null;
 };

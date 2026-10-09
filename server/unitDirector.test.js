@@ -255,3 +255,100 @@ test("a distant narrative objective is kept for the unit engine instead of being
   assert.equal(directed[0].impacts.unitOps[0].toLng, 15.55);
   assert.equal(directed[0].impacts.unitOps[0].toLat, 41.45);
 });
+
+// Seen in a live game (2026-09-19): an empire commissioning frigates, taking
+// delivery of submarines and standing up squadrons for three game years never
+// gained a single counter. Such an event was never offered to the director, and
+// a spawn for a power that already had units needed army wording ("new corps").
+const commissioning = [
+  { title: "Royal Navy commissions two Type 45 destroyers into the fleet", description: "HMS Dauntless and HMS Diamond are commissioned at Portsmouth." },
+  { title: "RAF stands up a new F-35 squadron at Marham", description: "No. 617 Squadron is formed with its first twelve aircraft." },
+  { title: "Admiralty takes delivery of the first Astute-class submarine", description: "The boat enters service with the Clyde flotilla." },
+  { title: "Carrier strike group formed around HMS Queen Elizabeth", description: "The task group is activated at Portsmouth." },
+];
+const notFormations = [
+  { title: "British Admiralty Standardizes Global Shipyard Blueprints", description: "Shipyard construction standards are unified across imperial yards." },
+  { title: "Ministry commissions a review of defence procurement", description: "An independent panel will report on procurement costs." },
+  { title: "Tehran launches a diplomatic campaign at the UN", description: "Iranian envoys lobby member states over Gulf shipping." },
+];
+
+test("a warship commissioned or a squadron stood up is offered to the director; paperwork is not", () => {
+  for (const event of commissioning) assert.equal(eventNeedsNativeUnitDirector(event), true, event.title);
+  for (const event of notFormations) assert.equal(eventNeedsNativeUnitDirector(event), false, event.title);
+});
+
+test("a commissioned ship or a new squadron may spawn for a power that already has units", async () => {
+  const fleet = [{ id: "n1", name: "Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1, lat: 50.8 }];
+  const directed = await directGeneratedUnitOps({
+    events: commissioning.map((event, index) => ({ ...event, id: `c${index}`, date: "2016-08-01", kind: "military", impacts: { unitOps: [] } })),
+    game: { gameDate: "2016-08-04", round: 20 },
+    world: { units: fleet },
+    analyzeBatch: async () => ({ payload: { eventOrders: [
+      { eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Type 45 Destroyer Group", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1.1, lat: 50.8 } }] },
+      { eventIndex: 1, unitOps: [{ op: "spawn", unit: { name: "No. 617 Squadron", type: "air", ownerCode: "British Empire", strength: 100, lng: 0.5, lat: 52.6 } }] },
+    ], summary: "" } }),
+  });
+  assert.equal(directed[0].impacts.unitOps.length, 1, "a destroyer commissioned into the fleet is a new formation");
+  assert.equal(directed[1].impacts.unitOps.length, 1, "a squadron stood up is a new formation");
+});
+
+test("a power with units still gains none from an event that forms nothing", async () => {
+  const fleet = [{ id: "n1", name: "Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1, lat: 50.8 }];
+  const directed = await directGeneratedUnitOps({
+    events: [{ id: "x", date: "2016-08-01", kind: "military", title: "Home Fleet sails to the Western Approaches", description: "The fleet redeploys for exercises.", impacts: { unitOps: [] } }],
+    game: { gameDate: "2016-08-04", round: 20 },
+    world: { units: fleet },
+    analyzeBatch: async () => ({ payload: { eventOrders: [
+      { eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Second Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -6, lat: 49 } }] },
+    ], summary: "" } }),
+  });
+  assert.deepEqual(directed[0].impacts.unitOps, [], "a fleet that is merely moving does not duplicate itself");
+});
+
+test("the director sees each unit's posture, make-up, cover and standing order", () => {
+  const input = buildUnitDirectorInput({
+    events: [events[1]],
+    world: {
+      units: [{ ...units[0], posture: "holding", composition: "three rifle divisions", covert: true }, units[1]],
+      pendingUnitOrders: [{ unitId: "u1", kind: "patrol", toLat: 50.2, toLng: 10.4, radiusKm: 40, untilRound: 7, targetLabel: "Zenda crossing" }],
+    },
+  });
+  const [first, second] = input.units;
+  assert.equal(first.posture, "holding");
+  assert.equal(first.composition, "three rifle divisions");
+  assert.equal(first.covert, true);
+  assert.deepEqual(first.standingOrder, { kind: "patrol", target: "Zenda crossing", untilRound: 7 });
+  assert.equal(second.standingOrder, undefined);
+  assert.equal(second.covert, undefined);
+  assert.equal(input.omittedUnits, 0);
+});
+
+test("on a crowded map the director is shown the events' own units first, and a count of the rest", () => {
+  const crowd = Array.from({ length: 80 }, (_, index) => ({
+    id: `x${index}`, name: `Garrison ${index}`, type: "infantry", ownerCode: "Syldavia", strength: 100, lng: 20, lat: 45,
+  }));
+  const input = buildUnitDirectorInput({
+    events: [events[1], events[2]],
+    world: { units: [...crowd, ...units] },
+  });
+  assert.equal(input.units.length, 60);
+  assert.equal(input.omittedUnits, 22);
+  assert.deepEqual(input.units.slice(0, 2).map((unit) => unit.id), ["u1", "u2"], "the 1st Army and the corps of Borduria, which the events name, lead");
+});
+
+test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    run([], {
+      signal: controller.signal,
+      analyzeBatch: async () => {
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+        throw controller.signal.reason;
+      },
+    }),
+    (error) => error?.name === "AbortError",
+  );
+  // Any other failure still leaves the events as they were.
+  const { directed } = await run([], { analyzeBatch: async () => { throw new Error("model unavailable"); } });
+  assert.equal(directed, events);
+});

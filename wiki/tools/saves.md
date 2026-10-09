@@ -88,38 +88,15 @@ On the stable Android app a file cannot be saved, so export is not offered there
 <p class="beta-note"><b>On beta the Android app exports too</b>, through Android's share
 sheet.</p>
 
-## Syncing between devices
+## Nothing is synced
 
-Only in the browser build at [openhistoria.com/play/](/play/), and only if you sign in. The
-desktop app and a self-hosted server do not sync — they keep files on disk.
+There is no account on any build, and nothing you make is uploaded: a game or a scenario
+lives on the device that made it. To continue a campaign somewhere else, export it there and
+import it here, as described above.
 
-**Signing in.** There is no password. Use the sign-in chip in the top-right corner and either
-enter an email address to be sent a magic link, or sign in with Google. Both land you in the
-same account.
-
-**What syncs.** Your games and your scenarios, with the library listings that order them.
-Map-editor documents and custom basemaps do *not* sync yet. Sync runs on sign-in, then every 20
-seconds, and again whenever you switch away from the tab.
-
-**How the encryption works.** On your first ever sign-in the browser generates a random
-encryption key, and every game and scenario is encrypted with it *before* it is uploaded. The
-server only ever receives ciphertext — it never sees a save in the clear.
-
-That key is then held by the server in wrapped form, which is what lets you sign in on a second
-device and read your own campaigns there. So this is not a zero-knowledge system: it protects
-your saves in transit and at rest, and it means a database leak is useless on its own, but the
-service can obtain the key. Do not treat it as a secret vault.
-
-**The one thing that can lose work.** If the same game is edited on two devices without syncing
-in between, the copy already on the server wins and the local one is replaced. There is no merge
-and no prompt. In practice: let a device finish syncing before you pick up the same campaign
-somewhere else. Playing different games on different devices is entirely safe.
-
-**Large scenarios may not upload.** A scenario carrying its own map data can exceed the current
-size limit and is skipped, with a warning in the browser console, until larger blob storage is
-switched on. Its games still sync.
-
-Your API key is never synced. Provider settings are per device.
+The browser build at [openhistoria.com/play/](/play/) used to offer sign-in and encrypted
+sync between devices. That has been removed. Your API key was never part of it, and provider
+settings are per device.
 
 ## Archiving
 

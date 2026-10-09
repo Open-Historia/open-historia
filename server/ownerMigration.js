@@ -8,7 +8,12 @@
 // before any read hook on both platforms, and that is exactly where `owner`
 // physically lives.
 //
-// The mirror of this file is src/runtime/web/ownerMigration.js. Keep them in step.
+// Both stores run it: server/libraryStore.js (migrateOwnerRecordAtPaths) and the
+// web build's src/runtime/web/libraryStore.js (ensureOwnerSchema), which imports
+// this module rather than mirroring it. Each gathers a record's parts its own way
+// (files on disk, one IndexedDB record); buildMigrationContext and
+// migrateOwnerRecord below are the one place those parts become a resolution, so
+// the same save migrates to the same names on either.
 
 // ---------------------------------------------------------------------------
 // The resolver. What does the token "ROM" mean in a legacy file?
@@ -524,3 +529,67 @@ export const migrateRegions = (fc, renames) => {
 };
 
 export const needsMigration = (world) => Number(world?.ownerSchema ?? 1) < OWNER_SCHEMA;
+
+// ---------------------------------------------------------------------------
+// One record, for both stores. `parts` are the record's own values plus the
+// context its store gathered:
+//   world, game, colors, flags, tags, events, chat — the record's own;
+//   meta     — whose countryNameOverrides (rule 2) apply: a game passes its
+//              scenario's, since that label lives on scenario meta;
+//   regions  — the map the owners are read against: the record's own, or (a game,
+//              or a scenario with no map of its own) another record's, passed with
+//              regionsReadOnly so it is context only and never rewritten here;
+//   registry — COUNTRY_NAME_REGISTRY;
+//   inheritedMapRefs / deriveMapRefsFromFeatures — a game inherits its scenario's
+//              polity mapRefs and never derives identity from live front lines.
+// ---------------------------------------------------------------------------
+export const buildMigrationContext = (parts = {}) => {
+  const { world, game, meta, colors, flags, tags, regions, registry, inheritedMapRefs, deriveMapRefsFromFeatures } = parts;
+  return {
+    polityOverrides: world?.polityOverrides,
+    countryNameOverrides: meta?.countryNameOverrides,
+    registry,
+    features: regions?.features,
+    ownershipOverrides: world?.regionOwnershipOverrides,
+    sovereigntyOverrides: world?.regionSovereigntyOverrides,
+    regionClaimants: world?.regionClaimants,
+    ownerCodes: world?.ownerCodes,
+    colors,
+    flags,
+    tags,
+    units: world?.units,
+    countryTags: world?.countryTags,
+    internationalReputation: world?.internationalReputation,
+    gameCountry: game?.country,
+    inheritedMapRefs: inheritedMapRefs ?? null,
+    deriveMapRefsFromFeatures: deriveMapRefsFromFeatures !== false,
+  };
+};
+
+// The scenario's frozen polity mapRefs, which a game inherits (see buildPolityMapRefs).
+export const inheritedMapRefsOf = (scenarioWorld) => Object.fromEntries(
+  Object.entries(scenarioWorld?.polityOverrides ?? {})
+    .map(([polityKey, polity]) => [polityKey, polity?.mapRefs])
+    .filter(([, refs]) => Array.isArray(refs?.gadm0) && refs.gadm0.length > 0),
+);
+
+// The migrated parts. A part the record does not have comes back null, and so
+// do read-only regions; the caller writes back what is not null, world last
+// (it carries the marker). Pure: nothing is read or written here.
+export const migrateOwnerRecord = (parts = {}, { warn } = {}) => {
+  const context = buildMigrationContext(parts);
+  const renames = buildOwnerRenameMap(context);
+  const mapRefs = buildPolityMapRefs(context, renames);
+  const { colors, flags, tags, regions, regionsReadOnly, events, chat, game, world } = parts;
+  return {
+    renames,
+    colors: colors ? rekeyOwnerMap(colors, renames, "colors", warn) : null,
+    flags: flags ? rekeyOwnerMap(flags, renames, "flags", warn) : null,
+    tags: tags ? rekeyOwnerMap(tags, renames, "tags", warn) : null,
+    regions: regions && !regionsReadOnly ? migrateRegions(regions, renames) : null,
+    events: events ? migrateEvents(events, renames) : null,
+    chat: chat ? migrateChat(chat, renames) : null,
+    game: game ? migrateGame(game, renames) : null,
+    world: migrateWorld(world, renames, warn, mapRefs),
+  };
+};

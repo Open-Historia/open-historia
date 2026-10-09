@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 // pattern, or an effect on the map itself.
 const ALLOWED = [
   { file: "src/Game/GameUI/libraryBar.jsx", has: "accentColor}", why: "the Accent of a scenario or a game" },
-  { file: "src/Game/GameUI/scenarios.jsx", has: "accentColor}", why: "the Accent, on the older scenario card" },
   { file: "src/Game/GameUI/chat.jsx", has: "${share}%, rgba(255,255,255,0.05) ${share}%", why: "a poll's bar: two flat colours, a hard edge where the share ends" },
   { file: "src/Game/Map/World.jsx", has: "radial-gradient(circle, #fff 0 7%", why: "the flash of a strike on the map, not a surface" },
   { file: "src/runtime/web/homePage.js", has: "repeating-linear-gradient(112deg", why: "a hairline texture: hard-edged stripes" },

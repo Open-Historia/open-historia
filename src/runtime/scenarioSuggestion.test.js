@@ -7,6 +7,7 @@
 //     a suggestion by its file or its marker line, never any other comment;
 //   - only a suggestion the hub has checked is kept or offered: one still
 //     waiting for its check appears once it has passed;
+//   - a post the player unlinked the scenario from is never found again;
 //   - comments are read only for a post whose comment count moved;
 //   - the .zip carries only the changes, and reads back exactly (a cover image
 //     and a basemap travel as files of their own);
@@ -18,6 +19,7 @@ import assert from "node:assert/strict";
 
 import { parsePost, parseSuggestionComment, refreshPublishedRecord } from "./hubPosts.js";
 import {
+  KNOWN_KINDS,
   SUGGESTION_SCHEMA,
   buildSuggestion,
   buildSuggestionComment,
@@ -27,7 +29,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "./scenarioSuggestion.js";
-import { buildScenarioSnapshot } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, summarizeChangesForComment } from "./scenarioChanges.js";
 import { buildDetailSave, detailChangeStatus } from "./suggestionApply.js";
 
 const ZIP = "https://github.com/user-attachments/files/123/old-world-suggestion.zip";
@@ -179,6 +181,60 @@ test("a suggestion already held is put away when the hub no longer lists it, or 
   assert.equal(off.changed, false);
 });
 
+test("a post the scenario was unlinked from is never found again, whatever key it carries now", async () => {
+  // The player unlinked post 12 and published the scenario again: post 40,
+  // with a new key. Post 12 was then edited on the hub to carry that key too.
+  const key = newPublishKey();
+  const posts = [
+    { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 3 },
+    { id: 40, title: "Old World, again", author: "ann", scenarioKey: key, comments: 0 },
+  ];
+  const calls = [];
+  const fetchComments = async (postId) => {
+    calls.push(postId);
+    return [];
+  };
+  const record = { key, publishedAt: "2026-10-01T00:00:00Z" };
+  const unlinked = { postIds: [12], keys: ["oh-0123456789abcdef"] };
+
+  const found = await refreshPublishedRecord(record, posts, { fetchComments, unlinked });
+  assert.deepEqual(found.published.postIds, [40], "only the new post is the scenario's");
+  assert.equal(found.published.title, "Old World, again");
+  assert.deepEqual(calls, [], "and the old one's comments are not read");
+  const again = await refreshPublishedRecord(found.published, posts, { fetchComments, unlinked });
+  assert.equal(again.changed, false, "a later check has nothing to add, so nothing to write");
+
+  // Without what the scenario remembers, the same search would take both.
+  assert.deepEqual((await refreshPublishedRecord(record, posts, { fetchComments })).published.postIds, [40, 12]);
+  // A post the record already holds is not the search's to take away: only the player's Unlink removes one.
+  const held = await refreshPublishedRecord({ ...record, postIds: [12] }, posts, { fetchComments: async () => [], unlinked });
+  assert.deepEqual(held.published.postIds, [40, 12]);
+});
+
+test("a post with more than fifty suggestions keeps the new ones, leaving out reviewed ones first", async () => {
+  const key = newPublishKey();
+  const comment = (id, login = "bob") => ({
+    id,
+    user: { login },
+    created_at: new Date(Date.UTC(2026, 8, 1, 0, id)).toISOString(),
+    body: `[s${id}-suggestion.zip](https://github.com/user-attachments/files/${id}/s${id}-suggestion.zip)`,
+  });
+  const oldComments = Array.from({ length: 50 }, (_, index) => comment(index + 1));
+  const post = { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 50, checkedSuggestions: checkedBy(oldComments) };
+  const first = await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, [post], { fetchComments: async () => oldComments });
+  assert.equal(first.published.suggestions.length, 50);
+
+  // Two of the old ones were reviewed; five new comments arrive.
+  const reviews = { c3: { status: "done" }, c40: { status: "dismissed" } };
+  const all = [...oldComments, ...Array.from({ length: 5 }, (_, index) => comment(51 + index, "carl"))];
+  const later = await refreshPublishedRecord(first.published, [{ ...post, comments: 55, checkedSuggestions: checkedBy(all) }], { fetchComments: async () => all, reviews });
+  const ids = later.published.suggestions.map((ref) => ref.id);
+  assert.equal(ids.length, 50);
+  for (const id of ["c51", "c52", "c53", "c54", "c55"]) assert.ok(ids.includes(id), `${id} is kept`);
+  for (const id of ["c3", "c40", "c1", "c2", "c4"]) assert.ok(!ids.includes(id), `${id} makes room`);
+  assert.equal(later.published.commentCounts[12], 55);
+});
+
 const bundle = () => ({
   schema: "open-historia-scenario-bundle/2",
   scenario: { name: "Old World", description: "A world.", features: {} },
@@ -218,24 +274,6 @@ test("the suggestion file carries only the changes and reads back exactly", asyn
   assert.match(comment, /old-world-suggestion\.zip/);
   assert.match(comment, new RegExp(`^Open-Historia-Suggestion: ${suggestion.id}$`, "m"));
   assert.throws(() => normalizeSuggestion({ schema: "something-else" }), /not a scenario suggestion/);
-});
-
-test("a suggestion made by a newer version: this version keeps what it can apply and skips the rest", () => {
-  const suggestion = normalizeSuggestion({
-    schema: SUGGESTION_SCHEMA,
-    id: "sug-newer",
-    changes: [
-      { id: "meta:name", area: "details", kind: "field", path: ["meta", "name"], from: "Old World", to: "New World" },
-      { id: "politics:institutions:league", area: "details", kind: "politics", field: "institutions", container: "list", entry: "league", op: "change", to: { id: "league" } },
-      { id: "institutionLogos", area: "details", kind: "institutionLogos", to: null },
-      { id: "group-add:Raiders", area: "map", kind: "group-add", key: "Raiders", to: { name: "Raiders" } },
-      { id: "region-group:r1", area: "map", kind: "region-group", regionId: "r1", from: null, to: "Raiders" },
-      { id: "marker-add:m1", area: "map", kind: "marker-add", key: "m1", to: { id: "m1", name: "Port" } },
-      { id: "puppet-add:p1", area: "map", kind: "puppet-add", key: "p1", to: { id: "p1", overlord: "Alpha", puppet: "Beta" } },
-      { id: "unit-add:u2", area: "map", kind: "unit-add", key: "u2", to: { id: "u2", name: "Fleet" } },
-    ],
-  });
-  assert.deepEqual(suggestion.changes.map((change) => change.id), ["meta:name", "unit-add:u2"]);
 });
 
 test("against the author's scenario now, each details change is open, a conflict or already applied", () => {
@@ -278,6 +316,19 @@ test("accepting builds one save: meta, game, world, features, prompts, Politics 
   assert.deepEqual(patch.worldPatch.institutions, [{ id: "league", name: "The Grand League", members: ["Alpha", "Beta"] }]);
   assert.deepEqual(uploads, [{ key: "stats", json: { version: 2, sections: [] } }]);
   assert.deepEqual(clears, ["cover"]);
+});
+
+test("every kind of change has a line in the comment", () => {
+  for (const kind of KNOWN_KINDS) {
+    const change = kind === "field"
+      ? { id: kind, area: "details", kind, path: ["meta", "name"] }
+      : kind === "history"
+      ? { id: kind, area: "details", kind, part: "event", entry: "e1" }
+      : { id: kind, area: "details", kind };
+    assert.ok(summarizeChangesForComment([change]).length > 0, `a suggestion of one ${kind} change says what it is`);
+  }
+  const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
+  assert.match(comment, /^- Institution logos changed$/m);
 });
 
 test("a change of projection is kept when it names one, and dropped when it does not", () => {

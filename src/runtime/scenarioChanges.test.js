@@ -148,6 +148,11 @@ test("what a save's own border cleanup does to a region is no change", () => {
   // A crack filled along the whole south border.
   const filled = { type: "Polygon", coordinates: [[[0, -0.001], [1, -0.001], [1, 1], [0, 1], [0, -0.001]]] };
   assert.equal(sameShape(shape(base), shape(filled)), true);
+  // And one 1.3 km wide: the cleanup reaches 1.5 km (0.0135°), where it used
+  // to stop at 500 m. On the built-in map it fills a triangle that moves
+  // Freiburg's outline 0.0099° and a crack that adds 0.28% to Gillette.
+  const filledWide = { type: "Polygon", coordinates: [[[0, -0.012], [1, -0.012], [1, 1], [0, 1], [0, -0.012]]] };
+  assert.equal(sameShape(shape(base), shape(filledWide)), true);
 });
 
 test("a border the player redrew is a change, even a thin corridor out of a large region", () => {
@@ -157,6 +162,9 @@ test("a border the player redrew is a change, even a thin corridor out of a larg
   const corridor = { type: "Polygon", coordinates: [[[0, 0], [3, 0], [3, 1.5], [3.5, 1.5], [3.5, 1.51], [3, 1.51], [3, 3], [0, 3], [0, 0]]] };
   assert.equal(sameShape(measureGeometry(base), measureGeometry(corridor)), false);
   assert.equal(sameShape(measureGeometry(base), measureGeometry(square(0, 0, 3.1))), false);
+  // A whole border moved two kilometres: further than a cleanup reaches.
+  const pushed = { type: "Polygon", coordinates: [[[0, -0.02], [1, -0.02], [1, 1], [0, 1], [0, -0.02]]] };
+  assert.equal(sameShape(measureGeometry(square(0, 0)), measureGeometry(pushed)), false);
 });
 
 test("regions drawn and removed travel whole, with their owner, claims and group", () => {
@@ -180,14 +188,14 @@ test("regions drawn and removed travel whole, with their owner, claims and group
   assert.ok(!changes.some((change) => change.kind === "region-owner"), "no ownership row for a region that travels whole");
 });
 
-test("ownership, names and claims of the regions both versions have; this version never suggests group areas", () => {
+test("ownership, names, claims and group areas of the regions both versions have", () => {
   const next = clone(baseBundle());
   next.data.world.regionOwnershipOverrides.r2 = "Beta";
   featuresOf(next)[0].properties.name = "Capital District";
   next.data.world.regionClaimants = { r3: ["Alpha"] };
   next.data.world.groupAreas = { r1: "Raiders" };
   const changes = diffScenarioBundles(baseBundle(), next);
-  assert.deepEqual(ids(changes), ["region-claims:r3", "region-name:r1", "region-owner:r2"]);
+  assert.deepEqual(ids(changes), ["region-claims:r3", "region-group:r1", "region-group:r2", "region-name:r1", "region-owner:r2"]);
   const owner = changes.find((change) => change.kind === "region-owner");
   assert.deepEqual([owner.from, owner.to, owner.regionName], ["Alpha", "Beta", "Region r2"]);
 });
@@ -229,7 +237,7 @@ test("a country's own record, colour, flag and tags; a colour only where both ve
   assert.deepEqual(change.fields.color.to, [200, 0, 0]);
 });
 
-test("cities by name and place and units by id; this version never suggests map features, groups or puppet states", () => {
+test("cities by name and place, units, map features, groups and puppets by id", () => {
   const next = clone(baseBundle());
   next.assets.citiesGeojson.data.features[0].properties.population = 5000;
   next.assets.citiesGeojson.data.features.push({ type: "Feature", geometry: { type: "Point", coordinates: [10.5, 10.5] }, properties: { city: "Betaburg", population: 300 } });
@@ -243,18 +251,13 @@ test("cities by name and place and units by id; this version never suggests map 
   assert.deepEqual(ids(changes), [
     "city-add:betaburg@10.50,10.50",
     "city-change:alphaville@0.50,0.50",
+    "group-add:Rebels",
+    "group-change:Raiders",
+    "marker-remove:m1",
+    "puppet-add:puppet-beta",
     "unit-add:u2",
     "unit-change:u1",
   ]);
-});
-
-test("this version leaves a city's population by year out of the comparison", () => {
-  // Its Workshop does not keep it: saving a newer version's map here must not
-  // read as the player removing every city's history.
-  const next = clone(baseBundle());
-  next.assets.citiesGeojson.data.features[0].properties.populationByYear = { 1900: 800, 1950: 4000 };
-  assert.deepEqual(diffScenarioBundles(baseBundle(), next), []);
-  assert.deepEqual(diffScenarioBundles(next, baseBundle()), []);
 });
 
 test("a copy of a stock-world scenario reports only what its player drew, reshaped or re-owned", () => {

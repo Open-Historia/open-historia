@@ -84,7 +84,9 @@ export const toPlainText = (value) => String(value ?? "")
     .replace(/\\([\\`*_{}[\]()#+\-.!~>])/g, "$1")
     .trim();
 
-export const buildMessageDrafts = (draftsRaw, sourceText) => {
+// `problems`, when given, collects a sentence for every entry that got no
+// button, for the advisor's receipt (advisorBlocks.js describeReplyProblems).
+export const buildMessageDrafts = (draftsRaw, sourceText, problems = []) => {
     const allQuotes = extractBlockquotes(sourceText);
     // Where the paired run starts within allQuotes — the same end-alignment the
     // slice below performs, kept as a number so each draft can say WHICH
@@ -95,14 +97,35 @@ export const buildMessageDrafts = (draftsRaw, sourceText) => {
     const blockquotes = allQuotes.slice(offset);
     return draftsRaw
         .map((draft, index) => {
-            const country = draft && String(draft.country ?? "").trim();
-            if (!country) return null;
+            const targetType = String(draft?.targetType || "private").trim().toLowerCase();
+            const country = String(draft?.country ?? "").trim();
+            const institutionId = String(draft?.institutionId ?? "").trim();
+            const caseId = String(draft?.caseId ?? "").trim();
+            const threadId = String(draft?.threadId ?? "").trim();
+            const label = country ? `the draft to ${country}` : `draft ${index + 1}`;
+            const drop = (why) => {
+                problems.push(`${label} ${why}, so no button was drawn for it`);
+                return null;
+            };
+            if (targetType === "private" && !country) return drop("named no country");
+            if (targetType === "institution-council" && !institutionId && !threadId) return drop("named no institutionId or threadId");
+            if (targetType === "institution-lifecycle" && ((!institutionId && !threadId) || (!caseId && !threadId))) return drop("named no caseId and institutionId, or threadId");
+            if (!["private", "institution-council", "institution-lifecycle"].includes(targetType)) return drop(`had the targetType "${targetType}", which is not private, institution-council or institution-lifecycle`);
             // A "text" field is still honored if present — older saved messages
             // have one, and an explicit value beats the positional guess.
             // Plain text: this string goes into the diplomacy composer, which
             // renders the player's own messages verbatim.
             const text = toPlainText(String(draft?.text ?? "").trim() || blockquotes[index] || "");
-            return text ? { country, text, quoteIndex: offset + index } : null;
+            if (!text) return drop("had no > blockquote holding its letter just before the block");
+            return {
+                targetType,
+                country,
+                institutionId,
+                caseId,
+                threadId,
+                text,
+                quoteIndex: offset + index,
+            };
         })
         .filter(Boolean);
 };

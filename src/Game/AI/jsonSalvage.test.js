@@ -9,6 +9,9 @@ import {
   ANSWER_SENTINEL,
   ANSWER_SENTINEL_DIRECTIVE,
   extractJsonPayload,
+  parseLooseJson,
+  parseWithoutTrailingFields,
+  repairLooseJson,
   stripBeforeSentinel,
   unwrapMimickedToolCall,
 } from "./jsonSalvage.js";
@@ -47,6 +50,80 @@ test("a mimicked tool call missing its outer bracket still yields the arguments"
   assert.equal(args.stopDate, "2032-11-02");
   assert.equal(args.events.length, 1);
   assert.equal(args.clearActions, true);
+});
+
+// A player's log (a small local model behind koboldcpp): after its lookup
+// rounds the model "answered … without calling the output function" and wrote
+// the call out as text, in the OpenAI wire's own shape. The Projects board
+// rejected it, "$ must be object; received array", and held a turn whose
+// events were already written. The envelope below is the one in that log.
+const wireCall = (args, name = TOOL) => `[
+{
+"id": "call_001",
+"type": "function",
+"function": {
+"name": ${JSON.stringify(name)},
+"arguments": ${args}
+}
+}
+]`;
+
+test("an answer written as the wire's own tool call yields the arguments", () => {
+  const raw = wireCall(`{
+"events": [
+{
+"date": "2014-04-25",
+"title": "Putin Travels to Army Bases for Reforms",
+"description": "Vladimir Putin departed for multiple army garrisons.",
+"playerRelated": true,
+"impacts": { "actionIds": ["order-0-muufk1ha-2mpuvlu"] }
+}
+],
+"stopDate": "2014-05-25",
+"summary": "The period saw the implementation of military reforms."
+}`);
+  const parsed = extractJsonPayload(raw);
+  assert.ok(Array.isArray(parsed), "the text itself parses to the array the schema refused");
+  const args = unwrapMimickedToolCall(parsed, TOOL);
+  assert.equal(args.stopDate, "2014-05-25");
+  assert.equal(args.events.length, 1);
+  assert.deepEqual(args.events[0].impacts.actionIds, ["order-0-muufk1ha-2mpuvlu"]);
+});
+
+test("the wire's call is unwrapped whether its arguments are an object or the JSON string the wire carries", () => {
+  const payload = { stopDate: "2014-05-25", events: [{ title: "Путин начал инспекцию военных баз" }] };
+  const asString = wireCall(JSON.stringify(JSON.stringify(payload)));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asString), TOOL), payload);
+  const asObject = wireCall(JSON.stringify(payload));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asObject), TOOL), payload);
+  // Not in an array, and without the id and type a model may leave out.
+  const bare = { function: { name: TOOL, arguments: payload } };
+  assert.deepEqual(unwrapMimickedToolCall(bare, TOOL), payload);
+  assert.deepEqual(unwrapMimickedToolCall({ index: 0, id: "call_1", type: "function", function: { name: TOOL, arguments: payload } }, TOOL), payload);
+});
+
+test("a wire call to another function is not the answer", () => {
+  // A lookup the model wrote out instead of making: there is no payload in it.
+  const lookup = extractJsonPayload(wireCall('{"owner": "Russian Federation", "limit": 100}', "list_regions"));
+  assert.equal(unwrapMimickedToolCall(lookup, TOOL), lookup);
+});
+
+test("only a wire call is unwrapped: a payload with a field named function is left alone", () => {
+  const payload = { stopDate: "2014-05-25", events: [] };
+  // With no tool to check the name against, the call has to be nothing but a call.
+  assert.deepEqual(unwrapMimickedToolCall([{ id: "call_001", type: "function", function: { name: "anything", arguments: payload } }], null), payload);
+  const withMore = { id: "call_001", type: "function", function: { name: "anything", arguments: payload, note: "extra" } };
+  assert.equal(unwrapMimickedToolCall(withMore, null), withMore);
+  // Fields the wire does not have beside `function`: a payload of its own.
+  const record = { function: { name: TOOL, arguments: payload }, summary: "A quarter passes." };
+  assert.equal(unwrapMimickedToolCall(record, TOOL), record);
+  const otherType = { id: "call_001", type: "custom", function: { name: TOOL, arguments: payload } };
+  assert.equal(unwrapMimickedToolCall(otherType, TOOL), otherType);
+  // Arguments that are no object leave the answer as it was, for the schema to refuse.
+  for (const args of ["not json", [payload], 7, null]) {
+    const call = { id: "call_001", type: "function", function: { name: TOOL, arguments: args } };
+    assert.equal(unwrapMimickedToolCall(call, TOOL), call);
+  }
 });
 
 test("a brace inside a string is not counted as structure", () => {
@@ -182,4 +259,160 @@ test("extractJsonArray: strict first, then the repairs, then the first balanced 
   assert.equal(extractJsonArray('{"a":1}'), null, "an object alone is not an array");
   assert.equal(extractJsonArray("no json here"), null);
   assert.equal(extractJsonArray(""), null);
+});
+
+// ---------------------------------------------------------------------------
+// An answer written as a JavaScript object rather than as JSON.
+//
+// The first real time skip asked of Gemini as JSON text wrote its events as
+// JSON and its unit ops, three levels down, with no quotes on their keys. The
+// whole answer stopped parsing, and the skip cost a second request.
+
+test("the answer a real skip wrote, bare keys three levels down, is read", () => {
+  const written = `{
+  "events": [
+    {
+      "date": "2016-01-05",
+      "title": "United States Army Initiates Exercise Northern Vanguard",
+      "impacts": {
+        "actionIds": ["probe-order-1"],
+        "unitOps": [
+          {
+            op: "spawn",
+            unit: {
+              name: "Northern Vanguard Task Force",
+              type: "armor",
+              strength: 100,
+              at: "Fort Drum, New York"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "stopDate": "2016-01-31"
+}`;
+  assert.throws(() => JSON.parse(written), "it is not JSON as written");
+  const read = extractJsonPayload(written);
+  assert.equal(read.events[0].impacts.unitOps[0].op, "spawn");
+  assert.deepEqual(read.events[0].impacts.unitOps[0].unit, { name: "Northern Vanguard Task Force", type: "armor", strength: 100, at: "Fort Drum, New York" });
+  assert.equal(read.stopDate, "2016-01-31");
+  assert.deepEqual(parseLooseJson(written), read);
+});
+
+test("bare keys, single quotes, comments, trailing commas and a copied ? are each repaired", () => {
+  assert.deepEqual(parseLooseJson('{a: 1, b_2: "x", $c: [true, null]}'), { a: 1, b_2: "x", $c: [true, null] });
+  assert.deepEqual(parseLooseJson("{'name': 'O\\'Brien', 'quote': 'he said \"no\"'}"), { name: "O'Brien", quote: 'he said "no"' });
+  assert.deepEqual(parseLooseJson('{"a": 1, // the first\n "b": 2 /* and the second */}'), { a: 1, b: 2 });
+  assert.deepEqual(parseLooseJson('{"a": [1, 2,], "b": {"c": 3,},}'), { a: [1, 2], b: { c: 3 } });
+  assert.deepEqual(parseLooseJson('{"note"?: "kept", regionName?: "Terespol", "ok" ? : true}'), { note: "kept", regionName: "Terespol", ok: true });
+  assert.deepEqual(parseLooseJson('[{op: "move", unitId: "u-1"}, {op: "remove", unitId: "u-2"}]'), [{ op: "move", unitId: "u-1" }, { op: "remove", unitId: "u-2" }]);
+});
+
+test("nothing inside a string is touched", () => {
+  const text = '{note: "op: spawn, unit: {name: x} // not a comment", "path": "C:/a/*b*/c", q: "is it? : yes", \'s\': "it\'s"}';
+  assert.deepEqual(parseLooseJson(text), {
+    note: "op: spawn, unit: {name: x} // not a comment",
+    path: "C:/a/*b*/c",
+    q: "is it? : yes",
+    s: "it's",
+  });
+});
+
+test("a bare word that is not a key is left alone, so what was not an object still does not parse", () => {
+  assert.equal(repairLooseJson('{"a": tru, "b": 1}'), '{"a": tru, "b": 1}', "a value is never quoted for the model");
+  assert.equal(parseLooseJson('{"a": tru, "b": 1}'), null);
+  assert.equal(repairLooseJson("[north, south]"), "[north, south]", "words in a list are not keys");
+  assert.equal(parseLooseJson("Here is the plan: move the army."), null);
+  assert.equal(parseLooseJson(""), null);
+});
+
+test("well-formed JSON is never rewritten: the repair is only tried after a strict parse fails", () => {
+  const text = '{"a":"x: y","b":[1,2],"c":{"d":"it\'s // fine"}}';
+  assert.deepEqual(parseLooseJson(text), JSON.parse(text));
+  assert.equal(repairLooseJson(text), text, "and would have come back as it was");
+});
+
+test("an answer cut off mid-object is still not an answer", () => {
+  assert.equal(parseLooseJson('{events: [{title: "A war", impacts: {unitOps: [{op: "move"'), null, "a shortened turn is never applied as the whole one");
+});
+
+// ---------------------------------------------------------------------------
+// The long text at the end of a time skip's answer. A skip is one request, and
+// it carries the agents' reports and the history document's fold last: the
+// longest free text in the answer, and what an answer that runs out of room
+// loses. Neither may cost the turn written in full before it.
+
+// Built from character codes, so no escape here depends on how this file was
+// written out.
+const BACKSLASH = String.fromCharCode(92);
+const LINE_BREAK = String.fromCharCode(10);
+const TAB = String.fromCharCode(9);
+const TURN_EVENTS = [
+  { date: "2016-01-05", title: "A depot opens", description: "A depot opens at the railhead.", impacts: { unitOps: [{ op: "move", unitId: "u1", at: "Denver" }] } },
+  { date: "2016-01-09", title: "Talks stall", description: "Talks stall in Geneva." },
+];
+const TURN = `{"events":${JSON.stringify(TURN_EVENTS)},"stopDate":"2016-01-31","summary":"A quiet month.","warUpdates":""`;
+const REPORTS = ',"agentReports":[{"agent":"agent_1","exchanges":[]}]';
+const RIDERS = ["agentReports", "history"];
+
+test("a line break or a tab written straight into a string is read as the text it is", () => {
+  const written = `${TURN}${REPORTS},"history":{"summary":"S","document":"2015 to 2016${LINE_BREAK}${LINE_BREAK}${TAB}The corridor opened."}}`;
+  assert.throws(() => JSON.parse(written), "not JSON as written");
+  const parsed = extractJsonPayload(written);
+  assert.equal(parsed.events.length, 2);
+  assert.equal(parsed.history.document, `2015 to 2016${LINE_BREAK}${LINE_BREAK}${TAB}The corridor opened.`, "the same text, with its breaks");
+  // With a quote copied in bare as well: both repairs together.
+  const both = extractJsonPayload(`${TURN},"history":{"summary":"S","document":"The "Northern" line.${LINE_BREAK}It opened."}}`);
+  assert.equal(both.history.document, `The "Northern" line.${LINE_BREAK}It opened.`);
+  // An escape that was written is left exactly as it was.
+  const escaped = `${TURN},"history":{"summary":"S","document":"One${BACKSLASH}nTwo"}}`;
+  assert.deepEqual(extractJsonPayload(escaped), JSON.parse(escaped));
+  // Outside a string a line break is only layout, and stays that.
+  assert.equal(repairLooseJson(`{${LINE_BREAK}  "a": 1${LINE_BREAK}}`), `{${LINE_BREAK}  "a": 1${LINE_BREAK}}`);
+});
+
+test("an answer broken or cut off inside a rider keeps the turn before it", () => {
+  // Cut off in the history document: the reports before it are complete.
+  const inHistory = `${TURN}${REPORTS},"history":{"summary":"S","document":"2015 to 2016${BACKSLASH}nThe corridor ope`;
+  assert.equal(extractJsonPayload(inHistory), null, "not readable as it stands");
+  const first = parseWithoutTrailingFields(inHistory, RIDERS);
+  assert.deepEqual(first.dropped, ["history"]);
+  assert.deepEqual(first.value.events, TURN_EVENTS, "every event, whole");
+  assert.equal(first.value.stopDate, "2016-01-31");
+  assert.equal(first.value.agentReports.length, 1, "and the reports that were finished");
+  assert.equal("history" in first.value, false);
+
+  // Broken by a bare quote, then cut off.
+  const brokenThenCut = parseWithoutTrailingFields(`${TURN}${REPORTS},"history":{"summary":"S","document":"The "Northern" corridor ope`, RIDERS);
+  assert.deepEqual(brokenThenCut.dropped, ["history"]);
+
+  // Cut off in the reports: nothing after them was begun.
+  const inReports = parseWithoutTrailingFields(`${TURN},"agentReports":[{"agent":"agent_1","exchanges":[{"counterpart":"Fra`, RIDERS);
+  assert.deepEqual(inReports.dropped, ["agentReports"]);
+  assert.deepEqual(inReports.value.events, TURN_EVENTS);
+  assert.equal("agentReports" in inReports.value, false);
+
+  // A report that talks about "history": the key is found by where it stands,
+  // not by the word.
+  const talkative = parseWithoutTrailingFields(`${TURN},"agentReports":[{"agent":"agent_1","exchanges":[{"counterpart":"France","messages":[{"speaker":"Russia","text":"We spoke of the "history": of it`, RIDERS);
+  assert.deepEqual(talkative.dropped, ["agentReports"]);
+});
+
+test("a turn cut off before its riders is never closed and applied", () => {
+  // The rule balancedJsonCandidates keeps: a turn lands as it was written or
+  // not at all. Only what comes AFTER the whole turn may be let go.
+  assert.equal(parseWithoutTrailingFields(`{"events":${JSON.stringify(TURN_EVENTS)},"stopDate":"2016-01-31","summary":"A quiet mon`, RIDERS), null, "cut off in the summary");
+  assert.equal(parseWithoutTrailingFields(`{"events":[${JSON.stringify(TURN_EVENTS[0])},{"date":"2016-01-09","title":"Talks st`, RIDERS), null, "cut off in the events");
+  // An event that happens to name a rider does not make one.
+  const named = `{"events":[{"date":"2016-01-05","title":"History","description":"The word ${BACKSLASH}"history${BACKSLASH}": appears, and agentReports too."}],"stopDate":"2016-01-31","summary":"S."${REPORTS},"history":{"summary":"S","document":"broken "quote`;
+  const rescued = parseWithoutTrailingFields(named, RIDERS);
+  assert.deepEqual(rescued.dropped, ["history"]);
+  assert.equal(rescued.value.events.length, 1);
+  assert.equal(rescued.value.agentReports.length, 1);
+  // Nothing to cut, nothing returned: an answer without riders that does not
+  // parse is simply not an answer, and one that parses is never passed here.
+  assert.equal(parseWithoutTrailingFields(`{"events":[],"stopDate":"2016-01-31","summary":"S"`, RIDERS), null);
+  assert.equal(parseWithoutTrailingFields("no object here", RIDERS), null);
+  assert.equal(parseWithoutTrailingFields(`${TURN}${REPORTS}}`, []), null, "and no riders named means none to drop");
 });

@@ -2,8 +2,10 @@
 
 // Everything a player sees of suggestions outside the map editor:
 //  - ScenarioCommunityCard, at the top of a scenario's editor: where it came
-//    from on the community hub (with Suggest changes and Unlink), the post its
-//    player made of it (with the suggestions left there), or a way to link one.
+//    from on the community hub (with Suggest changes and Unlink), and the post
+//    its player made of it (with the suggestions left there, and Unlink). The
+//    game makes those links itself, on a download and on Publish; the card can
+//    only remove one, for good.
 //  - SuggestChangesDialog: the changes a player made to a downloaded scenario,
 //    saved as a small file and posted as a comment on the original post.
 //  - SuggestionReviewDialog: the author's changelog of a suggestion's changes
@@ -22,12 +24,14 @@ import {
   loadScenarioDetails,
   saveScenario,
   uploadScenarioAsset,
+  withSingleLibraryRefresh,
 } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { fetchHubIndex, hubIndexProblem } from "../../runtime/hubFiles.js";
 import { downloadHubBundle, downloadHubFile, fetchHubPosts, hubOriginalGone, hubPostUrl } from "../../runtime/hubPosts.js";
-import { buildScenarioSnapshot, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
+import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
   buildSuggestionComment,
@@ -35,7 +39,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "../../runtime/scenarioSuggestion.js";
-import { buildDetailSave, detailChangeStatus, detailValueIn } from "../../runtime/suggestionApply.js";
+import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
 import { openHubSuggestions } from "../../../server/hubProvenance.js";
 import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
 import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
@@ -148,7 +152,7 @@ const promptLabelOf = (path) => {
 };
 
 // Where in the editor a details change lives, and what it is called there.
-export const describeDetailChange = (change) => {
+const describeDetailChange = (change) => {
   if (change.kind === "field") {
     const [area, ...rest] = change.path;
     if (area === "features") {
@@ -164,65 +168,15 @@ export const describeDetailChange = (change) => {
     return { tab: area === "meta" ? "Overview" : "World", title: DETAIL_FIELD_LABELS[key] || rest[0], detail: "" };
   }
   if (change.kind === "politics") return { tab: "Politics", title: POLITICS_FIELD_LABELS[change.field] || change.field, detail: change.label || "" };
+  if (change.kind === "history") {
+    return change.part === "setup"
+      ? { tab: "Pre-history", title: "Summary and Day-one facts", detail: "" }
+      : { tab: "Pre-history", title: "Pre-history event", detail: change.label || "" };
+  }
   if (change.kind === "stats") return { tab: "Stats", title: "National Stats sheet", detail: "" };
   if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
   if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
   return { tab: "", title: change.kind, detail: "" };
-};
-
-// Word by word, like tracked changes: what was taken out and what was put in.
-const tokens = (text) => String(text ?? "").split(/(\s+)/).filter((part) => part !== "");
-export const diffWords = (before, after) => {
-  const a = tokens(before);
-  const b = tokens(after);
-  if (a.length * b.length > 2_500_000) {
-    return [...(a.length ? [{ type: "del", text: a.join("") }] : []), ...(b.length ? [{ type: "add", text: b.join("") }] : [])];
-  }
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const table = new Uint32Array(rows * cols);
-  for (let i = a.length - 1; i >= 0; i -= 1) {
-    for (let j = b.length - 1; j >= 0; j -= 1) {
-      table[i * cols + j] = a[i] === b[j] ? table[(i + 1) * cols + j + 1] + 1 : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1]);
-    }
-  }
-  const parts = [];
-  const push = (type, text) => {
-    const last = parts[parts.length - 1];
-    if (last?.type === type) last.text += text;
-    else parts.push({ type, text });
-  };
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { push("same", a[i]); i += 1; j += 1; }
-    else if (table[(i + 1) * cols + j] >= table[i * cols + j + 1]) { push("del", a[i]); i += 1; }
-    else { push("add", b[j]); j += 1; }
-  }
-  while (i < a.length) { push("del", a[i]); i += 1; }
-  while (j < b.length) { push("add", b[j]); j += 1; }
-  // A replaced phrase reads as one: the words taken out together, then the
-  // words put in, rather than alternating word by word. The spaces between
-  // changed words belong to both sides.
-  const grouped = [];
-  let removed = "";
-  let added = "";
-  const flush = () => {
-    if (removed) grouped.push({ type: "del", text: removed });
-    if (added) grouped.push({ type: "add", text: added });
-    removed = "";
-    added = "";
-  };
-  parts.forEach((part, index) => {
-    const between = part.type === "same" && !part.text.trim()
-      && parts[index - 1] && parts[index - 1].type !== "same" && parts[index + 1] && parts[index + 1].type !== "same";
-    if (part.type === "del") removed += part.text;
-    else if (part.type === "add") added += part.text;
-    else if (between) { removed += part.text; added += part.text; }
-    else { flush(); grouped.push(part); }
-  });
-  flush();
-  return grouped;
 };
 
 const TrackedText = ({ before, after }) => {
@@ -253,6 +207,18 @@ const valueText = (value) => {
   return String(value);
 };
 
+// A value inside a Politics entry, short: the entry's own data, never
+// translated. Records and lists of records as compact JSON, cut.
+const POLITICS_VALUE_CHARS = 90;
+const politicsValueText = (value) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const text = Array.isArray(value) && value.every((item) => item === null || typeof item !== "object")
+    ? value.join(", ")
+    : typeof value === "object" ? JSON.stringify(value) : String(value);
+  return text.length > POLITICS_VALUE_CHARS ? `${text.slice(0, POLITICS_VALUE_CHARS).trimEnd()}…` : text || "—";
+};
+const POLITICS_PATHS_SHOWN = 5;
+
 const statsSummary = (sheet) => {
   const sections = Array.isArray(sheet?.sections) ? sheet.sections : [];
   const stats = sections.reduce((total, section) => total + (Array.isArray(section?.stats) ? section.stats.length : 0), 0);
@@ -276,9 +242,30 @@ const DetailValue = ({ change, coverBefore }) => {
   if (change.kind === "stats") {
     return <div style={quietTextStyle}>{statsSummary(change.from)} → {statsSummary(change.to)}</div>;
   }
-  if (change.kind === "politics") {
+  if (change.kind === "politics" || change.kind === "history") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
-    return <div style={quietTextStyle}>{text}</div>;
+    // Which fields of the entry changed, the way tracked changes show a word;
+    // for a value changed whole (the canon context), its fields, a new one's
+    // measured from nothing.
+    const record = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const whole = !change.op && (record(change.from) || record(change.to));
+    const paths = change.op === "change" || whole
+      ? changedPathsOf(whole ? change.from ?? {} : change.from, whole ? change.to ?? {} : change.to, { max: POLITICS_PATHS_SHOWN })
+      : [];
+    return (
+      <div style={{ display: "grid", gap: "0.2rem" }}>
+        <div style={quietTextStyle}>{text}</div>
+        {paths.slice(0, POLITICS_PATHS_SHOWN).map((entry) => (
+          <div data-no-translate key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>{entry.path}: </span>
+            <span style={{ color: "#fecaca", textDecoration: "line-through" }}>{politicsValueText(entry.from)}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>
+            <span style={{ color: "#bbf7d0" }}>{politicsValueText(entry.to)}</span>
+          </div>
+        ))}
+        {paths.length > POLITICS_PATHS_SHOWN ? <div data-no-translate style={quietTextStyle}>…</div> : null}
+      </div>
+    );
   }
   if (change.kind === "institutionLogos") return <div style={quietTextStyle}>Changed</div>;
   const color = /^#[0-9a-f]{6}$/i;
@@ -293,7 +280,7 @@ const DetailValue = ({ change, coverBefore }) => {
   );
 };
 
-const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, onReject, onUndo, coverBefore, touch }) => {
+const DetailChangeRow = ({ change, status, decision, canUndo = true, busy, readOnly, onAccept, onReject, onUndo, coverBefore, touch }) => {
   const label = describeDetailChange(change);
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, display: "grid", gap: "0.45rem", padding: "0.65rem 0.75rem" }}>
@@ -315,7 +302,9 @@ const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, o
               <span style={{ color: decision === "accepted" ? "#86efac" : "rgba(255,255,255,0.55)", fontSize: "0.78rem", fontWeight: 700 }}>
                 {decision === "accepted" ? "Accepted" : "Rejected"}
               </span>
-              <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+              {canUndo
+                ? <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+                : <span style={quietTextStyle}>It can no longer be undone here: the game was closed after it was accepted. Change it back in the editor.</span>}
             </>
           ) : (
             <>
@@ -409,17 +398,6 @@ const DialogFrame = ({ title, subtitle, onClose, children, footer }) => {
   );
 };
 
-const copyText = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Insecure contexts (the Android app) have no clipboard API; the text is
-    // on screen to copy by hand.
-    return false;
-  }
-};
-
 const postTitleOf = (origin) => origin?.title || `#${origin?.postId}`;
 
 // ---- Suggest changes (the player who downloaded the scenario) -------------------
@@ -487,7 +465,7 @@ export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => 
       // The page first, while the click still counts as the player's: a browser
       // only lets a click open a window for a moment.
       if (openPost) window.open(`${postUrl}#new_comment_field`, "_blank", "noopener");
-      const copied = await copyText(comment);
+      const copied = await copyToClipboard(comment);
       await saveBlobToDisk(await buildSuggestionZip(suggestion), fileName);
       setSent({ fileName, comment, copied, openedPost: openPost });
       setPhase("sent");
@@ -589,7 +567,7 @@ export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => 
           </ol>
           <textarea readOnly data-no-translate style={{ ...inputStyle, fontFamily: "monospace", fontSize: "0.76rem", minHeight: "9rem" }} value={sent.comment} onFocus={(event) => event.target.select()} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button type="button" className="oh-tap-row" onClick={async () => setSent({ ...sent, copied: await copyText(sent.comment) })} style={tapFit(buttonStyle, touch)}>Copy the comment</button>
+            <button type="button" className="oh-tap-row" onClick={async () => setSent({ ...sent, copied: await copyToClipboard(sent.comment) })} style={tapFit(buttonStyle, touch)}>Copy the comment</button>
             <a href={`${postUrl}#new_comment_field`} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={{ ...tapFit(buttonStyle, touch), textDecoration: "none" }}>Open the post ↗</a>
           </div>
         </>
@@ -602,27 +580,22 @@ export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => 
 
 // The review record's key: the comment for a suggestion found on the hub, the
 // file's own id for one opened from a file.
-export const suggestionReviewKey = (source) => source?.ref?.id || source?.suggestion?.id || "";
+const suggestionReviewKey = (source) => source?.ref?.id || source?.suggestion?.id || "";
 
 const decisionsOf = (review) => ({
   accepted: new Set(review?.accepted ?? []),
   rejected: new Set(review?.rejected ?? []),
 });
 
-const setDetailValueIn = (snapshot, change, value) => {
-  if (!snapshot) return;
-  if (change.kind === "field") {
-    const [area, ...rest] = change.path;
-    if (area === "meta" || area === "game" || area === "world") snapshot[area][rest[0]] = value;
-    else if (area === "features") snapshot.features[rest[0]] = { ...(snapshot.features[rest[0]] ?? {}), [rest[1]]: value };
-    else if (area === "prompts") snapshot.prompts[rest.join(".")] = value;
-  } else if (change.kind === "stats") snapshot.stats = value;
-  else if (change.kind === "institutionLogos") snapshot.institutionLogos = value;
-  else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
+// What Undo puts back, per review: change id -> inverse change. Kept outside
+// the dialog, so closing it, or going to the Workshop and back, keeps it;
+// kept until the game closes, after which an accepted change has no Undo.
+const undoStore = new Map();
+const undoesOf = (scenarioId, key) => {
+  const id = `${scenarioId}\n${key}`;
+  if (!undoStore.has(id)) undoStore.set(id, new Map());
+  return undoStore.get(id);
 };
-
-// A change that puts back `value` where `change` went: what Undo applies.
-const inverseOf = (change, value, extra = {}) => ({ ...change, from: change.to, to: value, ...extra });
 
 export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap, onChanged, onLoaded, onRejectContributor }) => {
   const touch = useTouchPrimary();
@@ -636,15 +609,12 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const [busy, setBusy] = useState(false);
   const snapshotRef = useRef(null);
   const coverRef = useRef(null); // the author's cover before any accept: { base64, contentType } | null
-  const undoRef = useRef(new Map()); // change id -> inverse change
+  const undoes = useMemo(() => undoesOf(scenario?.id, key), [scenario?.id, key]);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        // A suggestion is its comment's own attachment, never a copy in the
-        // hub's releases, and is fetched only while the hub's index lists it
-        // as checked (hubFiles.js fetchHubFile).
         const next = source?.suggestion ?? await readSuggestionFile(await downloadHubFile(source.ref.zipUrl, { copy: false }));
         // Kept by the caller, so coming back from the Workshop does not
         // download the file again.
@@ -655,7 +625,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
         snapshotRef.current = snapshot;
         coverRef.current = snapshot.cover ? { base64: snapshot.cover.base64, contentType: snapshot.cover.contentType, hash: snapshot.cover.hash } : null;
         setSuggestion(next);
-        setStatuses(Object.fromEntries(next.changes.filter((change) => change.area === "details").map((change) => [change.id, detailChangeStatus(change, snapshot)])));
+        setStatuses(detailStatuses(next.changes, snapshot));
         setPhase("ready");
       } catch (nextError) {
         if (!alive) return;
@@ -686,10 +656,27 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     const saved = await saveScenario(scenario.id, { hubReviews: reviews });
     onChanged?.(saved?.scenario ?? null);
   };
+  // A decision shows once it is saved: a save that fails leaves the rows
+  // as they were, and the error says why.
   const decide = async (nextDecisions, nextStatus) => {
+    await persist(nextDecisions, nextStatus ?? status);
     setDecisions(nextDecisions);
     if (nextStatus) setStatus(nextStatus);
-    await persist(nextDecisions, nextStatus ?? status);
+  };
+  const errorText = (nextError) => nextError?.message || String(nextError);
+  // Reject, Mark as reviewed and Dismiss only record decisions.
+  const record = async (nextDecisions, nextStatus) => {
+    setBusy(true);
+    setError("");
+    try {
+      await decide(nextDecisions, nextStatus);
+      return true;
+    } catch (nextError) {
+      setError(errorText(nextError));
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Accepting applies the change at once, like accepting a tracked change;
@@ -698,35 +685,39 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     if (!list.length) return;
     const details = await loadScenarioDetails(scenario.id);
     const { patch, uploads, clears } = buildDetailSave(list, details);
-    if (Object.keys(patch).length) await saveScenario(scenario.id, patch);
-    for (const upload of uploads) {
-      const blob = upload.json !== undefined
-        ? new Blob([JSON.stringify(upload.json)], { type: "application/json" })
-        : new Blob([Uint8Array.from(globalThis.atob(upload.base64), (char) => char.charCodeAt(0))], { type: upload.contentType });
-      await uploadScenarioAsset(scenario.id, upload.key, blob);
-    }
-    for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey).catch(() => {});
+    // One catalog refresh for the whole batch, not one per write.
+    await withSingleLibraryRefresh(async () => {
+      if (Object.keys(patch).length) await saveScenario(scenario.id, patch, { refresh: false });
+      for (const upload of uploads) {
+        const blob = upload.json !== undefined
+          ? new Blob([JSON.stringify(upload.json)], { type: "application/json" })
+          : new Blob([Uint8Array.from(globalThis.atob(upload.base64), (char) => char.charCodeAt(0))], { type: upload.contentType });
+        await uploadScenarioAsset(scenario.id, upload.key, blob, { refresh: false });
+      }
+      for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey, { refresh: false });
+    });
   };
 
   const accept = async (list) => {
     const pending = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
     if (!pending.length) return;
     setBusy(true);
+    setError("");
     try {
       for (const change of pending) {
         const before = change.kind === "cover" ? coverRef.current : detailValueIn(snapshotRef.current, change);
-        undoRef.current.set(change.id, change.kind === "cover"
+        undoes.set(change.id, change.kind === "cover"
           ? inverseOf(change, before ? { hash: before.hash, contentType: before.contentType, base64: before.base64 } : null)
           : inverseOf(change, before));
       }
       await applyChanges(pending);
-      for (const change of pending) {
-        setDetailValueIn(snapshotRef.current, change, change.kind === "cover" ? change.to?.hash ?? null : change.to);
-      }
+      for (const change of pending) applyToSnapshot(snapshotRef.current, change);
       setStatuses((current) => ({ ...current, ...Object.fromEntries(pending.map((change) => [change.id, "applied"])) }));
-      await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected });
+      // Applied already: a review that fails to save cannot take it back.
+      await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected })
+        .catch((nextError) => { throw new Error(`Your scenario was changed, but the decision could not be saved: ${errorText(nextError)}`); });
     } catch (nextError) {
-      setError(nextError?.message || String(nextError));
+      setError(errorText(nextError));
     } finally {
       setBusy(false);
     }
@@ -734,32 +725,36 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const reject = async (list) => {
     const pending = list.filter((change) => !decided.has(change.id));
     if (!pending.length) return;
-    setBusy(true);
-    try {
-      await decide({ accepted: decisions.accepted, rejected: new Set([...decisions.rejected, ...pending.map((change) => change.id)]) });
-    } finally {
-      setBusy(false);
-    }
+    await record({ accepted: decisions.accepted, rejected: new Set([...decisions.rejected, ...pending.map((change) => change.id)]) });
   };
+  // Only an acceptance whose replaced value is still kept (undoesOf, until the
+  // game closes) can be taken back. Clearing the decision of an earlier one
+  // would leave the change in, marked undecided.
+  const canUndo = (change) => !decisions.accepted.has(change.id) || undoes.has(change.id);
   const undo = async (change) => {
+    if (!canUndo(change)) return;
     setBusy(true);
+    setError("");
     try {
-      if (decisions.accepted.has(change.id)) {
-        const inverse = undoRef.current.get(change.id);
-        if (inverse) {
-          await applyChanges([inverse]);
-          setDetailValueIn(snapshotRef.current, change, inverse.kind === "cover" ? inverse.to?.hash ?? null : inverse.to);
-          undoRef.current.delete(change.id);
-        }
+      // An accepted change is undone only by putting back what was there; one
+      // accepted before the game was last closed has nothing to put back,
+      // and its row offers no Undo.
+      const inverse = decisions.accepted.has(change.id) ? undoes.get(change.id) : null;
+      if (decisions.accepted.has(change.id) && !inverse) return;
+      if (inverse) {
+        await applyChanges([inverse]);
+        applyToSnapshot(snapshotRef.current, inverse);
       }
       const accepted = new Set(decisions.accepted);
       const rejected = new Set(decisions.rejected);
       accepted.delete(change.id);
       rejected.delete(change.id);
       setStatuses((current) => ({ ...current, [change.id]: detailChangeStatus(change, snapshotRef.current) }));
-      await decide({ accepted, rejected }, "reviewing");
+      await decide({ accepted, rejected }, "reviewing")
+        .catch((nextError) => { throw new Error(inverse ? `Your scenario was changed back, but the decision could not be saved: ${errorText(nextError)}` : errorText(nextError)); });
+      undoes.delete(change.id);
     } catch (nextError) {
-      setError(nextError?.message || String(nextError));
+      setError(errorText(nextError));
     } finally {
       setBusy(false);
     }
@@ -778,7 +773,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       </span>
       <span style={{ flex: 1 }} />
       {phase === "ready" && status !== "done" && (
-        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => decide(decisions, "done")} style={tapFit(buttonStyle, touch)}>Mark as reviewed</button>
+        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => record(decisions, "done")} style={tapFit(buttonStyle, touch)}>Mark as reviewed</button>
       )}
       {/* Someone flooding the post with bad edits: everything they suggested
           goes, on every post of this player's, and what they suggest later is hidden. */}
@@ -789,7 +784,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       )}
       {/* A suggestion that cannot be read can still be put away. */}
       {phase !== "loading" && status !== "dismissed" && (
-        <button type="button" className="oh-tap-row" disabled={busy} onClick={async () => { await decide(decisions, "dismissed"); onClose(); }} style={tapFit(buttonStyle, touch)}>Dismiss</button>
+        <button type="button" className="oh-tap-row" disabled={busy} onClick={async () => { if (await record(decisions, "dismissed")) onClose(); }} style={tapFit(buttonStyle, touch)}>Dismiss</button>
       )}
       <button type="button" className="oh-tap-row" onClick={onClose} style={tapFit(primaryButtonStyle, touch)}>Done</button>
     </>
@@ -843,6 +838,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
                   onAccept={() => accept([change])}
                   onReject={() => reject([change])}
                   onUndo={() => undo(change)}
+                  canUndo={canUndo(change)}
                 />
               ))}
             </div>
@@ -904,10 +900,8 @@ const ContributorSuggestions = ({ login, refs, reviews, busy, touch, onReview, o
   </div>
 );
 
-export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onReview, onOpenFile, onRefresh, onLinkPost, onForgetPost, onRejectContributor, onUnblockContributor, refreshNote }) => {
+export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onReview, onOpenFile, onRefresh, onForgetPost, onRejectContributor, onUnblockContributor, refreshNote }) => {
   const touch = useTouchPrimary();
-  const [postInput, setPostInput] = useState("");
-  const [linkOpen, setLinkOpen] = useState(false);
   const [showReviewed, setShowReviewed] = useState(false);
   const fileRef = useRef(null);
   if (!scenario) return null;
@@ -924,14 +918,6 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
     return groups;
   }, new Map())].sort((a, b) => b[1].length - a[1].length);
   const blocked = published?.blocked ?? [];
-  const linkPost = () => {
-    const match = /(?:issues\/)?#?(\d{1,7})\s*$/.exec(postInput.trim());
-    if (match) {
-      onLinkPost?.(Number(match[1]));
-      setPostInput("");
-      setLinkOpen(false);
-    }
-  };
   return (
     <div style={{ ...cardStyle, display: "grid", gap: "0.8rem" }}>
       {origin && (
@@ -953,7 +939,7 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
               className="oh-tap-row"
               disabled={busy}
               onClick={onUnlink}
-              title="Make this your own scenario: it stops following the post, and you can no longer suggest changes to it."
+              title="Make this your own scenario, for good: it stops following the post, you can no longer suggest changes to it, and it cannot be linked to a post again."
               style={tapFit(buttonStyle, touch)}
             >
               Unlink from the community post
@@ -1029,7 +1015,7 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
               className="oh-tap-row"
               disabled={busy}
               onClick={onForgetPost}
-              title="Stop looking for suggestions on this post. The post itself stays on the hub."
+              title="Stop looking for suggestions on this post, for good. The post itself stays on the hub, and it cannot be linked to this scenario again."
               style={tapFit(buttonStyle, touch)}
             >
               Unlink the post
@@ -1037,28 +1023,15 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
           </div>
         </div>
       )}
+      {/* No post of the player's own: one comes only from Publish, which the
+          game then finds by itself. There is nothing here to link one with. */}
       {!published && (
         <div style={{ display: "grid", gap: "0.45rem" }}>
           {!origin && <span style={labelStyle}>Community</span>}
-          {linkOpen ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-              <input
-                style={{ ...inputStyle, flex: "1 1 14rem", width: "auto" }}
-                value={postInput}
-                onChange={(event) => setPostInput(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter") linkPost(); }}
-                placeholder="The post's address, or its number"
-              />
-              <button type="button" className="oh-tap-row" onClick={linkPost} style={tapFit(primaryButtonStyle, touch)}>Link</button>
-              <button type="button" className="oh-tap-row" onClick={() => setLinkOpen(false)} style={tapFit(buttonStyle, touch)}>Cancel</button>
-            </div>
-          ) : (
-            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
-              <span style={quietTextStyle}>Posted this scenario on the hub? Link your post to see the changes people suggest.</span>
-              <button type="button" className="oh-tap-row" onClick={() => setLinkOpen(true)} style={tapFit(buttonStyle, touch)}>Link my post</button>
-              <button type="button" className="oh-tap-row" disabled={busy} onClick={() => fileRef.current?.click()} style={tapFit(buttonStyle, touch)}>Open a suggestion file</button>
-            </div>
-          )}
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+            <span style={quietTextStyle}>If you publish this scenario to the hub from the Community tab, the changes people suggest on your post show here.</span>
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={() => fileRef.current?.click()} style={tapFit(buttonStyle, touch)}>Open a suggestion file</button>
+          </div>
         </div>
       )}
       <input

@@ -3,12 +3,13 @@
 // meta defaults, mirroring server/libraryStore.js. models.js re-exports all of
 // them, so callers keep importing from there.
 //
-// They live apart from models.js because this file imports nothing. models.js
-// imports ./generated/countryNames.js, which only exists once
-// scripts/seed-web-defaults.mjs has run, and CI runs the tests before any build.
-// A Node test that needs these values imports them from here; one that imported
-// models.js passed on any machine that had done a web build and failed on a
-// clean checkout. Keep it import-free (gameBundleParity.test.js checks).
+// They live apart from models.js because models.js once imported the web
+// build's gitignored country table (./generated/countryNames.js, written by
+// scripts/seed-web-defaults.mjs), so a Node test that imported it failed on a
+// clean checkout. models.js now reads the committed table instead and loads in
+// Node too, but tests and src/runtime/scenarioChanges.js import these from here,
+// and neither file may import anything under ./generated/
+// (gameBundleParity.test.js checks).
 
 export const DEFAULT_SCENARIO_ID = "default";
 export const DEFAULT_GAME_ID = "default";
@@ -30,7 +31,7 @@ export const COVER_IMAGE_ASSET_KEY = "cover";
 export const STORAGE_JSON_ASSET_KEYS = ["actions", "advisor", "chat", "events"];
 export const CORE_JSON_ASSET_KEYS = ["game", "prompts", "world"];
 export const JSON_ASSET_KEYS = [...STORAGE_JSON_ASSET_KEYS, ...CORE_JSON_ASSET_KEYS];
-export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags", "stats"];
+export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags", "stats", "institutionLogos"];
 export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts"];
 export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions"];
 export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData"];
@@ -45,7 +46,7 @@ export const UPLOADABLE_GAME_ASSET_KEYS = [COVER_IMAGE_ASSET_KEY];
 
 export const JSON_ASSET_DEFAULTS = {
   actions: [], advisor: [], chat: [], colors: {}, events: [],
-  game: {}, prompts: {}, stats: {}, world: {}, snapshots: [], intercepts: {},
+  game: {}, prompts: {}, stats: {}, institutionLogos: {}, world: {}, snapshots: [], intercepts: {},
 };
 
 // This project's name, deliberately. The scenario schema below is a frozen wire
@@ -69,21 +70,39 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
+  "canonModelVersion",
+  "canonContext",
   "customCities",
   "customGeometry",
   "customRegions",
   "difficulty",
   "language",
   "mapCredit",
-  "notes",
   "ownerCodes",
   "polityOverrides",
+  "politicalActors",
+  "institutions",
+  "powerStatus",
+  "agreements",
   "units",
+  // What the Workshop authors besides the map: structures (markers), puppet
+  // states, and groups with the areas they control.
+  "markers",
+  "puppets",
+  "groups",
+  "groupAreas",
+  // The map's region types (runtime/regionTypes.js), which the game draws.
+  "regionTypes",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",
+  // A scenario map's own named seas, for placing fleets (placement.js declaredSeas).
+  "seas",
   "simulationRules",
   "startingTimelineText",
+  // The scenario's pre-history (src/runtime/scenarioPrehistory.js): applied by
+  // the game the first time it is opened, then dropped from its world.
+  "prehistory",
 ];
 
 export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([

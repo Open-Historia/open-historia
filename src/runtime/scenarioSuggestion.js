@@ -13,7 +13,7 @@
 //     files/background.json a suggested basemap, when there is one
 
 import { zipBundle, unzipBundle, looksLikeZip } from "./bundleZip.js";
-import { countChanges, summarizeChangesForComment } from "./scenarioChanges.js";
+import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment } from "./scenarioChanges.js";
 import { SUGGESTION_MARKER } from "./hubPosts.js";
 
 export const SUGGESTION_SCHEMA = "open-historia-scenario-suggestion/1";
@@ -40,23 +40,37 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // The change kinds a suggestion may carry (scenarioChanges.js). Anything else
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
-// The changes this version of the game can apply. A suggestion made by a newer
-// one may also carry its political world, institution logos, groups, map
-// features and puppet states: those are skipped here.
-const KNOWN_KINDS = new Set([
-  "field", "stats", "cover",
-  "region-owner", "region-name", "region-type", "region-claims", "borders",
+export const KNOWN_KINDS = new Set([
+  "field", "politics", "history", "stats", "institutionLogos", "cover",
+  "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
+  "group-add", "group-remove", "group-change",
   "city-add", "city-remove", "city-change", "cities-replace",
   "unit-add", "unit-remove", "unit-change",
+  "marker-add", "marker-remove", "marker-change",
+  "puppet-add", "puppet-remove", "puppet-change",
   "map-field", "background", "projection",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+// A Politics change names the ledger it goes into and the entry, both of
+// which become object keys when it is applied: only a ledger this build knows,
+// and never a key that would reach an object's prototype.
+const POLITICS_LEDGERS = new Set(["byPolity", "byId"]);
+const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+// Its field, like a field change's path, becomes a key of the author's world:
+// only a Politics part this build writes.
+// An entry (a Politics record, a pre-history event) becomes an object key too.
+const safeEntryKey = (entry) => entry === undefined || entry === null || (typeof entry === "string" && !UNSAFE_KEYS.has(entry));
+const validPoliticsChange = (change) => POLITICS_FIELDS.includes(change.field)
+  && (change.within === undefined || POLITICS_LEDGERS.has(change.within))
+  && safeEntryKey(change.entry);
 const validChange = (change) => isRecord(change)
   && typeof change.id === "string" && change.id
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
-  && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
+  && (change.kind !== "field" || isDetailFieldPath(change.path))
+  && (change.kind !== "politics" || validPoliticsChange(change))
+  && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && safeEntryKey(change.entry)))
   && (change.kind !== "borders" || Array.isArray(change.regions))
   && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"));
 

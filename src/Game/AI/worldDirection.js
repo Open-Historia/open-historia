@@ -12,10 +12,14 @@
 // (requestBudget.js) — and the simulator is told at the top of its next turn
 // (runtime/applicationReceipt.js, the "short" note).
 //
-// DELIBERATELY IMPORT-FREE: gameplay.js hands in the resolved settings.
+// Imports only the game-date rules (runtime/gameDates.js, itself import-free):
+// gameplay.js hands in the resolved settings.
+
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
+const scriptedTextMode = (value) => (asText(value).toLowerCase() === "exact" ? "exact" : "generated");
 
 // --- Pace ---
 //
@@ -38,8 +42,9 @@ export const scaleEventRange = (range, pacePercent = 100) => {
 // An event is the player's when the simulator says so (playerRelated) or when
 // its own words name the player's polity: a model that under-declares cannot
 // talk its way past the count. Whole words, case folded; a short name ("Ob") is
-// matched the same way and simply matches rarely.
-const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+// matched the same way and simply matches rarely. Words in any script: kept to
+// a-z and 0-9, a name written in Cyrillic or Arabic was never found.
+const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
 
 export const eventConcernsPlayer = (event, playerNames = []) => {
     if (event?.playerRelated === true) return true;
@@ -88,42 +93,58 @@ export const worldShareShortfall = (events, floorPercent, { playerNames = [] } =
 // again would be a whole second request.
 const DATE_AT_START = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/;
 
-// A date as one number that sorts, negative years included: -0218-03-01 is
-// -2180301 and falls before 0001-01-01.
-export const dateKey = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const value = Number(match[2]) * 10000 + Number(match[3]) * 100 + Number(match[4]);
-    return match[1] ? -value : value;
-};
+// A date as one number that sorts, negative years included, and a count of
+// days for "within a week of": its day number (runtime/gameDates.js), so
+// 15 April 218 BC falls before 18 December 218 BC and both before 0001-01-01.
+// Null when it is not a game date.
+export const dateKey = (iso) => gameDateDayNumber(asText(iso));
 
-// The same date as a count of days, for "within a week of": proleptic
-// Gregorian, and setUTCFullYear takes the years Date.UTC would misread (a year
-// under 100, a year before 1).
-const dayNumber = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const year = Number(match[2]) * (match[1] ? -1 : 1);
-    const date = new Date(0);
-    date.setUTCFullYear(year, Number(match[3]) - 1, Number(match[4]));
-    const value = Math.round(date.getTime() / 86400000);
-    return Number.isFinite(value) ? value : null;
+// One line: null for a blank line or a # comment, { beat } for a beat, and
+// { problem } ("no-date" | "no-text") for a line the engine will not use.
+const readScriptedLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) return null;
+    const match = DATE_AT_START.exec(line);
+    if (!match || dateKey(match[1]) === null) return { problem: "no-date" };
+    const body = asText(match[2]);
+    if (!body) return { problem: "no-text" };
+    // The title is the first sentence, or the whole beat when it is one.
+    const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
+    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body, textMode: "generated" } };
 };
 
 export const parseScriptedEvents = (text) => {
     const beats = [];
     for (const rawLine of asText(text).split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith("#")) continue;
-        const match = DATE_AT_START.exec(line);
-        if (!match || dateKey(match[1]) === null) continue;
-        const body = asText(match[2]);
-        if (!body) continue;
-        // The title is the first sentence, or the whole beat when it is one.
-        const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-        beats.push({ date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body });
+        const read = readScriptedLine(rawLine);
+        if (read?.beat) beats.push(read.beat);
     }
     return beats.sort((a, b) => dateKey(a.date) - dateKey(b.date));
+};
+
+// What the editor shows under the setting: how many beats the engine will
+// use, and every line it will not, as the author typed it. "passed" is a beat
+// no skip will reach: dated on or before `currentDate` (the game's date, or
+// the scenario's start), except that the day itself still counts while
+// `includeOrigin` (a game's first skip covers it). The same rule
+// scriptedBeatsInSpan applies when the skip runs.
+export const reviewScriptedEvents = (text, { currentDate = "", includeOrigin = false } = {}) => {
+    let count = 0;
+    const ignored = [];
+    const dated = dateKey(currentDate) !== null;
+    for (const rawLine of asText(text).split(/\r?\n/)) {
+        const read = readScriptedLine(rawLine);
+        if (!read) continue;
+        if (read.problem) {
+            ignored.push({ line: rawLine.trim(), problem: read.problem });
+            continue;
+        }
+        const reachable = !dated
+            || scriptedBeatsInSpan([read.beat], { originDate: currentDate, targetDate: "9999-12-31", includeOrigin }).length > 0;
+        if (reachable) count += 1;
+        else ignored.push({ line: rawLine.trim(), problem: "passed" });
+    }
+    return { count, ignored };
 };
 
 // The beats a period covers: after its origin (the day itself belongs to the
@@ -140,40 +161,72 @@ export const scriptedBeatsInSpan = (beats, { originDate, targetDate, includeOrig
 };
 
 const STOP_WORDS = new Set(["that", "this", "with", "from", "into", "over", "after", "before", "their", "there", "which", "while", "where", "when", "have", "been", "were", "will", "would", "than", "then", "them", "they", "against", "between", "under", "about", "through", "during", "first", "second", "third", "held", "holds", "hold", "makes", "made", "make", "takes", "take", "taken", "signed", "signs", "sign", "declares", "declared", "declare", "wins", "won", "win", "dies", "died", "die", "begins", "begin", "began", "ends", "end", "ended", "falls", "fall", "fell", "opens", "open", "opened", "government", "president", "minister", "state", "states", "national", "forces", "troops", "army", "city", "region", "country", "people", "power", "powers", "war", "treaty", "election", "elections", "vote", "votes"]);
-const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
+const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
 
 // Did the answer write this beat? An event within a week of the beat's date
 // that shares enough of its particular words — names, places, the things that
-// make it THIS beat rather than any election or any battle.
+// make it THIS beat rather than any election or any battle. Words in any
+// script (`words` above): split on a-z and 0-9 alone, a beat its author wrote
+// in Russian or Greek had no words, was never found in the answer, and was
+// written a second time by the engine beside the model's own telling of it.
 export const SCRIPTED_MATCH_DAYS = 7;
-export const beatIsWritten = (beat, events) => {
-    const needles = [...words(`${beat?.title} ${beat?.text}`)];
-    const beatDay = dayNumber(beat?.date);
-    if (!needles.length || beatDay === null) return false;
+const sharesEnoughWords = (source, haystack) => {
+    const needles = [...words(source)];
+    if (!needles.length) return true;
     const needed = Math.min(3, Math.max(1, Math.ceil(needles.length / 3)));
+    let shared = 0;
+    for (const needle of needles) if (haystack.has(needle)) shared += 1;
+    return shared >= needed;
+};
+
+const sharesParentContextAnchor = (parentText, primaryText, haystack) => {
+    const primaryWords = words(primaryText);
+    const anchors = [...words(parentText)].filter((word) => !primaryWords.has(word));
+    if (!anchors.length) return true;
+    return anchors.some((word) => haystack.has(word));
+};
+
+export const beatIsWritten = (beat, events) => {
+    const beatDay = dateKey(beat?.date);
+    const primaryText = `${beat?.title || ""} ${beat?.text || ""}`;
+    if (![...words(primaryText)].length || beatDay === null) return false;
+    const parentText = asText(beat?.parentText);
+    const generatedBranch = Boolean(parentText) && scriptedTextMode(beat?.textMode) !== "exact";
     return asArray(events).some((event) => {
-        const eventDay = dayNumber(event?.date);
+        const eventDay = dateKey(event?.date);
         if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
         const haystack = words(`${event?.title} ${event?.description}`);
-        let shared = 0;
-        for (const needle of needles) if (haystack.has(needle)) shared += 1;
-        return shared >= needed;
+        if (!sharesEnoughWords(primaryText, haystack)) return false;
+        // A generated branch must still belong to its parent event. Without this
+        // guard a generic outcome such as "Outcome A is selected" can be rewritten
+        // around the player polity and accepted even when the author anchored the
+        // parent event somewhere else. Exact wording is exempt because its visible
+        // body is intentionally only the author's selected branch text.
+        return !generatedBranch || sharesParentContextAnchor(parentText, primaryText, haystack);
     });
 };
 
 // The event the engine writes for a beat the answer left out: the author's own
 // words, on the author's date, marked as the world's and as worth stopping for.
-export const scriptedEventFor = (beat) => ({
-    date: beat.date,
-    title: beat.title,
-    description: beat.text,
-    importance: "major",
-    kind: "world",
-    tags: [],
-    notable: true,
-    playerRelated: false,
-    impacts: {},
-});
+export const scriptedEventFor = (beat) => {
+    const parentText = asText(beat?.parentText);
+    const description = parentText && scriptedTextMode(beat?.textMode) !== "exact"
+        ? `${parentText}
+
+${asText(beat?.text)}`
+        : beat.text;
+    return {
+        date: beat.date,
+        title: beat.title,
+        description,
+        importance: "major",
+        kind: "world",
+        tags: [],
+        notable: true,
+        playerRelated: false,
+        impacts: {},
+    };
+};
 
 // The answer with every beat of the period in it: the ones it wrote as they
 // are, the rest written by the engine. Pure; returns what was done.
@@ -182,8 +235,25 @@ export const ensureScriptedEvents = (events, beats) => {
     const written = [];
     const inserted = [];
     for (const beat of asArray(beats)) {
-        if (beatIsWritten(beat, list)) written.push(beat);
-        else { list.push(scriptedEventFor(beat)); inserted.push(beat); }
+        const matchIndex = list.findIndex((event) => beatIsWritten(beat, [event]));
+        if (matchIndex !== -1) {
+            written.push(beat);
+            if (scriptedTextMode(beat?.textMode) === "exact") {
+                // Exact wording freezes presentation, not consequences. Keep every
+                // structured effect the simulator supplied, but restore the author
+                // date/headline/body and remove any AI-added quotation.
+                const { quote: _quote, ...generated } = list[matchIndex] || {};
+                list[matchIndex] = {
+                    ...generated,
+                    date: beat.date,
+                    title: beat.title,
+                    description: beat.text,
+                };
+            }
+        } else {
+            list.push(scriptedEventFor(beat));
+            inserted.push(beat);
+        }
     }
     return { events: list, written, inserted };
 };
@@ -193,10 +263,25 @@ export const ensureScriptedEvents = (events, beats) => {
 export const buildScriptedEventsInstruction = (beats) => {
     const list = asArray(beats);
     if (!list.length) return "";
+    const hasExact = list.some((beat) => scriptedTextMode(beat?.textMode) === "exact");
+    const rows = list.map((beat) => {
+        const exact = scriptedTextMode(beat?.textMode) === "exact";
+        const parentText = asText(beat?.parentText);
+        if (!parentText) return `- ${beat.date} — ${exact ? "[EXACT WORDING] " : ""}${beat.text}`;
+        return [
+            `- ${beat.date} — Parent event: ${parentText}`,
+            `  Selected outcome: ${exact ? "[EXACT WORDING] " : ""}${beat.text}`,
+            "  The selected outcome refines this parent event; it does not replace its people, places, actors or subject.",
+        ].join("\n");
+    });
     return "[Scripted events this period — set by this scenario's author, checked by the engine]\n"
-        + "These happen in this period. Write each as its own event, dated as given, in your own words and with the impacts it implies, and let the rest of the period feel its consequences. "
+        + "These happen in this period. Write each as its own event, dated as given, with the impacts it implies, and let the rest of the period feel its consequences. "
+        + "Ordinary entries are instructions: write their final event in your own words. For a branched event, the selected outcome refines the parent event rather than replacing its context. "
+        + (hasExact
+            ? "An entry marked [EXACT WORDING] is different: copy its supplied text verbatim into the event description and do not add a quotation or extra prose to that event; still supply every canonical impact it implies. When an exact selected outcome has a parent event, use the parent only as context for those consequences, not as extra visible prose. The engine enforces the author's visible wording while preserving those impacts. "
+            : "")
         + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, without its impacts.\n"
-        + list.map((beat) => `- ${beat.date} — ${beat.text}`).join("\n");
+        + rows.join("\n");
 };
 
 // --- The territory tempo ---
@@ -246,6 +331,19 @@ export const applyTerritoryTempo = (events, { ceilingPerMonth, spanDays } = {}) 
 // description that lists nuclear programmes as a thing a polity can start.
 export const PRIORITY_RULES_HEADING = "[PRIORITY RULES — set by this scenario's author]";
 
+// The author's priority rules alone, without the share and the tempo (which
+// only a time skip is counted against). Every other task that writes the world
+// or speaks for a polity carries them too: a rule broken by a Projects entry, an
+// interactive event or a leader's reply is a world every later skip inherits.
+export const buildPriorityRulesBlock = (direction) => {
+    const rules = asText(direction?.priorityRules);
+    if (!rules) return "";
+    return `${PRIORITY_RULES_HEADING}\n`
+        + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
+        + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
+        + rules;
+};
+
 export const buildWorldDirectionDirective = (direction, { playerPolity = "", spanDays = 30 } = {}) => {
     if (!direction) return "";
     const player = asText(playerPolity) || "the player's polity";
@@ -268,14 +366,7 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
             + "Beyond that the engine withholds the entry and tells you. Write fronts that grind — a river line held, a siege that drags — rather than sweeps.",
         );
     }
-    const rules = asText(direction.priorityRules);
-    if (rules) {
-        parts.push(
-            `${PRIORITY_RULES_HEADING}\n`
-            + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
-            + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
-            + rules,
-        );
-    }
+    const rules = buildPriorityRulesBlock(direction);
+    if (rules) parts.push(rules);
     return parts.join("\n\n");
 };

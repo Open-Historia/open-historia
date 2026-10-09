@@ -252,6 +252,7 @@
     { "loc": "/", "changefreq": "weekly", "priority": "1.0" },
     { "loc": "/play/", "changefreq": "weekly", "priority": "1.0" },
     { "loc": "/pax-historia-alternative/", "changefreq": "monthly", "priority": "0.9" },
+    { "loc": "/privacy/", "changefreq": "monthly", "priority": "0.3" },
     { "loc": "/sitemap/", "changefreq": "monthly", "priority": "0.4" }
   ]
 }

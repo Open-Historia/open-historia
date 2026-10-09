@@ -11,16 +11,13 @@
 // puppets) through useMapDocument's setters, with what they replaced kept so
 // Undo can put it back.
 //
-// ctx = { api, doc, d, setBackground } — the OlMap api, the current document,
+// ctx = { api, doc, d, setBackground, convertProjection } — the OlMap api, the current document,
 // the useMapDocument hook's setters, and MapEditor's own background setter.
 
+import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
-
-// This version of the Workshop has no map features that are not cities (a
-// newer one has src/Editor/mapFeatures.js), and scenarioSuggestion.js skips
-// every change to one, so none is ever built here.
-const markerToFeature = () => null;
-import { cityTierOf, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { withoutPolities } from "./scenarioPuppets.js";
+import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 
@@ -40,12 +37,47 @@ export { REVIEW_SECTIONS, sectionOfChange } from "../runtime/suggestionSections.
 // ---- the map as it is open ----------------------------------------------------
 
 const regionOf = (ctx, id) => ctx.api?.getRegionSummary?.(String(id)) ?? null;
+// What a review reads of the map over and over, kept while the regions stay
+// as they are (the hook makes a new one on every MapEditor regionEpoch): each
+// region's measured shape, and which regions each owner and each group has.
+export const createRegionCache = () => ({ shapes: new globalThis.Map(), owners: null, groups: null });
 // (ctx.moveRegion: the region as the suggested projection would have it,
-// inSuggestedProjection below.)
-const regionShape = (ctx, id) => {
+// inSuggestedProjection below; kept apart in the cache from the region as it is.)
+const regionShape = (ctx, id, cache) => {
+  const key = `${ctx.moveRegion ? "moved:" : ""}${id}`;
+  if (cache?.shapes.has(key)) return cache.shapes.get(key);
   const fc = ctx.api?.exportRegions?.([String(id)]);
   const feature = fc?.features?.[0];
-  return feature ? measureGeometry(ctx.moveRegion ? ctx.moveRegion(feature.geometry) : feature.geometry) : null;
+  const shape = feature ? measureGeometry(ctx.moveRegion ? ctx.moveRegion(feature.geometry) : feature.geometry) : null;
+  cache?.shapes.set(key, shape);
+  return shape;
+};
+const indexRegions = (ctx, cache) => {
+  if (cache.owners) return cache;
+  cache.owners = new globalThis.Map();
+  cache.groups = new globalThis.Map();
+  const add = (index, key, id) => {
+    if (!key) return;
+    if (!index.has(key)) index.set(key, []);
+    index.get(key).push(id);
+  };
+  for (const region of ctx.api?.queryRegions?.("", Infinity) ?? []) {
+    add(cache.owners, String(region.owner ?? "").trim(), region.id);
+    add(cache.groups, clean(region.group), region.id);
+  }
+  return cache;
+};
+// The ids of the regions an owner holds (as listOwnerRegions finds them), and
+// of those a group controls.
+const ownerRegionIds = (ctx, key, cache) => {
+  const owner = String(key ?? "").trim();
+  if (!owner) return [];
+  if (cache) return indexRegions(ctx, cache).owners.get(owner) ?? [];
+  return (ctx.api?.listOwnerRegions?.(owner) ?? []).map((region) => region.id);
+};
+const groupRegionIds = (ctx, key, cache) => {
+  if (cache) return indexRegions(ctx, cache).groups.get(clean(key)) ?? [];
+  return (ctx.api?.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.group) === key).map((region) => region.id);
 };
 // ---- a suggestion that changes the projection ----------------------------------
 // Every other change of such a suggestion is written for the map in its new
@@ -56,7 +88,7 @@ const regionShape = (ctx, id) => {
 // new projection puts them, and (regions) each region measured there. The map
 // itself is not touched, and the document's own projection is left as it is.
 export const projectionChangeOf = (changes) => (Array.isArray(changes) ? changes : []).find((change) => change?.kind === "projection") ?? null;
-const projectionKey = (value) => JSON.stringify(normalizeProjection(value));
+const projectionKey = (value) => canonicalJson(normalizeProjection(value));
 export const inSuggestedProjection = (ctx, changes, { regions = true } = {}) => {
   const change = projectionChangeOf(changes);
   if (!change || !ctx?.doc) return ctx;
@@ -86,12 +118,14 @@ const cityView = (feature) => feature ? {
   population: Math.max(0, Math.round(Number(feature.population) || 0)),
   capital: (feature.tags || []).includes("capital"),
   tier: cityTierOf(feature.tier, feature.population),
+  ...(isRecord(feature.populationByYear) && Object.keys(feature.populationByYear).length ? { populationByYear: feature.populationByYear } : {}),
 } : null;
 const suggestedCityView = (city) => city ? {
   name: clean(city.name),
   population: Math.max(0, Math.round(Number(city.population) || 0)),
   capital: Boolean(city.capital),
   tier: cityTierOf(city.tier, city.population),
+  ...(isRecord(city.populationByYear) && Object.keys(city.populationByYear).length ? { populationByYear: city.populationByYear } : {}),
 } : null;
 const markerFeatureOf = (doc, key) => (doc?.features ?? []).find((feature) => clean(feature?.kind)
   && (clean(feature.markerId) === key || `marker-${clean(feature.id)}` === key)) ?? null;
@@ -105,6 +139,21 @@ const markerView = (marker) => marker ? {
   lng: Number(Number(marker.lng ?? marker.coord?.[0]).toFixed(4)), lat: Number(Number(marker.lat ?? marker.coord?.[1]).toFixed(4)),
   status: clean(marker.status) || "active", note: clean(marker.note),
 } : null;
+// The custom basemap as the diff fingerprints it (scenarioChanges.js
+// buildScenarioSnapshot): its kind and a hash of the payload a save uploads
+// (exportPreset.js buildBackgroundForGame), or null. Kept per basemap object:
+// the payload runs to megabytes, and the statuses are worked out again on
+// every document edit while the basemap stays the same object.
+const backgroundHashes = new WeakMap();
+const backgroundOf = (saved) => {
+  if (!isRecord(saved)) return null;
+  if (backgroundHashes.has(saved)) return backgroundHashes.get(saved);
+  let fingerprint = null;
+  if (saved.kind === "image" && saved.dataUrl) fingerprint = { kind: "image", hash: hashText(canonicalJson({ dataUrl: saved.dataUrl })) };
+  else if (saved.kind === "vector" && Array.isArray(saved.geojson?.features)) fingerprint = { kind: "vector", hash: hashText(canonicalJson({ geojson: saved.geojson })) };
+  backgroundHashes.set(saved, fingerprint);
+  return fingerprint;
+};
 const puppetView = (row) => row ? {
   overlord: clean(row.overlord), puppet: clean(row.puppet), kind: clean(row.kind) || "satellite",
   secrecy: row.secrecy === "covert" ? "covert" : "open", loyalty: Math.round(Number(row.loyalty) || 0), status: clean(row.status) || "active",
@@ -137,7 +186,7 @@ const polityFieldValue = (ctx, key, field) => {
 // "open" (the map still has the post's value: accepting applies it),
 // "conflict" (the author changed it since), "applied" (already so), or
 // "missing" (what it changes is not on this map any more).
-export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
+export const mapChangeStatus = (change, ctx, { renames = {}, cache = null } = {}) => {
   const fromOwner = (value) => renamed(value, renames);
   switch (change.kind) {
     case "region-owner": {
@@ -175,7 +224,7 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       let applied = 0;
       let conflict = false;
       for (const region of change.regions ?? []) {
-        const shape = regionShape(ctx, region.id);
+        const shape = regionShape(ctx, region.id, cache);
         const suggested = region.toShape ?? (region.feature ? measureGeometry(region.feature.geometry) : null);
         if (region.op === "remove") {
           if (!shape) applied += 1;
@@ -192,12 +241,12 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
     case "polity-add":
       return ctx.doc?.polities?.[change.key] ? "applied" : "open";
     case "polity-remove": {
-      const owned = ctx.api?.listOwnerRegions?.(change.key)?.length ?? 0;
+      const owned = ownerRegionIds(ctx, change.key, cache).length;
       return !ctx.doc?.polities?.[change.key] && !owned ? "applied" : "open";
     }
     case "polity-rename":
       if (ctx.doc?.polities?.[change.to] && !ctx.doc?.polities?.[change.from]) return "applied";
-      return ctx.doc?.polities?.[change.from] || ctx.api?.listOwnerRegions?.(change.from)?.length ? "open" : "missing";
+      return ctx.doc?.polities?.[change.from] || ownerRegionIds(ctx, change.from, cache).length ? "open" : "missing";
     case "polity-change": {
       const key = fromOwner(change.key);
       let open = false;
@@ -242,8 +291,17 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       if (sameValue(cityView(current), suggestedCityView(change.to))) return "applied";
       return sameValue(cityView(current), suggestedCityView(change.from)) ? "open" : "conflict";
     }
-    case "cities-replace":
-      return "open";
+    case "cities-replace": {
+      // The post had its own cities (change.from counts them) or the built-in
+      // set (null); the suggestion has its own (a list) or the built-in set.
+      const current = cityFeatures(ctx.doc);
+      const authored = Boolean(ctx.doc?.metadata?.citiesAuthored) || current.length > 0;
+      if (Array.isArray(change.to)
+        ? authored && current.length === change.to.length && change.to.every((city) => sameValue(cityView(findCity(ctx.doc, city)), suggestedCityView(city)))
+        : !authored) return "applied";
+      if (change.from === null || change.from === undefined) return authored ? "conflict" : "open";
+      return current.length === Number(change.from) ? "open" : "conflict";
+    }
     case "unit-add":
       return (ctx.doc?.units ?? []).some((unit) => clean(unit.id) === change.key) ? "applied" : "open";
     case "unit-remove":
@@ -284,8 +342,12 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       if (current === clean(change.to)) return "applied";
       return current === clean(change.from) ? "open" : "conflict";
     }
-    case "background":
-      return "open";
+    case "background": {
+      const current = backgroundOf(ctx.doc?.metadata?.customBackground);
+      const matches = (entry) => (entry ? Boolean(current) && current.kind === clean(entry.kind) && current.hash === entry.hash : !current);
+      if (matches(change.to)) return "applied";
+      return matches(change.from) ? "open" : "conflict";
+    }
     default:
       return "open";
   }
@@ -401,6 +463,7 @@ const editorCity = (city, id = newId("feat")) => ({
   population: Math.max(0, Math.round(Number(city?.population) || 0)),
   tags: city?.capital ? ["city", "capital"] : ["city"],
   ...(city?.tier ? { tier: city.tier } : {}),
+  ...(isRecord(city?.populationByYear) && Object.keys(city.populationByYear).length ? { populationByYear: { ...city.populationByYear } } : {}),
 });
 
 // Accept one change: make the map say what it suggests. Returns the function
@@ -470,18 +533,28 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       const key = owner(change.key);
       const saved = capturePolity(ctx, key);
       const regions = (api.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.owner) === key || (region.claimants ?? []).includes(key));
-      const puppets = clone(ctx.doc?.puppets ?? []);
+      // Only the puppet rows the removal takes (removePolity drops the ones
+      // naming the country): Undo adds those back to the rows as they are
+      // then, so a puppet change accepted since stays.
+      const kept = new Set(withoutPolities(ctx.doc?.puppets, key));
+      const puppets = clone((ctx.doc?.puppets ?? []).filter((row) => !kept.has(row)));
       api.removeOwners([key]);
       d.removePolity(key);
       return () => {
         restorePolity(ctx, saved);
         for (const region of regions) api.setRegionAttrs([region.id], { owner: region.owner || null, claimants: region.claimants?.length ? region.claimants : null });
-        d.setPuppets(puppets);
+        if (puppets.length) {
+          d.setPuppets((rows) => [...rows, ...puppets.filter((row) => !rows.some((other) => (clean(row.id) ? clean(other.id) === clean(row.id) : sameValue(other, row))))]);
+        }
       };
     }
     case "polity-rename": {
       const from = change.from;
       const to = change.to;
+      // Both names as they were: the rename carries the country's own colour,
+      // flag and tags to the new name and the suggestion's go over them, so
+      // renaming back alone would leave the suggestion's on the old country.
+      const savedFrom = capturePolity(ctx, from);
       const savedTo = capturePolity(ctx, to);
       api.renameOwner(from, to);
       d.renamePolity(from, to);
@@ -494,6 +567,7 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       return () => {
         api.renameOwner(to, from);
         d.renamePolity(to, from);
+        restorePolity(ctx, savedFrom);
         restorePolity(ctx, savedTo);
       };
     }
@@ -555,10 +629,15 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     }
     case "cities-replace": {
       const before = cityFeatures(ctx.doc);
+      const authored = ctx.doc?.metadata?.citiesAuthored;
       const next = (Array.isArray(change.to) ? change.to : []).map((city) => editorCity(city));
       d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...next]);
-      d.patchMetadata({ citiesAuthored: true });
-      return () => d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...before]);
+      // No list is the built-in cities: the map stops carrying a set of its own.
+      d.patchMetadata({ citiesAuthored: Array.isArray(change.to) });
+      return () => {
+        d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...before]);
+        d.patchMetadata({ citiesAuthored: authored });
+      };
     }
     case "unit-add":
     case "unit-change": {
@@ -641,15 +720,109 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
   }
 };
 
+// ---- accepting a list, and what a save records --------------------------------
+
+// The projection first, then countries and groups: the rest of a suggestion's
+// changes may need them.
+const APPLY_ORDER = ["projection", "polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
+const applyRank = (change) => {
+  const index = APPLY_ORDER.indexOf(change.kind);
+  return index < 0 ? APPLY_ORDER.length : index;
+};
+
+// The order a list of changes is accepted in: countries and groups first, and
+// before each change what it needs (changeDependencies), skipping what is
+// already accepted.
+export const planAccept = (list, ctx, { changes = [], accepted = new Set() } = {}) => {
+  const byId = new globalThis.Map(changes.map((change) => [change.id, change]));
+  const done = new Set(accepted);
+  const order = [];
+  const visit = (change, depth = 0) => {
+    if (!change || done.has(change.id) || depth > 6) return;
+    for (const id of changeDependencies(change, changes, ctx)) visit(byId.get(id), depth + 1);
+    if (done.has(change.id)) return;
+    done.add(change.id);
+    order.push(change);
+  };
+  [...list].sort((a, b) => applyRank(a) - applyRank(b)).forEach((change) => visit(change));
+  return order;
+};
+
+// Accept a list of changes: what they need first, then each in turn, the
+// ownership rows batched by the country they go to (one map step each, after
+// every rename, so a row written against an old name lands on the new one).
+// Returns the ids accepted, each one's undo, and the renames now in force.
+export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set(), renames = {} } = {}) => {
+  const order = planAccept(list, ctx, { changes, accepted });
+  const localRenames = { ...renames };
+  const undoers = new globalThis.Map();
+  const ids = [];
+  const owners = new globalThis.Map(); // target owner -> changes
+  // The document this was handed stays as it was for the whole batch. Once the
+  // batch has moved the map to the suggested projection, the changes after it
+  // look their cities and units up where the conversion has put them.
+  let live = ctx;
+  for (const change of order) {
+    if (change.kind === "region-owner") {
+      const to = clean(change.to);
+      if (!owners.has(to)) owners.set(to, []);
+      owners.get(to).push(change);
+      continue;
+    }
+    // Every change accepted here gets an undo, even one with nothing to take
+    // back: only one accepted in an earlier review has none (canUndo).
+    undoers.set(change.id, applyMapChange(change, live, { renames: localRenames }) ?? (() => {}));
+    if (change.kind === "projection") live = inSuggestedProjection(live, [change], { regions: false });
+    if (change.kind === "polity-rename") localRenames[change.from] = change.to;
+    ids.push(change.id);
+  }
+  for (const [to, group] of owners) {
+    const target = renamed(to, localRenames);
+    const regionIds = group.map((change) => String(change.regionId));
+    const before = regionIds.map((id) => [id, ctx.api.getRegionSummary(id)?.owner ?? null]);
+    ctx.api.setRegionAttrs(regionIds, { owner: target || null });
+    for (const [index, change] of group.entries()) {
+      const [id, owner] = before[index];
+      undoers.set(change.id, () => ctx.api.setRegionAttrs([id], { owner }));
+      ids.push(change.id);
+    }
+  }
+  return { accepted: ids, undoers, renames: localRenames };
+};
+
+// How a change stands once the author's decisions are counted: theirs, else
+// accepted when the map already has it and rejected when what it changes is
+// gone, else null (still to decide).
+export const decisionOf = (change, decisions, statuses) => {
+  if (decisions.accepted.has(change.id)) return "accepted";
+  if (decisions.rejected.has(change.id)) return "rejected";
+  if (statuses[change.id] === "applied") return "accepted";
+  if (statuses[change.id] === "missing") return "rejected";
+  return null;
+};
+
+// What a save should record: the author's decisions, with what is already on
+// the map counted as accepted and what is no longer on it as rejected.
+export const decisionsFor = (changes, decisions, statuses) => {
+  const accepted = new Set(decisions.accepted);
+  const rejected = new Set(decisions.rejected);
+  for (const change of changes) {
+    const decision = decisionOf(change, decisions, statuses);
+    if (decision === "accepted") accepted.add(change.id);
+    else if (decision === "rejected") rejected.add(change.id);
+  }
+  return { accepted: [...accepted], rejected: [...rejected] };
+};
+
 // ---- where a change is on the map ---------------------------------------------
 
 // What to outline and zoom to for a change: region ids on this map, suggested
 // shapes (GeoJSON, WGS84) that are not on it yet, and points.
-export const changeTargets = (change, ctx, { changes = [], renames = {} } = {}) => {
+export const changeTargets = (change, ctx, { changes = [], renames = {}, cache = null } = {}) => {
   const regionIds = [];
   const shapes = [];
   const points = [];
-  const ownedBy = (key) => (ctx.api?.listOwnerRegions?.(renamed(key, renames)) ?? []).map((region) => region.id);
+  const ownedBy = (key) => ownerRegionIds(ctx, renamed(key, renames), cache);
   switch (change.kind) {
     case "region-owner": case "region-name": case "region-type": case "region-claims": case "region-group":
       regionIds.push(String(change.regionId));
@@ -673,7 +846,7 @@ export const changeTargets = (change, ctx, { changes = [], renames = {} } = {}) 
       regionIds.push(...ownedBy(change.from), ...ownedBy(change.to));
       break;
     case "group-add": case "group-change": case "group-remove":
-      regionIds.push(...(ctx.api?.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.group) === change.key).map((region) => region.id));
+      regionIds.push(...groupRegionIds(ctx, change.key, cache));
       for (const entry of changes) if (entry.kind === "region-group" && (entry.to === change.key || entry.from === change.key)) regionIds.push(String(entry.regionId));
       break;
     case "city-add": case "city-change": case "city-remove": {

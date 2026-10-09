@@ -81,6 +81,13 @@ export const formatGameDate = (parts) => {
 
 export const normalizeGameDate = (value) => formatGameDate(parseGameDate(value));
 
+// Already in the canonical text above (a stored scenario date, a contract that
+// asks for YYYY-MM-DD): BC years included, no other spelling.
+export const isCanonicalGameDate = (value) => {
+  const raw = text(value);
+  return Boolean(raw) && normalizeGameDate(raw) === raw;
+};
+
 // Days since 1970-01-01, or null.
 export const gameDateDayNumber = (value) => {
   const parts = parseGameDate(value);
@@ -127,6 +134,18 @@ export const compareGameDates = (a, b) => {
   if (left !== null) return -1;
   if (right !== null) return 1;
   return text(a).localeCompare(text(b));
+};
+
+// The same order for a newest-first list: game dates latest first, still
+// before anything that is not one (swapping the arguments of compareGameDates
+// would put the undated first).
+export const compareGameDatesNewestFirst = (a, b) => {
+  const left = gameDateDayNumber(a);
+  const right = gameDateDayNumber(b);
+  if (left !== null && right !== null) return left === right ? 0 : left > right ? -1 : 1;
+  if (left !== null) return -1;
+  if (right !== null) return 1;
+  return text(b).localeCompare(text(a));
 };
 
 export const gameDateYear = (value) => parseGameDate(value)?.year ?? null;

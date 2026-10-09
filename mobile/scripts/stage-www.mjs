@@ -8,8 +8,9 @@
 //
 // This copies dist-android/ into mobile/www/ (Capacitor's webDir), drops the
 // website-only files that ride along in the output (marketing pages, the
-// sitemap, the signed node directory nobody consults here), and lays the
-// verified map data from map-cache/ under www/assets/. Nothing in mobile/www is
+// sitemap), and lays the verified map data from map-cache/ under www/assets/:
+// the same files, from the same list, that `npm run build:web` lays into the
+// website (scripts/stage-map-assets.mjs). Nothing in mobile/www is
 // committed except its .gitignore.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -26,11 +27,9 @@ const target = path.join(mobileDir, "www");
 // some of them large (the screenshots alone are 8 MB).
 const SITE_ONLY = [
   "screenshots", "screenshot.png",
-  "guides", "get-started", "how-to-play", "self-hosting", "pax-historia-alternative",
+  "guides", "get-started", "how-to-play", "self-hosting", "pax-historia-alternative", "privacy",
   "sitemap.xml", "sitemap.txt", "robots.txt",
   "sw.js", "version.json",
-  "content-manifest.json", "content-manifest.json.sig",
-  "node-directory.json", "node-directory.json.sig",
 ];
 
 if (!existsSync(path.join(source, "index.html"))) {

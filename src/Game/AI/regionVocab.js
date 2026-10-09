@@ -13,7 +13,7 @@
 // TIERED so the model gets names where it actually needs them, without "every name
 // at once":
 //
-//   Section 1 (FULL `name (id)` lists): only the powers currently IN PLAY — the
+//   Section 1 (FULL lists of region NAMES): only the powers currently IN PLAY — the
 //     player, anyone already re-owned via an override, scenario-defined actors, and
 //     the player's active chat partners. These are the likely belligerents, so the
 //     model can emit a resolvable transfer on the FIRST attempt.
@@ -27,6 +27,12 @@
 // Every owner in both sections is the FULL COUNTRY NAME. GADM's codes are provenance
 // on the region row, never an identity: the model is only ever shown, and only ever
 // asked for, "Spain".
+//
+// A region is shown by its NAME alone, for the same reason. The lists used to
+// read `name (id)`, and a model shown "Hamhung (4441)" wrote exactly that back
+// as the region: it matched nothing and a treaty's four transfers were dropped
+// (a 45-skip test, 2026-10-09). The map's key for a region is the save's
+// business; what the model writes is "region: Hamhung" (nameRefs.js).
 //
 // A region's owner is `regionOwnershipOverrides[id] ?? region.country` (the base
 // country from the catalog), so ownership is non-empty on stock maps, not just on
@@ -77,9 +83,9 @@ const groupByOwner = (catalog, overrides) => {
 };
 
 export const FOCUS_INTRO =
-  "Regions of the powers currently in play — each region as `name (id)`. To move any "
-  + "of these territories in a regionTransfer, copy a region's name or id EXACTLY "
-  + "(never invent or translate a region name):";
+  "Regions of the powers currently in play, each by its name as the map spells it. To "
+  + "move any of these territories, copy the region's name EXACTLY and write it as "
+  + "\"region: <name>\" (never invent or translate a region name, and never write an id):";
 export const ROSTER_INTRO =
   "All other powers, by full country name. Every owner field (fromCode, toCode, "
   + "ownerCode) takes the power's FULL NAME exactly as written here - \"Spain\", never "
@@ -95,6 +101,10 @@ export const ROSTER_INTRO =
 //     override owners, defined actors, chat partners) — the theatre in play.
 //   options.polityNames: { [code|label]: displayName } for nicer headers.
 //   options.ownerCap / focusTotalCap / rosterCap: prompt-budget bounds.
+//   options.regionIds: true adds each region's own key after its name; only
+//     for a caller that is not a model's prompt. Names alone are the default.
+//   options.focusIntro / rosterIntro: the section headers, for a task that is
+//     not writing regionTransfers (FOCUS_INTRO and ROSTER_INTRO speak to one).
 export const buildRegionOwnershipText = (regionCatalog, overrides, options = {}) => {
   const catalog = Array.isArray(regionCatalog) ? regionCatalog : [];
   if (catalog.length === 0) {
@@ -108,6 +118,9 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 480;
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
+  const withIds = options.regionIds === true;
+  const focusIntro = options.focusIntro || FOCUS_INTRO;
+  const rosterIntro = options.rosterIntro || ROSTER_INTRO;
 
   const focus = (Array.isArray(options.focusCodes) ? options.focusCodes : [])
     .map(lower)
@@ -129,7 +142,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   };
   const regionWord = (n) => `${n} region${n === 1 ? "" : "s"}`;
 
-  // Section 1 — focus powers, full name(id) lists, in priority order, bounded.
+  // Section 1 — focus powers, full lists of region names, in priority order, bounded.
   const focusEntries = [...groups.entries()]
     .filter(([key]) => focusRank.has(key))
     .sort((a, b) => focusRank.get(a[0]) - focusRank.get(b[0]));
@@ -139,7 +152,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   for (const [key, group] of focusEntries) {
     if (emitted >= focusTotalCap) break; // a focus power we cannot fit falls through to the roster
     const shown = group.regions.slice(0, ownerCap);
-    const list = shown.map((r) => (r.id ? `${r.name} (${r.id})` : r.name)).join(", ");
+    const list = shown.map((r) => (r.id && withIds ? `${r.name} (${r.id})` : r.name)).join(", ");
     const moreInGroup = group.regions.length - shown.length;
     const suffix = moreInGroup > 0 ? `, (+${moreInGroup} more)` : "";
     focusLines.push(`- ${headerLabel(key, group.label)} [${regionWord(group.regions.length)}]: ${list}${suffix}`);
@@ -162,11 +175,11 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
 
   const out = [];
   if (focusLines.length) {
-    out.push(FOCUS_INTRO, ...focusLines);
+    out.push(focusIntro, ...focusLines);
   }
   if (rosterLines.length) {
     if (out.length) out.push("");
-    out.push(ROSTER_INTRO, ...rosterLines);
+    out.push(rosterIntro, ...rosterLines);
     if (rosterOmitted > 0) {
       out.push(`(+${rosterOmitted} more power${rosterOmitted === 1 ? "" : "s"} not listed for brevity.)`);
     }

@@ -1,8 +1,6 @@
 /*! Open Historia — what the jump is told about history, orders, the world and writing © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/jumpPromptCraft.test.js
 //
-// Runs without node_modules.
-//
 // The two jump templates were rewritten on 2026-09-26 into one brief: real
 // history as the default, more events, the rules once each, the live records
 // rendered into the template at ${JUMP_LIVE_STATE}, and the prompt ending on how
@@ -186,7 +184,7 @@ test("a jump asks for as many events as the period holds, not two to four a mont
 test("the live records go into the template, and the request ends on the writing reminder", () => {
   assert.equal(defaultPrompts.helpers.JUMP_LIVE_STATE, "${jumpLiveState}");
   assert.match(gameplaySource, /jumpLiveState: await buildJumpLiveState\(/);
-  assert.match(gameplaySource, /buildScriptedEventsInstruction\(scriptedBeats\), WRITING_REMINDER\]/);
+  assert.match(gameplaySource, /buildScriptedEventsInstruction\(scriptedBeats\),\s*scriptedPoliticalInstruction,\s*WRITING_REMINDER\]/);
   for (const gone of ["[Native World Director — authoritative", "[Diplomatic Consequence Bridge]", "[Actions You Can Take]", "[Counterfactual Knowledge Boundary"]) {
     assert.ok(!gameplaySource.includes(gone), `${gone} is appended again`);
   }

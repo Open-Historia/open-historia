@@ -84,6 +84,25 @@ test("an event links to what it changed first, then to what its words name", () 
   ]);
 });
 
+test("the regions a group moves into are linked, after the ones the event fought over", () => {
+  const event = {
+    title: "A quiet spread",
+    impacts: {
+      regionControlOps: [{ op: "contest", regionId: "UKR.5_1", actorCode: "Romania", fromCode: "Ukraine" }],
+      groupOps: [
+        { op: "take", name: "Green Cells", regionIds: ["IRL.4_1", "no-such-region"] },
+        { op: "spread", group: "Green Cells", regionId: "IRL.7_1" },
+      ],
+    },
+  };
+  assert.deepEqual(summary(deriveEventLinks(event, context)), [
+    "region:Donetsk",
+    "polity:Romania",
+    "region:Connacht",
+    "region:Kerry",
+  ]);
+});
+
 test("every link carries a frame to fly to, and a place the map cannot find is left out", () => {
   const links = deriveEventLinks({
     title: "Talks in Atlantis",

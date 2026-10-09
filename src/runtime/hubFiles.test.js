@@ -351,8 +351,8 @@ test("the game downloads hub files through hubFiles.js only, asks GitHub's API f
   const proxyCallers = sources.filter((file) => /fetch\(\s*[`"']\/api\/hub\/file/.test(fs.readFileSync(file, "utf8"))).map(rel);
   assert.deepEqual(proxyCallers, ["src/runtime/hubFiles.js"]);
 
-  // GitHub's API: named in hubIssues.js (the address) and asked by
-  // hubPosts.js, for one post's comments.
+  // GitHub's API: named in hubIssues.js (the address, and the paging that
+  // follows only it) and asked by hubPosts.js, for one post's comments.
   const apiUsers = sources.filter((file) => /\bHUB_API\b|api\.github\.com/.test(code(file))).map(rel).sort();
   assert.deepEqual(apiUsers, ["src/runtime/hubIssues.js", "src/runtime/hubPosts.js"]);
   const apiCalls = code(path.join(ROOT, "src/runtime/hubPosts.js")).match(/`\$\{HUB_API\}[^`]*`/g);

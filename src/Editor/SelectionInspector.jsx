@@ -23,6 +23,9 @@ import { pillButton } from "./editorStyles.js";
 import { Row, TextField, SelectField, ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { rgbToHex } from "./fields.jsx";
+import { normalizeGroups } from "../runtime/groups.js";
+import { commonClaimants, claimantDelta, applyClaimantDelta } from "./claimantEdits.js";
+import { bundledFlagUrl } from "../runtime/countryFlags.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -32,12 +35,12 @@ const commonOr = (arr, blank = "") => {
 
 const foldPolityName = (value) => String(value ?? "").trim().toLowerCase();
 
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, regionEpoch = 0, onOpenPolities, onCopyToClipboard = null }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, regionEpoch = 0, onOpenPolities, groups = {}, onOpenGroups, onCopyToClipboard = null }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection, regionEpoch],
   );
-  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [] });
+  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [], claimantsMixed: false, group: "" });
   // What the Polity field shows while it is being typed in; null when it is
   // not, so the field follows the owner (and a rename in the Polities panel).
   const [ownerDraft, setOwnerDraft] = useState(null);
@@ -57,19 +60,23 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
   }, [countryNames, polities]);
 
   useEffect(() => {
-    // Claimants are an array, so "common value" compares serialized lists.
-    const claimantKeys = summaries.map((s) => JSON.stringify(s.claimants || []));
+    // Claimants are an array: the field shows the claims every region shares,
+    // and a selection whose lists differ is marked mixed.
+    const claimants = commonClaimants(summaries.map((s) => s.claimants || []));
     setForm({
       name: summaries.length === 1 ? summaries[0].name : "",
       typeId: commonOr(summaries.map((s) => s.typeId)),
       owner: commonOr(summaries.map((s) => s.owner || "")),
-      claimants: JSON.parse(commonOr(claimantKeys, "[]") || "[]"),
+      claimants: claimants.shown,
+      claimantsMixed: claimants.mixed,
+      group: commonOr(summaries.map((s) => s.group || "")),
     });
     setOwnerDraft(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.join(","), regionEpoch]);
 
   if (!selection.length) return null;
+  const groupRegistry = normalizeGroups(groups);
   const single = selection.length === 1;
   const apply = (patch) => api?.setRegionAttrs(selection, patch);
   const ownerRgb = form.owner && colors[form.owner];
@@ -223,12 +230,44 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
         <TagField
           value={form.claimants}
           suggestions={polityOptions.map((row) => row.key)}
+          placeholder={form.claimantsMixed ? "mixed — adds to every region…" : undefined}
           onChange={(next) => {
             const claimants = next.map((v) => String(v).trim()).filter(Boolean);
+            // Differing lists change per region: an added claimant joins each
+            // region's own list and a removed one leaves it, so the claims only
+            // some regions carry survive. Identical lists are replaced whole.
+            const delta = form.claimantsMixed ? claimantDelta(form.claimants, claimants) : null;
             setForm((f) => ({ ...f, claimants }));
-            apply({ claimants });
+            apply({ claimants: delta ? (list) => applyClaimantDelta(list, delta) : claimants });
           }}
         />
+      </Row>
+      <Row
+        label="Controlled by group"
+        title="A group — a cartel, a militia, a zombie outbreak — that controls these regions without owning them. The game outlines the group's whole area and tints it in the group's colour; the AI is told what the group is. Create and describe groups in the Groups panel."
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+          {form.group && groupRegistry[form.group] && (
+            <span style={{ width: 14, height: 14, borderRadius: 3, flexShrink: 0, background: groupRegistry[form.group].color, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)" }} />
+          )}
+          <SelectField
+            value={form.group}
+            onChange={(value) => {
+              setForm((f) => ({ ...f, group: value }));
+              apply({ group: value || null });
+            }}
+            options={[
+              { value: "", label: selection.length > 1 && !form.group ? "— none / mixed —" : "— none —" },
+              ...[...new Set([...Object.keys(groupRegistry), ...(form.group ? [form.group] : [])])]
+                .sort((a, b) => a.localeCompare(b))
+                .map((name) => ({ value: name, label: name })),
+            ]}
+            width={130}
+          />
+          <button type="button" onClick={onOpenGroups} style={pillButton(false)} title="Create, describe and colour groups">
+            Groups…
+          </button>
+        </span>
       </Row>
       {form.owner && setColorOverride && (
         <Row label="Colour" title="The colour this country is painted, here and in the game">
@@ -254,7 +293,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {ownerFlag && (
               <img
-                src={ownerFlag}
+                src={bundledFlagUrl(ownerFlag)}
                 alt=""
                 style={{ width: 26, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
               />

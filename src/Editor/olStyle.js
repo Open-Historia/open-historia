@@ -96,18 +96,33 @@ export const pickZoomBand = (type, zoom) => {
   return null; // outside every band -> hidden
 };
 
+// A region inside a group's area (runtime/groups.js) gets a second fill over its
+// owner's: the group's colour, lightly, as the game tints it. The outline round
+// the whole area is OlMap's group layer.
+const GROUP_TINT_ALPHA = 0.3;
+const hexRgb = (hex) => {
+  const match = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!match) return null;
+  const n = Number.parseInt(match[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
 // Returns an OL style function. Dependencies are read through getters so the same
 // function stays valid as the document/colors/selection change (call
-// layer.changed() to restyle). getSelectedIds/getZoom are optional.
-export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZoom }) => {
+// layer.changed() to restyle). getSelectedIds/getZoom/getGroupColors are optional.
+export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZoom, getGroupColors }) => {
   const cache = new Map();
   let cachedPalette = null;
+  let cachedGroupColors = null;
   return (feature, resolution) => {
     // Styles are memoised per owner, so a palette swap (e.g. a scenario's own
     // colors.json arriving after load) must drop the cache or fills go stale.
+    // The same for the groups' colours.
     const palette = getColors();
-    if (palette !== cachedPalette) {
+    const groupColors = getGroupColors?.() ?? null;
+    if (palette !== cachedPalette || groupColors !== cachedGroupColors) {
       cachedPalette = palette;
+      cachedGroupColors = groupColors;
       cache.clear();
     }
     const typeId = feature.get("typeId") || "land";
@@ -128,7 +143,9 @@ export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZo
     // must not share a cache slot with the owner's solid fill.
     const claimants = feature.get("claimants");
     const claimantKey = Array.isArray(claimants) && claimants.length ? claimants.join(",") : "";
-    const key = `${typeId}|${owner || "-"}|${selected ? 1 : 0}|${bandKey}|${claimantKey}`;
+    const group = feature.get("group") || "";
+    const groupRgb = group ? hexRgb(groupColors?.[group]) : null;
+    const key = `${typeId}|${owner || "-"}|${selected ? 1 : 0}|${bandKey}|${claimantKey}|${groupRgb ? groupRgb.join("_") : ""}`;
     const hit = cache.get(key);
     if (hit) return hit;
 
@@ -168,7 +185,10 @@ export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZo
         width: strokeWidth,
       }),
     });
-    cache.set(key, style);
-    return style;
+    const styled = groupRgb
+      ? [style, new Style({ zIndex: selected ? 999 : type.zIndex ?? 1, fill: new Fill({ color: rgba(groupRgb, GROUP_TINT_ALPHA) }) })]
+      : style;
+    cache.set(key, styled);
+    return styled;
   };
 };

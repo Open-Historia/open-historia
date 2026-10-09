@@ -12,11 +12,12 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   applyUnitOpBatch,
-  applyUnitOps,
   buildOwnerFootprint,
   clampUnitStrength,
   clearStaleUnitMotion,
+  confirmResolvedDeployments,
   enforceUnitVolume,
+  lastUnitMoveDates,
   normalizePendingUnitOrders,
   normalizeUnits,
   normalizeWorldState,
@@ -121,16 +122,49 @@ test("a move beyond the budget lands short and keeps an order to the full destin
   const result = applyUnitOpBatch(
     [unit({ type: "infantry", lng: 0, lat: 1 })],
     [],
-    [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0 }],
+    [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0, seaShare: 0 }],
     { gameDate: "2024-01-01", elapsedDays: 7 },
   );
   const moved = result.units[0];
   const covered = haversineKm(1, 0, moved.lat, moved.lng);
-  assert.ok(Math.abs(covered - 280) < 2, `expected ~280 km covered, got ${covered}`);
+  // Seven days of a redeployment by rail and road, at 500 km a day.
+  assert.ok(Math.abs(covered - 3500) < 5, `expected ~3500 km covered, got ${covered}`);
   assert.equal(moved.status, "moving");
   assert.equal(result.orders.length, 1);
   assert.equal(result.orders[0].kind, "move");
   assert.equal(result.orders[0].toLng, 40); // the FULL destination, not the step
+  assert.equal(result.orders[0].seaShare, 0, "the order keeps how much of its way is over water");
+});
+
+test("an advance against an enemy covers a fraction of what a redeployment does", () => {
+  const go = (posture) => {
+    const result = applyUnitOpBatch(
+      [unit({ type: "infantry", lng: 0, lat: 1 })],
+      [],
+      [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0, seaShare: 0, posture }],
+      { gameDate: "2024-01-01", elapsedDays: 7 },
+    );
+    return haversineKm(1, 0, result.units[0].lat, result.units[0].lng);
+  };
+  assert.ok(Math.abs(go("assaulting") - 210) < 3, `seven days of an advance on foot is about 210 km, got ${go("assaulting")}`);
+  assert.ok(Math.abs(go("transit") - 3500) < 5, `seven days of a redeployment is about 3500 km, got ${go("transit")}`);
+});
+
+test("a division sent across an ocean arrives in weeks, on later skips, at the pace of its voyage", () => {
+  // Texas to Korea: a 45-skip test (2026-10-09) had it 127 to 328 game days on the way.
+  const texas = { lng: -97.7, lat: 31.1 };
+  const korea = { lng: 127.0, lat: 37.0 };
+  let { units, orders } = applyUnitOpBatch(
+    [unit({ type: "armor", ...texas })],
+    [],
+    [{ op: "move", unitId: "unit-1", toLng: korea.lng, toLat: korea.lat, seaShare: 0.6, posture: "transit" }],
+    { gameDate: "2016-03-01", elapsedDays: 5 },
+  );
+  assert.equal(orders.length, 1, "five days do not carry it there");
+  let world = advanceStandingOrders({ units, pendingUnitOrders: orders }, { fromDate: "2016-03-05", toDate: "2016-03-30", round: 2 });
+  assert.equal(world.pendingUnitOrders.length, 0, "it has arrived within the month");
+  assert.equal(world.units[0].lng, korea.lng);
+  assert.equal(world.units[0].status, "idle");
 });
 
 test("successive jumps converge on the destination and then clear the order", () => {
@@ -279,12 +313,6 @@ test("removing a unit takes its standing order with it", () => {
   assert.equal(removed.orders.length, 0);
 });
 
-test("applyUnitOps keeps its old array contract for any caller that still expects it", () => {
-  const units = applyUnitOps([], [spawnOp({ id: "x" })], {});
-  assert.ok(Array.isArray(units));
-  assert.equal(units.length, 1);
-});
-
 // ---- advanceStandingOrders -------------------------------------------------
 
 test("a patrol repositions each round but stays on station", () => {
@@ -327,6 +355,67 @@ test("an expired order is dropped and the unit stands down", () => {
   assert.equal(next.pendingUnitOrders.length, 0);
   assert.equal(next.units[0].posture, "");
   assert.equal(next.units[0].status, "idle");
+});
+
+// A fleet on a standing move order far from its destination.
+const crossing = () => ({
+  units: normalizeUnits([unit({ type: "naval", lng: 0, lat: 1 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "move", toLng: 80, toLat: 1 },
+  ]),
+});
+const coveredKm = (world) => haversineKm(1, 0, world.units[0].lat, world.units[0].lng);
+
+test("only a move or a spawn counts as moving a unit, dated by its last event", () => {
+  const moved = lastUnitMoveDates([
+    { date: "2024-01-03", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "strength", unitId: "b" }] } },
+    { date: "2024-01-20", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "remove", unitId: "c" }] } },
+    { date: "2024-01-10", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "spawn", unit: { id: "d" } }] } },
+    { impacts: { unitOps: [{ op: "move", unitId: "e" }] } },
+  ], "2024-01-01");
+  assert.deepEqual(Object.fromEntries(moved), { a: "2024-01-20", d: "2024-01-10", e: "2024-01-01" });
+});
+
+test("a unit that only took losses keeps advancing on its standing order", () => {
+  const movedAt = lastUnitMoveDates([
+    { date: "2024-01-05", impacts: { unitOps: [{ op: "strength", unitId: "unit-1", strength: 80 }] } },
+  ], "2024-01-01");
+  const next = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, movedAt });
+  const full = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  assert.ok(coveredKm(next) > 0, "attrition must not freeze the fleet for the whole jump");
+  assert.equal(coveredKm(next), coveredKm(full));
+});
+
+test("a unit an event moved is credited only the days after its last move", () => {
+  const whole = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-01-04", round: 3 });
+  const late = advanceStandingOrders(crossing(), {
+    fromDate: "2024-01-01", toDate: "2024-01-04", round: 3, movedAt: new Map([["unit-1", "2024-01-03"]]),
+  });
+  assert.equal(whole.pendingUnitOrders.length, 1, "the fixture must not arrive, or the ratio means nothing");
+  const ratio = coveredKm(late) / coveredKm(whole);
+  assert.ok(Math.abs(ratio - 1 / 3) < 0.02, `one of three days, got ${ratio}`);
+  assert.equal(late.pendingUnitOrders.length, 1);
+});
+
+test("a unit moved on the period's last day is not advanced again", () => {
+  const world = crossing();
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-01-31", round: 3, movedAt: { "unit-1": "2024-01-31" },
+  });
+  assert.equal(next.units[0].lng, world.units[0].lng);
+});
+
+test("a moved unit's order still expires on schedule", () => {
+  const world = {
+    units: normalizeUnits([unit({ type: "naval", lng: -30, lat: 50, posture: "patrol" })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250, untilRound: 5 },
+    ]),
+  };
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-02-01", round: 6, movedAt: { "unit-1": "2024-02-01" },
+  });
+  assert.equal(next.pendingUnitOrders.length, 0);
 });
 
 test("advanceStandingOrders is a no-op when nothing has a standing order", () => {
@@ -421,9 +510,10 @@ test("each event gets a budget measured from the previous event, not the jump st
   const { world: next } = applyEventImpactsToWorld({
     world, events, motion: { originDate: "2024-01-01", round: 2 },
   });
-  // 3 days of infantry travel = 120 km, not the whole 4400 km.
+  // 3 days of a redeployment = 1,500 km at most (less where its way is taken
+  // to be partly by sea), not the whole 4,400 km.
   const covered = haversineKm(1, 0, next.units[0].lat, next.units[0].lng);
-  assert.ok(Math.abs(covered - 120) < 3, `expected ~120 km, got ${covered}`);
+  assert.ok(covered > 1400 && covered < 1800, `expected about 1,500 to 1,700 km, got ${covered}`);
 });
 
 test("motion null leaves the impacts path exactly as it was", () => {
@@ -481,6 +571,30 @@ test("falling short of the destination still reads as moving", () => {
   assert.equal(result.units[0].status, "moving");
 });
 
+// Seen in a player's Game (2026-09-29): an armoured division sent 149 km
+// marched 90 km in a one-day skip and stopped 59 km short. Its order was pruned
+// as satisfied, being inside the arrival radius, and the division stood there
+// reading "moving" for good. Here, Glasgow to Stranraer: 118 km, 28 short. A unit still on its
+// way keeps its order until it gets there.
+test("a unit that stops inside the arrival radius but short of its destination keeps marching", () => {
+  const glasgow = { lng: -4.25, lat: 55.86 };
+  const stranraer = { lng: -5.03, lat: 54.9 };
+  // In contact, so at an advance's pace: 50 km a day for armour.
+  let world = { units: [unit({ type: "armor", ...glasgow, status: "moving", posture: "assaulting" })], pendingUnitOrders: [{ id: "o1", unitId: "unit-1", kind: "move", toLng: stranraer.lng, toLat: stranraer.lat }] };
+  world = advanceStandingOrders(world, { fromDate: "2016-02-13", toDate: "2016-02-14", round: 15 });
+  world = advanceStandingOrders(world, { fromDate: "2016-02-14", toDate: "2016-02-15", round: 16 });
+  const short = haversineKm(world.units[0].lat, world.units[0].lng, stranraer.lat, stranraer.lng);
+  assert.ok(short > 0 && short < 60, `expected to stop inside the radius but short, got ${short} km`);
+  assert.equal(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 1, "the order to Stranraer was dropped short of it");
+
+  world = advanceStandingOrders(world, { fromDate: "2016-02-15", toDate: "2016-02-16", round: 17 });
+  assert.equal(world.units[0].lng, stranraer.lng);
+  assert.equal(world.units[0].lat, stranraer.lat);
+  assert.notEqual(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 0);
+});
+
 // ---- stale "moving" on old saves -------------------------------------------
 
 test("a unit left claiming to move with nothing moving it is repaired to idle", () => {
@@ -527,4 +641,77 @@ test("clearStaleUnitMotion repairs only the stale unit, and is idempotent", () =
 test("a world with nothing moving comes back untouched", () => {
   const world = normalizeWorldState({ units: [unit({ id: "u1", status: "idle" })] });
   assert.equal(clearStaleUnitMotion(world), world);
+});
+
+// ---- A player deployment the skip resolved ----------------------------------
+//
+// Seen in a live game (2026-09-19): two formations placed from the advisor on
+// the first day were still translucent "pending" counters three years later.
+// The skip had written their deployment as an event and resolved the request,
+// but only a move op ever turned a pending unit into a real one — and a move on
+// a garrison is ignored outright.
+
+const deployRequest = (unitId) => ({ kind: "action", source: "order", status: "planned", text: `Deploy request: ${unitId}`, unitRevert: { unitId, remove: true } });
+
+test("a pending deployment whose request the skip resolved joins the order of battle", () => {
+  const world = { units: [unit({ id: "fleet", status: "pending" }), unit({ id: "garrison", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("fleet"), deployRequest("garrison")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["fleet", "idle"], ["garrison", "idle"]]);
+});
+
+test("a deployment the skip removed stays removed, and one it moved keeps its motion", () => {
+  const world = { units: [unit({ id: "moving", status: "moving" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("moving"), deployRequest("rejected")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["moving", "moving"]]);
+});
+
+test("a pending deployment with no resolved request of its own stays pending", () => {
+  const world = { units: [unit({ id: "fresh", status: "pending" }), unit({ id: "other", status: "pending" })] };
+  // A moved unit's revert (no remove) is an order, not a deployment.
+  const orders = [{ kind: "action", status: "planned", text: "Orders", unitRevert: { unitId: "other", lng: 1, lat: 2 } }];
+  const next = confirmResolvedDeployments(world, orders);
+  assert.equal(next, world, "nothing to confirm leaves the world untouched");
+});
+
+// ---- A pending garrison the skip sited ---------------------------------------
+//
+// Seen in a live game (2026-09-21): three skips in a row wrote the Falklands
+// garrison's deployment as a move op to Mount Pleasant, and every one was
+// ignored because a move on a garrison is ignored outright — so it stayed a
+// translucent pending counter where the player had first put it.
+
+const moveOp = (unitId, over = {}) => ({ op: "move", unitId, toLng: -58.86, toLat: -51.58, regionId: "116", posture: "holding", ...over });
+
+test("a move on a pending garrison sites it and confirms it", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "pending", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].status, "idle");
+  assert.equal(units[0].lng, -58.86);
+  assert.equal(units[0].lat, -51.58);
+  assert.equal(units[0].regionId, "116");
+  assert.equal(units[0].posture, "holding");
+});
+
+test("a move on a confirmed garrison is still ignored", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "idle", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].lng, -59.5);
+  assert.equal(units[0].lat, -51.7);
+});
+
+test("a pending unit whose deploy request is long gone is confirmed by a skip that resolved the queue", () => {
+  const world = { units: [unit({ id: "orphan", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [] });
+  assert.equal(next.units[0].status, "idle");
+});
+
+test("a pending unit whose request is still queued is not taken for an orphan", () => {
+  const world = { units: [unit({ id: "waiting", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [deployRequest("waiting")] });
+  assert.equal(next, world);
+});
+
+test("without the queue, an orphan is left alone", () => {
+  const world = { units: [unit({ id: "orphan", status: "pending" })] };
+  assert.equal(confirmResolvedDeployments(world, []), world);
 });

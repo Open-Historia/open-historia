@@ -8,24 +8,31 @@
 // public/assets/cities-seed.json by scripts/extract-cities.mjs.
 
 import { newId } from "./useMapDocument.js";
+import { worldFileUrl } from "../runtime/worldFiles.js";
 
-// Web build: seed hosted on the Worker /content proxy (VITE_OH_PMTILES_URL);
-// local/desktop leaves it unset → same-origin /assets. On Pages /assets/*.json
-// would 200-with-SPA-HTML (the seed isn't hosted there).
-const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
-const SEED_URL = `${CONTENT_BASE}/cities-seed.json`;
+// Every build reads the seed from its own /assets folder (runtime/worldFiles.js).
+const SEED_URL = worldFileUrl("cities");
 let _cache = null;
+let _loading = null;
 
-const loadSeed = async () => {
-  if (_cache) return _cache;
-  try {
-    const r = await fetch(SEED_URL);
-    _cache = r.ok ? await r.json() : [];
-  } catch (e) {
-    console.warn("[editor] city seed load failed (run scripts/extract-cities.mjs):", e);
-    _cache = [];
+// Only a seed that arrived is kept. A failure (offline for a moment, a proxy
+// hiccup, an HTML page served with 200) used to be cached as an empty list, so
+// the imports added nothing and the search found nothing until a reload; now it
+// throws, and the next call tries again. Callers that load at once share one
+// download.
+const loadSeed = () => {
+  if (_cache) return Promise.resolve(_cache);
+  if (!_loading) {
+    _loading = (async () => {
+      const r = await fetch(SEED_URL);
+      if (!r.ok) throw new Error(`city seed: HTTP ${r.status}`);
+      const seed = await r.json();
+      if (!Array.isArray(seed) || !seed.length) throw new Error("city seed: not a list of cities");
+      _cache = seed;
+      return seed;
+    })().finally(() => { _loading = null; });
   }
-  return _cache;
+  return _loading;
 };
 
 const toFeature = (c) => ({
@@ -41,10 +48,24 @@ const toFeature = (c) => ({
   tags: c.tags || ["city"],
 });
 
-// How many cities are available to import (for the button label).
-export const cityCount = async () => (await loadSeed()).length;
+// Roughly how many bytes a list of features adds to the document, its autosave
+// and the scenario's cities.geojson, from an even sample of them: the whole
+// seed is ~70k features, too many to stringify just to ask.
+export const estimateJsonBytes = (list, samples = 200) => {
+  const items = Array.isArray(list) ? list : [];
+  if (!items.length) return 0;
+  const step = Math.max(1, Math.floor(items.length / samples));
+  let bytes = 0;
+  let counted = 0;
+  for (let i = 0; i < items.length; i += step) {
+    bytes += JSON.stringify(items[i]).length + 1;
+    counted += 1;
+  }
+  return Math.round((bytes / counted) * items.length);
+};
 
-// Every city / POI from the original dataset.
+// Every city / POI from the original dataset. Both imports throw when the seed
+// cannot be downloaded.
 export const importAllCities = async () => (await loadSeed()).map(toFeature);
 
 // Capitals + large cities only.
@@ -56,10 +77,18 @@ export const importMajorCities = async ({ minPopulation = 500000 } = {}) =>
 // Name search over the modern world place index (for the editor search bar).
 // Prefix matches rank above substring matches; within each, capitals and larger
 // cities first. Entries without coordinates can't be located, so they're skipped.
+// A seed that cannot be downloaded finds nothing this time and is asked for
+// again on the next search.
 export const searchSeedCities = async (query, limit = 8) => {
   const q = String(query || "").trim().toLowerCase();
   if (q.length < 2) return [];
-  const seed = await loadSeed();
+  let seed;
+  try {
+    seed = await loadSeed();
+  } catch (e) {
+    console.warn("[editor] city seed load failed (run scripts/extract-cities.mjs):", e);
+    return [];
+  }
   const starts = [];
   const contains = [];
   for (const c of seed) {

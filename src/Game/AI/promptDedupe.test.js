@@ -63,7 +63,8 @@ test("an empty marker or prompt never claims the rule is present", () => {
 // there is nothing left to de-duplicate — only this to hold.
 test("the jump's levers ride in its live records, not after its template", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /blocks\.push\(JUMP_LEVERS\)/);
+  // Pushed as they are, or without the groups lever while groups are off.
+  assert.match(gameplay, /blocks\.push\([^;]*JUMP_LEVERS/);
   assert.doesNotMatch(gameplay, /ACTIONS_REFERENCE/);
   assert.doesNotMatch(gameplay, /\[Units on the Map\]/);
 });

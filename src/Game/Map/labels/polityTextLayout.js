@@ -1,6 +1,29 @@
 /*! Open Historia — metric-preserving PTR layout math © 2026 Open Historia contributors, AGPL-3.0-or-later (see LICENSE). */
 
 export const PTR_REFERENCE_ZOOM = 4;
+
+// Final visual scale for modern territory-fitted polity typography. Placement,
+// territory fit, bend, collision/coverage search and zoom fading are resolved
+// first; this only contracts the finished support ribbon around its chosen
+// center so labels read a little quieter without changing where they belong.
+export const POLITY_TEXT_VISUAL_SCALE = 0.88;
+
+export const scalePolityTextSupportPoints = ({
+  points,
+  center,
+  scale = POLITY_TEXT_VISUAL_SCALE,
+} = {}) => {
+  const source = Array.isArray(points) ? points : [];
+  if (source.length < 2) return source;
+  const factor = Math.max(0.1, Math.min(1, Number(scale) || POLITY_TEXT_VISUAL_SCALE));
+  const cx = Number(center?.[0]);
+  const cy = Number(center?.[1]);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return source;
+  return source.map(([x, y]) => [
+    cx + (Number(x) - cx) * factor,
+    cy + (Number(y) - cy) * factor,
+  ]);
+};
 export const PTR_WORLD_PIXELS_AT_REFERENCE_ZOOM = 512 * (2 ** PTR_REFERENCE_ZOOM);
 
 export const planMetricTextSupport = ({
@@ -102,8 +125,8 @@ export const planTerritorialTextSupport = ({
 // Where polity text stops as the player zooms in — the same ceiling the
 // MapLibre label layers use (LABEL_MAX_ZOOM in Nations.jsx) — and where the
 // fade toward it begins. Past the ceiling the map is provinces and cities.
-export const POLITY_TEXT_MAX_ZOOM = 7.5;
-export const POLITY_TEXT_FADE_OUT_START_ZOOM = 6.75;
+export const POLITY_TEXT_MAX_ZOOM = 6.20;
+export const POLITY_TEXT_FADE_OUT_START_ZOOM = 5.00;
 
 export const polityTextOpacityAtZoom = ({
   zoom,

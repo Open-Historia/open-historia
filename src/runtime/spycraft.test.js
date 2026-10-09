@@ -289,3 +289,37 @@ test("applySpyOps: the turn's orders follow the Spy tab's rules and never throw"
   assert.deepEqual(applySpyOps(world, [], { playerPolity: P }).spies, world.spies);
   assert.equal(applySpyOps(world, [{ op: "deploy", target: "Japan" }], {}).applied.length, 0);
 });
+
+test("normalizeIntercepts preserves political assessment metadata and Beta document event links", () => {
+  const out = normalizeIntercepts({
+    Germany: {
+      reportId: "report-1",
+      spyId: "spy-7",
+      gatheredAt: "1938-03-04",
+      round: 4,
+      politicalAssessment: { cipher: "SEALED" },
+      exchanges: [{
+        id: "doc-1",
+        counterpart: "Italy",
+        date: "1938-03-04",
+        subject: "Secret protocol",
+        eventId: "event-99",
+        messages: [{ speaker: "Germany", cipher: "AAAA" }],
+      }],
+    },
+  });
+
+  assert.equal(out.Germany.reportId, "report-1");
+  assert.equal(out.Germany.spyId, "spy-7");
+  assert.deepEqual(out.Germany.politicalAssessment, { cipher: "SEALED" });
+  assert.equal(out.Germany.exchanges[0].eventId, "event-99");
+});
+
+test("foreign deployment odds read graded hostility, and the legacy boolean maps to 0.75", () => {
+  const base = foreignDeployChance(50);
+  assert.ok(Math.abs(foreignDeployChance(50, { hostility: 1 }) - (base + 0.2)) < 1e-9);
+  assert.ok(Math.abs(foreignDeployChance(50, { hostile: true }) - (base + 0.15)) < 1e-9);
+  assert.equal(foreignDeployChance(50, { hostile: true }), foreignDeployChance(50, { hostility: 0.75 }));
+  assert.equal(foreignDeployChance(50, { hostile: true, hostility: 0 }), base);
+  assert.equal(foreignDeployChance(100, { hostility: 1 }), 0.32);
+});

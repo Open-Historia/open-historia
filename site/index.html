@@ -441,7 +441,6 @@
       <a href="#play">How it works</a>
       <a href="#features">Features</a>
       <a class="nav-keep" href="/wiki/">Wiki</a>
-      <a href="#host">Host a node</a>
       <a href="#download">Download</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a class="nav-cta" href="/play/">▶ Play</a>
@@ -580,35 +579,6 @@
     </div>
   </section>
 
-  <section id="host">
-    <p class="eyebrow">Grow the network</p>
-    <h2>Host a server node</h2>
-    <div class="rule"></div>
-    <p class="lead">Run a small node on your own device to help players load the world map faster. It's deliberately safe: a node only ever serves read-only map data, verified byte-for-byte by checksum. It never touches anyone's games, accounts, or AI keys, and never runs their code — so it can't be turned against players.</p>
-    <div class="steps">
-      <div class="step">
-        <div class="n">I</div>
-        <h3>Install in one click</h3>
-        <p>Download the node and run <code>install.bat</code> (Windows) or <code>install.sh</code> (macOS/Linux). It sets everything up and downloads the verified map content for you.</p>
-      </div>
-      <div class="step">
-        <div class="n">II</div>
-        <h3>Put it online</h3>
-        <p>Expose it over HTTPS — a free <b>Cloudflare Tunnel</b> is easiest (no open ports, hides your IP). The README walks you through it step by step.</p>
-      </div>
-      <div class="step">
-        <div class="n">III</div>
-        <h3>You're live</h3>
-        <p>Your node registers itself and starts serving straight away — no waiting, no extra steps on your side. Players only ever use nodes listed in the project's signed directory, and an admin can pause or remove any node from it at any time.</p>
-      </div>
-    </div>
-    <div class="cta-row" style="margin-top:36px">
-      <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener"><span>🖥️</span> Host a server</a>
-      <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia-node#readme" target="_blank" rel="noopener">Read the setup guide</a>
-    </div>
-    <p class="hero-note" style="text-align:center;margin-top:8px">Trust is in the checksum and the project's signature — never in the node itself.</p>
-  </section>
-
   <section id="faq">
     <p class="eyebrow">Good to know</p>
     <h2>Questions &amp; requirements</h2>
@@ -619,7 +589,6 @@
       <details><summary>Where does it run — is my data uploaded?</summary><p>The game runs locally on your own machine and opens in your browser at <code>localhost:3000</code>. Your saves and scenarios stay on your computer.</p></details>
       <details><summary>How do I update later?</summary><p>Run the <b>Update Open Historia</b> script that comes with your install — it fetches the latest version while preserving your saves, scenarios, and map data. You can choose the Stable or Beta channel when updating.</p></details>
       <details><summary>What about mobile?</summary><p>Download the Android APK and open it — that is the whole setup. Your games live on the phone and the world map is kept there after it downloads the first time, so there is no server to run and nothing to point it at.</p></details>
-      <details><summary>Can I help by hosting a server?</summary><p>Yes! Running a <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">content node</a> caches the game's map data and serves it to nearby players, so everyone loads faster. It's a one-click install and completely safe — a node only serves read-only, checksum-verified map files and never touches games, accounts, or API keys. See <a href="#host">Host a server node</a>.</p></details>
     </div>
   </section>
 
@@ -641,12 +610,12 @@
     <div class="fnav">
       <a href="#download">Download</a>
       <a href="/wiki/">Wiki</a>
-      <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">Host a node</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
       <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>
       <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
       <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="/privacy/">Privacy</a>
     </div>
     <p class="foot-legal">Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
   </div>

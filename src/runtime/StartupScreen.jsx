@@ -1,10 +1,10 @@
 /*! Open Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useState } from "react";
-import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
 // Cinzel + EB Garamond from the bundle rather than Google Fonts: no request to
 // Google on every start, and the right faces with no network.
 import "../assets/fonts/fonts.css";
-
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
+import { translateNow } from "./translator.js";
 // Loading-screen artwork. The first is the original; the rest cycle in once the
 // files exist in /public. Missing files are skipped (see the preload check), so
 // the screen never flashes a broken image.
@@ -83,6 +83,14 @@ const StartupScreen = ({
   }, [availableImages]);
 
   const currentBg = bgIndex % availableImages.length;
+
+  // In the player's language from the first frame the pack is in: looked up
+  // here (translateNow), because the DOM translator leaves this screen alone
+  // until it is gone. Each string whole, so the packs can hold it.
+  const title = translateNow(timedOut ? "Continuing…" : "Preparing the World");
+  const stepName = translateNow(activeStep ? activeStep.label : stage);
+  const stepCounter = translateNow(`${doneCount} of ${steps.length} complete`);
+  const cached = loadedBytes > 0 ? translateNow(`${formatBytes(loadedBytes)} cached so far`) : "";
 
   return (
     <>
@@ -361,7 +369,8 @@ const StartupScreen = ({
 
       {/* data-startup-screen: the translator waits for this to disappear
           before doing ANY work, so translation can never stall the load;
-          data-no-translate keeps its fast-changing progress text verbatim. */}
+          data-no-translate keeps the translator off it, since its text is
+          already looked up above. */}
       <div className="ss-shell" data-startup-screen="" data-no-translate="">
       {availableImages.map((src, index) => (
         <div
@@ -382,7 +391,7 @@ const StartupScreen = ({
       <div className="ss-title-block">
       <div className="ss-game-name">Open Historia</div>
       <div className="ss-title">
-      {timedOut ? "Continuing…" : "Preparing the World"}
+      {title}
       </div>
       </div>
       </div>
@@ -390,11 +399,11 @@ const StartupScreen = ({
       {steps.length > 0 && (
         <div className="ss-step-info">
         <div className="ss-step-name">
-        {activeStep ? activeStep.label : stage}
+        {stepName}
         </div>
         {steps.length > 1 && (
           <div className="ss-step-counter">
-          {doneCount} of {steps.length} complete
+          {stepCounter}
           </div>
         )}
         </div>
@@ -430,12 +439,12 @@ const StartupScreen = ({
         <div
         key={step.id}
         className={`ss-dot ss-dot-${step.status}`}
-        title={step.label}
+        title={translateNow(step.label)}
         />
       ))}
       </div>
       <div className="ss-cache">
-      {loadedBytes > 0 ? `${formatBytes(loadedBytes)} cached` : ""}
+      {cached}
       </div>
       </div>
 

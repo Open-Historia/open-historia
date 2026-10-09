@@ -16,7 +16,7 @@ import {
   BATCH_MAX_STRINGS,
   BATCH_MIN_STRINGS,
   planTranslationBatch,
-} from "./translator.js";
+} from "./translationRules.js";
 
 const strings = (count, each = "Save game") => Array.from({ length: count }, (_unused, index) => `${each} ${index}`);
 

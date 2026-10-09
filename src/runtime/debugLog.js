@@ -275,6 +275,14 @@ export const setDebugLogVerbose = (verbose) => {
 // as the profiles before them did (`ai_provider_presets`), so those lists are
 // opened and every `apiKey` field in them counted too. Only lists named so:
 // this runs for every entry, and the log keeps its own megabyte in storage.
+//
+// The NAME is tested before anything is read. Reading every value first, as
+// this once did, copied the log's own megabyte, the translator's cache and
+// every setting out of storage several times per entry, which on a busy turn
+// or a failing tile host was megabytes of synchronous reads a second on the
+// main thread. What is read is only the few entries named like secrets.
+const SECRET_KEY_NAME = /(_api_key|_token|_secret)$/i;
+const SECRET_LIST_NAME = /(_connections|_presets)$/i;
 const collectApiKeyFields = (node, into, depth = 0) => {
     if (!node || typeof node !== "object" || depth > 4) return;
     for (const [field, value] of Object.entries(node)) {
@@ -283,25 +291,48 @@ const collectApiKeyFields = (node, into, depth = 0) => {
     }
 };
 
-const storedSecretValues = () => {
-    if (typeof localStorage === "undefined") return [];
-    const found = [];
+// The stored entries named like secrets, as [name, value] pairs.
+const readSecretEntries = () => {
+    const entries = [];
+    if (typeof localStorage === "undefined") return entries;
     try {
         for (let index = 0; index < localStorage.length; index += 1) {
             const key = localStorage.key(index);
-            if (!key) continue;
+            if (!key || !(SECRET_KEY_NAME.test(key) || SECRET_LIST_NAME.test(key))) continue;
             const value = localStorage.getItem(key);
-            if (typeof value !== "string") continue;
-            if (/(_api_key|_token|_secret)$/i.test(key)) {
-                found.push(value);
-            } else if (/(_connections|_presets)$/i.test(key)) {
-                try { collectApiKeyFields(JSON.parse(value), found); } catch { /* not JSON after all */ }
-            }
+            if (typeof value === "string") entries.push([key, value]);
         }
     } catch { /* storage disabled — fall through to the patterns below */ }
+    return entries;
+};
+
+// One pattern that finds every stored secret, rebuilt only when those entries
+// change (a key pasted, a connection edited), not compiled per secret per call.
+// Longest first, so a key that begins with another is redacted whole rather
+// than leaving its tail behind.
+let secretPatternCache = { source: null, pattern: null };
+
+const storedSecretPattern = () => {
+    const entries = readSecretEntries();
+    const source = JSON.stringify(entries);
+    if (source === secretPatternCache.source) return secretPatternCache.pattern;
+    const found = [];
+    for (const [key, value] of entries) {
+        if (SECRET_KEY_NAME.test(key)) {
+            found.push(value);
+        } else {
+            try { collectApiKeyFields(JSON.parse(value), found); } catch { /* not JSON after all */ }
+        }
+    }
     // Very short values are not keys and would redact half the log if treated
     // as one (a stray "1" would eat every number in it).
-    return found.map((value) => value.trim()).filter((value) => value.length >= 8);
+    const secrets = [...new Set(found.map((value) => String(value).trim()).filter((value) => value.length >= 8))]
+        .sort((a, b) => b.length - a.length);
+    secretPatternCache = {
+        source,
+        pattern: secrets.length ? new RegExp(secrets.map(escapeForRegExp).join("|"), "g") : null,
+    };
+    return secretPatternCache.pattern;
 };
 
 // Run over every entry as it is recorded, and over every Desktop log entry as it
@@ -316,9 +347,8 @@ export const redactSecrets = (value) => {
     let text = String(value ?? "");
     if (!text) return text;
 
-    for (const secret of storedSecretValues()) {
-        text = text.replace(new RegExp(escapeForRegExp(secret), "g"), "[redacted API key]");
-    }
+    const secrets = storedSecretPattern();
+    if (secrets) text = text.replace(secrets, "[redacted API key]");
     return redactLogText(text);
 };
 
@@ -361,8 +391,16 @@ const describeDetail = (detail) => {
     }
 };
 
-const truncate = (text, limit = detailLimit()) =>
-    text.length > limit ? `${text.slice(0, limit)}… (+${text.length - limit} chars)` : text;
+// Redacted, then cut to the entry limit. In that order because a key the cut
+// ran through would leave its first half behind, too short for the literal
+// pass to know. Only a margin past the limit is redacted, so a megabyte of
+// stringified state is never run through every pattern to keep 600 characters.
+const REDACT_MARGIN_CHARS = 512;
+const redactAndTruncate = (text, limit = detailLimit()) => {
+    if (text.length <= limit) return redactSecrets(text);
+    const head = redactSecrets(text.slice(0, limit + REDACT_MARGIN_CHARS));
+    return `${head.slice(0, limit)}… (+${text.length - limit} chars)`;
+};
 
 // What one entry costs against MAX_LOG_CHARS. The constant is the JSON
 // scaffolding — the field names, the two ISO timestamps, the punctuation — which
@@ -418,10 +456,16 @@ export const logDebugEvent = (category, message, detail, { verbose = false, prob
     if (!loggingEnabled) return;
     if (verbose && !verboseLogging) return;
 
-    const flatDetail = truncate(describeDetail(detail));
-    const safeCategory = redactSecrets(category || "app");
-    const safeMessage = redactSecrets(message);
-    const safeDetail = flatDetail ? redactSecrets(flatDetail) : "";
+    // The message is held to the same limit as the detail. The console capture
+    // passes a warning's whole first argument as the message, and a failed
+    // JSON task's warning carries up to 12,000 characters of the model's
+    // campaign prose: into the normal log a player pastes in public, and out
+    // of it went the older entries the budget could no longer hold. The
+    // category is always a literal at the call site, so it is not redacted.
+    const safeCategory = String(category || "app");
+    const safeMessage = redactAndTruncate(String(message ?? ""));
+    const flatDetail = describeDetail(detail);
+    const safeDetail = flatDetail ? redactAndTruncate(flatDetail) : "";
     const now = Date.now();
 
     const repeated = findRepeatOf(entries, { category: safeCategory, message: safeMessage, detail: safeDetail }, now);
@@ -610,13 +654,22 @@ export const subscribeToDebugLog = (listener) => {
 // entry is a jank source, and flushed on pagehide so the last entries before a
 // reload or a close are not the ones that are lost.
 
+// A second window of the same app shares this storage: a shared game's hidden
+// engine window (multiplayer/host/engineMain.js). It sends its entries to the
+// first window's log and keeps no stored copy of its own, or each window would
+// write over the other's.
+let persistenceEnabled = true;
+export const setDebugLogPersistence = (enabled) => {
+    persistenceEnabled = Boolean(enabled);
+};
+
 const persistNow = () => {
     persistTimer = null;
     if (typeof localStorage === "undefined") return;
     // Nothing is written while logging is off — the disable path already removed
     // the key, and a stray flush (pagehide, the error boundary) must not put it
     // back after the player said no.
-    if (!loggingEnabled) return;
+    if (!loggingEnabled || !persistenceEnabled) return;
     try {
         let payload = JSON.stringify({ version: 1, context, entries });
         // Backstop for the estimate in entryCost: if the serialized form is still
@@ -827,6 +880,7 @@ const HEADER_FIELD_KEYS = {
     model: "model",
     "player polity": "playerCountry",
     difficulty: "difficulty",
+    "player focus": "playerFocus",
     round: "round",
     "game date": "gameDate",
 };
@@ -888,8 +942,8 @@ const fromDesktopEntry = (entry) => {
         at: String(entry.at || ""),
         gameDate: "",
         category: DESKTOP_SOURCE_LABELS[entry.source],
-        message: redactSecrets(truncate(message)),
-        detail: detail ? redactSecrets(truncate(detail)) : "",
+        message: redactAndTruncate(message),
+        detail: detail ? redactAndTruncate(detail) : "",
         problem: entry.level === "error" || entry.level === "warn",
     };
 };
@@ -952,16 +1006,34 @@ const mergeWithDesktop = (pageEntries, desktop) => {
     return merged.concat(desktopEntries.slice(next));
 };
 
+// The time of day of an ISO stamp on this computer's clock — the clock the
+// game's own messages use ("is busy; skipped until 23:26"). The file used to
+// print UTC beside them, so in a report from a player two hours east of UTC a
+// ten-minute pause read as two hours and ten minutes.
+export const localClock = (iso) => {
+    const ms = Date.parse(iso ?? "");
+    if (!Number.isFinite(ms)) return "";
+    const at = new Date(ms);
+    return [at.getHours(), at.getMinutes(), at.getSeconds()].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+// "UTC+02:00": this computer's offset, said once in the header.
+export const utcOffsetLabel = (date = new Date()) => {
+    const minutes = -date.getTimezoneOffset();
+    const size = Math.abs(minutes);
+    return `UTC${minutes < 0 ? "-" : "+"}${String(Math.floor(size / 60)).padStart(2, "0")}:${String(size % 60).padStart(2, "0")}`;
+};
+
 // One entry as a line of the file.
 const renderEntry = (entry) => {
-    const time = entry.at?.slice(11, 19) || "--:--:--";
+    const time = localClock(entry.at) || "--:--:--";
     const date = entry.gameDate ? ` {${entry.gameDate}}` : "";
     const detail = entry.detail ? `\n        ${entry.detail}` : "";
     // "×48 over 12s" says storm; the same line with no marker says it happened
     // once. Both matter to a reader deciding whether an error is the bug or the
     // weather.
     const repeat = entry.repeat > 1
-        ? ` (×${entry.repeat}, last ${entry.lastAt?.slice(11, 19) || "?"})`
+        ? ` (×${entry.repeat}, last ${localClock(entry.lastAt) || "?"})`
         : "";
     return `[${time}]${date} [${entry.category}] ${entry.message}${repeat}${detail}`;
 };
@@ -998,6 +1070,7 @@ const composeLoggingFile = ({ incident, desktop, settings } = {}) => {
     const header = [
         "OPEN HISTORIA — DIAGNOSTICS LOG",
         `Generated: ${new Date().toISOString()}`,
+        `Clock: the times below are this computer's local time (${utcOffsetLabel()}), the clock the game's own messages use.`,
         contextLine("Build", context.build),
         contextLine("Platform", typeof navigator !== "undefined" ? navigator.userAgent : ""),
         contextLine("Language", context.language),
@@ -1012,6 +1085,7 @@ const composeLoggingFile = ({ incident, desktop, settings } = {}) => {
         contextLine("Game date", context.gameDate),
         contextLine("Round", context.round),
         contextLine("Difficulty", context.difficulty),
+        contextLine("Player focus", context.playerFocus),
         "",
         // Provider and model NAMES only. Which model a player is on is the
         // single most useful line in an AI bug report, and it is not a secret;
@@ -1155,6 +1229,20 @@ export const buildIncidentReport = (incident) => {
     ].filter((line) => line !== "");
     return redactSecrets([...lines, "", ...formatReportFields(incident.fields)].join("\n"));
 };
+
+// A render crash as a report, for the crash screen's Save button
+// (ErrorBoundary.jsx): the error, its own stack and React's component stack,
+// all of them whole. Its log entry keeps a few frames of each, which names the
+// panel; the report is where the rest goes.
+export const buildRenderCrashIncident = (error, componentStack = "") => ({
+    kind: "render-crash",
+    title: "Render crash",
+    fields: [
+        ["Error", `${error?.name || "Error"}: ${error?.message || String(error)}`],
+        ["Stack", String(error?.stack || "").trim()],
+        ["Component stack", String(componentStack || "").trim()],
+    ],
+});
 
 // A filename that sorts by time and says what it was saved for, because the
 // first thing that happens to these is being dragged into a Discord thread with

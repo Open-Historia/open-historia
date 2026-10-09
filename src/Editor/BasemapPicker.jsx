@@ -14,6 +14,7 @@ import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import { useIsMobile } from "../runtime/useIsMobile.js";
 
 const overlay = {
   position: "fixed",
@@ -101,7 +102,20 @@ const closeBtn = {
   width: "2rem",
 };
 
-const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish }) => (
+// A little pill on a card saying it came from the community, linking to its
+// post when the record kept one. Shared with FlagPicker's cards.
+export const CommunitySourceBadge = ({ url }) => {
+  const style = { position: "absolute", left: 6, bottom: 6, background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "999px", color: "#fff", fontSize: "0.6rem", fontWeight: 700, padding: "0.12rem 0.45rem", textDecoration: "none" };
+  return url ? (
+    <a href={url} target="_blank" rel="noopener noreferrer" title="Installed from the community hub. Open its post" onClick={(e) => e.stopPropagation()} style={style}>
+      Community ↗
+    </a>
+  ) : (
+    <span title="Installed from the community hub" style={style}>Community</span>
+  );
+};
+
+const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish, communityUrl = null, fromCommunity = false }) => (
   <div
     style={{ ...cardSurface, outline: active ? "2px solid rgba(255,255,255,0.22)" : "none", outlineOffset: "-2px" }}
     onClick={onClick}
@@ -131,7 +145,8 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
           ✓ In use
         </span>
       )}
-      {onPublish && (
+      {fromCommunity && <CommunitySourceBadge url={communityUrl} />}
+      {onPublish && !fromCommunity && (
         <button
           type="button"
           title="Share this basemap to the community"
@@ -167,6 +182,7 @@ const BasemapPicker = ({
   onSelectCustom,
   onUpload,
 }) => {
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
   const [mine, setMine] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -176,6 +192,9 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  // What the last upload came to when it is not simply "saved": a session-only
+  // raster, or a library that would not take it ({ tone, text }).
+  const [notice, setNotice] = useState(null);
 
   const refresh = () => {
     setLoading(true);
@@ -196,6 +215,7 @@ const BasemapPicker = ({
 
   useEffect(() => {
     if (open) refresh();
+    setNotice(null);
   }, [open]);
 
   useEffect(() => {
@@ -204,12 +224,27 @@ const BasemapPicker = ({
 
   if (!open) return null;
 
+  // What Your basemaps already holds, so a post installed before says so
+  // instead of offering to download its whole payload again (the store would
+  // only then find it by hash and hand back the copy it has).
+  const installedHashes = new Set(mine.flatMap((bm) => [bm.contentHash, bm.source?.hash]).filter(Boolean).map((hash) => String(hash).toLowerCase()));
+  const installedUrls = new Set(mine.map((bm) => bm.source?.url).filter(Boolean));
+  const isInstalled = (post) => Boolean(
+    (post.contentHash && installedHashes.has(String(post.contentHash).toLowerCase())) || (post.url && installedUrls.has(post.url)),
+  );
+
   const handleUpload = async (file) => {
     if (!file) return;
     setBusy(true);
+    setNotice(null);
     try {
-      await onUpload(file);
+      const result = await onUpload(file);
       refresh();
+      if (result?.sessionOnly) {
+        setNotice({ tone: "warn", text: "This GeoTIFF or PMTiles background is on the map for this session only. It is not saved with the map or added to your basemaps, and the game does not show it." });
+      } else if (result?.libraryError) {
+        setNotice({ tone: "error", text: "The basemap is on the map, but it could not be saved to your basemaps, so it will not be here to reuse." });
+      }
     } catch (e) {
       window.alert(`Could not add that basemap: ${e?.message || e}`);
     } finally {
@@ -217,8 +252,16 @@ const BasemapPicker = ({
     }
   };
 
-  const handleDelete = async (id) => {
-    await deleteBasemapApi(id).catch(() => {});
+  // One click used to delete, and a failure was swallowed. A map keeps its
+  // own copy of its basemap (doc.metadata.customBackground), so only the
+  // library entry goes.
+  const handleDelete = async (bm) => {
+    if (!window.confirm(`Delete the basemap “${bm.name || "Custom basemap"}” from Your basemaps? Maps already using it keep their own copy.`)) return;
+    try {
+      await deleteBasemapApi(bm.id);
+    } catch (e) {
+      window.alert(`Could not delete that basemap: ${e?.message || e}`);
+    }
     refresh();
   };
 
@@ -251,13 +294,15 @@ const BasemapPicker = ({
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={headerBar}>
-          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
+        {/* Wraps rather than clipping Upload and ✕ off a phone's edge, the way
+            FlagPicker's header does; there Upload drops its label to an icon. */}
+        <div style={{ ...headerBar, flexWrap: "wrap", gap: isMobile ? "0.4rem" : "0.6rem" }}>
+          <div style={{ fontSize: isMobile ? "0.95rem" : "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
-          <div style={{ flex: 1 }} />
-          <label style={uploadBtn}>
-            {busy ? "Uploading…" : "⬆ Upload basemap"}
+          {!isMobile && <div style={{ flex: 1 }} />}
+          <label style={uploadBtn} aria-label={isMobile ? "Upload basemap" : undefined} title="A map image (PNG, JPG, SVG) or a vector map (GeoJSON, KML, KMZ, Shapefile) is saved to your basemaps. GeoTIFF and PMTiles files are shown for the current session only.">
+            {busy ? (isMobile ? "…" : "Uploading…") : isMobile ? "⬆" : "⬆ Upload basemap"}
             <input
               type="file"
               accept={acceptFor(BACKGROUND_ACCEPT)}
@@ -269,10 +314,13 @@ const BasemapPicker = ({
               }}
             />
           </label>
-          <button type="button" style={closeBtn} onClick={onClose} title="Close">✕</button>
+          <button type="button" className="oh-tap" aria-label="Close basemap picker" style={{ ...closeBtn, marginLeft: isMobile ? "auto" : undefined }} onClick={onClose} title="Close">✕</button>
         </div>
 
         <div style={bodyBox}>
+          {notice && (
+            <div role="status" style={{ ...dim, color: notice.tone === "error" ? "#fecaca" : "#fde68a", paddingTop: 0 }}>{notice.text}</div>
+          )}
           {tab === "mine" ? (
             <>
               <div style={{ marginBottom: "1.3rem" }}>
@@ -295,7 +343,7 @@ const BasemapPicker = ({
                 {loading ? (
                   <div style={dim}>Loading…</div>
                 ) : mine.length === 0 ? (
-                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image (it stays here so you can reuse it on any map).</div>
+                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image or vector map (it stays here so you can reuse it on any map). GeoTIFF and PMTiles files are shown for the current session only.</div>
                 ) : (
                   <div style={rowScroll}>
                     {mine.map((bm) => (
@@ -306,8 +354,12 @@ const BasemapPicker = ({
                         active={currentCustomId === bm.id}
                         badge={bm.kind === "vector" ? "vector" : undefined}
                         onClick={() => { onSelectCustom(bm); onClose(); }}
-                        onDelete={() => handleDelete(bm.id)}
+                        onDelete={() => handleDelete(bm)}
+                        // Someone else's work, installed from the hub: it links
+                        // to its post rather than offering to publish it again.
                         onPublish={() => handlePublish(bm)}
+                        fromCommunity={Boolean(bm.source?.community)}
+                        communityUrl={bm.source?.url || null}
                       />
                     ))}
                   </div>
@@ -339,7 +391,8 @@ const BasemapPicker = ({
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))", gap: "0.8rem" }}>
                   {community.map((post) => {
-                    const canInstall = basemapPostInstallable(post);
+                    const installed = isInstalled(post);
+                    const canInstall = basemapPostInstallable(post) && !installed;
                     return (
                     <div key={post.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
                       <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
@@ -370,15 +423,15 @@ const BasemapPicker = ({
                           type="button"
                           disabled={!canInstall || busyId === post.id}
                           onClick={() => handleInstall(post)}
-                          title={canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
+                          title={installed ? "Already in Your basemaps" : canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
                           style={{
                             ...tabBtn(false),
                             background: canInstall ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
                             cursor: canInstall && busyId !== post.id ? "pointer" : "default",
-                            opacity: canInstall ? 1 : 0.5,
+                            opacity: canInstall || installed ? 1 : 0.5,
                           }}
                         >
-                          {busyId === post.id ? "Installing…" : "⬇ Install"}
+                          {busyId === post.id ? "Installing…" : installed ? "✓ Installed" : "⬇ Install"}
                         </button>
                       </div>
                     </div>

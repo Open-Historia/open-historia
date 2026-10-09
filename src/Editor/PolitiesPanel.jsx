@@ -8,9 +8,11 @@ import Panel from "./Panel.jsx";
 import { inputStyle, pillButton } from "./editorStyles.js";
 import { ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
-import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import PuppetFields from "./PuppetFields.jsx";
+import { rosterRowKey } from "./polityRoster.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -37,9 +39,6 @@ const rosterRowsFromJson = (value) => {
   }
   return rows;
 };
-
-const rosterKey = (row) =>
-  clean(row?.key ?? row?.stableKey ?? row?.stable_key ?? row?.code ?? row?.id ?? row?.name);
 
 const uniqueStandardFlagForCandidates = (candidates) => {
   const codes = new Set();
@@ -69,6 +68,8 @@ const PolitiesPanel = ({
   setTags,
   onOpenFlagPicker,
   onPaintPolity,
+  puppets = [],
+  setPuppets,
   onClose,
 }) => {
   const [query, setQuery] = useState("");
@@ -117,6 +118,14 @@ const PolitiesPanel = ({
       })
       .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
   }, [polities, usage, query]);
+
+  // Every polity by name, unfiltered: the puppet fields' overlord list.
+  const polityChoices = useMemo(
+    () => [...new Set([...Object.keys(polities || {}), ...usage.keys()])]
+      .map((key) => ({ key, name: clean(polities?.[key]?.name) || key }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key)),
+    [polities, usage],
+  );
 
   const allFilteredSelected = rows.length > 0 && rows.every((row) => bulkSelected.has(row.key));
   const selectedBulkRows = useMemo(() => {
@@ -218,27 +227,18 @@ const PolitiesPanel = ({
   // Removing a polity is a map operation: its regions become unowned, the
   // claims in its name are dropped, and the record (with its colour, flag and
   // tags) goes with them. Deleting only the record used to leave the regions
-  // keyed to it, so the polity came straight back.
+  // keyed to it, so the polity came straight back. The confirm counts come from
+  // the usage scan the list already holds: no map serialisation, and the
+  // selection is left alone until the author says yes.
   const removeFromMap = () => {
     if (!current?.key) return;
     const key = current.key;
-    const owned = api?.selectOwner?.(key, { zoom: false }) || [];
-    const disputed = (api?.serializeRegions?.()?.features || []).filter((feature) =>
-      Array.isArray(feature?.properties?.claimants) && feature.properties.claimants.includes(key));
     const summary = [
-      owned.length ? `${owned.length} region(s) become unowned` : "",
-      disputed.length ? `${disputed.length} claim(s) are dropped` : "",
+      current.regionCount ? `${current.regionCount} region(s) become unowned` : "",
+      current.claimantCount ? `${current.claimantCount} claim(s) are dropped` : "",
     ].filter(Boolean).join(" and ");
     if (!window.confirm(`Remove “${current.name}” from the map?${summary ? ` ${summary};` : ""} its colour, flag and tags go with it.`)) return;
-    if (api?.removeOwners) api.removeOwners([key]);
-    else {
-      if (owned.length) api?.setRegionAttrs?.(owned, { owner: null });
-      for (const feature of disputed) {
-        const id = String(feature?.properties?.id ?? feature?.id ?? "");
-        if (!id) continue;
-        api?.setRegionAttrs?.([id], { claimants: feature.properties.claimants.filter((claimant) => claimant !== key) });
-      }
-    }
+    api?.removeOwners?.([key]);
     removePolity?.(key);
     setBulkSelected((previous) => { const next = new Set(previous); next.delete(key); return next; });
     setSelectedKey("");
@@ -276,7 +276,8 @@ const PolitiesPanel = ({
       let duplicates = 0;
 
       for (const row of rawRows) {
-        const key = rosterKey(row);
+        // The key the import will use, so the preview counts what lands.
+        const key = rosterRowKey(row);
         if (!key) {
           invalid += 1;
           continue;
@@ -502,11 +503,13 @@ const PolitiesPanel = ({
                 type="button"
                 style={pillButton(false)}
                 disabled={!clean(draftName) || clean(draftName) === current.key}
-                title="Renames the country everywhere on this map: its regions, claims, colour, flag, tags and cities. The old name is kept as a former name."
+                title="Renames the country everywhere on this map: its regions, claims, colour, flag, tags, map features, units and puppet ties. The old name is not kept."
                 onClick={() => {
                   const next = clean(draftName);
                   const previousKey = current.key;
-                  renamePolity?.(previousKey, next);
+                  // A refused rename (the name is another polity's) leaves the
+                  // panel on the country it was showing.
+                  if (renamePolity?.(previousKey, next) !== true) return;
                   setBulkSelected((previous) => {
                     if (!previous.has(previousKey)) return previous;
                     const updated = new Set(previous);
@@ -587,7 +590,7 @@ const PolitiesPanel = ({
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.58)", width: 52 }}>Flag</span>
-            {flags?.[current.key] && <img src={flags[current.key]} alt="" style={{ width: 28, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />}
+            {flags?.[current.key] && <img src={bundledFlagUrl(flags[current.key])} alt="" style={{ width: 28, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />}
             <button type="button" style={pillButton(false)} onClick={() => onOpenFlagPicker?.(current.key)}>
               {flags?.[current.key] ? "Change" : "Choose flag"}
             </button>
@@ -597,6 +600,14 @@ const PolitiesPanel = ({
             <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}>Tags</div>
             <TagField value={tags?.[current.key] || []} suggestions={TAG_SUGGESTIONS} onChange={(next) => setTags?.(current.key, next)} />
           </div>
+
+          <PuppetFields
+            polity={current.key}
+            regionCount={current.regionCount}
+            choices={polityChoices}
+            puppets={puppets}
+            setPuppets={setPuppets}
+          />
 
           {current.record && (
             <div>

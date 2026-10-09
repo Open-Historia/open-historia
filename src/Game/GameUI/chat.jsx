@@ -1,50 +1,65 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dedupeByName } from "../../runtime/countryList.js";
+import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
-import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
-import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
+import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
+import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
-import { isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
+import { assertNoTurnRunning, isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
 } from "../../runtime/spycraft.js";
-import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
+import { isSeal, newSeal, openExchange, openPoliticalAssessment } from "../../runtime/spySeal.js";
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { Actions } from "./actions";
 import { Projects } from "./projects";
 import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, DOCK_WIDTH } from "./hudDock.js";
-import { isDocumentExchange } from "../../runtime/reportDelivery.js";
+import { documentsReadableBy, isDocumentExchange } from "../../runtime/reportDelivery.js";
 import { Presence } from "./presence.jsx";
+import StorageProblemNotice from "./storageProblemNotice.jsx";
 import { useMainMenuOpen } from "./libraryBar";
 import {
     JSON_URLS,
     getNationColors,
     getNationFlags,
     loadCountryNames as loadCachedCountryNames,
+    loadRegionCatalog,
     readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen, mergeChatKnowledgeCursors } from "../../runtime/gameState.js";
+import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import { chatTextDirection } from "../../runtime/i18n.js";
+import { uiString } from "../../runtime/translator.js";
 import { compareGameDates, formatGameDateReadable, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { UNSEEN_EVENTS_CHANGED, withoutUnseenChats, withoutUnseenIntercepts, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
 import { unseenEventIdsFor, useUnseenEventIds } from "./useUnseenEvents.js";
+import InstitutionsWorkspace, { Emblem as InstitutionEmblem, Facts as InstitutionFacts, SmallPill as InstitutionPill } from "./InstitutionsWorkspace.jsx";
+import { buildInstitutionDiplomacyView } from "../../runtime/institutionalDiplomacyView.js";
+import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGovernance.js";
+import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
+import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
+import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -54,26 +69,43 @@ const selectGameIdentity = (game) => ({
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
+// A chat's id is a string once stored (gameState.js normalizeChatEntry), so a
+// new chat is given one from the start, and ids are compared as strings: a
+// numeric id from before never matched its stored copy, and every message
+// after the first store sync was shown but not saved.
+const newChatId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const sameChatId = (a, b) => a != null && b != null && String(a) === String(b);
+
+// Whether the save landed: a failed one is said in the panel and kept in
+// memory for its Retry.
 const saveAllChats = async (chats) => {
     try {
         await writeChatsState(chats);
-    } catch (err) { console.error("Failed to save chats:", err); }
+        return true;
+    } catch (err) {
+        console.error("Failed to save chats:", err);
+        return false;
+    }
 };
 
 // How far each leader has been shown of its other threads
-// (AI/crossChatKnowledge.js). Written straight to world state, merged rather
-// than replaced: a turn in one chat must not forget what another chat showed.
+// (AI/crossChatKnowledge.js), merged into world state (gameState.js
+// mergeChatKnowledgeCursors: queued, coalesced and quiet).
 const saveChatKnowledgeCursors = async (cursors) => {
     try {
-        const world = await readWorldState({ force: true });
-        await writeWorldState({ ...world, chatKnowledgeCursors: { ...(world?.chatKnowledgeCursors ?? {}), ...cursors } });
+        await mergeChatKnowledgeCursors(cursors);
     } catch (err) { console.error("Failed to save what each leader has been shown:", err); }
 };
 
+// null when the read FAILED, never []: an empty list here is taken for the
+// player's conversations, and the next save would write it over them.
 const loadAllChats = async ({ force = false } = {}) => {
     try {
         return await readChatsState({ force });
-    } catch { return []; }
+    } catch (err) {
+        logDebugEvent("diplomacy", "The conversations could not be loaded; nothing is saved until they are.", err, { problem: true });
+        return null;
+    }
 };
 
 // ── What a thread missed ──────────────────────────────────────────────────────
@@ -144,6 +176,24 @@ const countryMatchesIdentity = (country, identity) => {
         .some(value => String(value ?? "").trim().toLowerCase() === normalizedIdentity);
 };
 
+// Diplomacy is always presented from the player's point of view. A direct
+// thread with France should read "France", not "Player Country, France".
+// Explicitly renamed threads still win, but the generated fallback only names
+// the people on the other side of the table.
+const diplomaticCounterparts = (countries, playerCountry) => {
+    const list = Array.isArray(countries) ? countries.filter(Boolean) : [];
+    const others = list.filter((country) => !countryMatchesIdentity(country, playerCountry));
+    return others.length ? others : list;
+};
+
+const summarizeDiplomaticParticipants = (countries) => {
+    const names = (Array.isArray(countries) ? countries : []).map((country) => String(country?.name || "").trim()).filter(Boolean);
+    if (!names.length) return "Unknown participant";
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return `${names[0]} & ${names[1]}`;
+    return `${names[0]}, ${names[1]} + ${names.length - 2}`;
+};
+
 // ── Flags ─────────────────────────────────────────────────────────────────────
 // Country flags render as images rather than emoji. Resolution order per
 // country, the same as the map, the polity badge and the country panel:
@@ -188,6 +238,8 @@ const findCommunityFlagPost = (posts, { code, name }) => {
     const normalizedName = String(name ?? "").trim().toLowerCase();
     return posts.find((post) => {
         if (post.fromScenario || !post.imageUrl) return false;
+        // Flag-Polity is the exact name the flag was shared for: compared as is.
+        if (post.polity && post.polity === String(name ?? "").trim()) return true;
         if (normalizedCode && post.code && post.code.toUpperCase() === normalizedCode) return true;
         return normalizedName && String(post.title ?? "").trim().toLowerCase() === normalizedName;
     }) ?? null;
@@ -196,6 +248,25 @@ const findCommunityFlagPost = (posts, { code, name }) => {
 // The read-only world view: resolvePolityFlag needs the polity records
 // (aliases, mapRefs, legacy flags) to find an authored flag by identity.
 const getWorldForFlags = () => readWorldStateView().catch(() => ({}));
+
+// Who holds land, read from the map each time a picker opens, so a country
+// absorbed a moment ago is already gone from it (countryList.js). Null until
+// read, and on any failure: the pickers then list everyone rather than hide a
+// country on a guess.
+const useLandHolders = (active) => {
+    const [state, setState] = useState({ holders: null, world: null });
+    useEffect(() => {
+        if (!active) return undefined;
+        let cancelled = false;
+        Promise.all([loadRegionCatalog(), readWorldStateView()])
+            .then(([regions, world]) => {
+                if (!cancelled) setState({ holders: landHolderNames(regions, world), world });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active]);
+    return state;
+};
 
 const resolveFlagImageUrl = ({ code, name } = {}) => {
     if (!code && !name) return Promise.resolve(null);
@@ -270,7 +341,7 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
     const h = height ?? size;
     return url ? (
         <img
-            src={url}
+            src={bundledFlagUrl(url)}
             alt={alt}
             style={{
                 width: w, height: h, objectFit: "cover", borderRadius: "2px",
@@ -385,6 +456,22 @@ const RetryIcon = () => (
     </svg>
 );
 
+const SendIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M22 2 11 13" />
+    <path d="m22 2-7 20-4-9-9-4Z" />
+    </svg>
+);
+
+const CopyIcon = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+);
+
 // Filled = currently unread (click to mark read, envelope "sealed"); outline =
 // currently read (click to mark unread, envelope "opened").
 const EnvelopeIcon = ({ filled }) => (
@@ -475,116 +562,22 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
     );
 };
 
-const MessageBubble = ({ msg, onRetry }) => {
-    const isPlayer = msg.role === "user";
-    const isError  = msg.role === "error";
-    const flagUrl  = useCountryFlagUrl(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
-    const reactions = Object.entries(msg.reactions ?? {});
-    const reactionFlags = useCountryFlagUrls(reactions.map(([name, { code }]) => ({ name, code })));
-    const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
-    const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
-    const isMobile = useIsMobile();
-
-    return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible" }}>
-        <div style={{ position: "relative", maxWidth: "90%", overflow: "visible" }}>
-
-        {!isPlayer && (
-            <span style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                fontSize: "0.7rem",
-                color: "rgba(255,255,255,0.4)",
-                       marginBottom: "0.25rem",
-                       // A phone's bubble is narrower than a long polity name on
-                       // one line, which pushed the whole thread sideways.
-                       whiteSpace: isMobile ? "normal" : "nowrap",
-            }}>
-            {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size="0.95em" />{msg.speaker}</>}
-            </span>
-        )}
-
-        {/* What the leaders were told the world did since this thread last
-            spoke, sent with this line (AI/conversationCatchUp.js); hover for it. */}
-        {isPlayer && msg.catchUpLabel && (
-            <div title={msg.catchUp || ""} style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", marginBottom: "0.25rem", textAlign: "right" }}>
-                ⏳ {msg.catchUpLabel}
-            </div>
-        )}
-
-        {isPlayer && reactions.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "row-reverse", gap: "0.15rem", marginBottom: "0.3rem" }}>
-            {reactions.map(([country, { emoji, code }]) => (
-                <ReactionBubble key={country} country={country} emoji={emoji} flagUrl={reactionFlags[country] ?? null} code={code} />
-            ))}
-            </div>
-        )}
-
-        {/* Player-typed text stays verbatim under UI translation. */}
-        <div data-no-translate={isPlayer ? "" : undefined} style={{
-            padding: "0.6rem 0.85rem",
-            borderRadius: isPlayer ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-            backgroundColor: isPlayer
-            ? "#3b82f6"
-            : isError
-            ? "rgba(239,68,68,0.2)"
-            : `color-mix(in srgb, ${accentColor} 5%, rgba(38,38,41,0.95))`,
-            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-            border: isPlayer
-            ? "none"
-            : isError
-            ? "1px solid rgba(239,68,68,0.3)"
-            : `1px solid color-mix(in srgb, ${accentColor} 35%, transparent)`,
-            borderLeft: (!isPlayer && !isError)
-            ? `2px solid ${accentColor}`
-            : undefined,
-            boxSizing: "border-box",
-        }}>
-        {isPlayer ? msg.text : <Markdown className="chat-markdown">{msg.text}</Markdown>}
-        </div>
-
-        {/* A failed request is the transport dropping, not the leader refusing
-            to answer — so the player re-sends the same message rather than
-            retyping it. Only offered on the newest error (see the caller). */}
-        {isError && onRetry && (
-            <button className="oh-tap-row" onClick={onRetry}
-            style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.4rem", padding: "0.3rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: "0.75rem", fontWeight: 600, fontFamily: "sans-serif", cursor: "pointer", transition: "all 0.12s ease" }}
-            onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.22)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.6)"; e.currentTarget.style.color = "#fecaca"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = "rgba(239,68,68,0.12)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; e.currentTarget.style.color = "#fca5a5"; }}>
-            <RetryIcon /> Retry
-            </button>
-        )}
-
-        {!isPlayer && msg.time && (
-            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem", display: "block" }}>
-            {/* Through gameDates.js: new Date("2016-01-01") is UTC midnight, shown a
-                day early west of Greenwich (the separator above always did this). */}
-            {formatGameDateReadable(msg.time, "MMM D, YYYY") || msg.time}
-            </span>
-        )}
-        </div>
-        </div>
-    );
-};
-
-// ── Reaction bubble ───────────────────────────────────────────────────────────
-
-const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
+const ReactionChip = ({ emoji, members, flagUrlMap }) => {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
     const tooltipRef = useRef(null);
-    const nationColor = useNationColor(code ?? null);
-    // Who reacted is said only by this label, and a touch screen has no hover
-    // to show it: there a tap shows it, for a few seconds or until the thread
-    // scrolls (the label is pinned to the screen, not to the bubble).
+    const names = members.map((member) => member.country);
+    // Who reacted is said by this label (the chip shows only flags), and a
+    // touch screen has no hover to show it: there a tap shows it, for a few
+    // seconds or until the thread scrolls (the label is pinned to the screen,
+    // not to the chip).
     const canHover = useCanHover();
 
     const handleMouseEnter = () => {
         if (anchorRef.current) {
-            const r = anchorRef.current.getBoundingClientRect();
-            setPos({ x: r.left + r.width / 2, y: r.top });
+            const rect = anchorRef.current.getBoundingClientRect();
+            setPos({ x: rect.left + rect.width / 2, y: rect.top });
         }
         setHovered(true);
     };
@@ -600,9 +593,9 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
         };
     }, [canHover, hovered]);
 
-    // Reactions sit on the player's own lines, at the right of the thread, and
+    // Reactions on the player's own lines sit at the right of the thread, and
     // on a phone that is the right edge of the screen: a label centred on the
-    // bubble ran off it. Measured once drawn and moved back on, before paint.
+    // chip ran off it. Measured once drawn and moved back on, before paint.
     useLayoutEffect(() => {
         const tip = tooltipRef.current;
         if (canHover || !hovered || !tip) return;
@@ -613,58 +606,319 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
 
     const tooltip = hovered ? ReactDOM.createPortal(
         <div ref={tooltipRef} style={{
-            position: "fixed",
-            left: pos.x,
-            top: pos.y - 2,
-            transform: "translate(-50%, -100%)",
-                                                    backgroundColor: "rgba(24,24,27,0.95)",
-                                                    border: "1px solid rgba(255,255,255,0.12)",
-                                                    borderRadius: "6px",
-                                                    padding: "0.2rem 0.45rem",
-                                                    fontSize: "0.7rem",
-                                                    color: "rgba(255,255,255,0.85)",
-                                                    whiteSpace: "nowrap",
-                                                    pointerEvents: "none",
-                                                    zIndex: 99999,
-                                                    display: "inline-flex",
-                                                    alignItems: "center",
-                                                    gap: "0.3rem",
+            position: "fixed", left: pos.x, top: pos.y - 5, transform: "translate(-50%, -100%)",
+            background: "rgba(18,18,21,.98)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8,
+            boxShadow: "0 8px 24px rgba(0,0,0,.35)", padding: ".34rem .48rem", zIndex: 99999, pointerEvents: "none",
+            display: "flex", flexDirection: "column", gap: ".2rem", color: "rgba(255,255,255,.82)", fontSize: ".66rem", whiteSpace: "nowrap",
         }}>
-        <FlagImg url={flagUrl} alt={country} size="0.9em" /> {country}
+            {members.map((member) => (
+                <span key={member.country} style={{ display: "inline-flex", alignItems: "center", gap: ".32rem" }}>
+                    <FlagImg url={flagUrlMap[member.country] ?? null} alt={member.country} size=".9em" />
+                    {member.country}
+                </span>
+            ))}
         </div>,
-        document.body
+        document.body,
     ) : null;
 
     return (
-        <div
-        // On touch the tap lands on this wrapper, which reaches past the
-        // 1.6rem bubble to a thumb's 2.75rem and gives that room back in
-        // margin, so nothing moves. The bubble sits above its neighbours'
-        // reach, so a tap on a bubble is always that bubble's.
-        onClick={canHover ? undefined : () => (hovered ? setHovered(false) : handleMouseEnter())}
-        style={canHover
-            ? { position: "relative", marginBottom: "-1rem" }
-            : { position: "relative", padding: "0.575rem", margin: "-0.575rem -0.575rem -1.575rem" }}>
+        <>
         {tooltip}
-        <div
-        ref={anchorRef}
-        onMouseEnter={canHover ? handleMouseEnter : undefined}
-        onMouseLeave={canHover ? () => setHovered(false) : undefined}
-        style={{
-            ...(canHover ? {} : { position: "relative", zIndex: 1 }),
-            width: "1.6rem", height: "1.6rem", borderRadius: "50%",
-            backgroundColor: nationColor
-            ? `color-mix(in srgb, ${nationColor} 25%, rgba(31,31,34,0.98))`
-            : "rgba(41,41,45,0.95)",
-            border: nationColor
-            ? `1.5px solid ${nationColor}`
-            : "1px solid rgba(255,255,255,0.15)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "0.85rem", cursor: "default", lineHeight: 1,
-        }}
-        >
-        {emoji}
+        <div ref={anchorRef}
+            onMouseEnter={canHover ? handleMouseEnter : undefined}
+            onMouseLeave={canHover ? () => setHovered(false) : undefined}
+            onClick={canHover ? undefined : () => (hovered ? setHovered(false) : handleMouseEnter())}
+            title={names.join(", ")} style={{
+            minHeight: "1.55rem", padding: ".18rem .42rem", borderRadius: 999,
+            border: "1px solid rgba(255,255,255,.12)", background: "rgba(31,31,35,.94)",
+            display: "inline-flex", alignItems: "center", gap: ".28rem", lineHeight: 1, cursor: "default",
+            boxShadow: "0 2px 8px rgba(0,0,0,.15)",
+        }}>
+            <span style={{ fontSize: ".78rem" }}>{emoji}</span>
+            {members.length > 1 && <span style={{ fontSize: ".61rem", fontWeight: 750, color: "rgba(255,255,255,.62)" }}>{members.length}</span>}
+            <span style={{ display: "inline-flex", alignItems: "center", marginLeft: members.length > 1 ? ".02rem" : 0 }}>
+                {members.slice(0, 3).map((member, index) => (
+                    <span key={member.country} style={{ display: "inline-flex", marginLeft: index ? "-.2rem" : 0, zIndex: 3 - index }}>
+                        <FlagImg url={flagUrlMap[member.country] ?? null} alt={member.country} width=".78rem" height=".54rem" />
+                    </span>
+                ))}
+            </span>
         </div>
+        </>
+    );
+};
+
+const ReactionStrip = ({ reactions, align = "left" }) => {
+    const entries = Object.entries(reactions ?? {})
+        .map(([key, value]) => ({ key, country: String(value?.country || key), value }))
+        .filter(({ value }) => String(value?.emoji || "").trim());
+    const flagUrlMap = useCountryFlagUrls(entries.map(({ country, value }) => ({ name: country, code: value?.code })));
+    const groups = [];
+    entries.forEach(({ country, value }) => {
+        const emoji = String(value?.emoji || "").trim();
+        let group = groups.find((candidate) => candidate.emoji === emoji);
+        if (!group) {
+            group = { emoji, members: [] };
+            groups.push(group);
+        }
+        group.members.push({ country, code: value?.code });
+    });
+    if (!groups.length) return null;
+
+    return (
+        <div data-diplomacy-reactions="multi" style={{
+            display: "flex", flexWrap: "wrap", gap: ".28rem", marginTop: ".28rem",
+            justifyContent: align === "right" ? "flex-end" : "flex-start",
+        }}>
+            {groups.map((group) => <ReactionChip key={group.emoji} emoji={group.emoji} members={group.members} flagUrlMap={flagUrlMap} />)}
+        </div>
+    );
+};
+
+// A demand between the player and their own Overlord or Puppet
+// (runtime/demandCheck.js, chatThreads.js), drawn like a poll: a card in the
+// thread, answered by the side whose move it is, once. Two buttons and your own
+// words, the shape of an interactive event's "play it out / let it pass" with an
+// angle of your own. It appears only on DEMANDS — every other message from an
+// Overlord is just a message.
+//
+//   the player is the Puppet, the demand open      → Accept · Refuse · an alternative
+//   the player is the Puppet, having refused        → the same choice, to think again
+//   the player is the Overlord, an alternative on it → Accept it · Reject (optionally revised)
+//
+// A card sits under the message that made the demand, where the conversation
+// reached it, rather than at the foot of the thread.
+//
+// Only a Refuse costs the Puppet anything, and only once (gameState.js
+// chargeRefusals). A refusal is not the end of it: the card stays answerable, so
+// a player who thinks better of it agrees to the same demand instead of being
+// handed a second one. Rejecting an alternative is demanding again: revised if
+// you write something, the original restated if you do not.
+const DEMAND_STATUS_TEXT = {
+    accepted: "Accepted",
+    refused: "Refused",
+    settled: "Settled on the alternative",
+    superseded: "Replaced by a new demand",
+};
+
+const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlternative, onReject }) => {
+    const [text, setText] = useState("");
+    const me = String(playerCountry ?? "").trim().toLowerCase();
+    const iAmPuppet = String(demand?.target ?? "").trim().toLowerCase() === me;
+    const iAmOverlord = String(demand?.by ?? "").trim().toLowerCase() === me;
+    const reconsidering = iAmPuppet && demand?.status === "refused";
+    const myMovePuppet = iAmPuppet && (demand?.status === "open" || reconsidering);
+    const myMoveOverlord = iAmOverlord && demand?.status === "countered";
+    const settled = myMovePuppet ? "" : DEMAND_STATUS_TEXT[demand?.status] ?? "";
+    const standing = reconsidering ? "Refused" : "";
+
+    const button = (label, onClick, tone = "neutral") => (
+        <button
+            type="button"
+            className="oh-tap-row"
+            disabled={busy}
+            onClick={onClick}
+            style={{
+                background: tone === "danger" ? "rgba(248,113,113,0.14)" : tone === "go" ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${tone === "danger" ? "rgba(248,113,113,0.45)" : tone === "go" ? "rgba(74,222,128,0.45)" : "rgba(255,255,255,0.16)"}`,
+                borderRadius: "8px",
+                color: "white",
+                cursor: busy ? "default" : "pointer",
+                flex: 1,
+                fontFamily: "inherit",
+                fontSize: "0.78rem",
+                fontWeight: 700,
+                opacity: busy ? 0.6 : 1,
+                padding: "0.4rem 0.6rem",
+            }}
+        >{label}</button>
+    );
+
+    return (
+        <div style={{
+            background: "rgba(234,179,8,0.08)",
+            border: "1px solid rgba(234,179,8,0.35)",
+            borderRadius: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            margin: "0.35rem 0",
+            opacity: settled ? 0.7 : 1,
+            padding: "0.7rem 0.85rem",
+        }}>
+            <span style={{ fontSize: "0.68rem", letterSpacing: "0.04em", color: "rgba(250,204,21,0.9)", textTransform: "uppercase" }}>
+                {iAmOverlord ? `Your demand · of ${demand?.target}` : `Demand · from ${demand?.by}`}
+                {settled || standing ? ` · ${settled || standing}` : ""}
+            </span>
+            <span style={{ fontSize: "0.85rem", fontWeight: 700, lineHeight: 1.35 }}>{demand?.summary}</span>
+            {demand?.alternative && (
+                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: "0.78rem", lineHeight: 1.35 }}>
+                    {iAmPuppet ? "You offered instead: " : `${demand?.target} offers instead: `}{demand.alternative}
+                </span>
+            )}
+
+            {reconsidering && (
+                <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", lineHeight: 1.35 }}>
+                    You refused this. You can still change your mind.
+                </span>
+            )}
+
+            {myMovePuppet && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button(reconsidering ? "Accept after all" : "Accept", () => onAnswer?.("accepted", ""), "go")}
+                        {!reconsidering && button("Refuse", () => onAnswer?.("refused", ""), "danger")}
+                    </div>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <input
+                            value={text}
+                            onChange={(event) => setText(event.target.value)}
+                            placeholder="Or offer an alternative…"
+                            disabled={busy}
+                            style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", flex: 1, fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                        />
+                        {button("Offer", () => { if (text.trim()) { onAnswer?.("alternative", text.trim()); setText(""); } })}
+                    </div>
+                </>
+            )}
+
+            {myMoveOverlord && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button("Accept alternative", () => onAcceptAlternative?.(), "go")}
+                        {button("Reject", () => { onReject?.(text.trim()); setText(""); }, "danger")}
+                    </div>
+                    <input
+                        value={text}
+                        onChange={(event) => setText(event.target.value)}
+                        placeholder="Revise your demand (or leave empty to insist on it)…"
+                        disabled={busy}
+                        style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                    />
+                </>
+            )}
+
+            {!settled && !myMovePuppet && !myMoveOverlord && (
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
+                    {demand?.status === "countered"
+                        ? `Waiting for ${demand?.by} to consider the alternative`
+                        : `Waiting for ${demand?.target}'s answer`}
+                </span>
+            )}
+        </div>
+    );
+};
+
+const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
+    const isPlayer = msg.role === "user";
+    const isError  = msg.role === "error";
+    const [hovered, setHovered] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const flagUrl  = useCountryFlagUrl(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
+    const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
+    const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
+    const isMobile = useIsMobile();
+    // The copy button comes with the pointer over the message, and nothing
+    // hovers on a touch screen: there a tap on the message shows it, until a
+    // second tap or a few seconds on, rather than one drawn beside every line.
+    const canHover = useCanHover();
+    useEffect(() => {
+        if (canHover || !hovered) return undefined;
+        const timer = setTimeout(() => setHovered(false), 4000);
+        return () => clearTimeout(timer);
+    }, [canHover, hovered]);
+
+    const copyMessage = async () => {
+        try {
+            await navigator?.clipboard?.writeText?.(String(msg.text ?? ""));
+            setCopied(true);
+            setTimeout(() => setCopied(false), 900);
+        } catch { /* clipboard may be unavailable in restricted desktop contexts */ }
+    };
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible", marginTop: compact ? "-.55rem" : 0 }}>
+        <div style={{ position: "relative", maxWidth: isError ? "82%" : "min(70%, 42rem)", overflow: "visible" }}>
+
+        {!isPlayer && !compact && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".34rem", fontSize: ".7rem", color: "rgba(255,255,255,.46)", marginBottom: ".28rem",
+                // A phone's bubble is narrower than a long polity name on one
+                // line, which pushed the whole thread sideways.
+                whiteSpace: isMobile ? "normal" : "nowrap" }}>
+            {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size=".95em" /><strong style={{ fontWeight: 650, color: "rgba(255,255,255,.58)" }}>{msg.speaker}</strong></>}
+            </span>
+        )}
+
+        {isPlayer && msg.catchUpLabel && (
+            <div title={msg.catchUp || ""} style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", marginBottom: "0.25rem", textAlign: "right" }}>
+                ⏳ {msg.catchUpLabel}
+            </div>
+        )}
+
+        <div onMouseEnter={canHover ? () => setHovered(true) : undefined} onMouseLeave={canHover ? () => setHovered(false) : undefined}
+            onClick={canHover || isError ? undefined : (event) => { if (!event.target.closest?.("a, button")) setHovered((shown) => !shown); }}
+            style={{ position: "relative" }}>
+            {/* The player's words and the leaders' replies (written in the chat
+                language) stay as written under the interface translator, which
+                would otherwise put a reply into the interface language at the
+                cost of a request; only an error is interface text. */}
+            <div data-no-translate={isError ? undefined : ""} dir={isPlayer || isError ? undefined : chatTextDirection()} style={{
+                padding: ".62rem .82rem",
+                borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
+                backgroundColor: isPlayer ? "rgba(59,130,246,.92)" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, rgba(35,35,39,0.96))`,
+                fontSize: ".85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
+                border: isPlayer ? "1px solid rgba(147,197,253,.2)" : isError ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(255,255,255,.08)",
+                borderLeft: (!isPlayer && !isError) ? `2px solid color-mix(in srgb, ${accentColor} 72%, white 8%)` : undefined,
+                boxSizing: "border-box", boxShadow: "0 2px 10px rgba(0,0,0,.12)",
+            }}>
+            {isPlayer ? msg.text : <Markdown className="chat-markdown">{msg.text}</Markdown>}
+            </div>
+            {!isError && hovered && (
+                <button type="button" className="oh-tap" onClick={copyMessage} title={copied ? "Copied" : "Copy message"} aria-label="Copy message" style={{
+                    position: "absolute", top: ".2rem", [isPlayer ? "right" : "left"]: "calc(100% + .35rem)",
+                    width: "1.6rem", height: "1.6rem", borderRadius: 7, border: "1px solid rgba(255,255,255,.09)",
+                    background: "rgba(24,24,27,.94)", color: copied ? "#86efac" : "rgba(255,255,255,.46)",
+                    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 4px 12px rgba(0,0,0,.2)",
+                }}>
+                    <CopyIcon />
+                </button>
+            )}
+        </div>
+
+        <ReactionStrip reactions={msg.reactions} align={isPlayer ? "right" : "left"} />
+
+        {isError && onRetry && (
+            <button className="oh-tap-row" onClick={onRetry}
+            style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.4rem", padding: "0.3rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: "0.75rem", fontWeight: 600, fontFamily: "sans-serif", cursor: "pointer", transition: "all 0.12s ease" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.22)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.6)"; e.currentTarget.style.color = "#fecaca"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(239,68,68,0.12)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; e.currentTarget.style.color = "#fca5a5"; }}>
+            <RetryIcon /> Retry
+            </button>
+        )}
+
+        {!isPlayer && showTime && msg.time && (
+            <span style={{ fontSize: ".63rem", color: "rgba(255,255,255,.27)", marginTop: ".28rem", display: "block" }}>
+            {formatGameDateReadable(msg.time, "MMM D, YYYY") || msg.time}
+            </span>
+        )}
+        </div>
+        </div>
+    );
+};
+
+
+const InstitutionRecord = ({ msg }) => {
+    const raw = String(msg?.text ?? "").trim();
+    if (!raw) return null;
+    const established = /institutional channel established\.?$/i.test(raw);
+    const text = established ? raw.replace(/\s+institutional channel established\.?$/i, " council opened.") : raw;
+    return (
+        <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
+            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
+                <span aria-hidden="true" style={{ color: "rgba(231,231,234,.72)", fontSize: ".72rem" }}>◇</span>
+                <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
+                <span>{text}</span>
+            </div>
         </div>
     );
 };
@@ -680,6 +934,59 @@ const TypingBubble = ({ speaker, code, hint = "", label = "Thinking" }) => {
         <ThinkingDots label={label} />
         </div>
         {hint && <span style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.32)", marginTop: "0.3rem" }}>{hint}</span>}
+        </div>
+    );
+};
+
+const GroupThinkingBubble = ({ count = 0 }) => (
+    <div data-diplomacy-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
+        {count > 1 ? `${count} governments` : "Government"}
+    </span>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
+        <span>Considering the reply</span><ThinkingDots />
+    </div>
+    </div>
+);
+
+const LifecycleThinkingBubble = ({ count = 0 }) => (
+    <div data-lifecycle-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
+        {count > 1 ? `${count} invited governments` : "Invited government"}
+    </span>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.035)", border: "1px solid var(--oh-grey-border)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
+        <span>Considering membership</span><ThinkingDots />
+    </div>
+    </div>
+);
+
+const lifecycleOutcomePresentation = (entry = {}) => {
+    const status = String(entry?.status || "pending").trim().toLowerCase();
+    if (status === "accepted") return { label: entry?.requestedStatus === "observer" ? "Observer accepted" : "Accepted", tone: "good" };
+    if (status === "rejected") return { label: "Declined", tone: "bad" };
+    if (status === "pending-approval") return { label: "Awaiting member approval", tone: "live" };
+    if (status === "negotiating") return { label: entry?.decision === "delay" ? "Decision delayed" : "Negotiating terms", tone: "neutral" };
+    if (status === "resolved") return { label: "Resolved", tone: "good" };
+    return { label: "Awaiting response", tone: "neutral" };
+};
+
+const LifecycleOutcomePanel = ({ cases = [], institution = null, concluded = false, onViewInstitution = null }) => {
+    if (!cases.length) return null;
+    return (
+        <div data-lifecycle-outcome-panel="true" style={{ marginBottom: ".45rem", padding: ".55rem .62rem", border: `1px solid ${concluded ? "rgba(34,197,94,.2)" : "var(--oh-grey-border)"}`, borderRadius: 9, background: concluded ? "rgba(34,197,94,.045)" : "rgba(255,255,255,.025)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 15rem", minWidth: 0 }}>
+                    <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "var(--oh-grey-text)" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
+                    {concluded && institution?.status && <div style={{ marginTop: ".14rem", fontSize: ".51rem", color: "rgba(255,255,255,.4)" }}>{institution.name || "Institution"} is now {String(institution.status).replace(/[-_]/g, " ")}.</div>}
+                </div>
+                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: ".3rem", marginTop: ".45rem" }}>
+                {cases.map((entry) => {
+                    const presentation = lifecycleOutcomePresentation(entry);
+                    return <div key={entry.id || entry.polity} style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}><span style={{ flex: 1, minWidth: 0, fontSize: ".56rem", color: "rgba(255,255,255,.62)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.polity || "Government"}</span><InstitutionPill tone={presentation.tone}>{presentation.label}</InstitutionPill></div>;
+                })}
+            </div>
         </div>
     );
 };
@@ -834,8 +1141,7 @@ const useTouchDisarm = (armed, setArmed) => {
     }, [armed, canHover, setArmed]);
 };
 
-const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied }) => {
-    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {} }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
     useTouchDisarm(confirmingDelete, setConfirmingDelete);
@@ -849,7 +1155,50 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             : [],
         [chat?.countries],
     );
-    const isGroup = countries.length > 1;
+    const counterparts = useMemo(() => diplomaticCounterparts(countries, playerCountry), [countries, playerCountry]);
+    const headerCountries = counterparts.slice(0, 4);
+    const headerFlagUrls = useCountryFlagUrls(headerCountries);
+    const displayThreadTitle = chat?.title || summarizeDiplomaticParticipants(counterparts);
+    const participantCount = counterparts.length + (playerCountry ? 1 : 0);
+    const isGroup = counterparts.length > 1;
+    const isInstitutional = Boolean(chat?.institutionId);
+    const isLifecycleConversation = Boolean(chat?.lifecycleInstitutionId && chat?.lifecycleCaseIds?.length);
+    // A lifecycle accession hearing can carry institutionId so native formal
+    // ballots work, while still being a diplomatic negotiation rather than the
+    // institution's permanent Council workspace.
+    const isInstitutionCouncil = isInstitutional && !isLifecycleConversation;
+    // Ordinary multi-party diplomacy already has a canonical poll event log;
+    // expose it to the human too. Institution Councils use their separate formal
+    // governance/ballot system and lifecycle hearings are membership workflows,
+    // so neither gets this conversational vote control.
+    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;
+    const playerLifecycleCase = useMemo(() => {
+        if (!isLifecycleConversation || !playerCountry) return null;
+        const wanted = new Set((Array.isArray(chat?.lifecycleCaseIds) ? chat.lifecycleCaseIds : []).map((id) => String(id || "").trim()));
+        return institutionLifecycleCasesForPolity(world, playerCountry, { pendingOnly: true })
+            .find(({ institution, case: entry }) => (
+                String(institution?.id || "").trim() === String(chat?.lifecycleInstitutionId || "").trim()
+                && wanted.has(String(entry?.id || "").trim())
+                && String(entry?.polity || "").trim().toLowerCase() === String(playerCountry || "").trim().toLowerCase()
+                && ["invitation", "founding-invitation"].includes(String(entry?.kind || "").trim().toLowerCase())
+            ))?.case || null;
+    }, [isLifecycleConversation, chat?.lifecycleInstitutionId, chat?.lifecycleCaseIds, world, playerCountry]);
+    const institutionView = useMemo(() => {
+        if (!isInstitutional || !chat?.institutionId) return null;
+        try {
+            return buildInstitutionDiplomacyView({
+                world,
+                institutionId: chat.institutionId,
+                playerCountry,
+            });
+        } catch {
+            return null;
+        }
+    }, [isInstitutional, chat?.institutionId, world, playerCountry]);
+    const institution = institutionView?.institution || null;
+    const institutionPendingBallots = Number(institutionView?.playerPendingBallotCount || 0);
+    const institutionPendingAmendments = Number(institutionView?.playerPendingAmendmentReviewCount || 0);
+    const institutionPendingActions = institutionPendingBallots + institutionPendingAmendments;
 
     const [messages, setMessages]               = useState(chat.messages ?? []);
     // A letter an event of the skip being revealed delivered waits for the
@@ -857,22 +1206,52 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     // what the leader is sent. The stored thread keeps it all along.
     const unseen = useUnseenEventIds();
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
-    const [phase, setPhase]                     = useState("player");
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
-    const [pendingCountry, setPendingCountry]   = useState(null);
-    const [remainingQueue, setRemainingQueue]   = useState([]);
+    const [pollComposerOpen, setPollComposerOpen] = useState(false);
+    const [pollQuestion, setPollQuestion] = useState("");
+    const [pollOptionsText, setPollOptionsText] = useState("Yes\nNo\nAbstain");
+    const [pollError, setPollError] = useState("");
     const [speakingCountry, setSpeakingCountry] = useState(null);
+    const [lifecycleCaseOverrides, setLifecycleCaseOverrides] = useState({});
+    const [lifecycleRevealInProgress, setLifecycleRevealInProgress] = useState(false);
+    const [stagedLifecycleSpeaker, setStagedLifecycleSpeaker] = useState(null);
 
-    const nextSpeakerIdx    = useRef(0);
-    const lastPlayerMessage = useRef("");
+    const lifecycleState = useMemo(() => {
+        if (!isLifecycleConversation) return { institution: null, cases: [], responseCases: [], awaitingApprovalCases: [], resolvedCases: [], responseComplete: false };
+        const base = institutionLifecycleConversationState(world, { institutionId: chat.lifecycleInstitutionId, caseIds: chat.lifecycleCaseIds });
+        if (!Object.keys(lifecycleCaseOverrides).length) return base;
+        const cases = base.cases.map((entry) => {
+            const override = lifecycleCaseOverrides[entry.id];
+            if (!override) return entry;
+            const baseStatus = String(entry?.status || "pending").toLowerCase();
+            return ["pending", "negotiating"].includes(baseStatus) ? override : entry;
+        });
+        const responseCases = cases.filter((entry) => ["pending", "negotiating"].includes(String(entry?.status || "").toLowerCase()));
+        const awaitingApprovalCases = cases.filter((entry) => String(entry?.status || "").toLowerCase() === "pending-approval");
+        const resolvedCases = cases.filter((entry) => !["pending", "negotiating", "pending-approval"].includes(String(entry?.status || "").toLowerCase()));
+        return { ...base, cases, responseCases, awaitingApprovalCases, resolvedCases, responseComplete: cases.length > 0 && responseCases.length === 0 };
+    }, [isLifecycleConversation, world, chat.lifecycleInstitutionId, chat.lifecycleCaseIds, lifecycleCaseOverrides]);
+    const lifecycleCanRequestResponse = isLifecycleConversation && !isInstitutional && (lifecycleState.cases.length === 0 || lifecycleState.responseCases.length > 0);
+    const lifecycleTerminal = isLifecycleConversation
+        && lifecycleState.cases.length > 0
+        && lifecycleState.resolvedCases.length === lifecycleState.cases.length
+        && !lifecycleRevealInProgress;
+    const lifecycleNegotiationConcluded = isLifecycleConversation
+        && lifecycleState.cases.length > 0
+        && lifecycleState.responseComplete
+        && !lifecycleRevealInProgress;
+    const lifecycleHasRecordedResponse = lifecycleState.cases.some((entry) => Boolean(entry?.decision) || String(entry?.status || "pending").toLowerCase() !== "pending");
+
     // What the last batch got wrong, told to the next one (AI/chatActions.js
     // describeChatActionFeedback). Kept on the view: it is about the exchange,
     // not the saved thread.
     const actionFeedbackRef = useRef("");
     const messagesEndRef    = useRef(null);
+    const messagesScrollRef = useRef(null);
     const messagesRef       = useRef(chat.messages ?? []);
     const composerRef       = useRef(null);
+    const lifecycleRevealTokenRef = useRef(0);
     // A group turn is said a line at a time (AI/chatActions.js planChatReveal):
     // the first at once, each later one after its speaker has been seen typing.
     // The lines still to come are held HERE, not in the thread, until they are
@@ -884,6 +1263,64 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     // vote the player cast in between is kept under it.
     const chatRef = useRef(chat);
     useEffect(() => { chatRef.current = chat; }, [chat]);
+
+    // A Council turn can be generated by the parent Institutions workspace, not
+    // by this ConversationView. The parent owns that canonical channel and can
+    // replace it while this embedded view stays mounted. Keep the local message
+    // state for ordinary chats and staged local turns, but make an embedded
+    // Council CONTROLLED by its canonical `chat.messages` prop for presentation.
+    // That removes a stale-local-state seam entirely: a committed background
+    // debate is visible on the render that receives the new channel, rather than
+    // waiting for an effect (or a tab remount) to copy the transcript into local
+    // state. `messagesRef` still follows the shown canonical transcript so a
+    // player message sent immediately afterwards continues from exactly what is
+    // on screen and never from the pre-debate copy.
+    const canonicalEmbeddedMessages = embeddedInstitution
+        ? withoutUnseenMessages(chat.messages ?? [], unseen)
+        : null;
+    const presentedMessages = embeddedInstitution ? canonicalEmbeddedMessages : messages;
+    const presentedMessageCount = presentedMessages.length;
+    useEffect(() => {
+        if (isLoading || lifecycleRevealInProgress || revealRef.current) return;
+        const saved = withoutUnseenMessages(chat.messages ?? [], unseen);
+        messagesRef.current = saved;
+        if (!embeddedInstitution) setMessages(saved);
+    }, [chat.messages, embeddedInstitution, isLoading, lifecycleRevealInProgress, unseen]);
+
+    // DEMANDS, in the one-on-one thread between the player and their own
+    // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
+    // player, from the same shared rule as the list's markers.
+    // A Council or accession table takes the group path even with one AI member
+    // (submitPlayerText), where no demand is read, so none is offered there.
+    const oneOnOne = !isGroup && !isInstitutional && !isLifecycleConversation;
+    const theyAre = oneOnOne ? puppetMarkers[countries[0]?.name]?.theyAre ?? "" : "";
+    // The composer offers "make this a demand" only to an Overlord writing to
+    // its own Puppet; an Overlord's demands of the player arrive on their own.
+    const canDemand = theyAre === "puppet";
+    const [makeDemand, setMakeDemand] = useState(false);
+    const [demandBusy, setDemandBusy] = useState(false);
+    const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // Appends events to the thread's log, the way a poll vote is — but read from
+    // the thread as LAST RENDERED, never the copy this closure started with: a
+    // demand is often appended after a model request, seconds later, and writing
+    // the older copy back would drop whatever the thread gained meanwhile.
+    const appendThreadEvents = (newEvents) => {
+        if (!newEvents?.length) return;
+        const current = chatRef.current ?? chat;
+        const events = [
+            ...(current.events?.length ? current.events : eventsFromLegacyChat({ ...current, messages: messagesRef.current })),
+            ...newEvents,
+        ];
+        const projected = projectChatThread(events);
+        onThreadUpdate?.(current.id, {
+            events,
+            countries: projected.countries,
+            title: projected.title,
+            polls: projected.polls,
+            demands: projected.demands,
+        });
+    };
 
     useEffect(() => {
         countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
@@ -943,10 +1380,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         logDebugEvent("diplomacy",
             `Opened chat #${chat.id} with ${countries.map((country) => country.name).join(", ") || "(nobody)"} — ${saved.length} saved message(s).`,
             undefined, { verbose: true });
+        // The messages are this thread's. Both render sites key the view on the
+        // chat id, so a switch remounts it; this is the second guard, because a
+        // view still holding the last thread's lines sends them into this one.
+        messagesRef.current = saved;
+        setMessages(saved);
         const shown = withoutUnseenMessages(saved, unseen);
         if (shown.length > 0) loadDiplomaticHistory(shown);
         else startDiplomaticChat();
         setVisibleMessageLimit(CHAT_INITIAL_RENDER_WINDOW);
+        setLifecycleCaseOverrides({});
+        setLifecycleRevealInProgress(false);
+        setStagedLifecycleSpeaker(null);
+        setPollComposerOpen(false);
+        setPollQuestion("");
+        setPollOptionsText("Yes\nNo\nAbstain");
+        setPollError("");
+        lifecycleRevealTokenRef.current += 1;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chat.id]);
 
@@ -963,14 +1413,56 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [unseenKey]);
 
+    // The thread grew outside this view: a Council round run from the
+    // Institutions workspace, a committed turn read back from storage. Shown
+    // when it holds more than the view does, and never mid-turn or mid-reveal,
+    // which write the thread themselves.
+    useEffect(() => {
+        const incoming = chat.messages ?? [];
+        if (incoming === messagesRef.current || incoming.length <= messagesRef.current.length) return;
+        if (isLoading || revealRef.current || lifecycleRevealInProgress) return;
+        messagesRef.current = incoming;
+        setMessages(incoming);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chat.messages]);
+
         useEffect(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, [messages, isLoading, phase, typingNext]);
+            const scroller = messagesScrollRef.current;
+            if (!scroller) return;
+            scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+        }, [presentedMessageCount, isLoading, typingNext]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
             setMessages(updated);
             onMessagesUpdate(chat.id, updated);
+        };
+
+        const presentCommittedLifecycleReplies = async (fullMessages, newMessageIds) => {
+            const plan = buildLifecycleReplyRevealPlan({ messages: fullMessages, newMessageIds });
+            messagesRef.current = fullMessages;
+            if (plan.length < 2) {
+                setMessages(fullMessages);
+                return;
+            }
+            const token = ++lifecycleRevealTokenRef.current;
+            const replyIds = new Set(plan.map((row) => String(row.message?.id || "")));
+            const baseMessages = fullMessages.filter((message) => !replyIds.has(String(message?.id || "")));
+            setLifecycleRevealInProgress(true);
+            setStagedLifecycleSpeaker(null);
+            setMessages([...baseMessages, plan[0].message]);
+            for (let index = 1; index < plan.length; index += 1) {
+                const row = plan[index];
+                if (lifecycleRevealTokenRef.current !== token) return;
+                setStagedLifecycleSpeaker({ name: row.message?.speaker || "Government", code: row.message?.code || "" });
+                await new Promise((resolve) => setTimeout(resolve, row.gapMs));
+                if (lifecycleRevealTokenRef.current !== token) return;
+                setMessages([...baseMessages, ...plan.slice(0, index + 1).map((entry) => entry.message)]);
+            }
+            if (lifecycleRevealTokenRef.current !== token) return;
+            setMessages(fullMessages);
+            setStagedLifecycleSpeaker(null);
+            setLifecycleRevealInProgress(false);
         };
 
         // The panel's copy of a thread's messages, from its log's projection.
@@ -995,6 +1487,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         const addTurnEvents = (reveal, newEvents, { cursors = null, onScreen = true } = {}) => {
             if (campaignChanged(reveal.campaignId, activeCampaignNow())) return false;
             const live = chatRef.current;
+            // A committed turn (a Council's, a hearing's) was saved whole with
+            // its governance before it came back: a step is only shown. Writing
+            // it again would put the thread back to this step, and a cut-in
+            // would then erase the committed lines after it.
+            if (reveal.committed) {
+                reveal.events = [...reveal.events, ...newEvents];
+                if (onScreen && String(live?.id) === String(reveal.chatId)) setMessages(viewMessagesOf(projectChatThread(reveal.events)));
+                return true;
+            }
             const events = [
                 ...logForNextStep({ turnLog: reveal.events, wroteAny: reveal.written, chatId: reveal.chatId, liveChatId: live?.id, liveLog: live?.events }),
                 ...newEvents,
@@ -1005,17 +1506,17 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const shown = viewMessagesOf(projected);
             if (onScreen && String(live?.id) === String(reveal.chatId)) pushMessages(shown);
             else onMessagesUpdate(reveal.chatId, shown);
-            onThreadUpdate?.(reveal.chatId, { events, countries: projected.countries, title: projected.title, polls: projected.polls, ...(cursors ? { cursors } : {}) });
+            onThreadUpdate?.(reveal.chatId, { events, countries: projected.countries, title: projected.title, polls: projected.polls, demands: projected.demands, ...(cursors ? { cursors } : {}) });
             return true;
         };
 
         // The rest of a group turn, a line at a time (chatReveal.js): each
-        // speaker is seen typing for CHAT_REVEAL_PAUSE_MS, then says the line.
+        // speaker is seen typing for a fresh 1-3 second pause, then says the line.
         const sayLater = (reveal, steps) => {
             revealRef.current = reveal;
             reveal.controller = startChatReveal({
                 steps,
-                pauseMs: CHAT_REVEAL_PAUSE_MS,
+                pauseMs: () => randomChatRevealPauseMs(),
                 onTyping: (step) => setTypingNext(step
                     ? { speaker: step.speaker, code: countries.find((country) => (country.name || "").toLowerCase() === step.speaker.toLowerCase())?.code || "" }
                     : null),
@@ -1036,6 +1537,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const reveal = revealRef.current;
             const unsaid = reveal?.controller?.stop() ?? [];
             if (!unsaid.length) return;
+            // A committed turn has been said, and saved, in full: the rest of it
+            // is shown at once rather than dropped.
+            if (reveal.committed) {
+                addTurnEvents(reveal, unsaid.flatMap((step) => step.events));
+                return;
+            }
             const note = describeChatCutIn({ player: playerCountry, steps: unsaid });
             if (note) actionFeedbackRef.current = [actionFeedbackRef.current, note].filter(Boolean).join("\n\n");
             logDebugEvent("diplomacy",
@@ -1054,15 +1561,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
-        const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
-            // Captured before the request, not in the catch: by the time an
-            // error lands, offerNextCountry may already have rotated the index
-            // on, and a retry has to replay this turn from where it started.
-            const speakerIdxAtStart = nextSpeakerIdx.current;
+        const fetchLeaderResponse = async (country, playerMessage) => {
             if (isPlayerCountry(country)) {
-                setPendingCountry(null);
-                setRemainingQueue([]);
-                setPhase("player");
                 return;
             }
             setIsLoading(true);
@@ -1076,8 +1576,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 const { reply, reaction, memorySummary } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
-                // and the world director read the same continuity.
+                // and the world director read the same continuity. Its id is set
+                // here so a demand this reply makes can be attached to it.
                 const leaderMessage = {
+                    id: newThreadId("msg"),
                     role: "leader", speaker: country.name, code: country.code, text: reply, time: repliedOn,
                     ...(memorySummary ? { memorySummary } : {}),
                 };
@@ -1095,6 +1597,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 } else {
                     pushMessages([...messagesRef.current, leaderMessage]);
                 }
+                // Did this reply make, answer or settle a demand? Only asked in
+                // the one-on-one thread between the player and their own Overlord
+                // or Puppet — everywhere else checkDemandReply returns at once,
+                // without a request. It runs after the reply is shown, so the
+                // player is never kept waiting for it; a failure records nothing.
+                if (!isGroup && theyAre) {
+                    void checkDemandReply({
+                        chat: { ...(chatRef.current ?? chat), messages: messagesRef.current },
+                        speaker: country.name,
+                        reply,
+                        answering: playerMessage,
+                        messageId: leaderMessage.id,
+                        time: repliedOn,
+                    })
+                        .then((events) => appendThreadEvents(events))
+                        .catch((error) => logDebugEvent("diplomacy", `Demand check on ${country.name}'s reply failed; nothing recorded.`, error));
+                }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
                     role: "error", speaker: country.name, code: country.code, text: err.message, time: repliedOn,
@@ -1103,77 +1622,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     retry: {
                         country: { name: country.name, code: country.code ?? "" },
                         playerMessage,
-                        queue: queueAfter.map(({ name, code }) => ({ name, code: code ?? "" })),
-                        speakerIdx: speakerIdxAtStart,
                     },
                 }]);
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
-            if (queueAfter.length > 0) {
-                offerNextCountry(queueAfter);
-            } else {
-                setPhase("player");
-            }
-        };
-
-        const buildRoundQueue = () => {
-            const n = countries.length;
-            if (n === 0) return [];
-            const s = nextSpeakerIdx.current % n;
-            return [...countries.slice(s), ...countries.slice(0, s)];
-        };
-
-        const buildResponsiveQueue = async (updatedMessages) => {
-            const rotatedQueue = buildRoundQueue();
-            const suggestedSpeaker = await chooseNextDiplomaticSpeaker({
-                chat: {
-                    ...chat,
-                    messages: updatedMessages,
-                },
-                excludeSpeaker: updatedMessages.at(-1)?.speaker || updatedMessages.at(-1)?.role || "",
-            }).catch(() => "");
-
-            if (!suggestedSpeaker) {
-                return rotatedQueue;
-            }
-
-            const suggestedCountry = rotatedQueue.find((country) => country.name.toLowerCase() === suggestedSpeaker.toLowerCase());
-            if (!suggestedCountry) {
-                return rotatedQueue;
-            }
-
-            return [
-                suggestedCountry,
-                ...rotatedQueue.filter((country) => country.name !== suggestedCountry.name),
-            ];
-        };
-
-        const offerNextCountry = (queue) => {
-            const [next, ...rest] = queue;
-            if (!next || countries.length === 0) {
-                setPhase("player");
-                return;
-            }
-            nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % countries.length;
-            if (isPlayerCountry(next)) {
-                setPendingCountry(null);
-                setRemainingQueue([]);
-                setPhase("player");
-                return;
-            }
-            setPendingCountry(next);
-            setRemainingQueue(rest);
-            setPhase("pending");
         };
 
         // A GROUP turn in one request (AI/chatActions.js): every AI participant
         // acts in a single answer — who speaks, who only reacts, who brings
-        // someone in, who calls a vote — instead of one request to pick the
-        // speaker and one per leader after it. A failure falls back to the
-        // rotation below, which is the behaviour this replaces.
-        const runGroupTurn = async (text, nextMessages) => {
+        // someone in, who calls a vote — instead of a separate speaker-selection
+        // request followed by one request per leader. This is the only group-chat
+        // response path; failure is surfaced rather than reviving the old sequence.
+        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "", chatOverride = null } = {}) => {
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
@@ -1181,41 +1643,195 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const campaignId = activeCampaignNow();
             try {
                 const outcome = await runChatActionBatch({
-                    chat: { ...chat, messages: nextMessages, actionFeedback: actionFeedbackRef.current },
+                    chat: { ...(chatOverride || chat), messages: nextMessages, actionFeedback: actionFeedbackRef.current },
                     playerMessage: text,
                     playerCountry,
                     catchUp: asked?.catchUp || "",
                     time: asked?.time || "",
+                    lifecycleResponseRequested,
+                    formalBusinessRequested,
+                    formalBusinessInteractive,
+                    institutionDebateRequested,
+                    institutionProposalId,
+                    expectedGameId: campaignId,
                 });
                 const newEvents = outcome?.newEvents ?? [];
-                if (!newEvents.length) return false;
+                const spoken = newEvents.filter((event) => event.kind === "message");
+                const lifecycleApplied = Array.isArray(outcome?.lifecycle) && outcome.lifecycle.length > 0;
+                // What this batch got wrong goes to the next one even when it
+                // produced nothing: that is when it is most needed.
                 actionFeedbackRef.current = outcome?.feedback ?? "";
-                // The first line is said now, the rest one at a time after it
-                // (planChatReveal). The projection carries the reactions, the
-                // roster and the polls each step changes; the panel renders
-                // messages, and the stored thread keeps the rest.
-                const [first, ...later] = planChatReveal(newEvents);
-                const reveal = {
-                    chatId: chat.id,
-                    campaignId,
-                    events: outcome.events.slice(0, outcome.events.length - newEvents.length),
-                    written: false,
-                    controller: null,
-                };
-                if (!addTurnEvents(reveal, first.events, { cursors: outcome.cursors })) {
-                    logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
-                    return true;
+                if (!newEvents.length && !lifecycleApplied) {
+                    // Nothing came back to show. Said, with why, rather than
+                    // leaving the player's line unanswered: the request is spent.
+                    const refused = Array.isArray(outcome?.rejected) ? outcome.rejected.length : 0;
+                    const unreachable = outcome?.generation?.source === "fallback";
+                    const why = unreachable
+                        ? "The AI could not be reached, so nobody at the table answered."
+                        : refused === 1 ? "Nobody at the table answered: the AI's action was refused."
+                            : refused > 1 ? `Nobody at the table answered: ${refused} of the AI's actions were refused.`
+                                : "Nobody at the table chose to answer.";
+                    logDebugEvent("diplomacy", `Chat #${chat.id}: the table's turn produced nothing.`, {
+                        refused,
+                        fallbackReason: unreachable ? outcome.generation.fallbackReason || "" : "",
+                    }, { problem: unreachable || refused > 0 });
+                    pushMessages([...messagesRef.current, {
+                        role: "error", speaker: "System", text: why, time: asked?.time || gameDate,
+                        ...(text ? { retry: { group: true, text } } : {}),
+                    }]);
+                    return false;
                 }
-                if (later.length) sayLater(reveal, later);
-                setPhase("player");
+                if (lifecycleApplied) {
+                    setLifecycleCaseOverrides((previous) => {
+                        const next = { ...previous };
+                        for (const entry of outcome.lifecycle) {
+                            const lifecycleCase = entry?.lifecycleCase;
+                            if (lifecycleCase?.id) next[lifecycleCase.id] = lifecycleCase;
+                        }
+                        return next;
+                    });
+                }
+
+                // Lifecycle response batches are committed atomically by native institution
+                // governance, then only PRESENTED one government at a time. Ordinary group
+                // turns keep Beta's staged reveal so the player can cut in before later lines
+                // are ever written to the thread.
+                if (isLifecycleConversation && lifecycleResponseRequested && outcome.committed === true) {
+                    const projected = projectChatThread(outcome.events);
+                    const projectedMessages = viewMessagesOf(projected);
+                    onThreadUpdate?.(chat.id, {
+                        events: outcome.events,
+                        countries: projected.countries,
+                        title: projected.title,
+                        polls: projected.polls,
+                        demands: projected.demands,
+                        cursors: outcome.cursors,
+                        committed: true,
+                    });
+                    const newMessageIds = spoken.map((event) => event.id).filter(Boolean);
+                    await presentCommittedLifecycleReplies(projectedMessages, newMessageIds);
+                    const openedVote = outcome.lifecycle
+                        ?.map((entry) => entry?.proposal)
+                        .find((proposal) => proposal?.id && String(proposal?.status || "").toLowerCase() === "voting");
+                    if (openedVote && chat.lifecycleInstitutionId) {
+                        void Promise.resolve(onInstitutionBusinessOpened?.({
+                            institutionId: chat.lifecycleInstitutionId,
+                            proposalId: openedVote.id,
+                            kind: "vote",
+                            delayMs: randomChatRevealPauseMs(),
+                            source: "lifecycle-acceptance",
+                        })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${openedVote.id}.`, error, { problem: true }));
+                    }
+                } else {
+                    // Any other committed turn is presented the same way: the
+                    // thread takes the committed log at once, unsaved again, and
+                    // only the screen follows the reveal.
+                    const committed = outcome.committed === true;
+                    if (committed) {
+                        const projected = projectChatThread(outcome.events);
+                        onThreadUpdate?.(chat.id, {
+                            events: outcome.events,
+                            countries: projected.countries,
+                            title: projected.title,
+                            polls: projected.polls,
+                            demands: projected.demands,
+                            cursors: outcome.cursors,
+                            committed: true,
+                        });
+                        messagesRef.current = viewMessagesOf(projected);
+                    }
+                    const [first, ...later] = planChatReveal(newEvents);
+                    const reveal = {
+                        chatId: chat.id,
+                        campaignId,
+                        events: outcome.events.slice(0, outcome.events.length - newEvents.length),
+                        written: false,
+                        committed,
+                        controller: null,
+                    };
+                    if (!addTurnEvents(reveal, first.events, committed ? {} : { cursors: outcome.cursors })) {
+                        logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
+                        return true;
+                    }
+                    if (later.length) sayLater(reveal, later);
+                }
                 return true;
             } catch (error) {
-                logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; falling back to the rotation.`, error, { problem: true });
-                return false;
+                const message = error?.message || "The group response could not be generated.";
+                logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; no legacy sequential fallback exists.`, error, { problem: true });
+                pushMessages([...nextMessages, {
+                    role: "error", speaker: "System", text: message, time: asked?.time || gameDate,
+                    // A line the player typed is asked again from the bubble,
+                    // not typed again: a second copy of it would change what
+                    // every leader answers. A hearing's or a Council's own
+                    // request has its own button for that.
+                    ...(text ? { retry: { group: true, text } } : {}),
+                }]);
+                return true;
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
+        };
+
+        // A human-called vote in an ordinary group chat. The poll itself and the
+        // line calling it are written into the SAME canonical chat event log as
+        // AI-created polls, then the existing one-request group turn lets every
+        // AI participant answer/vote. This is conversational diplomacy only; it
+        // intentionally cannot mutate institution governance.
+        const handlePlayerCreatePoll = async () => {
+            if (!canCallChatVote || isLoading) return;
+            const options = pollOptionsText
+                .split(/\r?\n|,/)
+                .map((entry) => entry.trim())
+                .filter(Boolean);
+            const pollEvent = createPlayerPollEvent({
+                player: playerCountry,
+                question: pollQuestion,
+                options,
+                time: gameDate,
+                idFor: newThreadId,
+            });
+            if (!pollEvent) {
+                setPollError("Enter a question and at least two distinct options.");
+                return;
+            }
+            setPollError("");
+            cutIn();
+            const line = `I call a vote: ${pollEvent.question}`;
+            const current = chatRef.current ?? chat;
+            const existing = current.events?.length
+                ? current.events
+                : eventsFromLegacyChat({ ...current, messages: messagesRef.current });
+            const messageEvent = {
+                id: newThreadId("msg"), kind: "message", time: gameDate, by: playerCountry,
+                role: "user", text: line,
+            };
+            const events = [...existing, messageEvent, pollEvent];
+            const projected = projectChatThread(events);
+            const projectedMessages = viewMessagesOf(projected);
+            const updatedChat = {
+                ...current,
+                events,
+                messages: projectedMessages,
+                countries: projected.countries,
+                title: projected.title,
+                polls: projected.polls,
+                demands: projected.demands,
+            };
+            // Keep the in-flight turn on this exact poll-bearing snapshot even
+            // before the parent has had a React render to feed it back as props.
+            chatRef.current = updatedChat;
+            messagesRef.current = projectedMessages;
+            setMessages(projectedMessages);
+            onThreadUpdate?.(current.id, {
+                events, countries: projected.countries, title: projected.title,
+                polls: projected.polls, demands: projected.demands,
+            });
+            setPollComposerOpen(false);
+            setPollQuestion("");
+            setPollOptionsText("Yes\nNo\nAbstain");
+            await runGroupTurn(line, projectedMessages, { chatOverride: updatedChat });
         };
 
         // The player's own vote. Appended to the thread's log like any other
@@ -1234,46 +1850,187 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             logDebugEvent("diplomacy", `${playerCountry} voted in chat #${chat.id}.`, { poll: poll.question, optionId }, { verbose: true });
         };
 
+        // The demand card's moves (runtime/demandCheck.js). Each is appended to
+        // the thread's log AND said, as a line from the player, so the other side
+        // answers it the way it answers anything typed — and that answer is then
+        // checked in turn. Only a refusal costs the Puppet anything.
+        const answerDemand = async (demand, answer, text = "") => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer, text, time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                // A change of mind says so, or the other side reads the
+                // acceptance as coming out of nowhere.
+                const reconsidered = demand.status === "refused";
+                // In the interface's language (the shipped pack's own entries):
+                // the player's line, as the player would have typed it.
+                const line = answer === "accepted"
+                    ? (reconsidered
+                        ? uiString("We have reconsidered. We accept: {{summary}}.", { summary: demand.summary })
+                        : uiString("We accept: {{summary}}.", { summary: demand.summary }))
+                    : answer === "refused" ? uiString("We refuse this demand.")
+                        : (reconsidered ? uiString("We have reconsidered. {{text}}", { text }) : text);
+                await submitPlayerText(line);
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        const acceptAlternative = async (demand) => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer: "alternative_accepted", time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }));
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        // Rejecting an alternative is demanding again: the player's revision if
+        // they wrote one, the original restated if not — "this is the demand".
+        const rejectAlternative = async (demand, revised = "") => {
+            setDemandBusy(true);
+            try {
+                await submitPlayerText(revised || uiString("No. The demand stands: {{summary}}.", { summary: demand.summary }), {
+                    onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: demand.target,
+                        text: revised,
+                        openDemand: demand,
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean)),
+                });
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading) return;
+            setPlayerInput("");
+            // "Make this a demand" — only offered to an Overlord writing to its
+            // own Puppet, and only for this one message.
+            const asDemand = canDemand && makeDemand;
+            setMakeDemand(false);
+            await submitPlayerText(text, {
+                // Rejecting an alternative from the card is demanding again; so is
+                // this. Either replaces whatever demand was still in play.
+                onSent: asDemand
+                    ? ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: countries[0]?.name,
+                        text,
+                        openDemand: openDemandOf(chatRef.current),
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean))
+                    : null,
+            });
+        };
+
+        // Sends a line as the player and gets the table's answer: the composer's
+        // path, and the demand card's, so a button press is answered exactly as a
+        // typed message is. `onSent` runs once the line is on the thread, with its
+        // id — which is what a demand made by this line is attached to.
+        const submitPlayerText = async (text, { onSent = null } = {}) => {
+            if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
-            lastPlayerMessage.current = text;
-            setPlayerInput("");
+            // In a shared game the host keeps every thread and answers for the AI
+            // governments: the line is sent to it, and the thread comes back in the
+            // next view. A thread started here reaches the host with its first line.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("say", chat.pendingShared
+                    ? { thread: null, to: countries.map((country) => country.name).filter(Boolean).slice(0, 8), text }
+                    : { thread: String(chat.id), to: [], text });
+                if (!answer.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
+                    return;
+                }
+                if (chat.pendingShared) onBack?.();
+                return;
+            }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
             const moment = await readSeenChatMoment(gameDate);
             const catchUp = buildLeaderCatchUp(messagesRef.current, chat, playerCountry, moment);
+            const messageId = newThreadId("msg");
             const nextMessages = [...messagesRef.current, {
-                role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
+                id: messageId, role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }];
             pushMessages(nextMessages);
-            // One request for the whole table. Only for a group: a one-on-one
-            // chat is already a single request, and its streaming reply is what
-            // the player watches arrive.
-            if (isGroup && await runGroupTurn(text, nextMessages)) return;
-            const queue = await buildResponsiveQueue(nextMessages);
-            // Who was asked, and in what order. A group chat sends the same
-            // message to each leader in turn, so "France answered as if it had
-            // heard Prussia's reply" is a question about this order — and the
-            // order is chosen by a model call (chooseNextDiplomaticSpeaker) that
-            // can quietly fall back to plain rotation.
-            logDebugEvent("diplomacy",
-                `Player sent in chat #${chat.id}; reply order: ${queue.map((country) => country.name).join(" → ") || "(nobody)"}.`,
-                undefined, { verbose: true });
-            if (queue.length === 0) {
-                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
+            onSent?.({ messageId, time: moment.date || gameDate });
+            // Groups and institution conversations have one canonical response path:
+            // runChatActionBatch decides who speaks, reacts, votes or stays silent in
+            // the same AI request that writes the turn. There is no legacy sequential
+            // group-chat fallback. A one-on-one thread has exactly one AI counterpart,
+            // so native code selects it directly and makes only the diplomacy request.
+            // An institution's Council is never that, even with one AI member: it
+            // has an agenda, a charter and votes, which only the batch can act on.
+            if (isGroup || isInstitutional || isLifecycleConversation) {
+                await runGroupTurn(text, nextMessages);
                 return;
             }
-            if (isGroup) {
-                // At most three NPC replies to one player message; the rotation
-                // ends at the player's own slot as it always did.
-                offerNextCountry(queue.filter((country) => !isPlayerCountry(country)).slice(0, MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE));
-            } else {
-                await fetchLeaderResponse(queue[0], text, []);
+            const counterpart = countries.find((country) => !isPlayerCountry(country));
+            if (!counterpart) {
+                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid counterpart.", time: gameDate }]);
+                return;
+            }
+            logDebugEvent("diplomacy",
+                `Player sent in chat #${chat.id}; one-on-one counterpart: ${counterpart.name}.`,
+                undefined, { verbose: true });
+            await fetchLeaderResponse(counterpart, text);
+        };
+
+        const handleLifecycleContinue = async () => {
+            if (!isLifecycleConversation || isLoading || playerLifecycleCase) return;
+            if (!isInstitutional && lifecycleState.cases.length > 0 && lifecycleState.responseCases.length === 0) return;
+            await runGroupTurn("", messagesRef.current, { lifecycleResponseRequested: true });
+        };
+
+        const handlePlayerLifecycleDecision = async (decision) => {
+            if (!playerLifecycleCase || isLoading) return;
+            setIsLoading(true);
+            try {
+                // The case lives in the world a running turn writes back.
+                assertNoTurnRunning();
+                const result = await commitInstitutionLifecycleCommand({
+                    playerCountry,
+                    date: gameDate,
+                    expectedGameId: String(getLibraryState()?.activeGameId || ""),
+                    command: {
+                        type: "respond",
+                        institutionId: chat.lifecycleInstitutionId,
+                        caseId: playerLifecycleCase.id,
+                        actorPolity: playerCountry,
+                        decision,
+                        authority: "player",
+                    },
+                });
+                onLifecycleResult?.(result);
+                if (result?.proposal?.id && String(result.proposal.status || "").toLowerCase() === "voting") {
+                    void Promise.resolve(onInstitutionBusinessOpened?.({
+                        institutionId: chat.lifecycleInstitutionId,
+                        proposalId: result.proposal.id,
+                        kind: "vote",
+                        delayMs: randomChatRevealPauseMs(),
+                        source: "lifecycle-acceptance",
+                    })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${result.proposal.id}.`, error, { problem: true }));
+                }
+            } catch (error) {
+                logDebugEvent("diplomacy", `Player institution lifecycle response failed in chat #${chat.id}.`, error, { problem: true });
+                pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: error?.message || "The institution response could not be recorded.", time: gameDate }]);
+            } finally {
+                setIsLoading(false);
             }
         };
 
@@ -1285,34 +2042,29 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            if (retry.group) {
+                // The table's turn again, answering the player's line as it
+                // stands in the thread: no second copy of it is added.
+                logDebugEvent("diplomacy", `Retrying the table's turn in chat #${chat.id}.`, undefined, { verbose: true });
+                const rest = messagesRef.current.filter((_, i) => i !== index);
+                pushMessages(rest);
+                await runGroupTurn(retry.text, rest);
+                return;
+            }
             logDebugEvent("diplomacy", `Retrying ${retry.country?.name || "a leader"}'s reply in chat #${chat.id}.`, undefined, { verbose: true });
             pushMessages(messagesRef.current.filter((_, i) => i !== index));
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            setPhase("player");
-            nextSpeakerIdx.current = retry.speakerIdx ?? nextSpeakerIdx.current;
-            lastPlayerMessage.current = retry.playerMessage;
-            await fetchLeaderResponse(retry.country, retry.playerMessage, retry.queue ?? []);
+            await fetchLeaderResponse(retry.country, retry.playerMessage);
         };
 
-        const handleSpeakInstead = () => {
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            setPhase("player");
-        };
-
-        const handleLetSpeak = async () => {
-            const country = pendingCountry;
-            const rest    = remainingQueue;
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            await fetchLeaderResponse(country, lastPlayerMessage.current, rest);
-        };
-
-        const typingSpeaker = speakingCountry ?? countries[0];
+        // One-request lifecycle turns ask every unresolved government at the table
+        // in the same model call. Do not pretend the first roster entry alone is
+        // "thinking" while that grouped request is in flight.
+        const lifecycleGroupThinking = isLifecycleConversation && isLoading && !speakingCountry && !stagedLifecycleSpeaker && countries.length > 1;
+        const ordinaryGroupThinking = isGroup && !isLifecycleConversation && isLoading && !speakingCountry;
+        const typingSpeaker = stagedLifecycleSpeaker ?? speakingCountry ?? (!lifecycleGroupThinking && !ordinaryGroupThinking ? countries[0] : null);
         // What the reveal has reached, each with its place in the stored thread
         // (a retry replays the stored message at that index).
-        const shownEntries = messages
+        const shownEntries = presentedMessages
             .map((msg, index) => ({ msg, index }))
             .filter(({ msg }) => !unseen.has(String(msg?.eventId ?? "")));
         const visibleEntries = shownEntries.length > visibleMessageLimit
@@ -1320,44 +2072,89 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             : shownEntries;
         const hiddenMessageCount = shownEntries.length - visibleEntries.length;
 
+        // DEMANDS, placed in the conversation rather than under it
+        // (runtime/demandCheck.js placeDemandCards).
+        const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
+            messages: visibleEntries.map(({ msg }) => msg),
+            demands: chat.demands,
+            isGroup,
+        });
+        const renderDemandCard = (demand) => (
+            <DemandCard
+                key={demand.id}
+                demand={demand}
+                playerCountry={playerCountry}
+                busy={demandBusy || isLoading}
+                onAnswer={(answer, text) => answerDemand(demand, answer, text)}
+                onAcceptAlternative={() => acceptAlternative(demand)}
+                onReject={(text) => rejectAlternative(demand, text)}
+            />
+        );
+
         return (
             <>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: isTouch ? "0.35rem 1rem" : "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-            <button className="oh-tap" aria-label="Back to chats" onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", display: "flex", padding: "0.2rem", borderRadius: "6px" }}
-            onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.6)"; e.currentTarget.style.background = "none"; }}>
-            <BackIcon />
-            </button>
-            <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Chat with {countries.map(c => c.name).join(", ") || "unknown participant"}
-            </span>
-            <button className="oh-tap" onClick={() => onToggleRead?.()}
-            title={unread ? "Mark as read" : "Mark as unread"}
-            aria-label={unread ? "Mark as read" : "Mark as unread"}
-            style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
-            <EnvelopeIcon filled={unread} />
-            </button>
-            {/* Two-step, same as the list row: one click arms, the next confirms. */}
-            <button className="oh-tap" title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"}
-            aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"}
-            onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }}
-            onBlur={() => setConfirmingDelete(false)}
-            style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirmingDelete ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,0.65)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { if (!confirmingDelete) { e.currentTarget.style.color = "rgba(239,68,68,1)"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; } }}
-            onMouseLeave={e => { if (!confirmingDelete) { e.currentTarget.style.color = "rgba(239,68,68,0.65)"; e.currentTarget.style.background = "none"; } }}>
-            {confirmingDelete ? "Delete?" : <TrashIcon />}
-            </button>
-            <button className="oh-tap" aria-label="Close chat" onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: "1rem", lineHeight: 1, padding: "0.25rem 0.3rem", borderRadius: "6px" }}
-            onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>✕</button>
-            </div>
+            {isInstitutionCouncil ? (!embeddedInstitution ? (
+                <>
+                {/* Institutional councils are canonical records and intentionally expose no delete control. */}
+                <div style={{ display: "flex", alignItems: "center", gap: ".75rem", padding: ".75rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", flexShrink: 0 }}>
+                    <button className="oh-tap" onClick={onBack} aria-label="Back to institution" style={{ background: "none", border: 0, color: "rgba(255,255,255,.55)", cursor: "pointer", display: "flex", padding: ".22rem", borderRadius: 6 }}><BackIcon /></button>
+                    {institution && <InstitutionEmblem institution={institution} size={48} />}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
+                            <strong style={{ fontSize: ".94rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{institution?.name || chat.title || "Institution council"}</strong>
+                            {institution?.status && <InstitutionPill tone={String(institution.status).toLowerCase() === "active" ? "good" : "neutral"}>{institution.status}</InstitutionPill>}
+                        </div>
+                        <div style={{ marginTop: ".12rem", fontSize: ".56rem", color: "rgba(255,255,255,.38)" }}>
+                            {String(institution?.kind || "institution").replace(/[-_]/g, " ")}{institution?.shortName ? ` · ${institution.shortName}` : ""}{institution?.foundedDate ? ` · founded ${institution.foundedDate}` : ""}
+                        </div>
+                    </div>
+                    <button className="oh-tap" onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(147,197,253,.78)", padding: ".3rem", borderRadius: 6 }}><EnvelopeIcon filled={unread} /></button>
+                </div>
+                {institutionView && <div style={{ padding: ".55rem 1rem", flexShrink: 0 }}><InstitutionFacts view={institutionView} /></div>}
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: ".15rem", padding: "0 .7rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
+                    {[
+                        ["council", "Council"],
+                        ["agenda", `Agenda${institutionView?.activeProposals?.length ? ` (${institutionView.activeProposals.length})` : ""}`],
+                        ["decisions", `Decisions${institutionView?.decisionHistory?.length ? ` (${institutionView.decisionHistory.length})` : ""}`],
+                        ["charter", "Charter"],
+                        ["members", "Members"],
+                        ["documents", "Documents"],
+                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(231,231,234,.72)" : "transparent"}`, background: "transparent", color: key === "council" ? "var(--oh-grey-text)" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
+                </div>
+                {institutionPendingActions > 0 && <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
+                    <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{institutionPendingBallots ? `${institutionPendingBallots} ballot${institutionPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{institutionPendingBallots && institutionPendingAmendments ? " · " : ""}{institutionPendingAmendments ? `${institutionPendingAmendments} amendment review${institutionPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
+                    <strong style={{ fontSize: ".6rem" }}>Review agenda →</strong>
+                </button>}
+                </>
+            ) : null) : (
+                <div data-diplomacy-header="modern" style={{ display: "flex", alignItems: "center",
+                    // On touch the gaps close up too: four thumb-sized buttons
+                    // .72rem apart left a phone's thread title under 60px.
+                    gap: isTouch ? ".35rem" : ".72rem", padding: isTouch ? ".35rem 1rem" : ".72rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", background: "rgba(15,15,18,.26)", flexShrink: 0 }}>
+                <button className="oh-tap" onClick={onBack} aria-label="Back to diplomacy" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.58)", display: "flex", padding: ".26rem", borderRadius: 7 }}><BackIcon /></button>
+                <div style={{ display: "inline-flex", alignItems: "center", minWidth: headerCountries.length > 1 ? "2.5rem" : "1.55rem", paddingRight: headerCountries.length > 1 ? ".2rem" : 0, flexShrink: 0 }}>
+                    {headerCountries.map((country, index) => (
+                        <span key={`${country.name}-${country.code || index}`} style={{ display: "inline-flex", marginLeft: index ? "-.38rem" : 0, zIndex: headerCountries.length - index, filter: "drop-shadow(0 1px 2px rgba(0,0,0,.45))" }}>
+                            <FlagImg url={headerFlagUrls[country.name] ?? null} alt={country.name} width="1.5rem" height="1rem" />
+                        </span>
+                    ))}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 750, fontSize: ".93rem", color: "rgba(255,255,255,.95)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayThreadTitle}</div>
+                    <div style={{ marginTop: ".12rem", color: "rgba(255,255,255,.34)", fontSize: ".62rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {isLifecycleConversation ? (lifecycleNegotiationConcluded ? "Institution membership negotiation · concluded" : "Institution membership negotiation") : isGroup ? `${participantCount}-party diplomatic channel` : "Direct diplomatic channel"}
+                    </div>
+                </div>
+                <button className="oh-tap" onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,.7)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}><EnvelopeIcon filled={unread} /></button>
+                <button className="oh-tap" title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"} aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"} onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }} onBlur={() => setConfirmingDelete(false)} style={{ display: "flex", alignItems: "center", gap: ".3rem", background: confirmingDelete ? "rgba(239,68,68,.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,.62)", fontSize: ".72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? ".25rem .5rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>{confirmingDelete ? "Delete?" : <TrashIcon />}</button>
+                <button className="oh-tap" onClick={onBack} aria-label="Close conversation" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.4)", fontSize: "1rem", lineHeight: 1, padding: ".28rem .34rem", borderRadius: 7 }}>✕</button>
+                </div>
+            )}
 
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "visible", scrollbarWidth: "none", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div ref={messagesScrollRef} data-institution-council-scroll={isInstitutionCouncil ? "messages" : undefined} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "visible", scrollbarWidth: "none", padding: isInstitutionCouncil ? ".75rem" : "1rem 1.15rem", display: "flex", flexDirection: "column", gap: isInstitutionCouncil ? "1rem" : ".86rem" }}>
             {messages.length === 0 && !isLoading && (
                 <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", textAlign: "center", marginTop: "2rem" }}>
-                Begin the diplomatic conversation.
+                {isInstitutionCouncil ? "The council floor is quiet. Address the institution when you are ready." : isLifecycleConversation ? "The accession table is open." : "Begin the diplomatic conversation."}
                 </p>
             )}
             {hiddenMessageCount > 0 && (
@@ -1385,12 +2182,22 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 every new game day. */}
             {visibleEntries.map(({ msg, index }, i) => {
                 const dateKey = chatDateKey(msg?.time);
-                const showDateSeparator = Boolean(dateKey) && (i === 0 || dateKey !== chatDateKey(visibleEntries[i - 1]?.msg?.time));
+                const previous = visibleEntries[i - 1]?.msg;
+                const next = visibleEntries[i + 1]?.msg;
+                const showDateSeparator = Boolean(dateKey) && (i === 0 || dateKey !== chatDateKey(previous?.time));
+                const speakerKey = `${msg?.role || ""}::${String(msg?.speaker || "").trim().toLowerCase()}`;
+                const previousKey = `${previous?.role || ""}::${String(previous?.speaker || "").trim().toLowerCase()}`;
+                const nextKey = `${next?.role || ""}::${String(next?.speaker || "").trim().toLowerCase()}`;
+                const compact = !showDateSeparator && msg?.role !== "system" && speakerKey === previousKey;
+                const groupedWithNext = msg?.role !== "system" && speakerKey === nextKey && dateKey === chatDateKey(next?.time);
                 return (
                     <React.Fragment key={index}>
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
-                    <MessageBubble msg={msg} chatCountries={countries}
-                    onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />
+                    {isInstitutional && (msg.role === "system" || String(msg.speaker || "").toLowerCase() === "system")
+                        ? <InstitutionRecord msg={msg} />
+                        : <MessageBubble msg={msg} compact={compact} showTime={!groupedWithNext}
+                            onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
+                    {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
                     </React.Fragment>
                 );
             })}
@@ -1405,74 +2212,95 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
-            {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
-            {/* The next line of the table's turn, still being typed. */}
+            {/* A demand whose message is older than the window, or which was
+                never tied to one, still has to be answerable: it sits at the
+                foot of the thread rather than nowhere. */}
+            {strandedDemands.map(renderDemandCard)}
+            {isLoading && lifecycleGroupThinking
+                ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
+                : isLoading && ordinaryGroupThinking
+                    ? <GroupThinkingBubble count={countries.length} />
+                    : isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             {!isLoading && typingNext && (
                 <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
             )}
             <div ref={messagesEndRef} />
             </div>
 
-            {phase === "pending" && !isLoading && pendingCountry ? (
-                <div style={{ padding: "0.75rem 1rem 0.9rem", borderTop: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(0,0,0,0.15)", flexShrink: 0 }}>
-                <p style={{ margin: "0 0 0.55rem 0", fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", textAlign: "center" }}>
-                <CountryTurnLabel country={pendingCountry} remaining={remainingQueue.length} />
-                </p>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                className="oh-tap-row"
-                onClick={handleSpeakInstead}
-                style={{ flex: 1, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.11)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
-                >Speak</button>
-                <button
-                className="oh-tap-row"
-                onClick={handleLetSpeak}
-                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
-                >Let {pendingCountry.name} speak →</button>
+            {lifecycleTerminal ? (                <div data-lifecycle-terminal-history="true" style={{ padding: ".62rem 1rem .76rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(13,13,16,.46)", flexShrink: 0 }}>
+                    <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />
                 </div>
+            ) : !isLoading ? (
+                <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
+                {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
+                    <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
+                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "rgba(231,231,234,.72)", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
+                </div>}
+                {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleTerminal || lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
+                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "rgba(255,255,255,.03)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
+                    {playerLifecycleCase ? <div data-player-lifecycle-chat-controls="true" style={{ display: "flex", gap: ".28rem", flexWrap: "wrap" }}>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
+                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                </div>}
+                {canCallChatVote && pollComposerOpen && <div data-player-chat-poll-composer="true" style={{ marginBottom: ".5rem", padding: ".55rem .62rem", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, background: "rgba(255,255,255,.03)" }}>
+                    <div style={{ fontSize: ".56rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>Call a conversational vote</div>
+                    <div style={{ marginTop: ".12rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>Recorded in this diplomatic thread. This does not create institutional law or a formal institution ballot.</div>
+                    <input value={pollQuestion} onChange={(event) => { setPollQuestion(event.target.value); setPollError(""); }} maxLength={500} placeholder="What should this group decide?" style={{ width: "100%", boxSizing: "border-box", marginTop: ".45rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".68rem" }} />
+                    <textarea value={pollOptionsText} onChange={(event) => { setPollOptionsText(event.target.value); setPollError(""); }} rows={3} maxLength={1200} placeholder={"One option per line\nYes\nNo"} style={{ width: "100%", boxSizing: "border-box", marginTop: ".38rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".64rem", fontFamily: "inherit", resize: "vertical" }} />
+                    {pollError && <div style={{ marginTop: ".3rem", color: "#fca5a5", fontSize: ".56rem" }}>{pollError}</div>}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: ".35rem", marginTop: ".42rem" }}>
+                        <button type="button" className="oh-tap-row" onClick={() => { setPollComposerOpen(false); setPollError(""); }} style={{ border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "transparent", color: "rgba(255,255,255,.58)", padding: ".3rem .48rem", fontSize: ".58rem", cursor: "pointer" }}>Cancel</button>
+                        <button type="button" className="oh-tap-row" onClick={handlePlayerCreatePoll} disabled={isLoading} style={{ border: "1px solid rgba(59,130,246,.35)", borderRadius: 8, background: "rgba(59,130,246,.13)", color: "#bfdbfe", padding: ".3rem .52rem", fontSize: ".58rem", fontWeight: 780, cursor: isLoading ? "wait" : "pointer" }}>Open vote</button>
+                    </div>
+                </div>}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {canCallChatVote && (
+                        <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
+                    )}
+                    {canDemand && (
+                        <button
+                        type="button"
+                        className="oh-tap"
+                        onClick={() => setMakeDemand((on) => !on)}
+                        aria-pressed={makeDemand}
+                        title={makeDemand ? "This message is a demand. Click to send it as an ordinary message." : `Make this message a demand of ${countries[0]?.name}`}
+                        style={{ background: makeDemand ? "rgba(234,179,8,0.22)" : "rgba(255,255,255,0.05)", border: `1px solid ${makeDemand ? "rgba(234,179,8,0.7)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: makeDemand ? "rgb(250,204,21)" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, height: "2.5rem", padding: "0 0.6rem" }}
+                        >{makeDemand ? "⚑ Demand" : "⚑"}</button>
+                    )}
+                    <textarea
+                    ref={composerRef}
+                    placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
+                    rows={1} value={playerInput}
+                    enterKeyHint="enter"
+                    onChange={e => setPlayerInput(e.target.value)}
+                    onKeyDown={e => { if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handlePlayerSubmit(); } }}
+                    onInput={fitComposer}
+                    // On a touch screen the keyboard takes up to half the screen,
+                    // and the panel shrinks with it: a composer grown to 12rem then
+                    // pushed the send button out of the bottom. There it stops at a
+                    // quarter of the visible height (never under one line) and
+                    // scrolls past that.
+                    style={{ flex: 1, backgroundColor: isInstitutionCouncil ? "rgba(0,0,0,0.2)" : "rgba(9,9,12,.58)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", color: "white", fontSize: "0.875rem", padding: ".62rem .78rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", boxShadow: "inset 0 1px 0 rgba(255,255,255,.025)", transition: "border-color 0.2s, background-color .2s" }}
+                    onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(255,255,255,.42)" : "rgba(59,130,246,0.6)"}
+                    onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
+                    />
+                    {/* An inline min-width beats the class's, so the icon-only
+                        button is widened to a thumb here, not by oh-tap. */}
+                    <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
-            ) : phase === "player" && !isLoading ? (
-                <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
-                <textarea
-                ref={composerRef}
-                placeholder="Send a diplomatic message…"
-                rows={1} value={playerInput}
-                onChange={e => setPlayerInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
-                onInput={fitComposer}
-                // On a touch screen the keyboard takes up to half the screen,
-                // and the panel shrinks with it: a composer grown to 12rem then
-                // pushed the send button out of the bottom. There it stops at a
-                // quarter of the visible height (never under one line) and
-                // scrolls past that.
-                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
-                onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
-                onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
-                />
-                <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                style={{ backgroundColor: playerInput.trim() ? "#3b82f6" : "rgba(59,130,246,0.3)", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-                onMouseEnter={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-                onMouseLeave={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
-                >🚀</button>
+                <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
                 </div>
             ) : null}
             </>
         );
 };
 
-const CountryTurnLabel = ({ country, remaining }) => {
-    const flagUrl = useCountryFlagUrl({ code: country.code, name: country.name });
-    return (
-        <>
-        <FlagImg url={flagUrl} alt={country.name} size="0.95em" /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
-        {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
-        </>
-    );
-};
 
 // ── Conversation date separators ────────────────────────────────────────────
 
@@ -1514,9 +2342,6 @@ const ChatDateSeparator = ({ value }) => (
 // A long thread renders its recent tail first; older messages come in on demand.
 const CHAT_INITIAL_RENDER_WINDOW = 12;
 const CHAT_RENDER_WINDOW_STEP = 40;
-// A group chat takes at most this many NPC replies to one player message; the
-// floor then returns to the player rather than letting a six-way table monologue.
-const MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE = 3;
 
 // ── Incoming diplomacy notifications ──────────────────────────────────────────
 //
@@ -1823,11 +2648,33 @@ const GeneratingBanner = () => (
 
 // ── Chat list item ────────────────────────────────────────────────────────────
 
-const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false }) => {
+// Which threads are the ones that matter politically: your Overlord, and the
+// countries you hold. Deliberately a MARKER on an existing row rather than a
+// tab or a panel of its own - being somebody's Puppet is played out through the
+// diplomacy the player already uses, and a new screen for it would be one more
+// thing to learn for a relationship they can already see.
+//
+// The answer comes from runtime/puppets.js, like the country panel's and the
+// map overlay's, so the three cannot disagree about the player's own empire.
+// Worked out once, in ChatPanel, from the runtime store's world (below), and
+// handed to the conversation: it follows a world write rather than a poll.
+const puppetMarkersFor = (world, player) => {
+    // Per counterpart: the label, and what THEY are to the player — the demand
+    // card and the composer's "make this a demand" need the relationship
+    // itself, not a label to parse.
+    const next = {};
+    for (const row of livePuppetsFor(world, player || "")) {
+        describeRole(row, {
+            puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
+            overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
+            foreign: () => {},
+        });
+    }
+    return next;
+};
+
+const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
     const [hovered, setHovered] = React.useState(false);
-    // Deleting a chat is not undoable, so the bin arms first and deletes on the
-    // second click. Resets whenever the pointer leaves the row, so a half-pressed
-    // delete never sits waiting to catch a later click.
     const [confirming, setConfirming] = React.useState(false);
     useTouchDisarm(confirming, setConfirming);
     // The row's own buttons appear on hover, and nothing hovers on a touch
@@ -1835,52 +2682,66 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false })
     // them rather than running underneath.
     const canHover = useCanHover();
     const showActions = hovered || !canHover;
-    const previewCountries = chat.countries.slice(0, 4);
+    const counterparts = diplomaticCounterparts(chat?.countries, playerCountry);
+    const previewCountries = counterparts.slice(0, 4);
     const flagUrlMap = useCountryFlagUrls(previewCountries);
-    const names    = chat.countries.map(c => c.name).join(", ");
-    const lastMsg  = chat.messages?.at(-1);
-    const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
+    const names = chat?.title || summarizeDiplomaticParticipants(counterparts);
+    const lastMsg = chat.messages?.at(-1);
+    const rawPreview = String(lastMsg?.text || "No messages yet").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+    const preview = rawPreview.slice(0, 96) + (rawPreview.length > 96 ? "…" : "");
+    const speaker = lastMsg?.role === "leader" || (lastMsg?.speaker && lastMsg?.role !== "user") ? String(lastMsg?.speaker || "") : "";
+    const channelMeta = counterparts.length > 1 ? `${counterparts.length + (playerCountry ? 1 : 0)}-party channel` : "Direct channel";
+    const chatMarker = counterparts.map((country) => puppetMarkers[country.name]?.label).find(Boolean) || "";
 
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
-        <button onClick={onClick} style={{ width: "100%", padding: canHover ? "0.7rem 0.9rem" : "0.7rem 6.6rem 0.7rem 0.9rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: hovered ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer", transition: "background 0.15s", fontFamily: "sans-serif", textAlign: "left" }}>
-        {/* Fixed-width slot, always rendered, so read and unread rows stay aligned. */}
-        <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
-        {unread && <div style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "#60a5fa" }} />}
-        </div>
-        <div style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, paddingRight: previewCountries.length > 1 ? "0.35rem" : 0 }}>
-        {previewCountries.map((c, index) => (
-            <span key={c.name} style={{ display: "inline-flex", marginLeft: index === 0 ? 0 : "-0.35rem", zIndex: previewCountries.length - index }}>
-            <FlagImg url={flagUrlMap[c.name] ?? null} alt={c.name} width="1.3rem" height="0.9rem" />
-            </span>
-        ))}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: "0.82rem", fontWeight: unread ? 700 : 600, color: unread ? "#fff" : "rgba(255,255,255,0.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}{unread && <span style={{ fontWeight: 400, fontSize: "0.7rem", color: "#60a5fa", marginLeft: "0.4rem" }}>new</span>}</div>
-        <div style={{ fontSize: "0.75rem", color: unread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)", marginTop: "0.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preview}</div>
-        </div>
-        </button>
-        {showActions && (
-            <div style={{ position: "absolute", top: "50%", right: "0.6rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
-            <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }}
-            title={unread ? "Mark as read" : "Mark as unread"}
-            aria-label={unread ? "Mark as read" : "Mark as unread"}
-            style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
-            <EnvelopeIcon filled={unread} /></button>
-            <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) { onDelete(); } else { setConfirming(true); } }}
-            title={confirming ? "Click again to delete this chat" : "Delete chat"}
-            aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
-            style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirming ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirming ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,0.7)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirming ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { if (!confirming) { e.currentTarget.style.color = "rgba(239,68,68,1)"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; } }}
-            onMouseLeave={e => { if (!confirming) { e.currentTarget.style.color = "rgba(239,68,68,0.7)"; e.currentTarget.style.background = "none"; } }}>
-            {confirming ? "Delete?" : <TrashIcon />}</button>
+        <button data-diplomacy-thread-row="modern" onClick={onClick} style={{
+            width: "100%", padding: canHover ? ".76rem 3rem .76rem .9rem" : ".76rem 6.7rem .76rem .9rem", borderRadius: 12,
+            border: `1px solid ${hovered ? "rgba(255,255,255,.13)" : unread ? "rgba(96,165,250,.15)" : "rgba(255,255,255,.07)"}`,
+            background: hovered ? "rgba(255,255,255,.065)" : unread ? "rgba(59,130,246,.035)" : "rgba(255,255,255,.025)",
+            display: "flex", alignItems: "center", gap: ".78rem", cursor: "pointer",
+            transition: "background .15s, border-color .15s, transform .15s", transform: hovered ? "translateY(-1px)" : "translateY(0)",
+            fontFamily: "sans-serif", textAlign: "left", boxShadow: hovered ? "0 6px 18px rgba(0,0,0,.12)" : "none",
+        }}>
+            <div style={{ width: ".52rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
+                {unread && <div style={{ width: ".46rem", height: ".46rem", borderRadius: "50%", background: "#60a5fa", boxShadow: "0 0 0 3px rgba(96,165,250,.08)" }} />}
             </div>
-        )}
+            <div style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, minWidth: previewCountries.length > 1 ? "2.65rem" : "1.45rem", paddingRight: previewCountries.length > 1 ? ".25rem" : 0 }}>
+                {previewCountries.map((country, index) => (
+                    <span key={`${country.name}-${country.code || index}`} style={{ display: "inline-flex", marginLeft: index ? "-.38rem" : 0, zIndex: previewCountries.length - index, filter: "drop-shadow(0 1px 2px rgba(0,0,0,.4))" }}>
+                        <FlagImg url={flagUrlMap[country.name] ?? null} alt={country.name} width="1.42rem" height=".96rem" />
+                    </span>
+                ))}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: ".48rem", minWidth: 0 }}>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: ".84rem", fontWeight: unread ? 740 : 650, color: unread ? "#fff" : "rgba(255,255,255,.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}</div>
+                    <span style={{ flexShrink: 0, fontSize: ".59rem", color: chatMarker ? "rgba(234,179,8,.9)" : "rgba(255,255,255,.25)", textTransform: "uppercase", letterSpacing: ".045em" }}>{chatMarker || channelMeta}</span>
+                </div>
+                <div style={{ marginTop: ".17rem", fontSize: ".74rem", color: unread ? "rgba(255,255,255,.59)" : "rgba(255,255,255,.38)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {speaker && counterparts.length > 1 && <span style={{ color: "rgba(255,255,255,.5)", fontWeight: 600 }}>{speaker}: </span>}{preview}
+                </div>
+            </div>
+        </button>
+        <div style={{ position: "absolute", top: "50%", right: ".72rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: ".28rem" }}>
+            {!showActions && <span aria-hidden="true" style={{ color: "rgba(255,255,255,.2)", fontSize: "1rem", lineHeight: 1 }}>›</span>}
+            {showActions && (
+                <>
+                <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
+                style={{ display: "flex", alignItems: "center", background: "rgba(24,24,27,.86)", border: "1px solid rgba(255,255,255,.08)", cursor: "pointer", color: "rgba(96,165,250,.78)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}>
+                    <EnvelopeIcon filled={unread} />
+                </button>
+                <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
+                style={{ display: "flex", alignItems: "center", gap: ".28rem", background: confirming ? "rgba(239,68,68,.18)" : "rgba(24,24,27,.86)", border: `1px solid ${confirming ? "rgba(239,68,68,.55)" : "rgba(255,255,255,.08)"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.68)", fontSize: ".68rem", fontWeight: 650, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>
+                    {confirming ? "Delete?" : <TrashIcon />}
+                </button>
+                </>
+            )}
+        </div>
         </div>
     );
 };
+
 
 // ── Main ChatPanel ────────────────────────────────────────────────────────────
 
@@ -1889,9 +2750,23 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false })
 // composer for the player to read over and send themselves. Nothing here sends
 // anything: `draft` is text in a textarea until the player presses the button.
 const _chatOpenSubs = new Set();
-export const requestDiplomaticChat = (country, { draft = "" } = {}) => {
-    if (!country || !country.name) return;
-    _chatOpenSubs.forEach((fn) => { try { fn(country, draft); } catch { /* noop */ } });
+export const requestDiplomaticChat = (target, { draft = "" } = {}) => {
+    if (!target) return;
+    const normalized = typeof target === "string"
+        ? { targetType: "private", country: target, name: target }
+        : {
+            ...target,
+            targetType: String(target.targetType || "private").trim().toLowerCase(),
+            country: String(target.country || target.name || "").trim(),
+            name: String(target.name || target.country || "").trim(),
+            institutionId: String(target.institutionId || "").trim(),
+            caseId: String(target.caseId || "").trim(),
+            threadId: String(target.threadId || "").trim(),
+        };
+    if (normalized.targetType === "private" && !normalized.name) return;
+    if (normalized.targetType === "institution-council" && !normalized.institutionId && !normalized.threadId) return;
+    if (normalized.targetType === "institution-lifecycle" && !normalized.threadId && (!normalized.institutionId || !normalized.caseId)) return;
+    _chatOpenSubs.forEach((fn) => { try { fn(normalized, draft); } catch { /* noop */ } });
 };
 
 // ---- Spy tab ----------------------------------------------------------------
@@ -1966,97 +2841,269 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
     );
 };
 
+const intelCard = ({ tone = "neutral" } = {}) => {
+    const tones = {
+        green: { bg: "rgba(34,197,94,.09)", border: "rgba(34,197,94,.25)", value: "#86efac" },
+        amber: { bg: "rgba(245,158,11,.09)", border: "rgba(245,158,11,.25)", value: "#fde68a" },
+        neutral: { bg: "rgba(255,255,255,.035)", border: "rgba(255,255,255,.09)", value: "rgba(255,255,255,.86)" },
+    };
+    return tones[tone] || tones.neutral;
+};
+
+const IntelligenceStatCard = ({ label, value, hint = "", tone = "neutral" }) => {
+    const colors = intelCard({ tone });
+    return (
+        <div style={{ minWidth: 0, padding: ".7rem .8rem", borderRadius: 10, background: colors.bg, border: `1px solid ${colors.border}` }}>
+            <div style={{ fontSize: ".58rem", letterSpacing: ".08em", textTransform: "uppercase", color: "rgba(255,255,255,.38)", fontWeight: 750 }}>{label}</div>
+            <div style={{ marginTop: ".22rem", fontSize: ".9rem", fontWeight: 800, color: colors.value }}>{value}</div>
+            {hint && <div style={{ marginTop: ".2rem", fontSize: ".6rem", color: "rgba(255,255,255,.34)", lineHeight: 1.35 }}>{hint}</div>}
+        </div>
+    );
+};
+
+const intelligenceCapabilityLabel = (value) => {
+    const score = Math.max(0, Math.min(100, Number(value) || 0));
+    if (score >= 85) return "Advanced";
+    if (score >= 70) return "Capable";
+    if (score >= 50) return "Limited";
+    if (score >= 30) return "Developing";
+    return "Minimal";
+};
+
+const sourceQualityLabel = (confidence, clarity, hasNetwork) => {
+    const label = String(confidence || "").trim();
+    if (label) return label;
+    if (!hasNetwork) return "None";
+    if (clarity >= .72) return "High";
+    if (clarity >= .46) return "Moderate";
+    return "Low";
+};
+
+const networkQualityLabel = (clarity, hasNetwork) => {
+    if (!hasNetwork) return "None";
+    if (clarity >= .72) return "Strong";
+    if (clarity >= .46) return "Moderate";
+    return "Limited";
+};
+
+const politicalKnowledgeLabel = (knowledge) => {
+    if (knowledge?.level === "classified") return "Strong";
+    if (knowledge?.level === "assessed") return "Limited";
+    return "Public";
+};
+
+const diplomaticKnowledgeLabel = (entry, clarity, hasNetwork) => {
+    if (!hasNetwork) return "Public";
+    const count = Array.isArray(entry?.exchanges) ? entry.exchanges.length : 0;
+    if (count >= 3 && clarity >= .6) return "Strong";
+    if (count >= 1) return "Limited";
+    return "Limited";
+};
+
+const officeholderLabel = (holder) => {
+    if (!holder) return "";
+    if (typeof holder === "string") return holder;
+    return String(holder?.name || holder?.id || "").trim();
+};
+
+const PublicPoliticalPicture = ({ profile }) => {
+    if (!profile) return <div style={{ color: "rgba(255,255,255,.35)", fontSize: ".7rem" }}>No structured political profile is currently available.</div>;
+    const government = profile.government || {};
+    const leader = officeholderLabel(profile.leader || government.headOfState || government.headOfGovernment);
+    const descriptors = [profile.politicalSystem?.label || profile.politicalSystem?.type, government.form, government.ideology, ...(profile.tags || [])].filter(Boolean);
+    const goals = Array.isArray(profile.goals) ? profile.goals.slice(0, 4) : [];
+    return (
+        <div style={{ fontSize: ".68rem", lineHeight: 1.5, color: "rgba(255,255,255,.67)" }}>
+            {descriptors.length > 0 && <div>{descriptors.join(", ")}</div>}
+            {leader && <div style={{ marginTop: ".2rem", color: "rgba(255,255,255,.52)" }}>Leadership: {leader}</div>}
+            {government.headOfGovernment && officeholderLabel(government.headOfGovernment) !== leader && (
+                <div style={{ color: "rgba(255,255,255,.45)" }}>Head of government: {officeholderLabel(government.headOfGovernment)}</div>
+            )}
+            {goals.length > 0 && <div style={{ marginTop: ".35rem" }}>{goals.map((goal) => <div key={goal}>- {goal}</div>)}</div>}
+        </div>
+    );
+};
+
+const IntelligenceCountryHeader = ({ country, subtitle = "" }) => {
+    const flagUrl = useCountryFlagUrl({ code: country?.code, name: country?.name });
+    return (
+        <div style={{ display: "flex", alignItems: "center", gap: ".65rem", minWidth: 0 }}>
+            <div style={{ width: "2.6rem", height: "1.75rem", borderRadius: 5, overflow: "hidden", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {flagUrl ? <FlagImg url={flagUrl} alt="" width="100%" height="100%" /> : <span style={{ fontSize: "1rem" }}>🏳</span>}
+            </div>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 800, fontSize: ".95rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{country?.name || "Unknown polity"}</div>
+                {subtitle && <div style={{ marginTop: ".1rem", fontSize: ".61rem", color: "rgba(255,255,255,.38)" }}>{subtitle}</div>}
+            </div>
+        </div>
+    );
+};
+
+const IntelligenceAssessmentPanel = ({ assessment }) => {
+    if (!assessment) {
+        return (
+            <div style={{ color: "rgba(255,255,255,.34)", fontSize: ".68rem", lineHeight: 1.5 }}>
+                No private political assessment is available. Only public information is shown.
+            </div>
+        );
+    }
+    return (
+        <div style={{ fontSize: ".68rem", lineHeight: 1.5, color: "rgba(255,255,255,.66)" }}>
+            {assessment.summary && <div>{assessment.summary}</div>}
+            {(assessment.confidence || assessment.source || assessment.gatheredAt) && (
+                <div style={{ marginTop: ".35rem", color: "rgba(255,255,255,.42)", fontSize: ".61rem" }}>
+                    {[assessment.confidence && `${assessment.confidence} confidence`, assessment.source, assessment.gatheredAt].filter(Boolean).join(" · ")}
+                </div>
+            )}
+            {Array.isArray(assessment.findings) && assessment.findings.length > 0 && (
+                <div style={{ marginTop: ".4rem", display: "flex", flexDirection: "column", gap: ".22rem" }}>
+                    {assessment.findings.slice(0, 6).map((finding, index) => (
+                        <div key={`${finding.topic || "finding"}-${index}`}>- {finding.topic ? <><strong style={{ color: "rgba(255,255,255,.78)" }}>{finding.topic}: </strong>{finding.text}</> : finding.text}</div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+
+const WorkspaceTabIcon = ({ type, size = 14 }) => {
+    const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
+    if (type === "institutions") return <svg {...common}><path d="M3 21h18" /><path d="M5 21V10h14v11" /><path d="M4 10 12 4l8 6" /><path d="M8 13v5M12 13v5M16 13v5" /></svg>;
+    if (type === "intelligence") return <svg {...common}><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
+    return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>;
+};
+
+// Two names for one country, however they are cased or spaced. Outside the
+// component: the country list below is memoized on it, and a function made anew
+// on every render is a dependency no list can name.
+const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
-    // A copy an agent stole in an event the reveal has not reached yet is not in
-    // the file the player is shown (runtime/unseenEvents.js).
     const unseen                      = useUnseenEventIds();
     const intercepts                  = useMemo(() => withoutUnseenIntercepts(filedIntercepts, unseen), [filedIntercepts, unseen]);
+    const [openedAssessments, setOpenedAssessments] = useState({});
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
+    const landHolders = useLandHolders(choosing);
     const [error, setError]           = useState("");
+    const [section, setSection]       = useState("overview");
+    const [countryQuery, setCountryQuery] = useState("");
+    const [selectedCountry, setSelectedCountry] = useState("");
+    const [expandedReport, setExpandedReport] = useState("");
     // On a phone, Back closes the target picker before the panel under it
     // (runtime/backToClose.js). Only while the panel shows: a closed panel keeps
     // this view, and its picker, mounted off-screen.
     useBackToClose(panelOpen && choosing, () => setChoosing(false));
-    // A phone's row is too narrow for an agent's name and "Possibly
-    // compromised" on one line, and the warning is what got cut off.
+    // On a phone the panel is one narrow column: the intelligence grids drop
+    // to fewer columns there, and the countries list sits over the dossier.
     const isMobile = useIsMobile();
 
-    // Opening the tab is when these have to be current; the store does the rest.
     useEffect(() => { void refreshRuntimeState(["world", "intercepts"]); }, []);
-    // Opening the tab is the first time most players meet their own service, and
-    // sending an agent the first time they meet another's: each gets its stat
-    // sheet and a first intelligence reading then (gameplay.js ensureCountryAssessed)
-    // instead of every service sitting on the same "ordinary" default.
-    useEffect(() => { void ensureCountryAssessed(playerCountry, { reason: "spies tab" }); }, [playerCountry]);
+    useEffect(() => { void ensureCountryAssessed(playerCountry, { reason: "intelligence workspace" }); }, [playerCountry]);
+
+    useEffect(() => {
+        let live = true;
+        const openAssessments = async () => {
+            const next = {};
+            for (const [target, entry] of Object.entries(intercepts || {})) {
+                let politicalAssessment = entry?.politicalAssessment || null;
+                if (politicalAssessment && isSeal(world?.spySeal)) {
+                    politicalAssessment = await openPoliticalAssessment(world.spySeal, entry.reportId, politicalAssessment);
+                }
+                next[target] = { ...entry, ...(politicalAssessment ? { politicalAssessment } : {}) };
+            }
+            if (live) setOpenedAssessments(next);
+        };
+        void openAssessments();
+        return () => { live = false; };
+    }, [intercepts, world?.spySeal]);
 
     const myIntel = intelligenceOf(world, playerCountry);
-    // Pre-ownership records (no owner) were all the player's.
     const spies = activeSpies(world).filter((spy) => !spy.owner || spy.owner === playerCountry);
     const foreign = foreignSpies(world, playerCountry);
+    const visibleForeign = foreign.filter((spy) => spy.status !== "active");
     const history = normalizeSpies(world?.spies).filter((spy) => (!spy.owner || spy.owner === playerCountry) && spy.status === "exposed").slice(-3);
-    const [storyDraft, setStoryDraft] = useState({}); // spy id -> cover story being typed
-    // Which agent's story was just saved: the Save button reads "Saved" for a
-    // moment. Without it a save changed nothing on screen — the field already
-    // showed what was typed — and read as a button that does nothing.
+    const readableReports = useMemo(() => documentsReadableBy(world?.reports, playerCountry).slice(0, 36), [world?.reports, playerCountry]);
+    const [storyDraft, setStoryDraft] = useState({});
     const [savedFlash, setSavedFlash] = useState("");
 
+    const countryByName = (name) => countries.find((country) => sameCountry(country.name, name)) || { name };
+    const countryRows = useMemo(() => countries
+        .filter((country) => !sameCountry(country.name, playerCountry))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name))), [countries, playerCountry]);
+
+    useEffect(() => {
+        if (selectedCountry && countryRows.some((country) => sameCountry(country.name, selectedCountry))) return;
+        const preferred = spies[0]?.target || Object.keys(intercepts || {})[0] || countryRows[0]?.name || "";
+        setSelectedCountry(preferred);
+    }, [selectedCountry, countryRows, spies, intercepts]);
+
+    // Refused while a turn runs: the turn writes back the world it read, and a
+    // deployed, expelled or recalled agent would be undone when it landed. Every
+    // caller shows the error.
+    // In a shared game an agent's order is asked of the host, which keeps every
+    // player's agents and holds each order to the same rules
+    // (multiplayer/host/agents.js); the change comes back in the next view.
+    const askHostForAgent = async (fields) => {
+        const answer = await requestFromHost("agent", { target: "", spy: "", story: "", ...fields });
+        if (!answer.ok) throw new Error(answer.error || "The host did not take the order.");
+    };
     const commitSpies = async (next) => {
-        // Re-read at write time so a jump's world write is never clobbered with
-        // the copy this tab happened to load earlier. The seal is minted here, on
-        // the first deployment, so every report ever stored has one to be sealed
-        // under.
+        assertNoTurnRunning();
         const fresh = await readWorldState({ force: true });
         const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
-        // Open (or close) the covert operation on the Projects board in the same
-        // write, so deploying an agent shows up there immediately instead of on
-        // the next jump. The turn does the same sync for the agents espionage
-        // itself moves — both call spyOperationOps, so they cannot disagree.
         const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });
         const toWrite = ops.length
-            ? applyProjectOpsToWorld({
-                date: gameDate,
-                ops,
-                playerCountry,
-                world: committed,
-            }).world
+            ? applyProjectOpsToWorld({ date: gameDate, ops, playerCountry, world: committed }).world
             : committed;
-        // Canonical, so the store republishes the saved world to this view.
         await writeWorldState(toWrite);
     };
 
     const handleExpel = async (spy) => {
         setError("");
-        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "expel", spy: spy.id });
+            else await commitSpies(expelSpy(world, spy.id, { date: gameDate }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleTurn = async (spy) => {
         setError("");
-        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "turn", spy: spy.id, story: String(storyDraft[spy.id] || "").slice(0, 300) });
+            else await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleStory = async (spy) => {
         setError("");
         try {
-            await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
+            if (inSharedGame()) await askHostForAgent({ op: "story", spy: spy.id, story: String(storyDraft[spy.id] ?? spy.coverStory ?? "").slice(0, 300) });
+            else await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
             setSavedFlash(spy.id);
             setTimeout(() => setSavedFlash((current) => (current === spy.id ? "" : current)), 1800);
         } catch (err) { setError(err?.message || String(err)); }
     };
-
     const handleDeploy = async (selected) => {
         setChoosing(false); setError("");
         const target = selected?.[0]?.name;
         try {
-            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
-            await commitSpies(next);
+            if (inSharedGame()) await askHostForAgent({ op: "deploy", target: String(target || "") });
+            else await commitSpies(deploySpy(world, target, { date: gameDate, playerPolity: playerCountry }));
+            setSelectedCountry(target || "");
+            setSection("countries");
             void ensureCountryAssessed(target, { reason: "agent deployed" });
         } catch (err) { setError(err?.message || String(err)); }
     };
-
     const handleRecall = async (spy) => {
         setError("");
-        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "recall", spy: spy.id });
+            else await commitSpies(recallSpy(world, spy.id));
+        } catch (err) { setError(err?.message || String(err)); }
     };
 
     if (open) {
@@ -2064,126 +3111,219 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
     }
 
-    const targets = Object.keys(intercepts);
-    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
-    const candidates = countries.filter((c) =>
-        !sameCountry(c.name, playerCountry) && !spies.some((s) => sameCountry(s.target, c.name)));
+    const candidates = pickableCountries(countryRows, landHolders)
+        .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
     const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
     const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
+    const assessedEntries = Object.entries(openedAssessments).filter(([, entry]) => entry?.politicalAssessment);
+    const interceptedDocuments = readableReports.filter((report) => report.interceptedBy?.some((name) => sameCountry(name, playerCountry)));
+    const currentReportCount = assessedEntries.length + interceptedDocuments.length;
+    const warnings = [
+        ...visibleForeign.map((spy) => `${spy.owner} has a ${spy.status === "turned" ? "turned" : "detected"} agent inside ${playerCountry}.`),
+        ...spies.filter((spy) => spy.suspected).map((spy) => `Source integrity concerns affect the network in ${spy.target}.`),
+    ];
+
+    const recentItems = [];
+    for (const [target, entry] of assessedEntries) {
+        recentItems.push({ kind: "assessment", target, title: `Political assessment: ${target}`, meta: entry.politicalAssessment?.gatheredAt || entry.gatheredAt || "", text: entry.politicalAssessment?.summary || "Political assessment updated." });
+    }
+    for (const [target, entry] of Object.entries(intercepts || {})) {
+        for (const exchange of (entry?.exchanges || []).slice(-1)) {
+            recentItems.push({ kind: "intercept", target, exchange, title: `${target} ↔ ${exchange.counterpart}`, meta: exchange.date || "", text: exchange.subject || "Intercepted diplomatic traffic" });
+        }
+    }
+    readableReports.slice(0, 4).forEach((report) => recentItems.push({ kind: "document", report, title: report.title, meta: report.dateline || report.createdDate || "", text: report.from ? `Document from ${report.from}` : "Document on file" }));
+    recentItems.sort((a, b) => String(b.meta || "").localeCompare(String(a.meta || "")));
+
+    const filteredCountries = countryRows.filter((country) => String(country.name || "").toLowerCase().includes(countryQuery.trim().toLowerCase()));
+    const selectedCountryRecord = countryByName(selectedCountry || filteredCountries[0]?.name || "");
+    const selectedSpy = spies.find((spy) => sameCountry(spy.target, selectedCountryRecord?.name));
+    const selectedRawEntry = intercepts[selectedCountryRecord?.name] || Object.entries(intercepts).find(([target]) => sameCountry(target, selectedCountryRecord?.name))?.[1] || null;
+    const selectedClarity = selectedSpy ? signalClarity(myIntel, intelligenceOf(world, selectedSpy.target)) : 0;
+    const selectedKnowledge = selectedCountryRecord?.name ? buildPlayerPoliticalKnowledgeView(world, selectedCountryRecord.name, { viewerPolity: playerCountry, intercepts: openedAssessments }) : null;
+    const selectedAssessment = selectedKnowledge?.intelligence || null;
+    const selectedInstitutionPortfolio = selectedCountryRecord?.name
+        ? institutionPortfolioForPolity(world, selectedCountryRecord.name, { viewerPolity: playerCountry })
+        : [];
+    const selectedNetworkLabel = networkQualityLabel(selectedClarity, Boolean(selectedSpy));
+    const selectedPoliticalLabel = politicalKnowledgeLabel(selectedKnowledge);
+    const selectedDiplomaticLabel = diplomaticKnowledgeLabel(selectedRawEntry, selectedClarity, Boolean(selectedSpy));
+    const selectedSourceLabel = sourceQualityLabel(selectedAssessment?.confidence, selectedClarity, Boolean(selectedSpy));
+
+    const panel = { border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, background: "rgba(255,255,255,.025)" };
+    const subhead = { fontSize: ".58rem", letterSpacing: ".09em", textTransform: "uppercase", color: "rgba(255,255,255,.37)", fontWeight: 800 };
+    const navItems = [["overview", "Overview"], ["countries", "Countries"], ["operations", "Operations"], ["reports", "Reports"]];
+
+    const renderCounterintelCase = (spy) => (
+        <div key={spy.id} style={{ ...panel, padding: ".65rem .7rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: ".55rem" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: ".77rem", fontWeight: 750 }}>{spy.status === "discovered" ? "🕵️ " : "🎭 "}{spy.owner}</div>
+                    <div style={{ marginTop: ".12rem", fontSize: ".6rem", color: "rgba(255,255,255,.4)" }}>
+                        {spy.status === "discovered" ? "agent in custody — decide what to do" : `double agent since ${spy.turnedAt || "capture"} — ${spy.owner} still trusts them`}
+                    </div>
+                </div>
+                {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+                {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleTurn(spy)} style={spyBtn(true)}>{storyOf(spy) ? "Turn & plant story" : "Turn"}</button>}
+            </div>
+            {spy.status !== "exposed" && (
+                <div style={{ marginTop: ".5rem", display: "flex", gap: ".4rem", alignItems: "center" }}>
+                    <input value={storyOf(spy)} onChange={(e) => setStoryDraft((draft) => ({ ...draft, [spy.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && spy.status === "turned") { e.preventDefault(); handleStory(spy); } }} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : `What your double agent tells ${spy.owner}`} style={inputStyle} />
+                    {spy.status === "turned" && (() => {
+                        const unchanged = storyOf(spy) === spy.coverStory;
+                        const justSaved = savedFlash === spy.id;
+                        return <button className="oh-tap-row" onClick={() => handleStory(spy)} disabled={unchanged && !justSaved} style={{ ...spyBtn(true), ...(unchanged && !justSaved ? { opacity: .45, cursor: "default" } : {}) }}>{justSaved ? "Saved ✓" : "Save"}</button>;
+                    })()}
+                </div>
+            )}
+        </div>
+    );
 
     return (
         <>
         <Presence open={choosing}>
-            <CountrySelectorModal
-                countries={candidates}
-                loading={loadingCountries}
-                onStart={handleDeploy}
-                onCancel={() => setChoosing(false)}
-                single
-                title="Deploy a Spy"
-                subtitle="Choose the country to plant an agent in"
-                selectedLabel="Target"
-                emptyLabel="No target chosen yet"
-                confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the spy")}
-            />
+            <CountrySelectorModal countries={candidates} loading={loadingCountries} onStart={handleDeploy} onCancel={() => setChoosing(false)} single title="Deploy a Network" subtitle="Choose a country for a persistent HUMINT network" selectedLabel="Target" emptyLabel="No target chosen yet" confirmLabel={(n) => (n === 0 ? "Choose a target" : "Deploy the network")} />
         </Presence>
-        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.13)" }}>
-        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
-        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#f4f4f5" }}>{myIntel}/100</span>
-        </div>
+        <div data-intelligence-workspace="restored" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", gap: ".35rem", alignItems: "center", padding: ".65rem 1rem .55rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
+                {navItems.map(([key, label]) => (
+                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid rgba(231,231,234,.72)" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
+                ))}
+            </div>
 
-        <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Deployed spies · {spies.length}/{MAX_ACTIVE_SPIES}</div>
-        {spies.length === 0 && (
-            <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>No spies in the field. Deploy one to read a country's private diplomacy with others.</div>
-        )}
-        {spies.map((spy) => (
-            <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: isMobile ? "normal" : "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ Possibly compromised</span>}
-            </div>
-            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
-            {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
-            </div>
-            </div>
-            <button className="oh-tap-row" onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
-            </div>
-        ))}
-        {history.length > 0 && (
-            <div style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>
-            {history.map((spy) => "Agent expelled by " + spy.target + (spy.exposedAt ? " on " + spy.exposedAt : "")).join(" · ")}
-            </div>
-        )}
-
-        {/* Agents other polities have in the player. An undiscovered one is not
-            listed — that is what makes the intelligence stat matter on defence.
-            A discovered one waits for a decision; a turned one is fed whatever
-            the player types here. */}
-        {foreign.filter((spy) => spy.status !== "active").length > 0 && (
-            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Foreign agents in {playerCountry}</div>
-        )}
-        {foreign.filter((spy) => spy.status !== "active").map((spy) => (
-            <div key={spy.id} style={{ padding: "0.55rem 0.7rem", borderRadius: "10px", background: spy.status === "discovered" ? "rgba(251,191,36,0.08)" : "rgba(255,255,255,0.04)", border: "1px solid " + (spy.status === "discovered" ? "rgba(251,191,36,0.35)" : "rgba(255,255,255,0.08)") }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "0.82rem", fontWeight: 600 }}>{spy.status === "discovered" ? "🚨 " : "🎭 "}{spy.owner}</div>
-            <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
-            {spy.status === "discovered" ? "agent in custody — decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " — " + spy.owner + " still trusts them"}
-            </div>
-            </div>
-            {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
-            {spy.status === "discovered" && (
-                <button className="oh-tap-row" onClick={() => handleTurn(spy)} style={spyBtn(true)} title={storyOf(spy) ? "Turn this agent and plant the story below as what it reports home" : "Turn this agent into a double agent; you can plant a story afterwards"}>
-                    {storyOf(spy) ? "Turn & plant story" : "Turn"}
-                </button>
-            )}
-            </div>
-            {spy.status !== "exposed" && (
-                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.4rem", alignItems: "center" }}>
-                <input value={storyOf(spy)} onChange={(e) => setStoryDraft((d) => ({ ...d, [spy.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && spy.status === "turned") { e.preventDefault(); handleStory(spy); } }} placeholder={spy.status === "discovered" ? "Cover story to feed them if turned (optional)" : "What your double agent tells " + spy.owner}
-                    style={inputStyle} />
-                {spy.status === "turned" && (() => {
-                    // Nothing to save once the field matches what the agent already
-                    // reports; the button shows it rather than doing nothing.
-                    const unchanged = storyOf(spy) === spy.coverStory;
-                    const justSaved = savedFlash === spy.id;
-                    return (
-                        <button className="oh-tap-row" onClick={() => handleStory(spy)} disabled={unchanged && !justSaved}
-                            style={{ ...spyBtn(true), ...(unchanged && !justSaved ? { opacity: 0.45, cursor: "default" } : {}) }}
-                            title={justSaved ? "Saved — this is what the agent now reports home" : unchanged ? "The agent already reports this story" : "Save the story the agent reports home (Enter does the same)"}>
-                            {justSaved ? "Saved ✓" : "Save"}
-                        </button>
-                    );
-                })()}
+            {section === "overview" && (
+                <div data-intelligence-section="overview" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".8rem 1rem", display: "flex", flexDirection: "column", gap: ".75rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".55rem" }}>
+                        <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="neutral" />
+                        <IntelligenceStatCard label="Active networks" value={spies.length} hint={`${MAX_ACTIVE_SPIES - spies.length} field slots available`} tone="green" />
+                        <IntelligenceStatCard label="Current reports" value={currentReportCount} hint="Latest political assessments retained" />
+                        <IntelligenceStatCard label="Counterintel alerts" value={visibleForeign.length} hint="Detected or turned foreign agents" tone={visibleForeign.length ? "amber" : "neutral"} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "1fr 1fr", gap: ".65rem" }}>
+                        <div style={{ ...panel, padding: ".7rem .8rem" }}>
+                            <div style={{ fontSize: ".75rem", fontWeight: 750 }}>Strategic warnings</div>
+                            <div style={{ marginTop: ".55rem", display: "flex", flexDirection: "column", gap: ".3rem" }}>
+                                {warnings.length ? warnings.slice(0, 6).map((warning) => <div key={warning} style={{ fontSize: ".65rem", lineHeight: 1.45, color: "rgba(255,255,255,.52)" }}>• {warning}</div>) : <div style={{ fontSize: ".65rem", color: "rgba(255,255,255,.34)" }}>No immediate intelligence warnings. This does not imply the absence of undiscovered activity.</div>}
+                            </div>
+                        </div>
+                        <div style={{ ...panel, padding: ".7rem .8rem" }}>
+                            <div style={{ fontSize: ".75rem", fontWeight: 750 }}>Recent intelligence</div>
+                            <div style={{ marginTop: ".45rem", display: "flex", flexDirection: "column", gap: ".38rem" }}>
+                                {recentItems.length ? recentItems.slice(0, 4).map((item, index) => (
+                                    <button key={`${item.kind}-${item.title}-${index}`} className="oh-tap-row" onClick={() => { if (item.kind === "intercept") setOpen({ target: item.target, exchange: item.exchange }); else if (item.kind === "assessment") { setSelectedCountry(item.target); setSection("countries"); } else { setExpandedReport(item.report?.id || ""); setSection("reports"); } }} style={{ padding: ".42rem .5rem", borderRadius: 7, border: "1px solid rgba(255,255,255,.06)", background: "rgba(255,255,255,.02)", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                                        <div style={{ display: "flex", gap: ".45rem", alignItems: "baseline" }}><strong style={{ fontSize: ".65rem", flex: 1 }}>{item.title}</strong>{item.meta && <span style={{ fontSize: ".55rem", color: "rgba(255,255,255,.3)" }}>{item.meta}</span>}</div>
+                                        <div style={{ marginTop: ".15rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.text}</div>
+                                    </button>
+                                )) : <div style={{ fontSize: ".65rem", color: "rgba(255,255,255,.34)" }}>No private reporting has been collected yet. Deploy a network to begin receiving intelligence.</div>}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
-            </div>
-        ))}
 
-        {error && <div style={{ fontSize: "0.74rem", color: "#fca5a5", padding: "0.3rem 0.1rem" }}>{error}</div>}
+            {section === "countries" && (
+                <div data-intelligence-section="countries" style={{ flex: 1, minHeight: 0, display: "grid", ...(isMobile ? { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "minmax(0, 14rem) minmax(0, 1fr)" } : { gridTemplateColumns: "minmax(16rem, .95fr) minmax(0, 1.9fr)" }), gap: ".65rem", padding: ".65rem" }}>
+                    <div style={{ ...panel, minHeight: 0, padding: ".55rem", display: "flex", flexDirection: "column" }}>
+                        <input value={countryQuery} onChange={(e) => setCountryQuery(e.target.value)} placeholder="Search countries" style={{ ...inputStyle, marginBottom: ".45rem" }} />
+                        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", display: "flex", flexDirection: "column", gap: ".25rem" }}>
+                            {filteredCountries.map((country) => {
+                                const active = sameCountry(country.name, selectedCountryRecord?.name);
+                                const network = spies.some((spy) => sameCountry(spy.target, country.name));
+                                return (
+                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "var(--oh-grey-border-strong)" : "transparent"}`, background: active ? "var(--oh-grey-selected)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
+                                        <span style={{ flex: 1, minWidth: 0, fontSize: ".68rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{country.name}</span>
+                                        {network && <span title="Active intelligence network" style={{ width: ".38rem", height: ".38rem", borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div style={{ ...panel, minHeight: 0, padding: ".8rem", overflowY: "auto", scrollbarWidth: "none" }}>
+                        <IntelligenceCountryHeader country={selectedCountryRecord} subtitle={selectedSpy ? `Active network · since ${selectedSpy.deployedAt || "an earlier date"}` : "No active network · public sources only"} />
+                        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".45rem", marginTop: ".75rem" }}>
+                            <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Source" value={selectedSourceLabel} tone={selectedSourceLabel === "Low" ? "amber" : selectedSourceLabel === "None" ? "neutral" : "green"} />
+                        </div>
+                        <div style={{ ...panel, padding: ".65rem .7rem", marginTop: ".65rem" }}>
+                            <div style={subhead}>Public political picture</div>
+                            <div style={{ marginTop: ".42rem" }}><PublicPoliticalPicture profile={selectedKnowledge?.public} /></div>
+                        </div>
+                        <div style={{ ...panel, padding: ".65rem .7rem", marginTop: ".55rem" }}>
+                            <div style={subhead}>Institutional position</div>
+                            <div style={{ marginTop: ".42rem", display: "flex", flexDirection: "column", gap: ".3rem" }}>
+                                {selectedInstitutionPortfolio.length ? selectedInstitutionPortfolio.slice(0, 10).map(({ institution, member, history, cases }) => (
+                                    <div key={institution.id} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".38rem .45rem", borderRadius: 7, background: "rgba(255,255,255,.025)", border: "1px solid rgba(255,255,255,.05)" }}>
+                                        <span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.68)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{institution.name}</span>
+                                        <span style={{ fontSize: ".53rem", color: member ? "rgba(231,231,234,.68)" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
+                                        {cases?.length ? <span style={{ fontSize: ".49rem", color: "#fde68a" }}>{cases.length} pending</span> : null}
+                                        {!member && history?.length ? <span style={{ fontSize: ".49rem", color: "rgba(255,255,255,.28)" }}>{history.at(-1)?.action || "history"}</span> : null}
+                                    </div>
+                                )) : <div style={{ fontSize: ".62rem", color: "rgba(255,255,255,.34)" }}>No current or publicly known institutional record.</div>}
+                            </div>
+                        </div>
+                        <div style={{ ...panel, padding: ".65rem .7rem", marginTop: ".55rem" }}>
+                            <div style={subhead}>Intelligence assessment</div>
+                            <div style={{ marginTop: ".42rem" }}><IntelligenceAssessmentPanel assessment={selectedAssessment} /></div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
-        {targets.length > 0 && (
-            <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>Intercepts</div>
-        )}
-        {targets.map((target) => intercepts[target].exchanges.map((exchange) => (
-            <button key={exchange.id} onClick={() => { setOpen({ target, exchange }); void ensureCountryAssessed(target, { reason: "intercept read" }); }}
-                style={{ width: "100%", padding: "0.6rem 0.8rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer", fontFamily: "sans-serif", textAlign: "left", color: "white" }}>
-            {/* A stolen document (runtime/reportDelivery.js) beside the agent's traffic. */}
-            <span aria-hidden="true" style={{ fontSize: "1rem" }}>{isDocumentExchange(exchange) ? "📄" : "📡"}</span>
-            <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{target} ↔ {exchange.counterpart}</span>
-            <span style={{ display: "block", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</span>
-            </span>
-            </button>
-        )))}
-        </div>
-        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-        <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full}
-            style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.09)", color: "#f4f4f5", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
-        🕵 Deploy a spy
-        </button>
+            {section === "operations" && (
+                <div data-intelligence-section="operations" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".75rem .8rem", display: "flex", flexDirection: "column", gap: ".65rem" }}>
+                    <div style={{ ...panel, padding: ".55rem .7rem", background: "rgba(255,255,255,.035)", borderColor: "var(--oh-grey-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div><div style={{ fontSize: ".72rem", fontWeight: 750 }}>Field networks</div><div style={{ fontSize: ".58rem", color: "rgba(255,255,255,.35)" }}>Persistent HUMINT networks also appear as covert Projects.</div></div>
+                        <div style={{ fontSize: ".7rem", fontWeight: 800 }}>{spies.length}/{MAX_ACTIVE_SPIES}</div>
+                    </div>
+                    {spies.length === 0 ? <div style={{ fontSize: ".68rem", color: "rgba(255,255,255,.34)", padding: ".25rem" }}>No networks are currently in the field.</div> : spies.map((spy) => (
+                        <div key={spy.id} style={{ ...panel, padding: ".55rem .7rem", display: "flex", alignItems: "center", gap: ".5rem" }}>
+                            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: ".76rem", fontWeight: 750 }}>{spy.target}</div><div style={{ marginTop: ".12rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)" }}>since {spy.deployedAt || "an earlier date"} · network {networkQualityLabel(signalClarity(myIntel, intelligenceOf(world, spy.target)), true).toLowerCase()}{spy.suspected ? " · source integrity concern" : ""}</div></div>
+                            <button className="oh-tap-row" onClick={() => { setSelectedCountry(spy.target); setSection("countries"); }} style={spyBtn(false)}>Dossier</button>
+                            <button className="oh-tap-row" onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+                        </div>
+                    ))}
+                    {history.length > 0 && <div style={{ fontSize: ".61rem", color: "rgba(255,255,255,.34)", fontStyle: "italic" }}>{history.map((spy) => `Agent expelled by ${spy.target}${spy.exposedAt ? ` on ${spy.exposedAt}` : ""}`).join(" · ")}</div>}
+                    <div style={{ ...subhead, marginTop: ".15rem" }}>Counterintelligence cases</div>
+                    {visibleForeign.length ? visibleForeign.map(renderCounterintelCase) : <div style={{ ...panel, padding: ".7rem", fontSize: ".66rem", color: "rgba(255,255,255,.34)" }}>No detected foreign agents currently require action.</div>}
+                    {error && <div style={{ fontSize: ".66rem", color: "#fca5a5" }}>{error}</div>}
+                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
+                </div>
+            )}
+
+            {section === "reports" && (
+                <div data-intelligence-section="reports" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".75rem .85rem", display: "flex", flexDirection: "column", gap: ".7rem" }}>
+                    <div style={subhead}>Political assessments</div>
+                    {assessedEntries.length ? assessedEntries.map(([target, entry]) => (
+                        <button key={`assessment-${target}`} className="oh-tap-row" onClick={() => { setSelectedCountry(target); setSection("countries"); }} style={{ ...panel, padding: ".6rem .7rem", color: "white", textAlign: "left", cursor: "pointer", fontFamily: "sans-serif" }}>
+                            <div style={{ display: "flex", gap: ".5rem", alignItems: "baseline" }}><strong style={{ flex: 1, fontSize: ".7rem" }}>{target}</strong><span style={{ fontSize: ".57rem", color: "rgba(255,255,255,.3)" }}>{entry.politicalAssessment?.gatheredAt || entry.gatheredAt || ""}</span></div>
+                            <div style={{ marginTop: ".2rem", fontSize: ".62rem", color: "rgba(255,255,255,.47)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.politicalAssessment?.summary || "Political assessment on file"}</div>
+                        </button>
+                    )) : <div style={{ fontSize: ".65rem", color: "rgba(255,255,255,.34)" }}>No private political assessments are currently on file.</div>}
+
+                    <div style={{ ...subhead, marginTop: ".2rem" }}>Intercepted traffic</div>
+                    {Object.values(intercepts).some((entry) => (entry?.exchanges || []).some((exchange) => !isDocumentExchange(exchange))) ? Object.entries(intercepts).flatMap(([target, entry]) => (entry.exchanges || []).filter((exchange) => !isDocumentExchange(exchange)).map((exchange) => (
+                        <button key={`${target}-${exchange.id}`} className="oh-tap-row" onClick={() => { setOpen({ target, exchange }); void ensureCountryAssessed(target, { reason: "intercept read" }); }} style={{ ...panel, padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".55rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                            <span aria-hidden="true" style={{ fontSize: ".9rem" }}>{isDocumentExchange(exchange) ? "📄" : "📡"}</span>
+                            <span style={{ flex: 1, minWidth: 0 }}><strong style={{ display: "block", fontSize: ".69rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{target} ↔ {exchange.counterpart}</strong><span style={{ display: "block", marginTop: ".1rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? ` · ${exchange.date}` : ""}</span></span>
+                        </button>
+                    ))) : <div style={{ fontSize: ".65rem", color: "rgba(255,255,255,.34)" }}>No intercepted diplomatic traffic is on file.</div>}
+
+                    <div style={{ ...subhead, marginTop: ".2rem" }}>Documents on file</div>
+                    {readableReports.length ? readableReports.map((report) => {
+                        const openReport = expandedReport === report.id;
+                        return (
+                            <button key={report.id} className="oh-tap-row" onClick={() => setExpandedReport(openReport ? "" : report.id)} style={{ ...panel, padding: ".6rem .7rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                                <div style={{ display: "flex", gap: ".5rem", alignItems: "baseline" }}><strong style={{ flex: 1, fontSize: ".69rem" }}>{report.title}</strong><span style={{ fontSize: ".57rem", color: "rgba(255,255,255,.3)" }}>{report.dateline || report.createdDate || ""}</span></div>
+                                <div style={{ marginTop: ".15rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)" }}>{report.from ? `From ${report.from} · ` : ""}{report.visibleTo === null ? "published" : report.interceptedBy?.some((name) => sameCountry(name, playerCountry)) && !report.visibleTo?.some((name) => sameCountry(name, playerCountry)) ? "intercepted copy" : "held by your government"}</div>
+                                {openReport && <div style={{ marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)", fontSize: ".64rem", lineHeight: 1.55, color: "rgba(255,255,255,.62)", whiteSpace: "pre-wrap" }}>{report.body}</div>}
+                            </button>
+                        );
+                    }) : <div style={{ fontSize: ".65rem", color: "rgba(255,255,255,.34)" }}>No readable government documents are currently on file.</div>}
+                </div>
+            )}
         </div>
         </>
     );
@@ -2192,23 +3332,53 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onConsumeRequest, requestedChatId = "", onConsumeRequestedChat, isGenerating = false }) => {
     // "chats" is the diplomacy the player is party to; "spy" is everyone else's.
     const [view, setView] = useState("chats");
+    const [institutionFocusRequest, setInstitutionFocusRequest] = useState(null);
     // The Spy tab exists only where espionage does (the scenario's Features tab,
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
-    const currentView = espionageOn ? view : "chats";
+    const currentView = view === "spy" && !espionageOn ? "chats" : view;
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
     const [gameDate, setGameDate]                 = useState("");
     const [chats, setChats]                       = useState([]);
+    // The stored list could not be read: nothing is saved until it is, since
+    // the list in hand is not the player's. And whether the last save failed,
+    // with the list kept here for the Retry.
+    const [chatsLoadFailed, setChatsLoadFailed]   = useState(false);
+    const [chatsSaveFailed, setChatsSaveFailed]   = useState(false);
+    const [chatsRetrying, setChatsRetrying]       = useState(false);
+    const chatsLoadFailedRef = useRef(false);
+    chatsLoadFailedRef.current = chatsLoadFailed;
+    const chatsRef = useRef(chats);
+    chatsRef.current = chats;
+    const persistChats = (list) => {
+        if (chatsLoadFailedRef.current) return;
+        void saveAllChats(list).then((ok) => setChatsSaveFailed(!ok));
+    };
+    // The list could be read at last (a Retry, or the store's own read): the
+    // chats begun meanwhile, kept in memory and unsaved, join it and are saved
+    // with it, rather than being replaced by it and lost.
+    const adoptRecoveredChats = (saved) => {
+        const begun = chatsRef.current.filter((chat) => !saved.some((entry) => sameChatId(entry.id, chat.id)));
+        const merged = [...begun, ...saved];
+        setChats(merged);
+        setChatsLoadFailed(false);
+        chatsLoadFailedRef.current = false;
+        if (begun.length) persistChats(merged);
+    };
     const [activeChat, setActiveChat]             = useState(null);
+    const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
+    const institutionAutomationInFlight = useRef(new Set());
+    const [institutionAutomation, setInstitutionAutomation] = useState([]);
     const [showSelector, setShowSelector]         = useState(false);
     // On a phone, Back closes the country picker before the panel under it
     // (runtime/backToClose.js; main.jsx does the panel). Only while the panel
     // shows: closing the panel leaves the picker as it was, off-screen.
     useBackToClose(isOpen && showSelector, () => setShowSelector(false));
-    // A finger is the pointer: the list header's tabs and ✕ are thumb-sized,
-    // and the header trims its padding to keep the height it had.
+    // A finger is the pointer: the workspace header's tabs and ✕ are
+    // thumb-sized (the header trims its padding to give back some of the
+    // height that takes), and the panel fits the screen a phone shows (below).
     const isTouch = useTouchPrimary();
     // A letter the advisor drafted, waiting for the conversation it belongs to to
     // mount. Tied to a chat id so navigating to a DIFFERENT chat never inherits it.
@@ -2221,7 +3391,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const unseen = useUnseenEventIds();
     const shownChats = useMemo(() => withoutUnseenChats(chats, unseen), [chats, unseen]);
     const shownVersion = (chat) => (chat ? withoutUnseenChats([chat], unseen)[0] ?? chat : chat);
-    const openChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    const allOpenChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    // Formal institution councils have their own first-class workspace. Keep
+    // them out of the ordinary Diplomacy list instead of flattening NATO/EU/etc.
+    // into ad-hoc country chats, while retaining them in unread tracking.
+    const openChats = allOpenChats.filter((chat) => !chat.institutionId || (chat.lifecycleInstitutionId && chat.lifecycleCaseIds?.length));
 
     // Which chats to flag as unread: seeded from the persisted baseline when the
     // panel OPENS, then only ever added to (arrivals) or cleared per-chat (an
@@ -2251,10 +3425,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             // First look ever: seed the baseline rather than declare every chat
             // that already existed unread. The same seed the toolbar badge does —
             // whichever gets there first wins, and it only ever happens once.
-            writeSeen(seenTotals(openChats));
+            writeSeen(seenTotals(allOpenChats));
             setUnreadIds(new Set());
         } else {
-            setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
+            setUnreadIds(new Set(allOpenChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
         }
         setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
         // Deliberately NOT writing the baseline here. Opening the panel is not
@@ -2262,7 +3436,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         // The baseline only advances when a chat is actually opened
         // (setChatReadState, below) or "Mark all read" is clicked, so the badge
         // survives a look at the list and clears only for what was really read.
-    }, [isOpen, hasLoadedInitialData, freshSinceOpen, openChats]);
+    }, [isOpen, hasLoadedInitialData, freshSinceOpen, allOpenChats]);
 
     // A chat that arrives (or gains a message) while the panel sits open still
     // has to show as new — storage is the authority now that the baseline is no
@@ -2273,12 +3447,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         const seen = readSeen();
         if (!seen) return;
         const activeId = activeChat ? String(activeChat.id) : null;
-        const arrived = openChats
+        const arrived = allOpenChats
             .filter((chat) => String(chat.id) !== activeId && isChatUnread(chat, seen))
             .map((chat) => String(chat.id));
         if (arrived.length === 0) return;
         setUnreadIds((prev) => (arrived.every((id) => prev.has(id)) ? prev : new Set([...prev, ...arrived])));
-    }, [isOpen, openChats, activeChat]);
+    }, [isOpen, allOpenChats, activeChat]);
 
     // Follows the frozen displayOrder — each id's LIVE chat object, so unread
     // status and preview text still update in place — with anything that
@@ -2350,7 +3524,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // The list row is the thread as shown; the conversation gets the stored one,
     // which is what it writes back.
     const openChatFromList = (chat) => {
-        setActiveChat(chats.find((entry) => entry.id === chat.id) ?? chat);
+        setActiveChat(chats.find((entry) => sameChatId(entry.id, chat.id)) ?? chat);
         setHeldUnreadId(null);
         setChatReadState(chat, true);
     };
@@ -2387,7 +3561,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (cancelled) return;
             setCountries(countryList);
             setLoadingCountries(false);
-            if (savedChats.length > 0) setChats(savedChats);
+            if (savedChats === null) setChatsLoadFailed(true);
+            else if (savedChats.length > 0) setChats(savedChats);
             setHasLoadedInitialData(true);
         })
         .catch(() => {
@@ -2400,7 +3575,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return () => { cancelled = true; };
     }, [hasLoadedInitialData, isOpen]);
 
+    // The whole world, so no selector: a selector's output is deep-compared on
+    // every world write, and for the whole document that is a full walk.
+    const worldDocument = useRuntimeState("world");
+    const worldSnapshot = useMemo(() => worldDocument || {}, [worldDocument]);
     const identity = useRuntimeState("game", selectGameIdentity);
+    // Who is the player's Overlord or Puppet, for the list's markers and a
+    // thread's demands: from the world this panel already holds, so it moves
+    // when the world is written.
+    const puppetMarkers = useMemo(
+        () => puppetMarkersFor(worldSnapshot, identity.country),
+        [worldSnapshot, identity.country],
+    );
     useEffect(() => {
         if (!isOpen) return;
         if (identity.country) setPlayerCountry(identity.country);
@@ -2419,12 +3605,20 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         const sync = (saved) => {
             if (cancelled) return;
             if (!Array.isArray(saved)) { setFreshSinceOpen(true); return; }
+            // A list the store read (or was written) is the player's: saving
+            // is safe again, and what was begun while it could not be read
+            // joins it.
+            if (chatsLoadFailedRef.current) {
+                adoptRecoveredChats(saved);
+                setFreshSinceOpen(true);
+                return;
+            }
             setChats((prev) => {
                 const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
                 if (signature(saved) === signature(prev)) return prev;
                 setActiveChat((ac) => {
                     if (!ac) return ac;
-                    const updated = saved.find((c) => c.id === ac.id);
+                    const updated = saved.find((c) => sameChatId(c.id, ac.id));
                     // Only adopt storage's copy when it has MORE messages (an
                     // outreach note landed); otherwise the in-panel state wins.
                     return updated && (updated.messages?.length ?? 0) > (ac.messages?.length ?? 0) ? updated : ac;
@@ -2446,17 +3640,42 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         };
     }, [isOpen, hasLoadedInitialData]);
 
+    const landHolders = useLandHolders(showSelector);
     const availableCountries = useMemo(
-        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
-                                       [countries, playerCountry]
+        () => pickableCountries(countries, landHolders).filter(country => !countryMatchesIdentity(country, playerCountry)),
+                                       [countries, landHolders, playerCountry]
     );
+
+    // Retry for a list that could not be read: once it is, the chats begun
+    // meanwhile (kept in memory, unsaved) join it and are saved with it.
+    const retryChatsLoad = async () => {
+        setChatsRetrying(true);
+        try {
+            const saved = await loadAllChats({ force: true });
+            if (saved === null) return;
+            adoptRecoveredChats(saved);
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
+
+    // Retry for a save that failed: the list as it stands now, which holds
+    // everything the failed one did.
+    const retryChatsSave = async () => {
+        setChatsRetrying(true);
+        try {
+            setChatsSaveFailed(!(await saveAllChats(chatsRef.current)));
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
 
     const handleMessagesUpdate = (chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") recordRecentDiplomaticOutgoing(chatId);
         setChats(prev => {
-            const updated = prev.map(c => c.id === chatId ? { ...c, messages: newMessages } : c);
-            saveAllChats(updated);
-            setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
+            const updated = prev.map(c => sameChatId(c.id, chatId) ? { ...c, messages: newMessages } : c);
+            persistChats(updated);
+            setActiveChat(ac => sameChatId(ac?.id, chatId) ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
     };
@@ -2465,21 +3684,162 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // itself (the truth of the thread), the roster after a join or a departure,
     // the title, the polls, and each speaker's cross-chat cursors. The cursors
     // live in world state, so they are written there rather than on the chat.
-    const handleThreadUpdate = (chatId, { events, countries, title, polls, cursors }) => {
+    const handleThreadUpdate = (chatId, { events, countries, title, polls, demands, cursors, committed = false }) => {
         setChats((prev) => {
-            const updated = prev.map((c) => (c.id === chatId
-                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls }
+            const updated = prev.map((c) => (sameChatId(c.id, chatId)
+                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls, demands: demands ?? c.demands }
                 : c));
-            saveAllChats(updated);
-            setActiveChat((ac) => (ac?.id === chatId ? updated.find((c) => c.id === chatId) ?? ac : ac));
+            // Institutional one-request turns are already committed atomically
+            // with their legal governance/world/event changes in gameplay.js.
+            if (!committed) persistChats(updated);
+            setActiveChat((ac) => (sameChatId(ac?.id, chatId) ? updated.find((c) => sameChatId(c.id, chatId)) ?? ac : ac));
             return updated;
         });
-        if (cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
+        if (!committed && cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
+        if (committed) void refreshRuntimeState(["world", "chat", "events"]);
+    };
+
+    const adoptInstitutionalResult = (result) => {
+        if (Array.isArray(result?.chats)) {
+            setChats(result.chats);
+        } else if (result?.channel) {
+            // Background Council automation does not run through ConversationView,
+            // so there is no local thread-update callback to publish the committed
+            // channel immediately. Merge the authoritative channel returned by
+            // native governance instead of waiting on an asynchronous runtime reread.
+            // Otherwise a successful debate can finish, clear its "considering" banner,
+            // and still leave the embedded Council showing its pre-request transcript.
+            const committedChannel = result.channel;
+            setChats((prev) => {
+                const channelId = String(committedChannel?.id || "");
+                if (!channelId) return prev;
+                const index = prev.findIndex((chat) => String(chat?.id || "") === channelId);
+                if (index < 0) return [committedChannel, ...prev];
+                const next = [...prev];
+                next[index] = committedChannel;
+                return next;
+            });
+        }
+        if (result?.channel) {
+            setHeldUnreadId(null);
+            setChatReadState(shownVersion(result.channel), true);
+        }
+        if (result?.createdChat) {
+            setHeldUnreadId(null);
+            setChatReadState(shownVersion(result.createdChat), true);
+            setView("chats");
+            setActiveChat(result.createdChat);
+        }
+        void refreshRuntimeState(["world", "chat", "events"]);
+    };
+
+    const runInstitutionCouncilTurn = async ({
+        institutionId = "", proposalId = "", kind = "debate", playerComment = "", delayMs = 0, source = "player",
+    } = {}) => {
+        const id = String(institutionId || "").trim();
+        const proposal = String(proposalId || "").trim();
+        const mode = kind === "vote" ? "vote" : kind === "amendment" ? "amendment" : "debate";
+        if (!id || !proposal) return null;
+        const key = `${id}:${proposal}:${mode}`;
+        if (institutionAutomationInFlight.current.has(key)) return null;
+        institutionAutomationInFlight.current.add(key);
+        // Capture the campaign identity BEFORE any presentation delay. If the
+        // player switches saves while an automatic Council round is waiting,
+        // every native write below must fail closed against the old game rather
+        // than discovering the new game id after the delay and writing into it.
+        const expectedGameId = String(getLibraryState()?.activeGameId || "");
+        try {
+            if (Number(delayMs) > 0) {
+                await new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(delayMs) || 0)));
+            }
+            setInstitutionAutomation((current) => [
+                ...current.filter((entry) => entry.key !== key),
+                { key, institutionId: id, proposalId: proposal, kind: mode },
+            ]);
+            // Publish the native Council channel immediately. The model may take
+            // several seconds to reason, but the institution workspace should
+            // already show that formal business is actively being considered.
+            // A comment from the player is committed in the same write, since
+            // saying it materializes the channel too; without one, a Council
+            // that already stands costs no write at all.
+            const comment = String(playerComment || "").trim();
+            const materialized = comment
+                ? await commitInstitutionalPlayerMessage({
+                    institutionId: id,
+                    playerCountry,
+                    text: comment,
+                    date: gameDate,
+                    expectedGameId,
+                })
+                : await ensureInstitutionalChannel({
+                    institutionId: id,
+                    playerCountry,
+                    date: gameDate,
+                    expectedGameId,
+                });
+            adoptInstitutionalResult(materialized);
+            const result = await runChatActionBatch({
+                chat: materialized.channel,
+                playerMessage: mode === "amendment" ? comment : "",
+                playerCountry,
+                time: gameDate,
+                institutionDebateRequested: mode === "debate",
+                institutionProposalId: proposal,
+                formalBusinessRequested: mode === "vote",
+                formalBusinessInteractive: mode === "vote",
+                useCanonicalState: true,
+                expectedGameId,
+            });
+            adoptInstitutionalResult({ ...result, channel: result?.channel || materialized.channel });
+            logDebugEvent("diplomacy", `Institution ${mode} round completed for ${id}/${proposal}.`, { source }, { verbose: true });
+            return result;
+        } catch (error) {
+            logDebugEvent("diplomacy", `Institution ${mode} round failed for ${id}/${proposal}.`, error, { problem: true });
+            throw error;
+        } finally {
+            institutionAutomationInFlight.current.delete(key);
+            setInstitutionAutomation((current) => current.filter((entry) => entry.key !== key));
+        }
+    };
+
+    const navigateInstitution = (institutionId, section = "overview") => {
+        const id = String(institutionId || "").trim();
+        setActiveChat(null);
+        setView("institutions");
+        if (id) setInstitutionFocusRequest({ institutionId: id, section, nonce: Date.now() });
+    };
+
+    const openInstitutionCouncil = (channel, result) => {
+        if (result) adoptInstitutionalResult(result);
+        const resolvedChannel = result?.channel || channel || null;
+        if (resolvedChannel) {
+            setHeldUnreadId(null);
+            setChatReadState(shownVersion(resolvedChannel), true);
+        }
+        const institutionId = resolvedChannel?.institutionId;
+        setActiveChat(null);
+        setView("institutions");
+        if (institutionId) setInstitutionFocusRequest({ institutionId: String(institutionId), section: "council", nonce: Date.now() });
+    };
+
+    const openInstitutionLifecycleChat = (channel) => {
+        if (!channel) return;
+        setHeldUnreadId(null);
+        setChatReadState(shownVersion(channel), true);
+        setView("chats");
+        setActiveChat(channel);
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
-        setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
+        // In a shared game a thread is the host's to open, with its first line
+        // (ConversationView's submitPlayerText); until then it lives only here.
+        if (inSharedGame()) {
+            setShowSelector(false);
+            setActiveChat({ id: `pending-${Date.now()}`, countries: selected, messages: [], status: "open", pendingShared: true });
+            return;
+        }
+        const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
+        setChats(prev => { const u = [newChat, ...prev]; persistChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
     };
@@ -2496,17 +3856,88 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // question of which one really deleted it.
     const handleDeleteChat = (id) => {
         setChats(prev => {
-            const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
-            saveAllChats(updated);
+            const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
+            persistChats(updated);
             return updated;
         });
-        if (activeChat?.id === id) setActiveChat(null);
+        if (sameChatId(activeChat?.id, id)) setActiveChat(null);
+    };
+
+    // Lifecycle invitation/application threads are purpose-built negotiations,
+    // not permanent diplomatic channels. Once every linked case is genuinely
+    // terminal, leaving the thread closes it automatically so Contacts does not
+    // fill up with one-purpose accession conversations. Pending-approval cases
+    // stay open because the institution still has formal business to resolve.
+    const leaveActiveChat = () => {
+        if (!activeChat) return;
+        const lifecycleState = activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length
+            ? institutionLifecycleConversationState(worldSnapshot, {
+                institutionId: activeChat.lifecycleInstitutionId,
+                caseIds: activeChat.lifecycleCaseIds,
+            })
+            : null;
+        const lifecycleTerminal = Boolean(
+            lifecycleState?.cases?.length
+            && lifecycleState.resolvedCases?.length === lifecycleState.cases.length
+            && lifecycleState.awaitingApprovalCases?.length === 0,
+        );
+        const institutionId = activeChat.institutionId;
+        if (lifecycleTerminal) handleDeleteChat(activeChat.id);
+        else setActiveChat(null);
+        if (institutionId) navigateInstitution(institutionId, "overview");
     };
 
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup
     // or from the advisor, optionally seeding the composer with a drafted letter.
-    const consumePending = (country, draftText = "") => {
+    const consumePending = (request, draftText = "") => {
         setShowSelector(false);
+        const targetType = String(request?.targetType || "private").trim().toLowerCase();
+
+        if (targetType === "institution-council" || targetType === "institution-lifecycle") {
+            const institutionId = String(request?.institutionId || "").trim().toLowerCase();
+            const caseId = String(request?.caseId || "").trim();
+            const threadId = String(request?.threadId || "").trim();
+            const exact = chats.find((chat) => {
+                if (threadId && String(chat?.id || "") === threadId) return true;
+                if (targetType === "institution-council") {
+                    return String(chat?.institutionId || "").trim().toLowerCase() === institutionId
+                        && !(chat?.lifecycleInstitutionId && Array.isArray(chat?.lifecycleCaseIds) && chat.lifecycleCaseIds.length);
+                }
+                return String(chat?.lifecycleInstitutionId || "").trim().toLowerCase() === institutionId
+                    && Array.isArray(chat?.lifecycleCaseIds)
+                    && chat.lifecycleCaseIds.some((id) => String(id || "").trim() === caseId);
+            });
+            if (exact) {
+                setHeldUnreadId(null);
+                setChatReadState(shownVersion(exact), true);
+                if (draftText) setComposerDraft({ chatId: exact.id, text: draftText });
+                if (targetType === "institution-council") {
+                    setActiveChat(null);
+                    setView("institutions");
+                    setInstitutionFocusRequest({ institutionId: exact.institutionId, section: "council", nonce: Date.now() });
+                } else {
+                    setView("chats");
+                    setActiveChat(exact);
+                }
+                return;
+            }
+            // Never fall through to "whatever chat has the same country". An
+            // explicit institution target that cannot be resolved stays explicit.
+            if (institutionId) {
+                setActiveChat(null);
+                setView("institutions");
+                setInstitutionFocusRequest({ institutionId: request.institutionId, section: targetType === "institution-council" ? "council" : "members", nonce: Date.now() });
+            }
+            logDebugEvent("diplomacy", `Advisor draft target could not resolve an exact ${targetType} thread.`, {
+                institutionId: request?.institutionId || "",
+                caseId: request?.caseId || "",
+                threadId,
+            }, { problem: true });
+            return;
+        }
+
+        const country = { name: String(request?.name || request?.country || "").trim(), code: request?.code || "" };
+        if (!country.name) return;
         // The advisor knows a polity by name only; the flag and the nation colour
         // both key off the code, so fill it in from the loaded roster rather than
         // opening a chat wearing the fallback white flag.
@@ -2515,17 +3946,23 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             || "";
         setChats(prev => {
             const existing = prev.find(
-                c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
-                     (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
+                c => c.status !== "closed"
+                    && !c.institutionId
+                    && !c.lifecycleInstitutionId
+                    && Array.isArray(c.countries)
+                    && c.countries.length === 1
+                    && (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
             );
             if (existing) {
+                setView("chats");
                 setActiveChat(existing);
                 if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
                 return prev;
             }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code }], messages: [], status: "open" };
+            const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
-            saveAllChats(u);
+            persistChats(u);
+            setView("chats");
             setActiveChat(newChat);
             if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
             return u;
@@ -2559,7 +3996,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
     // Only the conversation on screen is exposed to the toolbar's incoming-message
     // watcher: a reply landing in this exact thread is being read, never toasted.
-    const activeChatIdForWatcher = activeChat ? String(activeChat.id) : "";
+    const institutionUnreadCount = allOpenChats.filter((chat) => chat.institutionId && unreadIds.has(String(chat.id))).length;
+    const chatUnreadCount = openChats.filter((chat) => unreadIds.has(String(chat.id))).length;
+
+    const activeChatIdForWatcher = activeChat && !activeChat.institutionId
+        ? String(activeChat.id)
+        : visibleCouncilChatId;
     useEffect(() => {
         activeDiplomaticChatId = isOpen ? activeChatIdForWatcher : "";
         return () => {
@@ -2572,39 +4014,109 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <MarkdownStyleInjector />
             {/* Laid out against the dock, not the screen: the dock's
                 backdrop-filter makes it this fixed panel's containing block,
-                so left 0 is the dock's left edge (0.5rem in, and in from a
-                notch the way the dock is) and bottom 4.25rem is just above it.
-                It narrows by both notch insets (0 wherever there is none). */}
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`, height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 33rem), 30rem))`, minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+                so left and bottom are measured from the dock, which keeps in
+                from a notch and up from the home indicator itself. On a touch
+                screen the panel fits what a phone shows: the visible height
+                (100vh runs under a browser's bars, and took the header and its
+                ✕ off the top), less the insets top and bottom; a width that
+                leaves 0.5rem at the right, since it starts 1rem in (the dock's
+                0.5rem, then its own); and a 10rem floor, as 24rem is taller
+                than a phone held sideways. Every inset is 0 on a desktop.
+                Beside an open Advisor/Country drawer the width also gives up the
+                drawer's live width (dragging its edge updates it in the same
+                frame), so the two meet with the same 0.5rem gap and never stack.
+                Nothing else is held back: the panel shrinks only once the drawer
+                would really reach it, not the moment the drawer opens. */}
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+                ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
+
+            {chatsLoadFailed ? (
+                <StorageProblemNotice title="Could not load your conversations." detail="Nothing new is saved until they load." onRetry={retryChatsLoad} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : chatsSaveFailed ? (
+                <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retryChatsSave} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : null}
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
-            {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+            {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
+                <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
-                draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
-                onDraftApplied={() => setComposerDraft(null)} />
+                draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
+                onDraftApplied={() => setComposerDraft(null)}
+                onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
             ) : (
                 <>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isTouch ? "0.45rem 1.25rem 0.3rem" : "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <div style={{ display: "flex", gap: "0.35rem" }}>
-                {[["chats", "Diplomacy"], ...(espionageOn ? [["spy", "Spy"]] : [])].map(([key, label]) => (
-                    <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
-                        border: "1px solid " + (currentView === key ? "rgba(255,255,255,0.23)" : "transparent"), background: currentView === key ? "rgba(255,255,255,0.11)" : "transparent", color: currentView === key ? "white" : "rgba(255,255,255,0.5)" }}>
-                    {label}
-                    </button>
-                ))}
-                </div>
-                <button className="oh-tap" aria-label="Close diplomacy panel" onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
-                onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-                onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
+                <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: ".75rem" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
+                            <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: ".98rem", fontWeight: 800, lineHeight: 1.1 }}>Diplomacy</div>
+                                <div style={{ marginTop: ".13rem", fontSize: ".56rem", color: "rgba(255,255,255,.32)" }}>Conversations, institutions and statecraft</div>
+                            </div>
+                        </div>
+                        <button className="oh-tap" aria-label="Close diplomacy panel" onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
+                        onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
+                    </div>
+                    {/* Three tabs are wider than a phone's header: there the
+                        last one wraps under rather than being cut off. */}
+                    <div style={{ display: "flex", gap: ".35rem", marginTop: ".55rem", ...(isTouch ? { flexWrap: "wrap" } : {}) }}>
+                        {[
+                            ["chats", "contacts", "Contacts", chatUnreadCount],
+                            ["institutions", "institutions", "Institutions", institutionUnreadCount],
+                            ...(espionageOn ? [["spy", "intelligence", "Intelligence", 0]] : []),
+                        ].map(([key, iconType, label, count]) => (
+                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), background: currentView === key ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
+                                <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}><WorkspaceTabIcon type={iconType} size={13} /></span>
+                                <span>{label}</span>
+                                {Number(count) > 0 && <span style={{ minWidth: "1.05rem", height: "1.05rem", padding: "0 .25rem", borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: currentView === key ? "rgba(255,255,255,.14)" : "rgba(96,165,250,.16)", color: currentView === key ? "#fff" : "#93c5fd", fontSize: ".57rem", fontWeight: 800 }}>{count}</span>}
+                            </button>
+                        ))}
+                    </div>
                 </div>
                 {currentView === "spy" ? (
                     <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} panelOpen={isOpen} />
+                ) : currentView === "institutions" ? (
+                    <InstitutionsWorkspace
+                        panelOpen={isOpen}
+                        world={worldSnapshot}
+                        playerCountry={playerCountry}
+                        gameDate={gameDate}
+                        chats={chats}
+                        unreadIds={unreadIds}
+                        onAdoptResult={adoptInstitutionalResult}
+                        onOpenCouncil={openInstitutionCouncil}
+                        onOpenLifecycleChat={openInstitutionLifecycleChat}
+                        onRequestCouncilTurn={runInstitutionCouncilTurn}
+                        councilAutomation={institutionAutomation}
+                        onCouncilVisibleChange={setVisibleCouncilChatId}
+                        renderCouncil={(channel) => (
+                            <ConversationView
+                                key={String(channel.id)}
+                                chat={channel}
+                                puppetMarkers={puppetMarkers}
+                                playerCountry={playerCountry}
+                                gameDate={gameDate}
+                                world={worldSnapshot}
+                                onMessagesUpdate={handleMessagesUpdate}
+                                onThreadUpdate={handleThreadUpdate}
+                                unread={unreadIds.has(String(channel.id))}
+                                onToggleRead={() => toggleActiveChatRead(channel)}
+                                draft={sameChatId(composerDraft?.chatId, channel.id) ? composerDraft.text : ""}
+                                onDraftApplied={() => setComposerDraft(null)}
+                                onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
+                                onLifecycleResult={adoptInstitutionalResult}
+                                onInstitutionBusinessOpened={runInstitutionCouncilTurn}
+                                embeddedInstitution
+                            />
+                        )}
+                        focusRequest={institutionFocusRequest}
+                    />
                 ) : (
                 <>
-                {/* The unread filter belongs to the diplomacy list only — the Spy
-                    tab has no read/unread notion, so it sits inside this branch
+                {/* The unread filter belongs to the Contacts list only — Intelligence
+                    has no chat read/unread notion, so it sits inside this branch
                     rather than above the tab switch. */}
                 {openChats.length > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
@@ -2634,7 +4146,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ) : groupedChats.map((group, index) => (
                     <React.Fragment key={`${group.label}-${group.chats[0]?.id ?? index}`}>
                     <ChatGroupHeader label={group.label} />
-                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
+                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
                     </React.Fragment>
                 ))}
                 </div>
@@ -3213,13 +4725,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     top: `calc(4.35rem + ${SAFE_TOP})`,
                     left: "auto",
                     // Advisor and Stats share the same resizable right drawer,
-                    // and the toasts were meant to sit left of it: the drawer
-                    // was to publish its live width as this variable. Nothing
-                    // sets it on this line (the setter was in advisor.jsx on the
-                    // Continuum checkpoint and never came across), so it is 0
-                    // and the toasts sit at the right edge, over an open drawer.
-                    // On a phone the drawer is the whole screen, with nothing
-                    // beside it, so there the offset is left out.
+                    // and the toasts sit left of it: main.jsx sets this
+                    // variable to the drawer's live width while it is open,
+                    // and to 0 while it is shut. On a phone the drawer is the
+                    // whole screen, with nothing beside it, so there the
+                    // offset is left out.
                     right: isMobile
                         ? `calc(0.75rem + ${SAFE_RIGHT})`
                         : `calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem + ${SAFE_RIGHT})`,
@@ -3554,4 +5064,4 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     );
 });
 
-export { Toolbar, Chat, ChatPanel };
+export { Toolbar };

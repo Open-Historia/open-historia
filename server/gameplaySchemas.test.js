@@ -173,7 +173,7 @@ test("does not fabricate events when the model omitted them, and leaves other ta
   assert.match(validation.error, /events/i);
 
   const untouched = { result: { speaker: "France" } };
-  assert.equal(normalizeGameplayPayload("nextSpeaker", untouched), untouched);
+  assert.equal(normalizeGameplayPayload("unknownTask", untouched), untouched);
   assert.equal(normalizeGameplayPayload("jumpForward", null), null);
 });
 
@@ -194,4 +194,32 @@ test("spy orders ride an event's impacts, under their own name or an alias", () 
     events: [event({ impacts: { spyOps: [{ op: "assassinate", target: "Germany" }] } })],
   }));
   assert.equal(validateGameplayPayload("jumpForward", bad).valid, false);
+});
+
+test("jump normalization repairs double-escaped quote prose into canonical quote metadata", () => {
+  const normalized = normalizeGameplayPayload("jumpForward", jump({
+    events: [event({
+      description: 'The cabinet announces the decision.\\n\\n> \\"We proceed,\\" — The Speaker, Prime Minister',
+    })],
+  }));
+  const [first] = normalized.events;
+  assert.equal(first.description, "The cabinet announces the decision.");
+  assert.deepEqual(first.quote, {
+    text: "We proceed,",
+    speaker: "The Speaker",
+    role: "Prime Minister",
+  });
+  assert.deepEqual(validateGameplayPayload("jumpForward", normalized), { valid: true, error: "" });
+});
+
+test("jump normalization accepts structured event quote metadata", () => {
+  const normalized = normalizeGameplayPayload("jumpForward", jump({
+    events: [event({ quote: { text: '"A proper quotation"', speaker: "The Speaker", role: "Minister" } })],
+  }));
+  assert.deepEqual(normalized.events[0].quote, {
+    text: "A proper quotation",
+    speaker: "The Speaker",
+    role: "Minister",
+  });
+  assert.deepEqual(validateGameplayPayload("jumpForward", normalized), { valid: true, error: "" });
 });

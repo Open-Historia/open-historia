@@ -30,7 +30,38 @@ export const CHAT_EVENT_KINDS = Object.freeze([
     "poll_created",
     "poll_option_added",
     "poll_vote_cast",
+    // A demand an Overlord makes of its own Puppet, and each answer to it, in the
+    // one-on-one thread between them (see "Demands" below).
+    "demand_made",
+    "demand_answered",
 ]);
+
+// Demands. An Overlord telling its own Puppet to do something is kept the way a
+// poll is — as events appended to the thread's log, its state projected from
+// them — and never as a flag written onto a message: a flag on a message was
+// erased by the next save from any chat panel holding an older copy, which is
+// how the refusal rule this replaces spent three commits never firing.
+//
+//   open ──accepted──────────────────► accepted     (no cost)
+//   open ──refused───────────────────► refused      (costs Loyalty, once)
+//   open ──alternative───────────────► countered
+//   countered ──alternative_accepted─► settled      (no cost)
+//   open | countered ──superseded────► superseded   (no cost)
+//
+// An Overlord that declines an alternative does so by DEMANDING AGAIN — revised,
+// or the same demand restated — which supersedes the old one. Countering is
+// negotiating, so it never costs anything; only a refusal does.
+export const DEMAND_ANSWERS = Object.freeze(["accepted", "refused", "alternative", "alternative_accepted"]);
+export const DEMAND_SUMMARY_MAX_CHARS = 240;
+export const DEMAND_ALTERNATIVE_MAX_CHARS = 600;
+const DEMAND_SETTLED = new Set(["accepted", "refused", "settled", "superseded"]);
+// What a Puppet may still answer. A REFUSAL is not the end of the conversation:
+// a player who refuses, thinks again and agrees is answering the same demand
+// over, not being handed a new one — so the card stays live. What has been
+// AGREED is final, by either side. The refusal's Loyalty cost is the turn's
+// (gameState.chargeRefusals): changing your mind before the turn ends costs
+// nothing, and after it the price has already been paid.
+const DEMAND_ANSWERABLE = new Set(["open", "refused"]);
 
 // A thread keeps this many events. A long negotiation is summarised into the
 // rolling memory on its messages (diplomaticEnvelope.js), not kept whole.
@@ -62,10 +93,12 @@ export const normalizeMember = (value) => {
     const name = asText(value.name ?? value.label ?? value.country);
     const code = asText(value.code ?? value.id);
     if (!name && !code) return null;
-    return { code, name: name || code };
+    const polityKey = asText(value.polityKey);
+    return { code, name: name || code, ...(polityKey ? { polityKey } : {}) };
 };
 
-const sameMember = (left, right) => fold(left?.name) === fold(right?.name)
+const sameMember = (left, right) => (Boolean(asText(left?.polityKey)) && fold(left?.polityKey) === fold(right?.polityKey))
+    || fold(left?.name) === fold(right?.name)
     || (Boolean(asText(left?.code)) && fold(left?.code) === fold(right?.code));
 
 // ---------------------------------------------------------------------------
@@ -136,10 +169,62 @@ export const normalizeChatEvent = (entry, index = 0) => {
         const label = clip(asText(entry.label), POLL_LABEL_MAX_CHARS);
         return pollId && label ? { ...base, pollId, optionId: asText(entry.optionId) || mintId("option"), label } : null;
     }
+    if (kind === "demand_made") {
+        const demandId = asText(entry.demandId);
+        const target = asText(entry.target);
+        const summary = clip(asText(entry.summary), DEMAND_SUMMARY_MAX_CHARS);
+        if (!demandId || !base.by || !target || !summary) return null;
+        return {
+            ...base,
+            demandId,
+            target,
+            summary,
+            ...(asText(entry.messageId) ? { messageId: asText(entry.messageId) } : {}),
+            ...(asText(entry.supersedes) ? { supersedes: asText(entry.supersedes) } : {}),
+        };
+    }
+    if (kind === "demand_answered") {
+        const demandId = asText(entry.demandId);
+        const answer = fold(entry.answer);
+        if (!demandId || !base.by || !DEMAND_ANSWERS.includes(answer)) return null;
+        const text = clip(asText(entry.text), DEMAND_ALTERNATIVE_MAX_CHARS);
+        if (answer === "alternative" && !text) return null;
+        return { ...base, demandId, answer, ...(text ? { text } : {}) };
+    }
     // poll_vote_cast
     const pollId = asText(entry.pollId);
     const optionId = asText(entry.optionId);
     return pollId && optionId && base.by ? { ...base, pollId, optionId } : null;
+};
+
+// A poll explicitly opened by the human player. The chat event log is the
+// canonical owner of conversational polls, so the UI builds the same
+// `poll_created` record an AI action would have produced instead of maintaining
+// parallel component state. This is DIPLOMATIC conversation state only; it has
+// no institution-law authority (formal institutional ballots live elsewhere).
+export const createPlayerPollEvent = ({ player = "", question = "", options = [], time = "", idFor = mintId } = {}) => {
+    const by = asText(player);
+    const prompt = clip(asText(question), POLL_QUESTION_MAX_CHARS);
+    if (!by || !prompt || typeof idFor !== "function") return null;
+    const labels = [];
+    const seen = new Set();
+    for (const option of asArray(options)) {
+        const label = clip(asText(typeof option === "string" ? option : option?.label ?? option?.text), POLL_LABEL_MAX_CHARS);
+        const key = fold(label);
+        if (!label || seen.has(key)) continue;
+        seen.add(key);
+        labels.push(label);
+        if (labels.length >= POLL_OPTION_LIMIT) break;
+    }
+    if (labels.length < 2) return null;
+    const pollId = asText(idFor("poll"));
+    const id = asText(idFor("pollev"));
+    if (!pollId || !id) return null;
+    return {
+        id, kind: "poll_created", time: asText(time), by, pollId, question: prompt,
+        options: labels.map((label, index) => ({ id: `${pollId}-o${index + 1}`, label })),
+        allowCustom: false,
+    };
 };
 
 export const normalizeChatEvents = (events) => {
@@ -214,7 +299,7 @@ export const eventsFromLegacyChat = (chat) => {
                 id: `${id}-reaction-${reactionIndex + 1}`,
                 kind: "reaction",
                 time: asText(message?.time),
-                by: asText(by),
+                by: asText(typeof value === "object" ? value?.country : "") || asText(by),
                 target: id,
                 emoji,
                 code: asText(typeof value === "object" ? value?.code : ""),
@@ -240,6 +325,7 @@ export const projectChatThread = (events) => {
     const messages = [];
     const messageById = new Map();
     const polls = new Map();
+    const demands = new Map();
 
     for (const event of log) {
         if (event.kind === "chat_created") {
@@ -280,7 +366,25 @@ export const projectChatThread = (events) => {
         }
         if (event.kind === "reaction") {
             const message = messageById.get(event.target);
-            if (message && event.by) message.reactions[event.by] = { emoji: event.emoji, code: event.code };
+            if (message && event.by) {
+                // A participant may react more than once to the same line. The
+                // old country-keyed projection silently replaced the earlier
+                // reaction, which made the UI capable of showing only one.
+                // Keep the first legacy key stable, suffix later entries, and
+                // carry the real country name in the value so round-tripping
+                // the projected shape still recreates the correct actor.
+                let key = event.by;
+                let suffix = 2;
+                while (Object.prototype.hasOwnProperty.call(message.reactions, key)) {
+                    key = `${event.by}#${suffix}`;
+                    suffix += 1;
+                }
+                message.reactions[key] = {
+                    emoji: event.emoji,
+                    code: event.code,
+                    ...(key === event.by ? {} : { country: event.by }),
+                };
+            }
             continue;
         }
         if (event.kind === "poll_created") {
@@ -302,6 +406,51 @@ export const projectChatThread = (events) => {
             }
             continue;
         }
+        if (event.kind === "demand_made") {
+            // A demand made again replaces the one it answers — but only one still
+            // in play. A refusal that stands is still charged, whatever follows.
+            const replaced = event.supersedes ? demands.get(event.supersedes) : null;
+            if (replaced && !DEMAND_SETTLED.has(replaced.status)) {
+                replaced.status = "superseded";
+                replaced.supersededBy = event.demandId;
+            }
+            if (!demands.has(event.demandId)) {
+                demands.set(event.demandId, {
+                    id: event.demandId,
+                    by: event.by,
+                    target: event.target,
+                    summary: event.summary,
+                    messageId: event.messageId || "",
+                    time: event.time,
+                    status: "open",
+                    alternative: "",
+                    ...(event.supersedes ? { supersedes: event.supersedes } : {}),
+                });
+            }
+            continue;
+        }
+        if (event.kind === "demand_answered") {
+            // Only the Puppet answers a demand, and only its Overlord accepts the
+            // Puppet's alternative: a model may not answer for either side, nor a
+            // third party for anyone. The first answer that settles it is final.
+            const demand = demands.get(event.demandId);
+            if (!demand) continue;
+            const byPuppet = fold(event.by) === fold(demand.target);
+            const byOverlord = fold(event.by) === fold(demand.by);
+            if (event.answer === "alternative_accepted") {
+                if (byOverlord && demand.status === "countered") demand.status = "settled";
+                continue;
+            }
+            if (!byPuppet || !DEMAND_ANSWERABLE.has(demand.status)) continue;
+            if (event.answer === "alternative") {
+                demand.status = "countered";
+                demand.alternative = event.text;
+            } else {
+                demand.status = event.answer;
+            }
+            demand.answeredAt = event.time;
+            continue;
+        }
         // poll_vote_cast — the first vote an actor casts on a poll is final.
         const poll = polls.get(event.pollId);
         if (!poll || poll.votes[event.by] || !poll.options.some((option) => option.id === event.optionId)) continue;
@@ -321,6 +470,7 @@ export const projectChatThread = (events) => {
                 votes: Object.values(poll.votes).filter((optionId) => optionId === option.id).length,
             })),
         })),
+        demands: [...demands.values()],
     };
 };
 
@@ -373,10 +523,14 @@ export const threadAsSeenBy = (events, polity) => {
 // silently dropped them on the next read: the second one-request group turn
 // lost the very message the player had just sent.
 //
-// A message is already in the log when the log has one with its id, or with the
-// same speaker and the same words. An error bubble is the panel's, not the
-// thread's, and never enters it. A message that came without an id gets one from
-// its content, so reading a thread twice gives the same log.
+// A message with an id is in the log when the log has that id. Words alone do
+// not make it so: a player who says "Agreed." twice said it twice. The one
+// exception is a copy of the thread whose ids differ from the log's (a legacy
+// thread given fresh ids by two reads): a logged line that no message here
+// claims by id answers for ONE message with its speaker and words. A message
+// without an id (an older writer's) is recognised by speaker and words, and
+// gets an id from its content, so reading a thread twice gives the same log. An
+// error bubble is the panel's, not the thread's, and never enters it.
 const contentId = (text) => {
     let value = 0x811c9dc5;
     for (let index = 0; index < text.length; index += 1) {
@@ -392,6 +546,13 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
     const logged = projectChatThread(log).messages;
     const ids = new Set(logged.map((message) => asText(message.id)).filter(Boolean));
     const said = new Set(logged.map((message) => `${fold(message.speaker)}|${asText(message.text)}`));
+    const claimed = new Set(asArray(messages).map((message) => asText(message?.id)).filter(Boolean));
+    const unclaimed = new Map();
+    for (const message of logged) {
+        if (claimed.has(asText(message.id))) continue;
+        const key = `${fold(message.speaker)}|${asText(message.text)}`;
+        unclaimed.set(key, (unclaimed.get(key) ?? 0) + 1);
+    }
     const additions = [];
     for (const message of asArray(messages)) {
         const role = asText(message?.role ?? message?.sender);
@@ -401,7 +562,11 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
         const speaker = asText(message?.speaker ?? message?.senderName);
         const id = asText(message?.id);
         const key = `${fold(speaker)}|${text}`;
-        if ((id && ids.has(id)) || said.has(key)) continue;
+        if (id) {
+            if (ids.has(id)) continue;
+            const left = unclaimed.get(key) ?? 0;
+            if (left > 0) { unclaimed.set(key, left - 1); continue; }
+        } else if (said.has(key)) continue;
         said.add(key);
         additions.push({
             id: id || `${asText(threadId) || "chat"}-unlogged-${contentId(`${key}|${asText(message?.time)}`)}`,

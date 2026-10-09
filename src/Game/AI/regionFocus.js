@@ -18,6 +18,10 @@
 // that says "Russia" on a world whose power is the "Russian Federation" (and
 // nothing called "Russia") names nobody; the two are different countries
 // wherever both exist. Ranking is never allowed to blur that line.
+//
+// A name is its letters, marks and digits in any script. Folded to a-z0-9, a
+// power the map names in Cyrillic, Arabic or Chinese had no form to be
+// recognised by, and nothing said about it ever weighed.
 
 export const foldName = (value) =>
   String(value ?? "")
@@ -25,7 +29,7 @@ export const foldName = (value) =>
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/['’`]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 
 // The forms under which a power is recognised in prose: the names the map
@@ -79,9 +83,18 @@ const impactOwners = (impacts) => {
   for (const entry of Array.isArray(impacts?.regionControlOps) ? impacts.regionControlOps : []) { push(entry?.fromCode); push(entry?.toCode); push(entry?.actorCode); }
   for (const entry of Array.isArray(impacts?.regionClaims) ? impacts.regionClaims : []) { push(entry?.claimantCode); }
   for (const entry of Array.isArray(impacts?.polityChanges) ? impacts.polityChanges : []) { push(entry?.code); push(entry?.name); }
+  for (const entry of Array.isArray(impacts?.politicalActorOps) ? impacts.politicalActorOps : []) { push(entry?.polityKey || entry?.polity || entry?.country); }
   for (const entry of Array.isArray(impacts?.unitOps) ? impacts.unitOps : []) { push(entry?.unit?.ownerCode); }
   return names;
 };
+
+// An order still waiting for its outcome. Actions carry only a status —
+// "planned" until a jump answers them, then "resolved" (playerFocus.js
+// settleOrders) — and one saved without a status is planned, as
+// normalizeActionEntry reads it. There is no `resolved` flag to test.
+export const isPendingAction = (action) =>
+  Boolean(action && typeof action === "object")
+  && (String(action.status ?? "").trim() || "planned") === "planned";
 
 export const FOCUS_WEIGHTS = Object.freeze({
   player: 1000,
@@ -103,7 +116,7 @@ export const FOCUS_WEIGHTS = Object.freeze({
  *   owners   [{ key, label, regions, displayName?, aliases? }] — one per current
  *            owner, `regions` being how many it holds.
  *   player   the player's polity name.
- *   actions  the save's pending actions (unresolved ones weigh; resolved ignored).
+ *   actions  the save's actions (planned ones weigh; resolved ones are ignored).
  *   chats    the save's chats ({ countries: [{ name }] }).
  *   events   recent events, newest last; the last `recentEvents` count.
  *   wars     the world's war ledger, any shape.
@@ -155,7 +168,7 @@ export const selectFocusPowers = ({
   credit(playerEntry, weights.player, "player");
 
   for (const action of Array.isArray(actions) ? actions : []) {
-    if (!action || action.resolved) continue;
+    if (!isPendingAction(action)) continue;
     const text = [action.title, action.description, action.rawInput, action.text].filter(Boolean).join(" ");
     creditMentions(text, weights.action, "player action", weights.action);
   }

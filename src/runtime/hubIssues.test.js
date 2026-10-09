@@ -6,18 +6,18 @@
 // What has to hold: a list is the index's posts carrying a label, open or
 // closed; it is read once and shared (callers at the same moment too); when
 // the hub has no list to give, the read fails with a sentence and GitHub's API
-// is not asked instead; and that API is asked for one thing only, a post's
-// comments.
+// is not asked instead; and a post's comments, the one thing still read
+// through that API, are read to the end or not at all.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { HUB_FILE_TEXTS, HUB_INDEX_URL, normalizeHubIndex, resetHubIndexCache } from "./hubFiles.js";
-import { HUB_API, HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage, hubImageUrl } from "./hubIssues.js";
-import { fetchHubPosts, fetchPostComments, parsePost } from "./hubPosts.js";
+import { HUB_API, HUB_URL, fetchHubIssues, fetchHubPages, fetchHubScenarioIssues, firstHubImage, hubImageUrl, nextPageUrl } from "./hubIssues.js";
+import { fetchPostComments, parsePost } from "./hubPosts.js";
 
-// `pages[url]` is what that address answers with: a body, or a status. The
-// hub's index is served from `pages[HUB_INDEX_URL]` as it is.
+// GitHub's list API over plain arrays: `pages[url]` is a page, or a status.
+// The hub's index is served from `pages[HUB_INDEX_URL]` as it is.
 const serve = (pages) => {
   const calls = [];
   resetHubIndexCache();
@@ -26,7 +26,9 @@ const serve = (pages) => {
     const page = pages[url];
     if (typeof page === "number") return { ok: false, status: page, headers: new Map(), json: async () => ({}) };
     if (!page) throw new TypeError("offline");
-    return { ok: true, status: 200, headers: new Map(), json: async () => page };
+    if (url === HUB_INDEX_URL) return { ok: true, status: 200, headers: new Map(), json: async () => page };
+    const headers = new Map(page.next ? [["link", `<${page.next}>; rel="next", <${page.next}>; rel="last"`]] : []);
+    return { ok: true, status: 200, headers, json: async () => page.items };
   };
   return calls;
 };
@@ -42,6 +44,13 @@ const post = (number, labels, extra = {}) => ({
   ...extra,
 });
 const index = (posts) => ({ version: 2, files: {}, imports: {}, posts, suggestions: {} });
+
+test("the next page is read from GitHub's Link header, and only GitHub's API is followed", () => {
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=5>; rel="last"'), "https://api.github.com/x?page=2");
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=1>; rel="prev"'), null);
+  assert.equal(nextPageUrl('<https://example.com/x?page=2>; rel="next"'), null);
+  assert.equal(nextPageUrl(null), null);
+});
 
 test("a list is the index's posts carrying a label, open or closed, read once for every caller", async () => {
   const calls = serve({
@@ -71,7 +80,6 @@ test("when the hub has no list to give, the read says why, and GitHub's API is n
   // The index as the hub published it before it checked anything.
   const before = serve({ [HUB_INDEX_URL]: { version: 1, files: {}, imports: { 12: 3 } } });
   await assert.rejects(fetchHubIssues("scenario"), { message: HUB_FILE_TEXTS.notListed });
-  await assert.rejects(fetchHubPosts(), { message: HUB_FILE_TEXTS.notListed }, "the Community tab says the same");
   assert.deepEqual(before, [HUB_INDEX_URL]);
 
   const offline = serve({});
@@ -109,45 +117,24 @@ test("a post's image is one GitHub hosts, and a card shows its checked copy or n
   assert.equal(parsePost({ ...issue, body: '<img src="https://tracker.example/pixel.png">' }, withCopy).coverImageUrl, null);
 });
 
-test("the Community tab lists the posts whose file the index holds a checked copy of, and no others", async () => {
-  const file = (n) => `https://github.com/user-attachments/files/${n}/world-scenario.zip`;
-  const copy = (n) => `https://github.com/Open-Historia/Open-historia-scenarios/releases/download/scenarios-1/p${n}-${n}-world-scenario-0a1b2c3d.zip`;
-  const scenario = (number, extra = {}) => post(number, ["scenario"], { title: `[Scenario] World ${number}`, body: `### Description\n\nA world.\n\n[world-scenario.zip](${file(number)})`, ...extra });
-  const calls = serve({
-    [HUB_INDEX_URL]: {
-      ...index([
-        scenario(31, { state: "closed" }),
-        // Its file is not among the hub's checked files under the address the post gives it.
-        scenario(30),
-        // Filed as a scenario with no file at all.
-        post(29, ["scenario"], { body: "### Description\n\nNo file here." }),
-        post(28, ["flag"]),
-      ]),
-      files: { [file(31)]: copy(31) },
-      imports: { 31: 7 },
-    },
-  });
-  const posts = await fetchHubPosts();
-  assert.deepEqual(posts.map((entry) => entry.id), [31]);
-  assert.equal(posts[0].releaseUrl, copy(31));
-  assert.equal(posts[0].bundleUrl, file(31));
-  assert.equal(posts[0].installs, 7, "the count is the index's");
-  assert.equal(await fetchHubPosts(), posts, "kept as long as the index is");
-  assert.deepEqual(calls, [HUB_INDEX_URL], "the list, the copies and the counts are one read, and nothing is asked of GitHub's API or of any counter");
-  assert.notEqual(await fetchHubPosts({ force: true }), posts, "Refresh reads the hub again");
-  assert.deepEqual(calls, [HUB_INDEX_URL, HUB_INDEX_URL]);
-});
-
-test("GitHub's API is asked for a post's comments, and for nothing else", async () => {
+test("a post's comments are read to the last page, or not at all", async () => {
   const url = `${HUB_API}/issues/41/comments?per_page=100`;
-  const calls = serve({ [url]: [{ id: 1, body: "Nice!" }, { id: 2, body: "the newest" }] });
+  const calls = serve({
+    [url]: { items: Array.from({ length: 100 }, (_, number) => ({ id: number + 1 })), next: `${url}&page=2` },
+    [`${url}&page=2`]: { items: [{ id: 101, body: "the newest" }] },
+  });
   const comments = await fetchPostComments(41, { force: true });
-  assert.equal(comments.length, 2);
-  assert.equal(await fetchPostComments(41), comments, "kept five minutes");
-  assert.deepEqual(calls, [url]);
+  assert.equal(comments.length, 101);
+  assert.equal(comments.at(-1).body, "the newest", "a suggestion after the hundredth comment is found");
+  assert.equal(calls.length, 2);
 
+  serve({ [`${HUB_API}/issues/42/comments?per_page=100`]: { items: [{ id: 1 }], next: `${HUB_API}/issues/42/comments?per_page=100&page=2` } });
+  await assert.rejects(fetchPostComments(42, { force: true }), /offline/);
+
+  // A later page that fails fails the read, whatever came before it.
+  const paged = `${HUB_API}/issues/7/comments?per_page=100`;
+  serve({ [paged]: { items: [{ id: 1 }], next: `${paged}&page=2` }, [`${paged}&page=2`]: 500 });
+  await assert.rejects(fetchHubPages(paged), (error) => error.status === 500);
   serve({ [`${HUB_API}/issues/43/comments?per_page=100`]: 403 });
   await assert.rejects(fetchPostComments(43, { force: true }), /rate limit/);
-  serve({});
-  await assert.rejects(fetchPostComments(44, { force: true }), /offline/);
 });

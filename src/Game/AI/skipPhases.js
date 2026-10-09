@@ -129,6 +129,7 @@ export const formatSkipPhases = (summary) => {
 const REVIEW_JOB_WORDS = Object.freeze({
   units: "moving the armies",
   territory: "redrawing the fronts",
+  structures: "placing new structures",
   timeline: "checking the record",
   board: "updating the board",
 });

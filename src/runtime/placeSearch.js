@@ -16,16 +16,31 @@ const STATUS_LABEL = {
   destroyed: "Destroyed",
 };
 
+const UNIT_TYPE_LABEL = {
+  infantry: "Infantry",
+  armor: "Armor",
+  air: "Air",
+  naval: "Naval",
+  artillery: "Artillery",
+  garrison: "Garrison",
+};
+
 // A country is as prominent as a place gets, and two places of the same name this close together are the same place.
 const POLITY_WEIGHT = 100;
+const GROUP_WEIGHT = 90;
+const UNIT_WEIGHT = 50;
 const SAME_PLACE_DEGREES = 0.75;
 
+// What a name and a query are compared by: case and accents folded, the
+// letters, marks and digits of every script kept. Folded to a-z0-9, a query
+// typed in Cyrillic, Greek or Chinese was empty and searched for nothing, and
+// a structure or a renamed city so named could not be found by its name.
 export const normalizePlaceText = (value) =>
   String(value ?? "")
     .normalize("NFD")
     .toLowerCase()
     .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 
 const titleCase = (value) =>
@@ -146,13 +161,17 @@ export const buildPolityIndex = (features) => {
     const lat = Number(point[1] ?? properties.anchorLat);
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
 
-    // Several label sites per polity; the most prominent one is its home.
+    // Several label sites per polity; the primary one is its home, else the most
+    // prominent. A dependency can out-measure the home ground (Greenland).
+    const primary = role !== "sovereign-secondary";
     const weight = Number(properties.priorityScale ?? properties.areaScale) || 0;
     const held = byOwner.get(owner);
-    if (!held || weight > held.weight) byOwner.set(owner, { owner, lng, lat, weight });
+    if (!held || (primary && !held.primary) || (primary === held.primary && weight > held.weight)) {
+      byOwner.set(owner, { owner, lng, lat, weight, primary });
+    }
   }
 
-  return [...byOwner.values()];
+  return [...byOwner.values()].map(({ owner, lng, lat, weight }) => ({ owner, lng, lat, weight }));
 };
 
 const polityNames = (owner, override) => {
@@ -292,13 +311,73 @@ const dedupePlaceEntries = (entries) => {
   return kept;
 };
 
-export const buildLocalPlaceEntries = ({ cities, markers, polities, cityRenames, polityOverrides } = {}) =>
-  dedupePlaceEntries([
+// One row per group that controls land, at the point its label is drawn (vnext/groupAreas.js, published by Nations.jsx): a group lives nowhere else a search could find it.
+export const buildGroupIndex = (features) => {
+  const byGroup = new Map();
+
+  for (const feature of Array.isArray(features) ? features : []) {
+    const properties = feature?.properties ?? {};
+    const group = String(properties.group ?? "").trim();
+    const point = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [];
+    const lng = Number(point[0]);
+    const lat = Number(point[1]);
+    if (!group || !Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+
+    const regions = Number(properties.regions) || 0;
+    const held = byGroup.get(group);
+    if (!held || regions > held.regions) byGroup.set(group, { group, lng, lat, regions });
+  }
+
+  return [...byGroup.values()];
+};
+
+// Found by its name or a former one (world.groups formerNames); the name is the group's key, exact.
+export const buildGroupPlaceEntries = (groupIndex, groups) => {
+  const records = groups && typeof groups === "object" ? groups : {};
+  return (groupIndex ?? []).map((row) => {
+    const formerNames = Array.isArray(records[row.group]?.formerNames) ? records[row.group].formerNames : [];
+    return {
+      key: `group:${row.group}`,
+      source: "group",
+      family: "group",
+      name: row.group,
+      aliases: unique([row.group, ...formerNames].map(normalizePlaceText)),
+      detail: "Group",
+      lng: row.lng,
+      lat: row.lat,
+      weight: GROUP_WEIGHT,
+    };
+  });
+};
+
+// Formations, as the map shows them now (unitsController.getUnits(), which hides what a turn's reveal has not reached yet).
+export const buildUnitPlaceEntries = (units) =>
+  (units ?? [])
+    .filter((unit) => unit?.id && unit?.name && Number.isFinite(unit.lng) && Number.isFinite(unit.lat))
+    .map((unit) => ({
+      key: `unit:${unit.id}`,
+      source: "unit",
+      family: "unit",
+      name: unit.name,
+      aliases: [normalizePlaceText(unit.name)],
+      detail: [UNIT_TYPE_LABEL[unit.type] || titleCase(unit.type), String(unit.ownerCode ?? "").trim()].filter(Boolean).join(" · "),
+      lng: unit.lng,
+      lat: unit.lat,
+      weight: UNIT_WEIGHT,
+      payload: { source: "unit", id: unit.id, lngLat: { lng: unit.lng, lat: unit.lat } },
+    }));
+
+// Groups and units sit outside the dedupe: a militia named for the town it holds is not that town.
+export const buildLocalPlaceEntries = ({ cities, markers, polities, cityRenames, polityOverrides, groups, groupRecords, units } = {}) => [
+  ...dedupePlaceEntries([
     ...buildMarkerPlaceEntries(markers),
     ...buildCityPlaceEntries(cities, cityRenames),
     ...buildPolityPlaceEntries(polities, polityOverrides),
     ...buildRenamePlaceEntries(cityRenames, cities),
-  ]);
+  ]),
+  ...buildGroupPlaceEntries(groups, groupRecords),
+  ...buildUnitPlaceEntries(units),
+];
 
 const aliasScore = (alias, needle) => {
   if (!alias) return 0;
@@ -308,10 +387,6 @@ const aliasScore = (alias, needle) => {
   if (alias.includes(needle)) return 400;
   return 0;
 };
-
-// The same rule ranks geocoder results, whose own order ignores what was typed.
-export const scorePlaceName = (name, query) =>
-  aliasScore(normalizePlaceText(name), normalizePlaceText(query));
 
 export const searchLocalPlaces = (entries, query, limit = 4) => {
   const needle = normalizePlaceText(query);
@@ -337,10 +412,10 @@ export const searchLocalPlaces = (entries, query, limit = 4) => {
 };
 
 // --- The map's published index ---------------------------------------------
-// Cities.jsx and Nations.jsx already hold this world's cities and label sites, and cities.geojson is deliberately never retained (assets.js), so they publish compact rows here rather than have the search bar refetch anything.
+// Cities.jsx and Nations.jsx already hold this world's cities, label sites and group label points, and cities.geojson is deliberately never retained (assets.js), so they publish compact rows here rather than have the search bar refetch anything.
 
 const EMPTY_ROWS = Object.freeze([]);
-const EMPTY_INDEX = Object.freeze({ cities: EMPTY_ROWS, polities: EMPTY_ROWS });
+const EMPTY_INDEX = Object.freeze({ cities: EMPTY_ROWS, polities: EMPTY_ROWS, groups: EMPTY_ROWS });
 
 let publishedIndex = EMPTY_INDEX;
 const indexSubscribers = new Set();
@@ -358,6 +433,9 @@ export const publishCustomCityIndex = (featureCollection) =>
 export const publishPolityIndex = (features) =>
   publishRows("polities", features ? buildPolityIndex(features) : EMPTY_ROWS);
 
+export const publishGroupIndex = (features) =>
+  publishRows("groups", features ? buildGroupIndex(features) : EMPTY_ROWS);
+
 export const getWorldPlaceIndex = () => publishedIndex;
 
 export const subscribeWorldPlaceIndex = (notify) => {
@@ -372,6 +450,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("oh:active-game-changed", () => {
     publishCustomCityIndex(null);
     publishPolityIndex(null);
+    publishGroupIndex(null);
   });
 }
 

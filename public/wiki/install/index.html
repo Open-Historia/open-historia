@@ -208,12 +208,11 @@ no second map download. The files are named <code>Open-Historia-Beta-Setup.exe</
 <ul>
 <li>Games and scenarios are stored in your browser&#39;s storage, not in files. Clearing site data
 clears your campaigns. The game will ask for persistent storage permission — grant it.</li>
-<li>The map is served by community-run content nodes rather than downloaded whole. If no node is
-reachable you get a blank map; see <a href="/wiki/troubleshooting/">Troubleshooting</a>.</li>
-<li>You can optionally sign in — by emailed magic link or with Google — to sync games and
-scenarios between devices. They are encrypted in your browser before upload, so the server
-only ever holds ciphertext. See <a href="/wiki/saves/">saves and rollback</a> for what that does and does
-not protect.</li>
+<li>The map comes from the site itself as you play. If it stays blank, see
+<a href="/wiki/troubleshooting/">Troubleshooting</a>.</li>
+<li>There is no account and nothing is synced: your games and scenarios stay in this browser. To
+carry one to another device, export it here and import it there; see
+<a href="/wiki/saves/">saves and rollback</a>.</li>
 <li>Providers that refuse direct browser requests need a relay, which the browser build does not
 have. Gemini and Anthropic work directly; see <a href="/wiki/ai-providers/">AI providers</a>.</li>
 </ul>
@@ -225,8 +224,8 @@ desktop app, and add it to your Home Screen for a fullscreen window.</p>
 install it. Android will ask you to allow installing from your browser — this is normal for an
 app distributed outside the Play Store.</p>
 <p>The app is the browser build packaged as an app. There is nothing to run on a PC alongside it
-and no Termux setup: your games are saved on the phone, and the world map streams from the same
-community content nodes that <a href="/play/">openhistoria.com/play/</a> uses, so it needs a connection.</p>
+and no Termux setup: your games are saved on the phone and the world map is inside the app, so the
+map needs no connection. Your AI provider still does, unless the model runs on your own network.</p>
 <p>It updates itself — it checks the release for a newer build and offers it in a banner.</p>
 <p>See <a href="/wiki/mobile/">playing on your phone</a> for more.</p>
 <h2 id="from-source">From source</h2>

@@ -7,7 +7,7 @@
  * assigned a custom flag.
  */
 import COUNTRY_NAMES from "./generated/countryNames.js";
-import { getNationFlags, JSON_URLS, writeJson } from "./assets.js";
+import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
 import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 
@@ -201,6 +201,17 @@ export const resolvePolityFlag = ({ polity, world, flags = {} } = {}) => {
   };
 };
 
+// A landless polity's flag: only one chosen for it (flags.json, or the flag on
+// its record) — never one derived from a code (map-ref, stock, the record's
+// stock bridge), since a stateless actor is not the country its code resolves
+// to. A faction or group the player founds is landless and keeps the flag they
+// picked for it.
+export const resolveChosenPolityFlag = (args = {}) => {
+  const resolved = resolvePolityFlag(args);
+  if (resolved.source === "custom" || resolved.source === "legacy-polity") return resolved;
+  return { imageUrl: null, polityKey: resolved.polityKey, source: "none" };
+};
+
 export const canonicalizeFlagMap = (flags, world) => {
   const source = flags && typeof flags === "object" && !Array.isArray(flags) ? flags : {};
   const out = {};
@@ -235,7 +246,17 @@ export const setPolityFlag = async ({ polity, world, dataUrl }) => {
   // force=true matters for an old save with no game-level flags.json yet: this read
   // returns the scenario's complete effective starting map, which we then clone and
   // write as the game's first mutable flag state rather than shadowing it with one key.
-  const current = await getNationFlags({ force: true }).catch(() => ({}));
+  //
+  // Read with no default: the whole map is written back, so a read that failed
+  // must stop the write rather than pass for an empty file and erase every other
+  // authored flag. A game without its own flags.json reads as {} and succeeds.
+  let current;
+  try {
+    current = await readJson(JSON_URLS.flags, { force: true });
+  } catch (error) {
+    console.warn("[flags] could not read flags.json; nothing was changed:", error);
+    throw new Error("The game's flags could not be read, so nothing was changed. Try again.");
+  }
   const next = canonicalizeFlagMap(current, world);
   const value = str(dataUrl);
   if (value) next[key] = value;

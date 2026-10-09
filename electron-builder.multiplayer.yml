@@ -1,0 +1,96 @@
+# Packaging config for the multiplayer build: `npm run dist:win:multiplayer`.
+# Like electron-builder.beta.yml, it is passed with --config, so electron-builder
+# IGNORES the `build` block in package.json: this is a complete config, and the
+# stable build's config stays untouched by anything here.
+#
+# The multiplayer build is a THIRD application to Windows, beside the official app
+# and the beta, never over either:
+#   appId / productName  — its own install folder, Start Menu entry and uninstall
+#                          entry. productName is also MULTIPLAYER_APP_NAME in
+#                          electron/channel.cjs, which the bootstrap and main.cjs
+#                          both rename the running app to, so its
+#                          profile (%APPDATA%\Open Historia Multiplayer) holds its own
+#                          saves, settings and map files. Nothing is shared with the
+#                          official app's profile, not even the map folder the beta
+#                          borrows: this build is far ahead of the released game.
+#   icon                 — the compass with a MULTIPLAYER banner, so it cannot be
+#                          mistaken for the official app where Windows truncates
+#                          the names of two apps that share a prefix.
+#   publish              — none. The multiplayer build has no update feed, and the
+#                          official one would offer it the stable installer as an
+#                          "update" (electron/main.cjs never reads a build id or
+#                          starts the updater on this channel, and
+#                          electron/bootstrap.cjs never runs an update's files).
+#
+# What tells the RUNNING app it is the multiplayer build is electron/channel.json,
+# stamped by scripts/stamp-channel.mjs, as for the beta.
+# server/multiplayerPackaging.test.js keeps this file and main.cjs in agreement.
+appId: io.github.arkniem.openhistoria.multiplayer
+# Without parentheses, for the same reason as the beta's: electron-builder only uses
+# productName for the install folder when it matches /^[-_+0-9a-zA-Z .]+$/.
+productName: Open Historia Multiplayer
+
+# Identical to package.json's `build.files`.
+files:
+  - LICENSE
+  - dist/**
+  - server/**
+  - electron/**
+  - scripts/fetch-map-assets.mjs
+  - scripts/map-assets.json
+  - public/lang/**
+  - fmg/dist/**
+  - package.json
+  - "!**/*.map"
+
+asarUnpack:
+  - scripts/**
+
+afterPack: ./scripts/mac-adhoc-sign.cjs
+
+publish: null
+
+directories:
+  output: release
+  buildResources: build
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: electron/multiplayer-assets/icon-multiplayer.png
+  artifactName: Open-Historia-Multiplayer-Setup-${os}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Open Historia Multiplayer
+  uninstallDisplayName: Open Historia Multiplayer
+  artifactName: Open-Historia-Multiplayer-Setup.${ext}
+
+mac:
+  target:
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: electron/multiplayer-assets/icon-multiplayer.png
+  category: public.app-category.strategy-games
+  artifactName: Open-Historia-Multiplayer-mac-${arch}.${ext}
+
+linux:
+  maintainer: Arkniem <nichojkrol@gmail.com>
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: electron/multiplayer-assets/icon-multiplayer.png
+  category: Game
+  artifactName: Open-Historia-Multiplayer-${arch}.${ext}

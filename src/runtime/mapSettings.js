@@ -69,6 +69,10 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // A skip whose player events were refused, or whose player orders got no
+    // outcome, is held for the player to retry (AI/playerTurnFailures.js). OFF
+    // by default: the skip lands and the orders carry over as overdue.
+    stopOnPlayerFailures: "ai_stop_on_player_failures",
 };
 
 // Families the label-font pickers suggest — Settings → Map and the game and
@@ -114,6 +118,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+    [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
 };
 
 export function setMapSetting(key, value) {
@@ -171,6 +176,54 @@ export function useMapSetting(key) {
     }, [key]);
 
     return value;
+}
+
+// The operating system's own reduced-motion setting. While it is on, the game
+// behaves as if its Reduce motion switch (Settings → General, both motion
+// switches below it) were on — no idle globe spin, no event camera, no
+// ownership sweep — and the switch shows as on, following it.
+export const SYSTEM_REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+export function systemPrefersReducedMotion() {
+    try {
+        return Boolean(globalThis.window?.matchMedia?.(SYSTEM_REDUCED_MOTION_QUERY)?.matches);
+    } catch {
+        return false;
+    }
+}
+
+// The Reduce motion switch in force, read when an animation is about to start:
+// the player's (both motion switches on) or the system's.
+export function reduceMotionEnabled() {
+    return systemPrefersReducedMotion()
+        || (getMapSetting(MAP_SETTING_KEYS.disableIdleRotation) && getMapSetting(MAP_SETTING_KEYS.disableEventCamera));
+}
+
+export function useSystemReducedMotion() {
+    const [value, setValue] = useState(systemPrefersReducedMotion);
+
+    useEffect(() => {
+        const query = globalThis.window?.matchMedia?.(SYSTEM_REDUCED_MOTION_QUERY);
+        const onChange = () => setValue(systemPrefersReducedMotion());
+        onChange();
+        if (!query) return undefined;
+        if (query.addEventListener) query.addEventListener("change", onChange);
+        else query.addListener?.(onChange);
+        return () => {
+            if (query.removeEventListener) query.removeEventListener("change", onChange);
+            else query.removeListener?.(onChange);
+        };
+    }, []);
+
+    return value;
+}
+
+// One motion switch (disableIdleRotation, disableEventCamera) in force: the
+// player turned it on, or the system asks for reduced motion.
+export function useMotionSetting(key) {
+    const own = useMapSetting(key);
+    const system = useSystemReducedMotion();
+    return own || system;
 }
 
 export function useMapSettingValue(key, fallback = "") {

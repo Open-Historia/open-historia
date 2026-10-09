@@ -91,12 +91,11 @@ What is different in the browser:
 
 - Games and scenarios are stored in your browser's storage, not in files. Clearing site data
   clears your campaigns. The game will ask for persistent storage permission — grant it.
-- The map is served by community-run content nodes rather than downloaded whole. If no node is
-  reachable you get a blank map; see [Troubleshooting](/wiki/troubleshooting/).
-- You can optionally sign in — by emailed magic link or with Google — to sync games and
-  scenarios between devices. They are encrypted in your browser before upload, so the server
-  only ever holds ciphertext. See [saves and rollback](/wiki/saves/) for what that does and does
-  not protect.
+- The map comes from the site itself as you play. If it stays blank, see
+  [Troubleshooting](/wiki/troubleshooting/).
+- There is no account and nothing is synced: your games and scenarios stay in this browser. To
+  carry one to another device, export it here and import it there; see
+  [saves and rollback](/wiki/saves/).
 - Providers that refuse direct browser requests need a relay, which the browser build does not
   have. Gemini and Anthropic work directly; see [AI providers](/wiki/ai-providers/).
 
@@ -111,8 +110,8 @@ install it. Android will ask you to allow installing from your browser — this 
 app distributed outside the Play Store.
 
 The app is the browser build packaged as an app. There is nothing to run on a PC alongside it
-and no Termux setup: your games are saved on the phone, and the world map streams from the same
-community content nodes that [openhistoria.com/play/](/play/) uses, so it needs a connection.
+and no Termux setup: your games are saved on the phone and the world map is inside the app, so the
+map needs no connection. Your AI provider still does, unless the model runs on your own network.
 
 It updates itself — it checks the release for a newer build and offers it in a banner.
 

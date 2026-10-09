@@ -1,12 +1,14 @@
 # Open Historia — Developer Documentation
 
-Open Historia is an AI-driven, map-based alternate-history strategy game: players run a world of owned regions on an interactive map and advance it turn-by-turn, with a language model narrating events and applying concrete changes back to the world state. The same codebase ships as three variants from one source tree — a Node/Express server build, a browser-only web build (openhistoria.com), and a Capacitor Android app with an embedded server — gated by the compile-time `VITE_OH_WEB` flag. These docs are organized by subsystem: the map and in-game UI, the world/turn model, the AI pipeline, the standalone map editor, the backend and data layers, the web/mobile targets, and the delivery/release topology. Every page is a standalone reference; this index groups them and links each with a one-line summary.
+Open Historia is an AI-driven, map-based alternate-history strategy game: players run a world of owned regions on an interactive map and advance it turn-by-turn, with a language model narrating events and applying concrete changes back to the world state. The same codebase ships as three variants from one source tree — a Node/Express server build, a browser-only web build (openhistoria.com), and a Capacitor Android app that runs the web build on the device — gated by the compile-time `VITE_OH_WEB` flag. These docs are organized by subsystem: the map and in-game UI, the world/turn model, the AI pipeline, the standalone map editor, the backend and data layers, the web/mobile targets, and the delivery/release topology. Every page is a standalone reference; this index groups them and links each with a one-line summary.
 
 ## Start here
 
 New to the codebase? Read **[Architecture Overview](architecture.md)** first — it covers the tech stack, the three build variants and the `VITE_OH_WEB` flag, the boot sequence, the directory map, and the frontend↔`/api`↔storage data flow that every other page builds on. From there, follow the group that matches what you're working on.
 
 > **Editing AI prompts?** The **[Prompt-Making Guide](ai-prompts.md)** is the canonical reference — every placeholder/variable, all 13 tasks plus the advisor/leader roots, end-to-end prompt assembly, the override/frozen-prompt model, and recipes for adding a variable or a task. Start there before touching any prompt text.
+
+> **References are by name.** These pages point at code by file and symbol (a function, constant or route), never by line number: line numbers drift with every commit, and the old `file.js:123` anchors had drifted by hundreds of lines. Search the file for the name.
 
 ## Contents
 
@@ -34,9 +36,8 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Languages & Translation](i18n.md) — Shipped language packs for the interface and the prompts' guidance, AI translation of content only, the pattern and run lookup, writing UI code that translates, regenerating the packs.
 
 ### Web & Mobile
-- [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, PMTiles Worker-proxy/content-node trust chain, magic-link/Google accounts + E2E sync.
+- [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, the map files the build carries under its own `/assets`; saves stay in the browser and move by export/import.
 - [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build.
 
 ### Delivery
-- [The Player Wiki](wiki.md) — Maintaining openhistoria.com/wiki/: the markdown-to-HTML generator, `npm run wiki:check` for spotting when it has gone stale, the screenshot harness, and the main-vs-beta rules.
-- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the four workflows, `build:site`, the admin-panel deploy engine, and the Workers.
+- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the desktop, Android, site and test workflows, `build:site`, the admin-panel deploy engine, and the Workers.

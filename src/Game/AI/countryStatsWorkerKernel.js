@@ -9,6 +9,7 @@ import {
   normalizeCountryStatSheet,
 } from "../../runtime/countryStats.js";
 import { gameDateDayNumber, parseGameDate } from "../../runtime/gameDates.js";
+import { regionOwnerName } from "./regionVocab.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -1325,6 +1326,74 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
 };
 
 
+// How much land the target holds, counted over the whole map. Most regions carry
+// no ownership override: their owner is the base owner on the catalog row
+// (regionOwnerName), so counting overrides alone said a polity held nothing once
+// any other polity had one, and "its modern-day territory" in 1871 when none had.
+// Controlled is who holds a region now; lawful sovereign is the sparse
+// sovereignty anchor, else the controller (normalizeWorldState drops the anchor
+// when the two agree). Owners are compared exactly, after the same code-to-name
+// canonicalisation regionOwnerName applies.
+const DOSSIER_REGION_NAMES = 40;
+const regionCount = (count) => (count === 1 ? "1 region" : `${count} regions`);
+const describeDossierTerritory = (world, code, catalog) => {
+  const overrides = world?.regionOwnershipOverrides ?? {};
+  const sovereignty = world?.regionSovereigntyOverrides ?? {};
+  const target = toCountryName(code);
+  const isTarget = (owner) => {
+    const name = normalizeString(owner);
+    return Boolean(name) && (name === code || name === target || toCountryName(name) === target);
+  };
+
+  if (!catalog.length) {
+    // No map to count over: the overrides are all there is.
+    const held = Object.values(overrides).filter(isTarget).length;
+    return [held
+      ? `Territory: holds at least ${regionCount(held)} (the region catalog was unavailable, so only changed regions were counted).`
+      : "Territory: the region catalog was unavailable, so its holdings could not be counted."];
+  }
+
+  let controlled = 0;
+  let lawful = 0;
+  let heldAsSovereign = 0;
+  let lostToOthers = 0;
+  const beyondStart = [];
+  for (const region of catalog) {
+    const regionId = normalizeString(region?.id);
+    if (!regionId) continue;
+    const baseOwner = regionOwnerName(region, null);
+    const controller = regionOwnerName(region, overrides);
+    const sovereign = normalizeString(sovereignty[regionId]) || controller;
+    if (isTarget(controller)) {
+      controlled += 1;
+      if (!isTarget(baseOwner)) beyondStart.push(region);
+      if (isTarget(sovereign)) heldAsSovereign += 1;
+    } else if (isTarget(baseOwner)) {
+      lostToOthers += 1;
+    }
+    if (isTarget(sovereign)) lawful += 1;
+  }
+
+  if (!controlled && !lawful) return [`Territory: holds no regions on the current map.`];
+  const lines = [
+    // Equal counts are not enough: one region occupied and another lost to an
+    // occupier leave the two numbers equal over different regions.
+    lawful === controlled && heldAsSovereign === controlled
+      ? `Territory: holds ${regionCount(controlled)} on the current map, and is their lawful sovereign.`
+      : `Territory: holds ${regionCount(controlled)} on the current map, and is the lawful sovereign of ${lawful}.`,
+  ];
+  if (beyondStart.length) {
+    const names = beyondStart.slice(0, DOSSIER_REGION_NAMES).map((region) => {
+      const name = normalizeString(region?.name) || normalizeString(region?.id);
+      return region?.country ? `${name} (${region.country})` : name;
+    });
+    const more = beyondStart.length > names.length;
+    lines.push(`Held beyond its starting territory in this scenario: ${regionCount(beyondStart.length)}${more ? ", including" : ""}: ${names.join(", ")}${more ? ", …" : ""}`);
+  }
+  if (lostToOthers) lines.push(`Of its starting territory in this scenario, ${regionCount(lostToOthers)} ${lostToOthers === 1 ? "is" : "are"} now held by others.`);
+  return lines;
+};
+
 export const buildTargetDossierKernel = ({ bundle, code, scenarioCatalog = [], fallbackCatalog = [] } = {}) => {
   const world = bundle?.world || {};
   const lines = [];
@@ -1339,30 +1408,11 @@ export const buildTargetDossierKernel = ({ bundle, code, scenarioCatalog = [], f
     if (polity.note) lines.push(`Notes: ${polity.note}`);
   }
 
-  const overrides = Object.entries(world.regionOwnershipOverrides ?? {});
-  const owned = code ? overrides.filter(([, owner]) => owner === code) : [];
-  if (owned.length > 0) {
+  if (code) {
     const catalog = normalizeArray(scenarioCatalog).length
       ? normalizeArray(scenarioCatalog)
       : normalizeArray(fallbackCatalog);
-    const regionLookup = new Map(catalog.map((region) => [String(region?.id ?? ""), region]));
-    const names = owned.slice(0, 40).map(([regionId]) => {
-      const region = regionLookup.get(regionId);
-      return region
-        ? `${region.name || regionId}${region.country ? ` (${region.country})` : ""}`
-        : regionId;
-    });
-    lines.push(
-      `Territory: holds ${owned.length} regions${owned.length > names.length ? ", including" : ""}: ${names.join(", ")}${
-        owned.length > names.length ? ", …" : ""
-      }`,
-    );
-  } else if (code) {
-    lines.push(
-      overrides.length > 0
-        ? `Territory: no regions on the current map are recorded as held by ${code}.`
-        : `Territory: holds its modern-day territory (no territorial changes recorded).`,
-    );
+    lines.push(...describeDossierTerritory(world, code, catalog));
   }
 
   const units = normalizeArray(bundle?.world?.units).filter((unit) => unit?.ownerCode === code);

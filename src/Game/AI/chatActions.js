@@ -1,7 +1,7 @@
 /*! Open Historia — one request speaks for every AI participant © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// A four-way chat used to cost four requests for one player message: one to
-// decide who speaks next (the `nextSpeaker` task) and one for each leader who
-// answered, capped at three. On a free key — a few hundred requests a day
+// A four-way chat used to cost several requests for one player message: a
+// standalone speaker-selection request plus one request per leader who answered,
+// capped at three. On a free key — a few hundred requests a day
 // (requestBudget.js) — a single afternoon of diplomacy was the day's allowance.
 //
 // So a turn of a thread is ONE request that returns an ordered ACTION BATCH,
@@ -52,8 +52,37 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const fold = (value) => asText(value).toLowerCase();
-// An option's label, usable as its ref when the model gave none.
-const refFromLabel = (label) => fold(label).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+const escapeRegex = (value) => String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Structured chat actions already carry the speaker in actorName. Models still
+// sometimes mirror transcript notation and return `France: ...` inside content,
+// which makes the UI render the polity twice. Strip only an exact leading actor
+// display name plus punctuation; aliases and later mentions are deliberately left
+// untouched so normalization can never eat real speech.
+//
+// A dash counts only with space on both sides, and not when the same dash closes
+// an aside later in the sentence: "France-German friendship ..." and "France —
+// as it always has — stands with its allies." are the speaker's own words.
+export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
+    const text = asText(content);
+    const actor = asText(actorName);
+    if (!text || !actor) return text;
+    const name = escapeRegex(actor);
+    const labelled = new RegExp(`^${name}\\s*:\\s*`, "iu");
+    if (labelled.test(text)) return text.replace(labelled, "").trim();
+    const dashed = text.match(new RegExp(`^${name}\\s+([-–—])\\s+`, "iu"));
+    if (!dashed) return text;
+    const rest = text.slice(dashed[0].length);
+    const firstSentence = rest.split(/[.!?]/)[0];
+    if (new RegExp(`\\s${escapeRegex(dashed[1])}\\s`, "u").test(firstSentence)) return text;
+    return rest.trim();
+};
+
+// An option's label, usable as its ref when the model gave none. The letters,
+// marks and digits of any script: kept to a-z and 0-9, "Принять" and "Отказать"
+// both came out empty, and a poll whose options were written as bare strings in
+// the player's language lost them all, and with them the poll and its votes.
+const refFromLabel = (label) => fold(asText(label).normalize("NFKC")).replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 40);
 
 // ---------------------------------------------------------------------------
 // Reading one action
@@ -68,7 +97,10 @@ export const normalizeChatAction = (entry) => {
     const base = { type, actorName };
 
     if (type === "send_message") {
-        const content = clip(asText(entry.content ?? entry.text ?? entry.message), MESSAGE_MAX_CHARS);
+        const content = clip(
+            stripRedundantChatSpeakerPrefix(entry.content ?? entry.text ?? entry.message, actorName),
+            MESSAGE_MAX_CHARS,
+        );
         return content ? { ...base, content } : null;
     }
     if (type === "add_reaction") {
@@ -129,7 +161,7 @@ export const normalizeChatAction = (entry) => {
 // (chatThreads.js normalizeChatEvents), so that turn's replies vanished, and a
 // reaction meant for one landed on the old line. A taken id is skipped.
 
-export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds = [] } = {}) => {
+export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds = [], disallowMembershipChanges = false } = {}) => {
     const ai = asArray(roster.aiParticipants).map(asText).filter(Boolean);
     const humans = asArray(roster.humanParticipants).map(asText).filter(Boolean);
     const known = asArray(roster.knownPolities).map(asText).filter(Boolean);
@@ -199,6 +231,10 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds
         }
 
         if (action.type === "add_member") {
+            if (disallowMembershipChanges) {
+                refuse(action, "institution membership is governed by the institution ledger, not by chat membership actions");
+                continue;
+            }
             const member = knownByFold.get(fold(action.targetName));
             if (!member) { refuse(action, `"${action.targetName}" is not a polity on this map`); continue; }
             if (membersNow.has(fold(member))) { refuse(action, `${member} is already in this chat`); continue; }
@@ -209,6 +245,10 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds
         }
 
         if (action.type === "remove_member") {
+            if (disallowMembershipChanges) {
+                refuse(action, "institution membership is governed by the institution ledger, not by chat membership actions");
+                continue;
+            }
             const target = aiByFold.get(fold(action.targetName)) ?? knownByFold.get(fold(action.targetName));
             if (humanFolds.has(fold(action.targetName))) {
                 refuse(action, `${action.targetName} is played by a human and cannot be removed from their own chat`);
@@ -251,7 +291,11 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds
         }
 
         if (action.type === "add_poll_option") {
-            const optionId = `${pollId}-${asText(action.optionRef).replace(/[^a-z0-9-]+/gi, "-")}`;
+            // The ref's own letters and digits, in any script: cut to a-z and
+            // 0-9, every option added under a ref in another script was given
+            // the one id "<poll>--". An id is made once, here, and read back
+            // from the thread afterwards, so options already saved keep theirs.
+            const optionId = `${pollId}-${asText(action.optionRef).replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")}`;
             optionIdByRef.set(`${action.pollRef}/${action.optionRef}`, optionId);
             events.push({ id: nextId("pollopt"), kind: "poll_option_added", time, by: actor, pollId, optionId, label: action.label });
             applied.push({ ...action, actorName: actor, pollId, optionId });
@@ -311,7 +355,7 @@ export const describeChatActionFeedback = ({ rejected = [], unansweredPolls = []
 // One request answers for the whole table, but a table does not talk all at
 // once. A batch's events are shown in steps: the first message at once (the
 // request was the wait for it), and each later message only after its speaker
-// has been seen typing for CHAT_REVEAL_PAUSE_MS. A step is a message and what
+// has been seen typing for a short, natural 1-3 second pause. A step is a message and what
 // follows it up to the next message (a reaction, a vote, a newcomer); what
 // comes before the first message goes with the first. A batch with fewer than
 // two messages is one step.
@@ -321,7 +365,15 @@ export const describeChatActionFeedback = ({ rejected = [], unansweredPolls = []
 // the reveal has not reached, and the next turn is told whose lines went
 // unsaid (describeChatCutIn).
 
-export const CHAT_REVEAL_PAUSE_MS = 5000;
+export const CHAT_REVEAL_MIN_PAUSE_MS = 1000;
+export const CHAT_REVEAL_MAX_PAUSE_MS = 3000;
+
+export const randomChatRevealPauseMs = (random = Math.random) => {
+    const raw = Number(typeof random === "function" ? random() : 0);
+    const sample = Number.isFinite(raw) ? Math.max(0, Math.min(0.999999999999, raw)) : 0;
+    return CHAT_REVEAL_MIN_PAUSE_MS
+        + Math.floor(sample * (CHAT_REVEAL_MAX_PAUSE_MS - CHAT_REVEAL_MIN_PAUSE_MS + 1));
+};
 
 export const planChatReveal = (events) => {
     const steps = [];

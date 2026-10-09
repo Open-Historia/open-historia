@@ -2,13 +2,18 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
-import { useWorldState } from "../Map/useWorldState.js";
+import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
+import { getPlayerCode, setInteractionMode } from "../Map/unitsController.js";
+import { approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dismissRegionPopup } from "./Regions.jsx";
+import { dismissRegionPopup, onRegionSelected } from "./Regions.jsx";
 import { dismissUnitPopup } from "./Units.jsx";
+import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
+import { useEventsById } from "./eventLookup.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -17,15 +22,13 @@ let _dismiss = null;
 // Called by the map click dispatcher (Nations.jsx) when a city or a built
 // structure (world.markers) is clicked. The payload is everything the popup
 // shows — cities are stateless tile features, so it all rides the click:
-// { source: "city"|"marker", id?, name, kind?, population?, capital?, tier?, lng, lat }
+// { source: "city"|"marker", id?, name, kind?, population?, capital?, tier?, lng, lat,
+//   hostRegionName?, hostRegion? } — hostRegion is the region under it, as a
+//   region click hands it to onRegionSelected.
 export const onFeatureSelected = (payload) => {
   if (!_setSelection || !payload?.name) return;
 
-  const isSame =
-    _currentSelection &&
-    _currentSelection.name === payload.name &&
-    _currentSelection.source === payload.source;
-  if (isSame) {
+  if (isSameFeatureSelection(_currentSelection, payload)) {
     _dismiss?.();
     return;
   }
@@ -134,6 +137,18 @@ const SIDEWAYS_SHEET_PLACEMENT = {
 };
 const SIDEWAYS_SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 4.5rem - ${SAFE_TOP} - 7.75rem - ${SAFE_BOTTOM})`;
 
+const settleButton = {
+  flex: 1,
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: "6px",
+  color: "white",
+  cursor: "pointer",
+  fontSize: "11px",
+  fontWeight: 700,
+  padding: "5px 8px",
+};
+
 const DetailRow = ({ label, value }) => (
   <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "11px", color: "rgba(255,255,255,0.6)", marginTop: "3px" }}>
     <span style={{ flexShrink: 0 }}>{label}</span>
@@ -147,7 +162,6 @@ const FeaturePopup = () => {
   const shortTouch = useShortTouchScreen();
   const asSheet = isMobile || shortTouch;
   const [selection, setSelection] = useState(null);
-  const [screenPos, setScreenPos] = useState(null);
   const [animKey, setAnimKey] = useState(0);
   const [dismissing, setDismissing] = useState(false);
   const { current: map } = useMap();
@@ -183,64 +197,38 @@ const FeaturePopup = () => {
     dismissUnitPopup();
   }, [asSheet, selection]);
 
-  const handleAnimationEnd = (e) => {
-    if (e.animationName !== "featurePopupFadeOut" && e.animationName !== "featureSheetFadeOut") return;
+  const finishDismiss = () => {
     _currentSelection = null;
     setSelection(null);
     setDismissing(false);
   };
 
+  const handleAnimationEnd = (e) => {
+    if (e.animationName !== "featurePopupFadeOut" && e.animationName !== "featureSheetFadeOut") return;
+    finishDismiss();
+  };
+
+  // A phone's sheet follows no point on the map, so nothing is tracked
+  // (mapCards.js).
+  const screenPos = useCardScreenPos(
+    map,
+    selection ? { lng: selection.lng, lat: selection.lat } : null,
+    Boolean(selection) && !asSheet,
+  );
+
+  // A card that is not on screen has no fade-out to play, and the fade's end
+  // is what clears the selection: without this a dismiss left it selected.
   useEffect(() => {
-    // A phone's sheet follows no point on the map, so nothing is tracked.
-    if (!map || !selection || asSheet) {
-      setScreenPos(null);
-      return undefined;
-    }
-
-    const update = () => {
-      const center = map.getCenter();
-      const toRad = (deg) => (deg * Math.PI) / 180;
-      const anchor = { lng: selection.lng, lat: selection.lat };
-      const lat1 = toRad(center.lat);
-      const lat2 = toRad(anchor.lat);
-      const dLng = toRad(anchor.lng - center.lng);
-      const cosAngle =
-        Math.sin(lat1) * Math.sin(lat2) + Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLng);
-
-      // On the globe, points around the horizon have no meaningful screen spot.
-      if (cosAngle < 0) {
-        setScreenPos(null);
-        return;
-      }
-
-      const point = map.project(anchor);
-      setScreenPos((prev) => {
-        if (prev && Math.abs(prev.x - point.x) < 0.5 && Math.abs(prev.y - point.y) < 0.5) {
-          return prev;
-        }
-        return { x: point.x, y: point.y };
-      });
-    };
-
-    let frameId = 0;
-    const scheduleUpdate = () => {
-      if (frameId) return;
-      frameId = requestAnimationFrame(() => {
-        frameId = 0;
-        update();
-      });
-    };
-
-    update();
-    map.on("move", scheduleUpdate);
-    return () => {
-      if (frameId) cancelAnimationFrame(frameId);
-      map.off("move", scheduleUpdate);
-    };
-  }, [map, selection, asSheet]);
+    if (dismissing && !asSheet && !screenPos) finishDismiss();
+  }, [dismissing, asSheet, screenPos]);
 
   // Hook order must not depend on the selection — called before any return.
   const ownerName = useCountryDisplayName(liveMarker?.ownerCode || selection?.ownerCode || "");
+  // The last two events that built or changed a structure, newest first, read
+  // through the cache the unit card shares (eventLookup.js).
+  const sourceEvents = useEventsById(
+    Array.isArray(liveMarker?.sourceEventIds) ? liveMarker.sourceEventIds.slice(-2).reverse() : [],
+  );
 
   // On a phone the card and a bottom panel would share one spot at the
   // bottom of the screen, the card underneath: it tells the HUD it opened,
@@ -259,6 +247,12 @@ const FeaturePopup = () => {
     : selection;
 
   const isCity = selection.source === "city";
+  // A structure given an approximate placement because its town is not on the
+  // map (AI/placement.js): everyone sees the note; the player settles their own,
+  // or their puppets', with Accept or Move (runtime/structurePlacement.js).
+  const approximate = isCity ? null : approximateMark(liveMarker);
+  const settleable = Boolean(approximate)
+    && canSettleStructure(liveMarker, { playerCountry: getPlayerCode(), world: getWorldStateSnapshot() ?? {} });
   const kind = isCity
     ? (feature.capital === "primary" ? "Capital city" : TIER_LABEL[feature.tier] || "City")
     : titleCase(feature.kind || "Landmark");
@@ -266,6 +260,15 @@ const FeaturePopup = () => {
   const statusMeta = markerStatusMeta(feature.status);
 
   const POPUP_WIDTH = 220;
+
+  // From a city or structure to the region under it, as a click on that
+  // region would open it (Nations.jsx hands over the region's selection).
+  const openHostRegion = () => {
+    const hostRegion = feature.hostRegion;
+    if (!hostRegion) return;
+    _dismiss?.();
+    onRegionSelected(hostRegion);
+  };
 
   return createPortal(
     <div
@@ -356,10 +359,79 @@ const FeaturePopup = () => {
           {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
             <DetailRow label="Last changed" value={feature.updatedDate} />
           ) : null}
-          <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
+          {/* The names it had before the AI renamed it, which the AI is still told. */}
+          {!isCity && Array.isArray(feature.aliases) && feature.aliases.length > 0 ? (
+            <DetailRow label="Formerly" value={feature.aliases.join(", ")} />
+          ) : null}
+          {!isCity && sourceEvents.length > 0 ? (
+            <DetailRow
+              label="Events"
+              value={sourceEvents.map((event) => (
+                <span key={event.id} style={{ display: "block" }}>
+                  {event.date ? `${event.date} — ${event.title}` : event.title}
+                </span>
+              ))}
+            />
+          ) : null}
+          {/* The region it stands in, which leads on to that region's card;
+              coordinates only where there is none (a structure at sea). */}
+          {feature.hostRegionName ? (
+            <DetailRow
+              label="Region"
+              value={feature.hostRegion ? (
+                <button
+                  className="oh-tap-row"
+                  onClick={openHostRegion}
+                  title="Open the region's card"
+                  style={{ background: "none", border: "none", padding: 0, color: "#2bc1f3", cursor: "pointer", font: "inherit", textAlign: "right", textDecoration: "underline", wordBreak: "break-word" }}
+                >
+                  {feature.hostRegionName}
+                </button>
+              ) : feature.hostRegionName}
+            />
+          ) : (
+            <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
+          )}
           {feature.note ? (
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,255,255,0.75)" }}>
               {feature.note}
+            </div>
+          ) : null}
+          {!isCity && approximate ? (
+            // Each case one whole sentence, so a language can reorder it (docs/i18n.md).
+            <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,210,120,0.9)" }}>
+              {approximate.unnamed
+                ? (approximate.near
+                  ? `No place was given for this, so it was placed near ${approximate.near} in ${approximate.country}.`
+                  : `No place was given for this, so it was placed in ${approximate.country}.`)
+                : approximate.near
+                  ? `${approximate.asked} isn't on this map, so this was placed near ${approximate.near} in ${approximate.country}.`
+                  : `${approximate.asked} isn't on this map, so this was placed in ${approximate.country}.`}
+            </div>
+          ) : null}
+          {!isCity && settleable ? (
+            <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+              <button
+                className="oh-tap"
+                onClick={() => {
+                  // In a shared game the host may refuse (the round is being resolved).
+                  void saveSettledStructure(feature.id)
+                    .catch((error) => logDebugEvent("warn", "[map] Accepting the structure's place failed.", error));
+                }}
+                style={settleButton}
+              >
+                Accept
+              </button>
+              <button
+                className="oh-tap"
+                onClick={() => {
+                  setInteractionMode({ kind: "structure-place", markerId: feature.id });
+                  setDismissing(true);
+                }}
+                style={settleButton}
+              >
+                Move
+              </button>
             </div>
           ) : null}
         </div>

@@ -127,9 +127,9 @@
 did, and every error and API failure along the way. <strong>🔎 View log</strong> reads it in place. It usually
 explains the problem immediately, and it is what to attach to a bug report.</p>
 <h2 id="the-map-is-blank">The map is blank</h2>
-<p><strong>In the browser.</strong> The web build streams its map from community-run content nodes. If none is
-reachable you get no map. Reload; if it persists, the node network is having a bad day — try
-again later, or use the desktop app, which stores the map locally.</p>
+<p><strong>In the browser.</strong> The site carries the map itself and the page reads it from there. A blank
+map usually means that download was cut short: reload, and give it time on a slow connection.
+The desktop app stores the map on disk and the Android app carries it inside the app.</p>
 <p><strong>On desktop.</strong> The map data failed to download on first launch. It is about 200 MB fetched
 separately from the installer. Restart the app and let the startup screen finish. From a source
 checkout, run <code>node scripts/fetch-map-assets.mjs</code>.</p>
@@ -270,8 +270,9 @@ CORS setting to enable.</li>
 <li>On the desktop app, close and reopen it — a long session accumulates map tiles.</li>
 </ul>
 <h2 id="i-lost-my-games">I lost my games</h2>
-<p><strong>In the browser</strong> — clearing site data clears your campaigns. There is no server-side copy
-unless you signed in, which syncs them. Grant persistent storage permission when asked.</p>
+<p><strong>In the browser</strong> — clearing site data clears your campaigns. There is no server-side copy:
+nothing is uploaded and there is no account. Grant persistent storage permission when asked,
+and export a campaign you care about.</p>
 <p><strong>On desktop</strong> — saves are files in the app&#39;s data directory and are still there. If the library
 looks empty, the app may be pointed at a different data directory.</p>
 <p><strong>After installing the beta</strong> — the beta build keeps a <strong>separate library</strong> by design. Your

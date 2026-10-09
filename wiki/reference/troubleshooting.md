@@ -6,9 +6,9 @@ explains the problem immediately, and it is what to attach to a bug report.
 
 ## The map is blank
 
-**In the browser.** The web build streams its map from community-run content nodes. If none is
-reachable you get no map. Reload; if it persists, the node network is having a bad day — try
-again later, or use the desktop app, which stores the map locally.
+**In the browser.** The site carries the map itself and the page reads it from there. A blank
+map usually means that download was cut short: reload, and give it time on a slow connection.
+The desktop app stores the map on disk and the Android app carries it inside the app.
 
 **On desktop.** The map data failed to download on first launch. It is about 200 MB fetched
 separately from the installer. Restart the app and let the startup screen finish. From a source
@@ -188,8 +188,9 @@ The error will name a blocked cross-origin request.
 
 ## I lost my games
 
-**In the browser** — clearing site data clears your campaigns. There is no server-side copy
-unless you signed in, which syncs them. Grant persistent storage permission when asked.
+**In the browser** — clearing site data clears your campaigns. There is no server-side copy:
+nothing is uploaded and there is no account. Grant persistent storage permission when asked,
+and export a campaign you care about.
 
 **On desktop** — saves are files in the app's data directory and are still there. If the library
 looks empty, the app may be pointed at a different data directory.

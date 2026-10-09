@@ -6,6 +6,14 @@
 // Workshop, the settings — and none of them has to mount anything for it. The
 // interface translator picks the text up as it appears; the file name opts out.
 const NOTICE_ID = "oh-saved-notice";
+// The notice's words, in a display constant so the string catalog reads them
+// (scripts/i18n/extractStrings.mjs): a textContent assignment is invisible to
+// it, and the packs only hold what the catalog has.
+export const SAVED_NOTICE_TEXT = Object.freeze({
+  title: "Saved to your Downloads folder",
+  share: "Share",
+  close: "Close",
+});
 const VISIBLE_MS = 8000;
 
 let hideTimer = 0;
@@ -67,7 +75,7 @@ export const showSavedNotice = ({ fileName, onShare = null }) => {
   const text = document.createElement("div");
   Object.assign(text.style, { display: "grid", gap: "2px", minWidth: "0" });
   const title = document.createElement("div");
-  title.textContent = "Saved to your Downloads folder";
+  title.textContent = SAVED_NOTICE_TEXT.title;
   Object.assign(title.style, { fontSize: "0.86rem", fontWeight: "700" });
   const place = document.createElement("div");
   place.setAttribute("data-no-translate", "");
@@ -77,11 +85,11 @@ export const showSavedNotice = ({ fileName, onShare = null }) => {
   box.append(text);
 
   if (typeof onShare === "function") {
-    box.append(button("Share", () => { hide(); onShare(); }));
+    box.append(button(SAVED_NOTICE_TEXT.share, () => { hide(); onShare(); }));
   }
   const close = button("✕", hide, { background: "transparent", border: "none", padding: "0.45rem 0.55rem" });
-  close.setAttribute("aria-label", "Close");
-  close.title = "Close";
+  close.setAttribute("aria-label", SAVED_NOTICE_TEXT.close);
+  close.title = SAVED_NOTICE_TEXT.close;
   box.append(close);
 
   document.body.append(box);

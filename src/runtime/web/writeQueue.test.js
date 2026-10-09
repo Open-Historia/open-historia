@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { serializeWrite, writeQueueIdle } from "./writeQueue.js";
+import { serializeByKey, serializeWrite, writeQueueIdle } from "./writeQueue.js";
 
 // A stand-in for the IndexedDB game record: one object holding all six assets,
 // with a real await between read and write so the interleave is genuine.
@@ -119,4 +119,38 @@ test("writeQueueIdle resolves once the queue drains", async () => {
   serializeWrite(async () => { seen.push("b"); });
   await writeQueueIdle();
   assert.deepEqual(seen, ["a", "b"]);
+});
+
+// The owner migration: a game opening fires several runtime reads at once, and
+// each migrates the active game (and, through it, the scenario) first.
+test("serializeByKey runs one task per key at a time, in order", async () => {
+  const log = [];
+  const task = (label, ms) => async () => {
+    log.push(`${label} start`);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    log.push(`${label} end`);
+    return label;
+  };
+  const results = await Promise.all([
+    serializeByKey("game:g1", task("first", 12)),
+    serializeByKey("game:g1", task("second", 1)),
+  ]);
+  assert.deepEqual(results, ["first", "second"]);
+  assert.deepEqual(log, ["first start", "first end", "second start", "second end"]);
+});
+
+test("serializeByKey lets one key's task wait on another key without deadlock", async () => {
+  // A game's migration waits for its scenario's inside its own turn.
+  const result = await serializeByKey("game:g1", () => serializeByKey("scenario:s1", async () => "scenario done"));
+  assert.equal(result, "scenario done");
+});
+
+test("serializeByKey keeps going after a failure, and nests inside the write queue", async () => {
+  const failing = serializeByKey("scenario:s1", async () => {
+    throw new Error("context failed");
+  });
+  const next = serializeByKey("scenario:s1", async () => "retried");
+  await assert.rejects(failing, /context failed/);
+  assert.equal(await next, "retried");
+  assert.equal(await serializeWrite(() => serializeByKey("game:g1", async () => "inside a write")), "inside a write");
 });

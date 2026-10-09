@@ -1,10 +1,12 @@
 /*! Open Historia — unit orders & deployment controller © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared troop interaction state + mutations.
 //
-// Holds the current unit list in memory (refreshed from world.json every 5s so
-// AI-spawned/moved units appear) and applies player mutations immediately for
-// snappy feedback, persisting them to world.json. A tiny pub/sub lets the map
-// layer, the selection popup and the Forces panel re-render on change.
+// Holds the current unit list in memory (read once, then refreshed from each
+// oh:world-updated / oh:game-updated event a write dispatches, so AI-spawned
+// and moved units appear; there is no poll) and applies player mutations
+// immediately for snappy feedback, persisting them to world.json. A tiny
+// pub/sub lets the map layer, the selection popup and the Forces panel
+// re-render on change.
 //
 // Player deploy is purely local (you place your own pieces) and queues a
 // machine-readable order (as an action) so the AI confirms or rejects it on the
@@ -22,6 +24,21 @@ import {
   normalizeUnitEntry,
   recenterPatrolOrders,
 } from "../../runtime/gameState.js";
+import { wrapLng } from "../../runtime/unitMotion.js";
+import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+
+// A turn reads world.json when it starts and writes it back whole when it
+// lands, so a unit placed, disbanded or moved in between would be undone
+// without a word. While one runs (or waits to be retried) the map's unit
+// changes are refused, and the Forces panel and the unit card say why.
+// Requested orders are not: they go to the queue, which the turn reads again
+// before it writes it (runtime/turnCommit.js).
+export const unitsLocked = () => {
+  if (!isSimulationBusy()) return false;
+  console.warn("[units] a turn is running; the change was not made.");
+  return true;
+};
 
 let units = [];
 // Standing orders the ENGINE is advancing (world.pendingUnitOrders).
@@ -80,12 +97,25 @@ export const getUnitOrder = (unitId) =>
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;
+// Whether `type` may be deployed under `allowed` (null or empty: any type).
+export const isDeployableType = (type, allowed) =>
+  !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(String(type ?? "").trim().toLowerCase());
 export const getInteractionMode = () => interactionMode;
 export const setInteractionMode = (next) => {
   interactionMode = next && next.kind ? next : { kind: "idle" };
   emit();
 };
 export const clearInteractionMode = () => setInteractionMode({ kind: "idle" });
+
+// A placement armed in one save belongs to that save: left armed, the first
+// click on the next map deployed the other save's unit there — an air wing in
+// 1200 AD — past that scenario's allowed types.
+const onActiveGameChanged = () => {
+  if (interactionMode.kind !== "idle") clearInteractionMode();
+};
+if (typeof window !== "undefined") {
+  window.addEventListener("oh:active-game-changed", onActiveGameChanged);
+}
 
 const sameUnits = (a, b) => {
   if (a === b) return true;
@@ -272,13 +302,20 @@ export const startUnitsSync = () => {
     if (stopped) return;
     stopped = true;
     syncRefCount = Math.max(0, syncRefCount - 1);
-    if (syncRefCount === 0) uninstallUnitSync();
+    if (syncRefCount === 0) {
+      uninstallUnitSync();
+      // No map left to take the placement's click.
+      if (interactionMode.kind !== "idle") clearInteractionMode();
+    }
   };
 };
 
 // Read-modify-write world.units while preserving the rest of world state.
 // `orders`, when given, rewrites world.pendingUnitOrders in the same write from
 // the new unit list, so a unit and its standing order never disagree on disk.
+// Resolves to the saved units, or null when the write failed: the caller must
+// know, because an order queued beside a unit that was never saved sends the
+// next jump to rule on a formation that is not on the map.
 const commit = async (mutator, { orders = null } = {}) => {
   busy = true;
   try {
@@ -292,7 +329,7 @@ const commit = async (mutator, { orders = null } = {}) => {
     return units;
   } catch (error) {
     console.error("Failed to commit units:", error);
-    return units;
+    return null;
   } finally {
     busy = false;
   }
@@ -327,6 +364,7 @@ const commitPendingOrders = async (mutator) => {
 export const updateUnitAdmin = async (unitId, patch = {}) => {
   const id = String(unitId ?? "").trim();
   if (!id || !patch || typeof patch !== "object") return null;
+  if (unitsLocked()) return null;
   const moved = Object.prototype.hasOwnProperty.call(patch, "lng") || Object.prototype.hasOwnProperty.call(patch, "lat");
   // A patrolling unit placed somewhere else takes its station with it
   // (recenterPatrolOrders): the ring follows it, and the next turn's patrol step
@@ -339,7 +377,7 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
     }
     : null;
 
-  await commit((list) =>
+  const saved = await commit((list) =>
     list.map((unit, index) => {
       if (unit.id !== id) return unit;
 
@@ -365,7 +403,7 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
     { orders },
   );
 
-  return units.find((unit) => unit.id === id) ?? null;
+  return saved ? saved.find((unit) => unit.id === id) ?? null : null;
 };
 
 // Authoritative map-placement seam for Cheats 2.0. This is deliberately NOT a
@@ -374,50 +412,103 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
 // unit's coordinates while preserving its identity, owner, strength and status.
 export const placeUnitAdmin = async (unitId, lng, lat) => {
   const id = String(unitId ?? "").trim();
-  const nextLng = Number(lng);
+  const nextLng = wrapLng(Number(lng));
   const nextLat = Number(lat);
   if (!id || !Number.isFinite(nextLng) || !Number.isFinite(nextLat)) return null;
-  if (nextLng < -180 || nextLng > 180 || nextLat < -90 || nextLat > 90) return null;
+  if (nextLat < -90 || nextLat > 90) return null;
   if (!units.some((unit) => unit.id === id)) return null;
   return updateUnitAdmin(id, { lng: nextLng, lat: nextLat });
 };
 
+// What the player is told when an order could not be written: the map and the
+// AI's picture of the war would drift apart without a word.
+export const ORDER_NOT_SAVED = "The order could not be saved; the next time skip would not see it. Try again.";
+export const UNIT_TYPE_NOT_ALLOWED = "This scenario does not allow that kind of unit.";
+// The Force Manager's edits are not orders, so the next skip is not involved.
+export const UNIT_NOT_SAVED = "The unit could not be saved. Try again.";
+
 // unitRevert records how to undo the order if the player deletes the queued
 // action before the next jump (#368): without it, a manual move stayed on the
 // map while the AI was never told about it.
-const queueOrder = async (text, unitRevert = null) => {
+const orderAction = (text, unitRevert = null) => ({
+  kind: "action",
+  source: "order",
+  status: "planned",
+  text,
+  title: text.length > 60 ? `${text.slice(0, 57)}...` : text,
+  ...(unitRevert ? { unitRevert } : {}),
+});
+
+// Rewrites the action queue. Resolves to the queue as it was before, or null
+// when it could not be read or written.
+const editActions = async (edit) => {
   try {
-    const actions = await readActionsState({ force: true });
-    actions.push({
-      kind: "action",
-      source: "order",
-      status: "planned",
-      text,
-      title: text.length > 60 ? `${text.slice(0, 57)}...` : text,
-      ...(unitRevert ? { unitRevert } : {}),
-    });
-    await writeActionsState(actions);
+    const before = await readActionsState({ force: true });
+    await writeActionsState(edit([...before]));
+    return before;
   } catch (error) {
     console.error("Failed to queue order:", error);
+    return null;
   }
 };
 
+// Resolves to whether the order was written.
+const queueOrder = async (text, unitRevert = null) =>
+  Boolean(await editActions((actions) => [...actions, orderAction(text, unitRevert)]));
+
+// A change to the units that the AI must hear about, as one change: the action
+// queue first, then the units, and the queue put back as it was if the units
+// could not be saved. Neither half is left standing without the other — a
+// deploy request for a unit that is not on the map, or a unit gone with no
+// order behind it. Resolves to whether both were saved.
+const commitWithActions = async (edit, mutator) => {
+  const before = await editActions(edit);
+  if (!before) return false;
+  if (await commit(mutator)) return true;
+  try {
+    await writeActionsState(before);
+  } catch (error) {
+    console.error("Failed to take back the queued order:", error);
+  }
+  return false;
+};
+
 // Undo a queued manual order whose action the player deleted (#368): a pending
-// deploy is removed again, a moved unit snaps back to its recorded position,
-// and a long-range/approach order restores the unit's prior status.
+// deploy is removed again, a disbanded unit comes back, a moved unit snaps back
+// to its recorded position, and a long-range/approach order restores the unit's
+// prior status. Resolves to whether the undo was saved.
 export const revertUnitOrder = async (revert) => {
   const unitId = String(revert?.unitId ?? "").trim();
-  if (!unitId) return;
+  if (!unitId) return false;
+  // In a shared game the host undoes an order's move when the order is
+  // withdrawn (multiplayer/host/forces.js): there is nothing to undo here.
+  if (inSharedGame()) return true;
+  if (unitsLocked()) return false;
   // A standing order minted by the beta engine for this action: cancel it, or the
   // unit keeps marching toward a destination whose justification is gone.
   if (revert.pendingOrderId) {
     await commitPendingOrders((list) => list.filter((entry) => entry.id !== revert.pendingOrderId));
   }
   if (revert.remove) {
-    await commit((list) => list.filter((u) => u.id !== unitId));
-    return;
+    return Boolean(await commit((list) => list.filter((u) => u.id !== unitId)));
   }
-  await commit((list) =>
+  // A disband the player took back: the formation stands again as it was, but
+  // for its standing order, which went with it when it left the map (every
+  // world write drops the orders of units that are gone). Brought back still
+  // "moving" under an order that no longer exists, it would march nowhere.
+  if (revert.restore) {
+    const { restore } = revert;
+    const unit = {
+      ...restore,
+      id: unitId,
+      ...(restore.orderId
+        ? { orderId: "", posture: "", ...(restore.status === "moving" ? { status: "idle" } : {}) }
+        : {}),
+    };
+    return Boolean(await commit((list) =>
+      (list.some((u) => u.id === unitId) ? list : [...list, unit])));
+  }
+  return Boolean(await commit((list) =>
     list.map((u) => {
       if (u.id !== unitId) return u;
       return {
@@ -427,11 +518,33 @@ export const revertUnitOrder = async (revert) => {
         ...(revert.pendingOrderId ? { orderId: "" } : {}),
         updatedAt: new Date().toISOString(),
       };
-    }));
+    })));
 };
 
+// Resolves to { ok: true } once the unit and its Deploy request are both
+// saved, else to { ok: false, error } with neither left behind.
+// Null when a turn is running and nothing was placed.
+// A type the scenario does not allow (world.allowedUnitTypes) is refused,
+// placing nothing: the Forces panel only offers those, and this holds the rule
+// for every other caller too (the advisor's one-click deployments).
 export const deployUnit = async ({ type, strength, name, composition, lng, lat }) => {
+  // In a shared game the host raises the formation and queues its Deploy
+  // request, for this player and by the same rules (multiplayer/host/forces.js);
+  // both come back in the next view.
+  if (inSharedGame()) {
+    const answer = await requestFromHost("deploy", {
+      type: String(type ?? "").trim().toLowerCase(),
+      strength: Math.max(1, Math.min(100, Number(strength) || 100)),
+      name: String(name ?? "").trim().slice(0, 80),
+      composition: String(composition ?? "").trim().slice(0, 200),
+      lng: wrapLng(Number(lng)),
+      lat: Number(lat),
+    });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
+  }
+  if (unitsLocked()) return null;
   if (!playerCode) await bootstrap();
+  if (!isDeployableType(type, allowedUnitTypes)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
   // Built outside the commit so the queued order can reference its id.
@@ -446,16 +559,20 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
     source: "player",
     status: "pending",
   });
-  if (!unit) return units;
-  const saved = await commit((list) => [...list, unit]);
-  await queueOrder(
+  if (!unit) return { ok: false, error: ORDER_NOT_SAVED };
+  // The scenario's allowed types (no air wing in 1200), whoever asks: the
+  // Forces panel offers only those, but the advisor names its own.
+  if (allowedUnitTypes && !allowedUnitTypes.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
+  const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
-      `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
-      `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
-      `reposition it, or reject it as the front and logistics allow.`,
-    { unitId: unit.id, remove: true },
+    `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
+    `lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
+    `reposition it, or reject it as the front and logistics allow.`;
+  const saved = await commitWithActions(
+    (actions) => [...actions, orderAction(text, { unitId: unit.id, remove: true })],
+    (list) => [...list, unit],
   );
-  return saved;
+  return saved ? { ok: true } : { ok: false, error: ORDER_NOT_SAVED };
 };
 
 // ---- beta system: stated intent ------------------------------------------
@@ -464,32 +581,61 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
 // This is intent, not control: it queues an ordinary action for the AI to weigh
 // against the front, the era and everyone else's plans on the next jump — the
 // same treatment every other action they plan gets. Nothing on the map moves now.
+// Resolves to whether the order was written.
 export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
   if (!unit || !request) return false;
-  await queueOrder(
-    `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+  // In a shared game an order is asked of the host, like any other
+  // (multiplayer/): the same words, under this player's country.
+  if (inSharedGame()) {
+    const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
+      `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
+      `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
+      `situation allow, or explain in an event why it could not be done.`;
+    return (await requestFromHost("order", { text: wording.slice(0, 1500) })).ok;
+  }
+  return queueOrder(
+    `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
       `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
       `situation allow, or explain in an event why it could not be done.`,
   );
-  return true;
 };
 
-// Round and game date are read by the Forces panel and the unit popup for
-// naming and order text; exported so nothing has to re-read game.json.
-export const getRound = () => round;
-export const getGameDate = () => gameDate;
-
-export const removeUnit = async (unitId) =>
-  commit((list) => list.filter((u) => u.id !== unitId));
-
+// The player stands one of their formations down. The unit leaves the map now
+// and a Disband order rides with the next jump, so the AI narrates the
+// stand-down instead of never learning of it. The order carries the unit as it
+// was (unitRevert.restore): deleting the order before the jump brings it back.
+//
+// A unit still pending — deployed, not yet confirmed by a jump — was never in
+// the order of battle: its Deploy request is withdrawn with it, and no Disband
+// order is queued, or the next skip would raise the brigade the player just
+// dismissed.
+//
+// Resolves to { ok: true } once both halves are saved, else to
+// { ok: false, error } with the unit and the queue as they were (while a turn
+// runs, nothing is changed and the error says so).
 export const disbandUnit = async (unitId) => {
   const unit = getUnitById(unitId);
-  if (!unit) return;
-  await commit((list) => list.filter((u) => u.id !== unitId));
-  await queueOrder(
-    `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
-  );
+  if (!unit) return { ok: false, error: ORDER_NOT_SAVED };
+  // In a shared game the host stands it down (multiplayer/host/forces.js).
+  if (inSharedGame()) {
+    const answer = await requestFromHost("disband", { unit: String(unit.id) });
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error || ORDER_NOT_SAVED };
+  }
+  if (unitsLocked()) return { ok: false, error: TURN_RUNNING_NOTE };
+  const removeIt = (list) => list.filter((u) => u.id !== unit.id);
+  const edit = unit.status === "pending"
+    ? (actions) => actions.filter((action) =>
+      !(action?.unitRevert?.remove && action.unitRevert.unitId === unit.id && (action.status ?? "planned") === "planned"))
+    : (actions) => [
+      ...actions,
+      orderAction(
+        `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
+        { unitId: unit.id, restore: unit },
+      ),
+    ];
+  const saved = await commitWithActions(edit, removeIt);
+  return saved ? { ok: true } : { ok: false, error: ORDER_NOT_SAVED };
 };

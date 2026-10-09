@@ -13,9 +13,7 @@ expected for an app distributed this way; allow it for your browser and continue
 
 The app is the same game [openhistoria.com/play/](/play/) serves, packaged as an Android app.
 Your games and scenarios are saved on the phone, and the game logic runs there. The world map is
-**not** in the app: it streams from the community content nodes the website uses, so the app
-needs a connection to draw the map, and a blank map usually means no node was reachable — see
-[troubleshooting](/wiki/troubleshooting/).
+in the app as well, so the map draws without a connection; only your AI provider needs one.
 
 Your AI provider requests go straight from the phone to the provider, the same as any other
 build.

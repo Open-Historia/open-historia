@@ -175,6 +175,23 @@ test("an older install keeps its campaigns on the previous map and moves the sto
   assert.deepEqual(readJson(path.join(root, "scenario-manifest.json")).order, ["default", "modern-day-classic"]);
 });
 
+test("an older install that holds the stock world as it was before it was deep-cleaned is treated the same", () => {
+  const manifest = readJson(path.join(ROOT_DIR, "scripts", "map-assets.json"));
+  const { earlierBytes } = manifest.assets.find((asset) => asset.path === "server/data/stock/regions.geojson");
+  assert.ok(Array.isArray(earlierBytes) && earlierBytes.includes(55401660), "the manifest remembers the size of the edition before");
+  const root = legacyRoot({ game: "old-campaign" });
+  const legacy = path.join(root, "scenarios", "default", "regions.geojson");
+  truncateSync(legacy, earlierBytes[0]);
+  const catalog = runStore(root, `store.ensureScenarioStore(); ${report("store.getScenarioCatalog().scenarios.map((s) => s.id)")}`);
+  assert.deepEqual([...catalog].sort(), ["default", "modern-day-classic"]);
+  const classic = path.join(root, "scenarios", "modern-day-classic");
+  assert.ok(!existsSync(path.join(classic, "regions.geojson")), "the fork renders on the stock world; it carries no 55 MB copy of the earlier one");
+  // Moved into the stock world's home, where the fetcher replaces it with the
+  // pinned edition on its next run (its size no longer matches).
+  assert.equal(statSync(path.join(root, "stock", "regions.geojson")).size, earlierBytes[0]);
+  assert.equal(statSync(legacy).size, seedRegionsBytes, "and the built-in holds the seed's map");
+});
+
 test("a copy the player edited is kept as the classic scenario even without campaigns", () => {
   const root = legacyRoot({ touched: true });
   const result = runStore(root, `store.ensureScenarioStore(); ${report("{ catalog: store.getScenarioCatalog().scenarios.map((s) => s.id) }")}`);
@@ -257,6 +274,31 @@ test("a built-in that already holds the seed's map but lost its record is comple
   assert.equal(readJson(path.join(gameDir, "game-instance.json")).scenarioId, "default", "the campaign stays on the built-in");
   assert.ok(existsSync(path.join(dir, "colors.json")));
   assert.equal(readJson(path.join(dir, "cities.geojson")).features.length, readJson(path.join(SEED_DIR, "cities.geojson")).features.length);
+});
+
+test("a built-in that holds the map as it was before its borders were cleaned, and lost its record, is completed in place too", () => {
+  const root = freshRoot();
+  const dir = path.join(root, "scenarios", "default");
+  mkdirSync(dir, { recursive: true });
+  // The seed's map as revisions 1 and 2 shipped it, by its size (sparse).
+  writeFileSync(path.join(dir, "regions.geojson"), "");
+  truncateSync(path.join(dir, "regions.geojson"), 5544501);
+  assert.notEqual(seedRegionsBytes, 5544501, "the seed's map is no longer that file");
+  const createdAt = "2026-09-07T12:00:00.000Z";
+  writeJson(path.join(dir, "scenario.json"), { id: "default", name: "Modern Day", createdAt, updatedAt: createdAt });
+  writeJson(path.join(root, "scenario-manifest.json"), { order: ["default"], selectedScenarioId: "default", version: 2 });
+  const gameDir = path.join(root, "games", "new-campaign");
+  writeJson(path.join(gameDir, "game-instance.json"), { id: "new-campaign", name: "new", scenarioId: "default", createdAt, updatedAt: createdAt });
+  writeJson(path.join(gameDir, "world.json"), { ownerSchema: OWNER_SCHEMA, builtInMap: STAMP, regionOwnershipOverrides: { 0: "United States" } });
+  writeJson(path.join(gameDir, "game.json"), { country: "United States", gameDate: "2016-02-01" });
+  writeJson(path.join(root, "game-manifest.json"), { activeGameId: "new-campaign", order: ["new-campaign"], version: 2 });
+
+  const result = runStore(root, `store.ensureScenarioStore(); ${report("{ catalog: store.getScenarioCatalog().scenarios.map((s) => s.id), world: store.getScenarioDetails('default').data.world }")}`);
+  assert.deepEqual(result.catalog, ["default"], "no classic fork: it is the same map");
+  assert.equal(result.world.builtInMap, STAMP);
+  assert.equal(result.world.builtInRevision, seedWorld.builtInRevision);
+  assert.equal(statSync(path.join(dir, "regions.geojson")).size, seedRegionsBytes, "and it now holds the seed's own file");
+  assert.equal(readJson(path.join(gameDir, "game-instance.json")).scenarioId, "default", "the campaign stays on the built-in");
 });
 
 test("a packaged install from before the redraw — meta and the stock map, no world.json — keeps its campaign on the stock world", () => {
@@ -380,4 +422,33 @@ test("a second start after the refresh does nothing more", () => {
   assert.deepEqual(readJson(path.join(root, "scenario-manifest.json")), manifest);
   assert.equal(readFileSync(path.join(root, "scenarios", "default", "world.json"), "utf-8"), world);
   assert.ok(!existsSync(path.join(root, "scenarios", "modern-day-edited-2")), "no second copy");
+});
+
+// Seen on a player's install (2026-09-29): the built-in carried the new map's
+// stamp but the old stock world as its regions.geojson — written by an older
+// build run against the same data directory. The stamp matched, so nothing ever
+// replaced the file: a new campaign's owners named regions the map did not
+// have, the map drew no colours, and nothing could be placed on it.
+test("a built-in stamped with the seed's map but holding the stock world gets the seed's map back", () => {
+  const root = freshRoot();
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  const dir = path.join(root, "scenarios", "default");
+  writeStockSized(path.join(dir, "regions.geojson"));
+  writeFileSync(path.join(dir, "regions.coarse.geojson"), "{}");
+  writeFileSync(path.join(dir, "regions.coarse.geojson.stamp"), "old");
+
+  const result = runStore(root, `store.ensureScenarioStore(); ${report("{ catalog: store.getScenarioCatalog().scenarios.map((s) => s.id) }")}`);
+  assert.equal(statSync(path.join(dir, "regions.geojson")).size, seedRegionsBytes, "the seed's map is back");
+  assert.equal(existsSync(path.join(dir, "regions.coarse.geojson.stamp")), false, "the coarse copy of the old map is gone");
+  assert.deepEqual(result.catalog, ["default"], "no fork: nothing was started on the stale file");
+  assert.equal(readJson(path.join(dir, "world.json")).builtInMap, STAMP);
+});
+
+test("a map of the player's own in a stamped built-in is left alone", () => {
+  const root = freshRoot();
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  const own = path.join(root, "scenarios", "default", "regions.geojson");
+  writeFileSync(own, JSON.stringify({ type: "FeatureCollection", features: [] }));
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  assert.equal(readFileSync(own, "utf-8"), JSON.stringify({ type: "FeatureCollection", features: [] }));
 });

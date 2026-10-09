@@ -1,10 +1,15 @@
+import { DEMAND_CHECK_OUTCOMES } from "../../runtime/demandCheck.js";
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
+import { normalizeEventPresentation } from "../../runtime/eventQuote.js";
 import {
   TERRITORY_BASIS_DESCRIPTION,
   TERRITORY_BASIS_DESCRIPTION_SHORT,
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
+import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
+import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
+import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -66,7 +71,10 @@ const createdChatSchema = {
 // request and a test holds it to a size (projectOpSchema.test.js); the long form
 // of every lever is in the actions reference and the directives the jump is
 // always given, so a description here only has to say what the field IS.
-const regionIdSchema = textSchema("The region's id, or its plain name.");
+// A region is written by its NAME (AI/nameRefs.js). The field keeps its old
+// name because saved turns and previews carry it; what goes in it is
+// "region: <name>", or "country: <name>" for the whole of a country's land.
+const regionIdSchema = textSchema("The region's NAME as the map spells it, written \"region: Hamhung\" (or \"country: North Korea\" for ALL of a country's land). Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
 
 const regionTransferSchema = {
@@ -272,12 +280,15 @@ const polityChangeSchema = {
 // WHOLE turn's structured output into a fallback simulation, which is exactly
 // the failure the note field on the spawn op was added to prevent (see its
 // comment below).
-// WHERE, in words (AI/placement.js): "Kharkiv", "near Kharkiv", "eastern Ukraine",
-// "coast of Crimea", "off Sevastopol", "Donetsk Oblast facing Russia". The engine
-// finds the point. Stated once here and explained once in the call-time
-// directive ([Placing Things]) — the jump's schema has a size budget
-// (projectOpSchema.test.js) and five copies of a grammar would spend it.
-const atSchema = { type: "string", description: "Where, in words — see [Placing Things]. Preferred to lng/lat." };
+// WHERE, in words (AI/placement.js): "Kharkiv, Ukraine", "near Kharkiv, Ukraine",
+// "eastern Ukraine", "coast of Crimea", "off Sevastopol, Ukraine", "Donetsk
+// Oblast, Ukraine facing Russia". The engine finds the point. Stated once here
+// and explained once in the call-time directive ([Placing Things]) — the jump's
+// schema has a size budget (projectOpSchema.test.js) and five copies of a
+// grammar would spend it.
+// The country after the comma is not optional: two countries have a Montana.
+// Each name is said with its kind (AI/nameRefs.js): Georgia is a country and a state.
+const atSchema = { type: "string", description: "Where, in words, each name with its kind and its country: \"region: Montana, country: United States\" — see [Placing Things]. Preferred to lng/lat." };
 
 const unitSchema = {
   type: "object",
@@ -301,7 +312,7 @@ const unitSchema = {
     at: atSchema,
     lng: { type: "number", description: "Only with no `at`.", minimum: -180, maximum: 180 },
     lat: { type: "number", description: "Only with no `at`.", minimum: -90, maximum: 90 },
-    regionId: textSchema("Region id, when known."),
+    regionId: textSchema("Only with no `at`: the region's name, as \"region: <name>\"."),
     status: {
       type: "string",
       description: "Optional unit status.",
@@ -341,11 +352,11 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["move"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         at: atSchema,
         toLng: { type: "number", minimum: -180, maximum: 180 },
         toLat: { type: "number", minimum: -90, maximum: 90 },
-        regionId: textSchema("Destination region id, when known."),
+        regionId: textSchema("Only with no `at`: the destination region's name, as \"region: <name>\"."),
         posture: {
           type: "string",
           description: "Only when the move changes what it is doing.",
@@ -360,7 +371,7 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["strength"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         strength: {
           type: "integer",
           description: "The formation's remaining percentage of established strength. 0 destroys it.",
@@ -376,7 +387,7 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["remove"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId"],
@@ -498,12 +509,12 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["update"] },
-        markerId: textSchema("Existing marker id, preferred when the structures list shows one."),
-        name: textSchema("Existing name, only when markerId is unavailable."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
+        name: textSchema("The existing structure's name, exactly as the structures list spells it."),
         kind: textSchema("New kind, when it materially changed."),
         ownerCode: textSchema("New operating polity's FULL name, when control changes."),
         status: markerStatusSchema,
-        at: { type: "string", description: "New place, only when it genuinely relocates." },
+        at: { type: "string", description: "New place, with its country, only when it genuinely relocates." },
         lng: { type: "number", description: "New longitude, only with no `at`.", minimum: -180, maximum: 180 },
         lat: { type: "number", description: "New latitude, only with no `at`.", minimum: -90, maximum: 90 },
         note: textSchema("Updated brief description."),
@@ -515,8 +526,8 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["remove"] },
-        markerId: textSchema("Existing marker id, preferred when known."),
-        name: textSchema("Existing name, when markerId is unavailable."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
+        name: textSchema("The existing structure's name, exactly as the structures list spells it."),
         note: textSchema("Brief explanation."),
       },
       required: ["op"],
@@ -526,7 +537,7 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["rename"] },
-        markerId: textSchema("Existing marker id, when known."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
         name: nonEmptyTextSchema("Current name of the structure or city."),
         newName: nonEmptyTextSchema("New display name."),
         note: textSchema("Brief explanation."),
@@ -538,7 +549,7 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["population"] },
-        markerId: textSchema("Existing marker id, when known."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
         name: nonEmptyTextSchema("The city."),
         population: {
           type: "integer",
@@ -563,10 +574,12 @@ const projectMilestoneSchema = {
     status: {
       type: "string",
       description:
-        "pending until reached; done once achieved; missed if its date passed unmet. "
+        "pending until reached; done once achieved; slipped if it is late but still coming "
+        + "(give it a new date); missed if it will never be reached. The engine marks a milestone "
+        + "slipped when its date passes with nothing said. "
         + "For a recurring checkpoint, send done each time it is performed - the engine "
         + "rolls it to the next occurrence and sets it pending again by itself.",
-      enum: ["pending", "done", "missed"],
+      enum: ["pending", "slipped", "done", "missed"],
     },
     repeat: {
       type: "string",
@@ -809,6 +822,88 @@ const projectOpSchema = {
   additionalProperties: false,
 };
 
+const institutionLifecycleImpactOpSchema = {
+  type: "object",
+  description:
+    "A canonical institution lifecycle act by an AI-controlled government. Use only when this event itself politically justifies founding, inviting, applying, responding, withdrawing, or opening formal discipline/dissolution business. The actor is sovereign: never use the human player's polity as actor for accept/apply/found/withdraw/respond. An invitation/application is NOT membership; native institution law resolves it.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["found", "invite", "apply", "respond", "withdraw", "expel", "suspend", "reinstate", "dissolve"],
+    },
+    actorPolity: textSchema("AI-controlled polity making this institutional act, using its exact canonical name."),
+    institutionId: textSchema("Existing institution id copied exactly from canonical institution context. Omit only for found."),
+    targetPolity: textSchema("invite/expel/suspend/reinstate: exact target polity name."),
+    caseId: textSchema("respond: exact pending lifecycle case id supplied by canonical context."),
+    requestedStatus: textSchema("invite/apply: requested status such as member or observer."),
+    decision: { type: "string", enum: [...INSTITUTION_LIFECYCLE_DECISIONS] },
+    reason: textSchema("Concise political/strategic reason grounded in current relations, PWv2 context and institution fit."),
+    terms: textSchema("Counterconditions or accession terms when relevant."),
+    name: textSchema("found: institution name."),
+    shortName: textSchema("found: optional short name/acronym."),
+    kind: textSchema("found: institution kind, e.g. military_alliance, regional_bloc, economic_union, international_organization, other."),
+    purpose: stringArraySchema("found: concrete purposes/mandates."),
+    geographicScope: stringArraySchema("found: political/geographic scope; this informs whether membership makes sense."),
+    primaryThreatModel: stringArraySchema("found: named threats/adversaries the institution explicitly organizes around, if any."),
+    politicalCharacter: textSchema("found: concise political identity/character."),
+    votingRule: textSchema("found: governance decision rule, normally simple-majority unless the event establishes another rule."),
+    minimumFoundingMembers: { type: "integer", minimum: 1, maximum: 64 },
+    accessionMode: { type: "string", enum: ["approval", "direct"], description: "found: whether later accession needs an institutional vote or is direct once the applicant accepts." },
+    allowObserver: { type: "boolean", description: "found: whether observer status is permitted." },
+    withdrawalMode: { type: "string", enum: ["unilateral", "notice", "approval", "not-permitted"], description: "found: charter withdrawal rule." },
+    withdrawalNoticeDays: { type: "integer", minimum: 0, maximum: 3650, description: "found: notice period when withdrawalMode is notice." },
+    expulsionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal expulsion can be proposed." },
+    dissolutionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal dissolution can be proposed." },
+    invitees: stringArraySchema("found: governments invited to become founding participants; invitation does not make them members."),
+    charterNote: textSchema("found: concise founding charter note/obligation summary."),
+  },
+  required: ["op", "actorPolity"],
+  additionalProperties: false,
+};
+
+const politicalActorImpactOpSchema = {
+  type: "object",
+  description: "One canonical PWv2 mutation; operation arguments are JSON in argsJson.",
+  properties: {
+    op: {
+      type: "string",
+      enum: [
+        "create-party", "update-party", "set-party-support", "set-party-influence", "set-party-leader",
+        "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
+        "set-political-system", "set-government", "form-coalition", "leave-coalition",
+        "replace-leader", "set-strategy", "set-traits", "set-perceptions", "remove-perception",
+      ],
+    },
+    polityKey: { type: "string", minLength: 1 },
+    argsJson: { type: "string", minLength: 1 },
+  },
+  required: ["op", "polityKey", "argsJson"],
+  additionalProperties: false,
+};
+
+// Groups (runtime/groups.js): actors that are not countries, each controlling an
+// area of regions it does not own. One object discriminated by op, like
+// projectOpSchema — the friendliest shape for Gemini and for small local models.
+const groupOpSchema = {
+  type: "object",
+  description: "One change to a group — an actor that is not a country (a terrorist organisation, a cartel, a militia, a zombie outbreak) — or to the regions it controls.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["create", "update", "dissolve", "take", "release"],
+      description: "create a group; update its description, colour or name; dissolve it (the group and its area are erased); take regions into its area; release regions from it (all of them when regionIds is empty).",
+    },
+    name: nonEmptyTextSchema("The group's exact name (a new one for create)."),
+    newName: textSchema("update only: the group's new name."),
+    description: textSchema("What the group is and does: for create, or when it changes."),
+    color: textSchema("#RRGGBB tint for its area; optional."),
+    regionIds: stringArraySchema("The regions it takes (create/take) or releases, each by NAME as the map spells it: \"region: Aleppo\"."),
+    note: textSchema("Brief reason."),
+  },
+  required: ["op", "name"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -823,6 +918,11 @@ const impactsSchema = {
       type: "array",
       description: "Polity changes.",
       items: polityChangeSchema,
+    },
+    politicalActorOps: {
+      type: "array",
+      description: "Canonical government, leader, party and strategy mutations.",
+      items: politicalActorImpactOpSchema,
     },
     regionTransfers: {
       type: "array",
@@ -854,6 +954,12 @@ const impactsSchema = {
       description: "The player's own espionage orders this event executes (deploy or recall an agent), only when their queued actions or chat ordered it; never for other powers.",
       items: spyOpSchema,
     },
+    institutionLifecycleOps: {
+      type: "array",
+      description:
+        "Institution lifecycle acts enacted by AI-controlled governments in this event: found/invite/apply/respond/withdraw or formal discipline/dissolution proposals. Use current PWv2, relations, institution purpose/scope/obligations and threat model to decide whether the act makes political sense. Never make a sovereign membership decision for the human player. Invitations aimed at the player are allowed; the player must answer them.",
+      items: institutionLifecycleImpactOpSchema,
+    },
     reports: {
       type: "array",
       description:
@@ -868,6 +974,13 @@ const impactsSchema = {
         + "a government-in-exile's title. The region shows as disputed WITHOUT the border moving; land that "
         + "changed hands is regionTransfers.",
       items: regionClaimSchema,
+    },
+    groupOps: {
+      type: "array",
+      description:
+        "Groups - actors that are not countries - founded, changed, erased, or taking or losing control of regions. "
+        + "The regions stay their countries'; a group's area is drawn over them.",
+      items: groupOpSchema,
     },
     projectOps: {
       type: "array",
@@ -893,12 +1006,100 @@ const impactsSchema = {
 // which is exactly how the attached ops get applied. The game master keeps the
 // full impacts object, since a direct "make this happen" command is one call
 // with no separate pass to hand the work to.
+// A few impact families have detailed field semantics duplicated verbatim in
+// ACTIONS_REFERENCE, which is present on every normal jump. Keep the jump tool
+// schema focused on shape while preserving each family's root description.
+// This compaction is jump-only: the authoritative/internal schemas (including
+// Game Master) retain their full descriptions. Validation is unchanged because
+// descriptions are annotations, not constraints.
+// Only a string annotation goes: a field that is itself called "description"
+// (groupOps has one) is a schema object inside `properties` and must survive,
+// or additionalProperties false turns every op that fills it into a failed turn.
+const stripNestedSchemaDescriptions = (schema) => {
+  if (Array.isArray(schema)) return schema.map(stripNestedSchemaDescriptions);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key, value]) => !(key === "description" && typeof value === "string"))
+      .map(([key, value]) => [key, stripNestedSchemaDescriptions(value)]),
+  );
+};
+
+const compactJumpImpactSchema = (schema) => ({
+  ...stripNestedSchemaDescriptions(schema),
+  ...(schema?.description ? { description: schema.description } : {}),
+});
+
+const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
+  "markerOps",
+  "institutionLifecycleOps",
+  "groupOps",
+]);
+
 const jumpImpactsSchema = {
   ...impactsSchema,
   properties: Object.fromEntries(
-    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
+    Object.entries(impactsSchema.properties)
+      .filter(([key]) => key !== "projectOps")
+      .map(([key, schema]) => [
+        key,
+        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
+      ]),
   ),
 };
+
+// ---- The folded time skip -------------------------------------------------------
+// A skip is ONE request (requestBudget.js): no second request checks its events
+// afterwards, so each event carries every consequence itself, the board
+// included, and what used to be asked after it rides at the end of the same
+// answer. The contract a skip is SENT is the lean one above plus up to three
+// things, added per call by foldJumpTool below:
+//   impacts.projectOps   the board, moved by the event that moved it;
+//   agentReports         one report per agent that is due one, when any is;
+//   history              the history document, when a fold is due.
+// The lean contract alone is what a skip is sent only when a provider refused
+// the folded one, and the checks then follow as one request of their own. The
+// schema an answer is VALIDATED against (JUMP_FORWARD_SCHEMA) accepts both, so
+// neither answer costs a turn its schema check; gameplay.js decides what each
+// skip does with the extra fields.
+//
+// The board's op is the board's own (projectOpSchema) without the fields an
+// event never sets: the priority is the player's dial, the links and the map
+// focus are the board's bookkeeping, the nested spelling of a create is
+// tolerance for a habit this contract never teaches, and a completion's effects
+// (onComplete) are the completing event's own impacts here, since that event
+// moves the map itself. Fewer optional fields is also less grammar for a
+// provider that compiles the schema (geminiSchema.js), on a contract every
+// event of every skip carries. Its field notes are in the prompt
+// ([Projects & Operations]), as the other compact families' are.
+const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "project", "onComplete"]);
+
+const foldedProjectOpsSchema = compactJumpImpactSchema({
+  type: "array",
+  description:
+    "The Projects & Operations board, moved by THIS event: one op per effort the event itself started, advanced, "
+    + "set back, completed or ended. Shapes and rules under [Projects & Operations]. Most events have none.",
+  items: {
+    ...projectOpSchema,
+    properties: Object.fromEntries(
+      Object.entries(projectOpSchema.properties).filter(([key]) => !FOLDED_PROJECT_OP_OMITS.has(key)),
+    ),
+  },
+});
+
+// What the validation schema accepts under an event's impacts: the lean jump
+// impacts, and the board's op whole, so a folded answer and a habit both pass.
+const jumpAnswerImpactsSchema = {
+  ...jumpImpactsSchema,
+  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps },
+};
+
+// The field a folded skip's agents' reports come back in (gameplay.js).
+export const AGENT_REPORTS_FIELD = "agentReports";
+
+// And the one its fold of the history document comes back in, when one is due
+// (historyConsolidation.js buildSkipHistoryJob).
+export const HISTORY_FIELD = "history";
 
 // Category tags (runtime/eventTags.js): the timeline's filter chips.
 const eventTagsSchema = {
@@ -906,6 +1107,34 @@ const eventTagsSchema = {
   description: "Categorization tags for the timeline's filter chips: Military, Diplomacy, Economy, Politics, Culture or Disaster (up to three).",
   items: { type: "string", enum: [...EVENT_TAG_ENUM] },
   maxItems: MAX_EVENT_TAGS,
+};
+
+const eventQuoteSchema = {
+  type: "object",
+  description: "Optional quotation shown beneath the event prose. Use this instead of putting a Markdown blockquote in description.",
+  properties: {
+    text: nonEmptyTextSchema("The quotation itself, without surrounding quotation marks."),
+    speaker: textSchema("Speaker name or human-readable attribution, when known."),
+    role: textSchema("Speaker role/title, when known."),
+  },
+  required: ["text"],
+  additionalProperties: false,
+};
+
+// Timeline jumps carry this schema on every generated event, so keep the provider
+// contract compact while preserving the full quotation guidance for Game Master.
+// Runtime normalization still enforces the same canonical {text,speaker,role}
+// shape after either transport.
+const jumpEventQuoteSchema = {
+  type: "object",
+  description: "Optional direct quotation; keep it out of description.",
+  properties: {
+    text: { type: "string", minLength: 1 },
+    speaker: { type: "string" },
+    role: { type: "string" },
+  },
+  required: ["text"],
+  additionalProperties: false,
 };
 
 const eventSchema = {
@@ -916,6 +1145,7 @@ const eventSchema = {
     date: textSchema("In-game date on which the event occurs."),
     title: textSchema("The headline: one sentence saying what happened."),
     description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
+    quote: jumpEventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
@@ -937,10 +1167,16 @@ const eventSchema = {
       maxItems: 8,
       items: nonEmptyTextSchema("One canonical belligerent polity name."),
     },
-    impacts: jumpImpactsSchema,
+    impacts: jumpAnswerImpactsSchema,
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
+};
+
+// The event of the lean contract: no board (see "The folded time skip" above).
+const leanJumpEventSchema = {
+  ...eventSchema,
+  properties: { ...eventSchema.properties, impacts: jumpImpactsSchema },
 };
 
 const interactiveSchema = {
@@ -994,18 +1230,18 @@ export const ACTIONS_SCHEMA = {
 
 export const JUMP_FORWARD_SCHEMA = {
   type: "object",
-  description: "A simulated timeline jump containing dated events and the resulting campaign state.",
+  description: "Timeline jump with dated events and campaign changes.",
   properties: {
     events: {
       type: "array",
-      description: "Events occurring during the simulated period.",
+      description: "Events in this period.",
       items: eventSchema,
     },
-    stopDate: textSchema("Date at which the simulation stops."),
-    summary: textSchema("Concise summary of the period and its strategic consequences."),
+    stopDate: textSchema("Simulation stop date."),
+    summary: textSchema("Concise period summary."),
     clearActions: {
       type: "boolean",
-      description: "Whether planned player actions were resolved by this jump. Defaults to true (resolved) when omitted.",
+      description: "Whether planned actions resolved; omitted means true.",
     },
     // No scene (the `catalyst` a skip used to write): a scene is played only
     // from an interactive event a skip offers, which costs the skip nothing
@@ -1013,9 +1249,7 @@ export const JUMP_FORWARD_SCHEMA = {
     // into a save nothing showed it from.
     diplomaticOutreach: {
       type: "array",
-      description:
-        "Polities reaching out to the player on their OWN initiative (feelers, proposals, warnings, "
-        + "invitations), not tied to one event. Empty when nobody plausibly would.",
+      description: "Independent outreach to the player; empty when none.",
       items: createdChatSchema,
     },
     // The canonical ledgers (nativeWarLedger.js, nativeDiplomaticDirector.js)
@@ -1024,19 +1258,45 @@ export const JUMP_FORWARD_SCHEMA = {
     // choke on, and the line formats are taught in the live prompt.
     storylineUpdates: {
       type: "string",
-      description: "Newline-separated storyline records, format in the prompt; unresolved multi-turn crises persist here. Empty string when none.",
+      description: "Storylines; format in prompt. Empty if none.",
     },
     warUpdates: {
       type: "string",
-      description: "Newline-separated war-state records, format in the prompt. Empty string when belligerency did not change.",
+      description: "Wars; format in prompt. Empty if none.",
     },
     relationUpdates: {
       type: "string",
-      description: "Newline-separated bilateral relation records, format in the prompt. Empty string when none changed materially.",
+      description: "Relations; format in prompt. Empty if none.",
     },
     agreementUpdates: {
       type: "string",
-      description: "Newline-separated treaty/agreement lifecycle records, format in the prompt. Empty string when none started, changed or ended.",
+      description: "Agreements; format in prompt. Empty if none.",
+    },
+    puppetUpdates: {
+      type: "string",
+      description: "Subordination; format in prompt. Empty if none.",
+    },
+    politicalClaims: {
+      type: "string",
+      description: "Political claims; format in prompt. Empty if none.",
+    },
+    // A folded skip's agents' reports (see "The folded time skip" above). Loose
+    // here on purpose: each report is checked against the agents' own schema
+    // (SPY_INTERCEPT_SCHEMA) when it is filed, so a malformed one costs that
+    // report and never the turn. The contract a skip is SENT declares the shape
+    // in full, and only when an agent is due (foldJumpTool).
+    [AGENT_REPORTS_FIELD]: {
+      type: "array",
+      description: "The player's agents' reports: one per agent listed under [Agents' Reports], and only when that block is present.",
+      items: { type: "object" },
+    },
+    // A folded skip's fold of the history document. Loose for the same reason:
+    // it is judged when it is read (historyConsolidation.js
+    // judgeSkipHistoryAnswer), and a poor one costs that fold, which waits for
+    // the next skip, and never the turn.
+    [HISTORY_FIELD]: {
+      type: "object",
+      description: "The history job's answer, only when the prompt carries that job.",
     },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
@@ -1052,6 +1312,16 @@ export const JUMP_FORWARD_SCHEMA = {
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// The lean contract, which foldJumpTool adds to: the answer schema without the
+// board, the agents' reports and the history.
+const JUMP_FORWARD_LEAN_SCHEMA = (() => {
+  const { [AGENT_REPORTS_FIELD]: _agentReports, [HISTORY_FIELD]: _history, ...properties } = JUMP_FORWARD_SCHEMA.properties;
+  return {
+    ...JUMP_FORWARD_SCHEMA,
+    properties: { ...properties, events: { ...properties.events, items: leanJumpEventSchema } },
+  };
+})();
 
 // The bounded semantic geography pass: place wording that exact matching could
 // not resolve, mapped onto the losing side's real regions, or UNRESOLVED.
@@ -1209,96 +1479,110 @@ const pregameEventSchema = {
   type: "object",
   description: "One dated historical event from BEFORE the game's start date.",
   properties: {
+    ref: nonEmptyTextSchema("Candidate-local event ref such as e1. Native code binds this to the persisted event id and never stores the ref."),
     date: textSchema("Date the event occurred, strictly before the game start date."),
     title: textSchema("Concise event headline."),
     description: textSchema("Specific narrative description and its consequences."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
-    warId: textSchema(
-      "Canonical war id when this pre-game event is the one that started, joined, paused or ended a war listed in canonicalUpdates. Blank otherwise.",
-    ),
   },
-  required: ["date", "title", "description"],
+  required: ["ref", "date", "title", "description"],
   additionalProperties: false,
 };
 
-// The pre-game bootstrap answers with ONE flat envelope for every canonical
-// ledger it seeds (wars, relations, agreements) instead of three mini-languages:
-// function-calling in "any" mode is sensitive to schema depth, so the transport
-// is deliberately flat and all-required - the model supplies the semantic values
-// and gameplay.js (expandCanonicalUpdateEnvelope) dispatches each item to the
-// ledger its "kind" names, ignoring the fields that kind does not use.
-const canonicalUpdateSchema = {
+// The provider transport stays deliberately shallow, but the JSON text inside
+// canonicalUpdatesJson is now a semantic Round-Zero baseline candidate rather
+// than a replay of normal-turn lifecycle operations. Persistent ids, operation
+// verbs, event indexes and other engine bookkeeping are intentionally absent;
+// pregameBootstrapCompiler.js owns identity and persisted shapes.
+const PREGAME_SEMANTIC_FACT_KINDS = ["war", "relation", "agreement", "storyline", "puppet"];
+const PREGAME_AGREEMENT_TYPES = [
+  "alliance",
+  "mutual_defense",
+  "guarantee",
+  "non_aggression",
+  "friendship_consultation",
+  "trade_economic",
+  "military_cooperation",
+  "military_access",
+  "neutrality",
+  "peace_settlement",
+  "other",
+];
+
+const pregameWarAssessmentSchema = {
+  type: "object",
+  description: "Optional scheduler-facing assessment native code merges into the derived war storyline mirror.",
+  properties: {
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    state: textSchema("What is currently true about the conflict and why it remains unresolved."),
+  },
+  additionalProperties: false,
+};
+
+const pregameCanonicalFactSchema = {
   type: "object",
   description:
-    "One canonical-state fact already true on the start date. Every field is required for provider reliability; use an empty string, empty array, or 0 for fields irrelevant to this kind.",
+    "One semantic Day-One fact. ref and sourceEventRefs are candidate-local only; native code owns every persistent id and lifecycle operation.",
   properties: {
-    kind: {
-      type: "string",
-      description:
-        "Semantic kind code. Use relation; storyline:active; storyline:dormant; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start.",
-    },
-    id: { type: "string", description: "Stable storyline/war/agreement id, or empty for a relation." },
-    polities: {
+    ref: nonEmptyTextSchema("Candidate-local fact ref such as f1. Never a persistent canonical id."),
+    kind: { type: "string", enum: PREGAME_SEMANTIC_FACT_KINDS },
+    sourceEventRefs: {
       type: "array",
-      description:
-        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors / side A. Agreement: parties.",
-      items: { type: "string" },
+      maxItems: 16,
+      items: nonEmptyTextSchema("Candidate-local pre-game event ref such as e2."),
+      description: "Optional provenance refs to events in this same answer.",
     },
-    opponents: {
-      type: "array",
-      description: "War opponents / side B; empty for non-war items.",
-      items: { type: "string" },
-    },
-    score: {
-      type: "integer",
-      description: "Relation absolute score -100..100; 0 for non-relation items. The engine clamps it and derives the status.",
-    },
-    pressure: {
-      type: "integer",
-      description: "Storyline pressure 0-100 (unresolved stakes); 0 for other kinds.",
-    },
-    momentum: {
-      type: "integer",
-      description: "Storyline momentum 0-100 (current rate of change); 0 for other kinds.",
-    },
-    date: {
-      type: "string",
-      description: "Storyline start date YYYY-MM-DD when known; empty for other kinds.",
-    },
-    category: {
-      type: "string",
-      description: "Storyline process kind (war, crisis, revolution, diplomacy, politics, economy) or agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other); otherwise empty.",
-    },
-    title: {
-      type: "string",
-      description: "Agreement or storyline title when relevant; otherwise empty.",
-    },
-    detail: {
-      type: "string",
-      description: "Relation summary, war note, agreement terms, or storyline state (what is true now and why the process is unresolved).",
-    },
+
+    // War baseline.
+    title: textSchema("Human-readable title for a war, agreement or storyline when that family uses it."),
+    status: textSchema("War: active|ceasefire. Storyline: active|dormant."),
+    sideA: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    sideB: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    startedDate: textSchema("Known start date YYYY-MM-DD, or blank when genuinely unknown."),
+    note: textSchema("War baseline note."),
+    assessment: pregameWarAssessmentSchema,
+
+    // Relation baseline.
+    a: textSchema("First current canonical polity name for a bilateral relation."),
+    b: textSchema("Second current canonical polity name for a bilateral relation."),
+    score: { type: "integer", minimum: -100, maximum: 100 },
+    summary: textSchema("Bilateral political-climate summary."),
+
+    // Agreement baseline. Guarantee and military-access roles are directional.
+    type: { type: "string", enum: PREGAME_AGREEMENT_TYPES },
+    parties: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical signatory polity name.") },
+    guarantor: textSchema("Guarantee issuer."),
+    beneficiary: textSchema("Guarantee beneficiary."),
+    grantor: textSchema("Military-access grantor."),
+    grantee: textSchema("Military-access grantee."),
+    reciprocal: { type: "boolean" },
+    terms: textSchema("Substantive agreement terms."),
+
+    // Non-war persistent process.
+    processKind: textSchema("Non-war process kind such as crisis, insurgency, diplomacy, politics or economy."),
+    participants: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    state: textSchema("What is currently true and why this non-war process remains unresolved."),
+    distinctFromWarRef: textSchema("Candidate-local war ref only when this independently justified process could otherwise look like that war."),
+
+    // Puppet/subordination baseline.
+    overlord: textSchema("Current canonical overlord polity name."),
+    puppet: textSchema("Current canonical subordinate polity name."),
+    puppetKind: { type: "string", enum: ["protectorate", "satellite", "client"] },
+    loyalty: { type: "integer", minimum: 0, maximum: 100 },
+    secrecy: { type: "string", enum: ["open", "covert"] },
   },
-  required: [
-    "kind",
-    "id",
-    "polities",
-    "opponents",
-    "score",
-    "pressure",
-    "momentum",
-    "date",
-    "category",
-    "title",
-    "detail",
-  ],
+  required: ["ref", "kind"],
   additionalProperties: false,
 };
 
 export const PREGAME_HISTORY_SCHEMA = {
   type: "object",
-  description: "The pre-game backstory: the events that led up to the start of the campaign.",
+  description: "The pre-game backstory plus semantic Day-One baseline facts compiled natively into canonical state.",
   properties: {
     events: {
       type: "array",
@@ -1311,13 +1595,136 @@ export const PREGAME_HISTORY_SCHEMA = {
     canonicalUpdates: {
       type: "array",
       description:
-        "Wars, bilateral relations and formal agreements ALREADY TRUE on the start date. Empty array only when no such Day-1 state exists. The engine dispatches and binds every item.",
+        "Semantic Day-One baseline facts. Persistent ids and lifecycle operations are forbidden; native code compiles these facts into the canonical ledgers.",
       maxItems: 32,
-      items: canonicalUpdateSchema,
+      items: pregameCanonicalFactSchema,
     },
   },
-  required: ["events", "summary"],
+  required: ["events", "summary", "canonicalUpdates"],
   additionalProperties: false,
+};
+
+export const PREGAME_HISTORY_TRANSPORT_SCHEMA = {
+  type: "object",
+  description: "Compact provider transport for pre-game history and the Round-Zero canonical bootstrap.",
+  properties: {
+    eventsJson: textSchema("JSON array text for chronological pre-game event objects. Must contain at least one event."),
+    summary: textSchema("One-paragraph summary of the era leading into the start date."),
+    canonicalUpdatesJson: textSchema("JSON array text for semantic Day-One baseline facts. Use [] only when no qualifying state exists; never put persistent ids or lifecycle operations in these facts."),
+  },
+  required: ["eventsJson", "summary", "canonicalUpdatesJson"],
+  additionalProperties: false,
+};
+
+const parsePregameTransportArray = (value, field) => {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null) {
+    throw new Error(`$.${field} is required and must contain JSON array text.`);
+  }
+  const text = String(value).trim();
+  if (!text) {
+    throw new Error(`$.${field} must contain explicit JSON array text; blank is not the same as [].`);
+  }
+
+  const parseArray = (candidate) => {
+    const parsed = JSON.parse(candidate);
+    if (!Array.isArray(parsed)) throw new Error("decoded value is not an array");
+    return parsed;
+  };
+
+  try {
+    return parseArray(text);
+  } catch (strictError) {
+    // Gemini corrective tool calls can echo JSON-text fields with one extra
+    // quote-escaping layer (e.g. [{\"ref\":\"e1\"}]). This is a
+    // transport-only representation error: removing exactly one backslash
+    // before each quote recovers the same JSON value without inventing or
+    // rewriting any semantic fact. Only attempt it when the first object is
+    // visibly quote-escaped, so ordinary malformed JSON still fails closed.
+    if (/^\s*\[\s*\{\s*\\"/.test(text)) {
+      const deescaped = text.replace(/\\"/g, '"');
+      try {
+        return parseArray(deescaped);
+      } catch {
+        // Fall through to the existing bounded array salvage below.
+      }
+    }
+
+    const salvaged = extractJsonArray(text);
+    if (!Array.isArray(salvaged)) {
+      throw new Error(`$.${field} must contain valid JSON array text: ${strictError?.message || strictError}.`);
+    }
+    return salvaged;
+  }
+};
+
+const decodePregameTransportSection = (value, field) => {
+  try {
+    return { ok: true, value: parsePregameTransportArray(value, field), error: "" };
+  } catch (error) {
+    return { ok: false, value: null, error: String(error?.message || error || `Invalid ${field}.`) };
+  }
+};
+
+// Provider compatibility keeps the two large arrays as JSON text, but one bad
+// text field must not erase a valid sibling section. Return the independently
+// decoded sections even when the overall transport is invalid so the retry path
+// can preserve every section that already decoded cleanly.
+export const decodePregameHistoryTransportPayload = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { payload: value, error: "", validSections: {} };
+  }
+  const isTransport = Object.prototype.hasOwnProperty.call(value, "eventsJson")
+    || Object.prototype.hasOwnProperty.call(value, "canonicalUpdatesJson");
+  if (!isTransport) return { payload: value, error: "", validSections: {} };
+
+  const events = decodePregameTransportSection(value.eventsJson, "eventsJson");
+  const canonicalUpdates = decodePregameTransportSection(value.canonicalUpdatesJson, "canonicalUpdatesJson");
+  const summary = String(value.summary ?? "").trim();
+  const errors = [events.error, canonicalUpdates.error].filter(Boolean);
+  const validSections = {
+    ...(events.ok ? { events: events.value } : {}),
+    ...(canonicalUpdates.ok ? { canonicalUpdates: canonicalUpdates.value } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "summary") && summary ? { summary } : {}),
+  };
+
+  return {
+    payload: {
+      events: events.value,
+      summary,
+      canonicalUpdates: canonicalUpdates.value,
+    },
+    error: errors.join(" "),
+    validSections,
+  };
+};
+
+
+const clonePregameTransportEntry = (entry) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  return {
+    ...entry,
+    ...(Array.isArray(entry.tags) ? { tags: [...entry.tags] } : {}),
+    ...(Array.isArray(entry.sourceEventRefs) ? { sourceEventRefs: [...entry.sourceEventRefs] } : {}),
+    ...(Array.isArray(entry.sideA) ? { sideA: [...entry.sideA] } : {}),
+    ...(Array.isArray(entry.sideB) ? { sideB: [...entry.sideB] } : {}),
+    ...(Array.isArray(entry.parties) ? { parties: [...entry.parties] } : {}),
+    ...(Array.isArray(entry.participants) ? { participants: [...entry.participants] } : {}),
+    ...(entry.assessment && typeof entry.assessment === "object" && !Array.isArray(entry.assessment)
+      ? { assessment: { ...entry.assessment } }
+      : {}),
+  };
+};
+
+export const mergePregameHistoryTransportSections = (payload, preserved = {}) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const next = { ...payload };
+  if (Array.isArray(preserved.events)) next.events = preserved.events.map(clonePregameTransportEntry);
+  if (Array.isArray(preserved.canonicalUpdates)) {
+    next.canonicalUpdates = preserved.canonicalUpdates.map(clonePregameTransportEntry);
+  }
+  if (Object.prototype.hasOwnProperty.call(preserved, "summary")) next.summary = String(preserved.summary ?? "").trim();
+  return next;
 };
 
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
@@ -1337,6 +1744,12 @@ export const IDLE_DIPLOMACY_SCHEMA = {
       anyOf: [
         { type: "null", description: "No polity would plausibly reach out right now." },
         createdChatSchema,
+      ],
+    },
+    chatInstitutionId: {
+      anyOf: [
+        { type: "null", description: "No institution Council route requested." },
+        textSchema("Exact shared institution id when this note belongs in that institution's Council; otherwise empty or null."),
       ],
     },
     unitOps: {
@@ -1384,13 +1797,24 @@ export const DESCRIPTION_TO_ACTION_SCHEMA = {
   additionalProperties: false,
 };
 
-export const NEXT_SPEAKER_SCHEMA = {
+// Whether a reply in the one-on-one thread between the player and their own
+// Overlord or Puppet makes, answers or settles a demand (runtime/demandCheck.js).
+// Both fields REQUIRED, the outcome from a fixed list: a demand used to be marked
+// by an optional hidden line in the reply, and a live run showed a model
+// understand a refusal and still leave that line off. A required choice cannot
+// be left off. The code accepts only the outcomes that side may give.
+export const DEMAND_CHECK_SCHEMA = {
   type: "object",
-  description: "The exact participant who should speak next in the diplomatic chat.",
+  description: "What the reply does about a demand between an overlord and its own puppet state.",
   properties: {
-    nextSpeaker: textSchema("Exact name of one chat participant other than the most recent speaker."),
+    outcome: {
+      type: "string",
+      enum: [...DEMAND_CHECK_OUTCOMES],
+      description: "Exactly one of the outcomes the request lists for this reply.",
+    },
+    summary: textSchema("One line: what is demanded (for demand) or what is offered instead (for alternative). Empty for any other outcome."),
   },
-  required: ["nextSpeaker"],
+  required: ["outcome", "summary"],
   additionalProperties: false,
 };
 
@@ -1419,11 +1843,12 @@ const chatActionSchema = {
       type: "string",
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
-        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a binding vote. add_poll_option = add a choice to one. poll_vote = cast a vote.",
-      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote"],
+        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
+        + `${INSTITUTION_CHAT_ACTION_KINDS.join(" / ")} are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.`,
+      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", ...INSTITUTION_CHAT_ACTION_KINDS],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
-    content: textSchema("send_message: what it says, in its leader's voice. Match the length and tone of what it answers."),
+    content: textSchema("send_message: spoken message only, in its leader's voice. Match the length and tone of what it answers. actorName already identifies the speaker; never prefix content with the polity name plus a colon or dash."),
     targetEntryId: textSchema("add_reaction: the id of the message reacted to, copied from the transcript."),
     emoji: textSchema("add_reaction: one emoji."),
     title: textSchema("rename_chat: the new title."),
@@ -1446,6 +1871,14 @@ const chatActionSchema = {
     optionRef: textSchema("add_poll_option: your own label for the new choice. poll_vote: the option's ref, or the exact label of an option already open."),
     label: textSchema("add_poll_option: what the new choice says on the ballot."),
     allowCustom: { type: "boolean", description: "create_poll: whether a participant may add a choice of its own." },
+    proposalId: textSchema("institution_*: canonical proposal id copied from the formal institutional governance block."),
+    proposalType: textSchema("institution_lodge_proposal: proposal type, normally resolution unless the formal governance block permits another type."),
+    summary: textSchema("institution_lodge_proposal: concise formal proposal summary."),
+    amendmentId: textSchema("institution_resolve_amendment: canonical amendment id copied from the formal governance block."),
+    amendmentText: textSchema("institution_amendment: exact formal amendment text."),
+    amendmentStatus: textSchema("institution_resolve_amendment: accepted, rejected, or withdrawn."),
+    voteChoice: textSchema("institution_vote: yes, no, abstain, or veto. Veto is valid only where the charter grants it."),
+    reason: textSchema("institution_vote: optional concise public ballot rationale."),
   },
   required: ["type", "actorName"],
   additionalProperties: false,
@@ -1458,10 +1891,14 @@ export const CHAT_ACTIONS_SCHEMA = {
     actions: {
       type: "array",
       description: "The actions, in order. An empty list is a valid answer: silence is an answer.",
-      maxItems: 16,
+      // Formal institution maintenance may need one ballot per member (NATO-
+      // sized councils included). Ordinary chat remains prompt-bounded; native
+      // authority still validates every action independently.
+      maxItems: 48,
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
+    lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
   additionalProperties: false,
@@ -1495,6 +1932,14 @@ export const INTERACTIVE_EXECUTOR_SCHEMA = {
       maxItems: 5,
       items: nonEmptyTextSchema("One player choice."),
     },
+    // The record of a scene that ends on this move, written with the move
+    // itself: without it, the scene cost a second request (interactiveSummary)
+    // just to condense what this answer had already concluded. Optional; a
+    // resolved answer without them falls back to that request (gameplay.js
+    // resolveInteractiveScene).
+    recordTitle: textSchema("Only when resolved is true: a concise headline for the whole finished interactive event as one campaign timeline event. Empty otherwise."),
+    recordDescription: textSchema("Only when resolved is true: a complete but concise account of the whole interactive event's outcome, as one campaign timeline event. Empty otherwise."),
+    recordImportance: textSchema("Only when resolved is true: the event's importance, normally major. Empty otherwise."),
   },
   required: ["summary", "resolved", "nextChoices"],
   additionalProperties: false,
@@ -1507,6 +1952,15 @@ export const INTERACTIVE_SUMMARY_SCHEMA = {
     title: textSchema("Concise event headline."),
     description: textSchema("Complete but concise account of the interactive event's outcome."),
     importance: textSchema("Event importance, normally major."),
+    // Land the Scene handed over by agreement (a treaty, cession, sale or trade).
+    // Land won in fighting is not a transfer: the territory Director marks it as
+    // occupied from the description.
+    regionTransfers: {
+      type: "array",
+      description: "Only regions whose legal sovereignty the Scene handed over by agreement (treaty, cession, sale, trade). Omit for anything won in fighting.",
+      maxItems: 12,
+      items: regionTransferSchema,
+    },
   },
   required: ["title", "description", "importance"],
   additionalProperties: false,
@@ -1688,13 +2142,70 @@ const gameMasterEventSchema = {
   ...eventSchema,
   properties: {
     ...eventSchema.properties,
+    quote: eventQuoteSchema,
     impacts: impactsSchema,
   },
+};
+
+const gmTerritorialScopeSchema = {
+  type: "object",
+  description: "Native exhaustive rendered-geography scope for a GM territorial instruction. Use this instead of sampling representative provinces.",
+  properties: {
+    kind: { type: "string", enum: ["legal-transfer", "control", "contest"] },
+    baseCountries: {
+      type: "array",
+      minItems: 1,
+      maxItems: 24,
+      items: nonEmptyTextSchema("Exact rendered base-geography country name, e.g. Estonia, Latvia, Lithuania."),
+    },
+    toCode: nonEmptyTextSchema("Recipient/controller/contender polity full name."),
+    eventIndex: { type: "integer", minimum: 0, maximum: 7 },
+    note: textSchema("Brief reason for the exhaustive scope."),
+  },
+  required: ["kind", "baseCountries", "toCode", "eventIndex", "note"],
+  additionalProperties: false,
 };
 
 // The GM transaction the app validates and previews. The AI plans structured
 // canonical operations; the payload is not itself permission to persist them —
 // only the administrator's Apply of the exact preview is.
+// One subordination change the GM decrees: one polity directing another's will
+// while it stays a separate country (docs/world-state.md, Puppet). The same ops
+// and rules as a skip's puppetUpdates lines, applied by the same director.
+//
+// Until this existed the GM transaction had no place for one, so a player asking
+// the GM to make a country their puppet got the story written — "Washington
+// Reverses Course and Aligns With London" — and an empty world.puppets: the
+// country panel said nothing, and nothing charged or ended it later.
+const gmPuppetUpdateSchema = {
+  type: "object",
+  description: "One subordination change: one polity directing another's will while it remains a separate country, holding its own territory and sovereignty.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["install", "reclassify", "loyalty", "reveal", "release", "annex", "revolt", "suppress"],
+      description: "install creates it; reclassify changes kind; loyalty moves the score; reveal makes a covert one open (permanently); release, annex and revolt end it; suppress puts down a rising.",
+    },
+    overlord: nonEmptyTextSchema("The directing polity, using its full canonical name."),
+    puppet: nonEmptyTextSchema("The directed polity, using its full canonical name."),
+    kind: {
+      type: "string",
+      enum: ["protectorate", "satellite", "client"],
+      description: "Which powers the overlord holds — protectorate: its foreign policy and defence; satellite: control of its government behind an independent front, which is what the player is shown as a \"puppet state\"; client: a government that depends on the overlord's backing but makes most of its own decisions. Used by install and reclassify.",
+    },
+    loyalty: { type: "integer", minimum: 0, maximum: 100, description: "How far the puppet accepts direction, 0-100. Used by install and loyalty." },
+    secrecy: {
+      type: "string",
+      enum: ["open", "covert"],
+      description: "open if the world knows of it, covert if only the two parties do. Used by install.",
+    },
+    eventIndexes: gmEventIndexesSchema,
+    note: textSchema("Why, in one line."),
+  },
+  required: ["op", "overlord", "puppet", "kind", "loyalty", "secrecy", "eventIndexes", "note"],
+  additionalProperties: false,
+};
+
 export const GAME_MASTER_SCHEMA = {
   type: "object",
   description:
@@ -1711,6 +2222,12 @@ export const GAME_MASTER_SCHEMA = {
       description: "Canonical timeline events authored by this transaction. Direct corrections may legitimately contain none.",
       maxItems: 8,
       items: gameMasterEventSchema,
+    },
+    territorialScopes: {
+      type: "array",
+      description: "Exhaustive rendered base-geography scopes. Native code expands each scope into exact per-region operations before preview.",
+      maxItems: 12,
+      items: gmTerritorialScopeSchema,
     },
     countryStatPatches: {
       type: "array",
@@ -1742,17 +2259,43 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 12,
       items: gmAgreementUpdateSchema,
     },
+    // Not in `required`: a preview saved before puppets had a place here must
+    // still validate. The transport decodes a missing list as [].
+    puppetUpdates: {
+      type: "array",
+      description: "Structured subordination changes: making a country a puppet (protectorate, satellite or client), changing one, or ending one.",
+      maxItems: 8,
+      items: gmPuppetUpdateSchema,
+    },
     diplomaticOutreach: {
       type: "array",
       description: "Direct NPC-to-player chats not attached to one specific authored event.",
       maxItems: 3,
       items: createdChatSchema,
     },
+    // What the administrator's request itself asks for, read by the model that
+    // reads the request, in whatever language it was written. The request
+    // checks (gameMasterRequestCompleteness.js, gameplay.js) trust these and
+    // fall back to their English patterns only when an answer lacks them. Not
+    // in `required`: a preview saved before they existed must still validate.
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: {
+      type: "string",
+      description: "The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC); blank when it names none or several.",
+    },
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
     "summary",
     "events",
+    "territorialScopes",
     "countryStatPatches",
     "storylineUpdates",
     "warUpdates",
@@ -1779,34 +2322,54 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     },
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
+    territorialScopesJson: textSchema("JSON array text for exhaustive rendered base-geography territorial scopes. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
     storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
+    puppetUpdatesJson: textSchema("JSON array text for structured world.puppets subordination changes — making a country a puppet (protectorate, satellite or client), changing one, or ending one. Use [] when none."),
     diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: textSchema("The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC). Empty string when it names none or several."),
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
     "summary",
     "eventsJson",
+    "territorialScopesJson",
     "countryStatPatchesJson",
     "storylineUpdatesJson",
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
+    "puppetUpdatesJson",
     "diplomaticOutreachJson",
+    "requestedSubordination",
+    "requestedDate",
+    "requestedOngoingProcess",
   ],
   additionalProperties: false,
 };
 
 const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["eventsJson", "events"],
+  ["territorialScopesJson", "territorialScopes"],
   ["countryStatPatchesJson", "countryStatPatches"],
   ["storylineUpdatesJson", "storylineUpdates"],
   ["warUpdatesJson", "warUpdates"],
   ["relationUpdatesJson", "relationUpdates"],
   ["agreementUpdatesJson", "agreementUpdates"],
+  // A missing field decodes to [] (parseGameMasterTransportArray), so an answer
+  // from before puppets had a place here still decodes as it did.
+  ["puppetUpdatesJson", "puppetUpdates"],
   ["diplomaticOutreachJson", "diplomaticOutreach"],
 ]);
 
@@ -1870,6 +2433,10 @@ export const decodeGameMasterTransportPayload = (value) => {
     for (const [field, key] of GAME_MASTER_TRANSPORT_FIELDS) {
       payload[key] = parseGameMasterTransportArray(value[field], field);
     }
+    // Carried only when the answer has them, so an older answer decodes as it did.
+    if (typeof value.requestedSubordination === "boolean") payload.requestedSubordination = value.requestedSubordination;
+    if (typeof value.requestedDate === "string") payload.requestedDate = value.requestedDate.trim();
+    if (typeof value.requestedOngoingProcess === "boolean") payload.requestedOngoingProcess = value.requestedOngoingProcess;
     return { payload: normalizeGameMasterChats(payload), error: "" };
   } catch (error) {
     return { payload: null, error: String(error?.message || error || "Invalid GM transport payload.") };
@@ -2113,6 +2680,56 @@ export const UNIT_DIRECTOR_SCHEMA = {
   additionalProperties: false,
 };
 
+// The structure director's answer: new structures the supplied events built,
+// keyed by event index (nativeStructureDirector.js). Builds only, and native
+// code decides which of them reach the map.
+export const STRUCTURE_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation pass that puts on the map the physical structures the supplied events "
+    + "built, opened or completed.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "New structures, keyed by the supplied eventIndex of the event that built them.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          structures: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: nonEmptyTextSchema("Its specific name."),
+                kind: nonEmptyTextSchema("What it is, as a short lowercase noun phrase: data centre, ground station, shipyard."),
+                ownerCode: nonEmptyTextSchema("The owning polity's FULL name, never a code."),
+                status: {
+                  type: "string",
+                  enum: ["planned", "under_construction", "active"],
+                  description: "planned when only announced, under_construction when work has begun, active when working.",
+                },
+                at: atSchema,
+                lng: { type: "number", description: "Only with no `at`.", minimum: -180, maximum: 180 },
+                lat: { type: "number", description: "Only with no `at`.", minimum: -90, maximum: 90 },
+                note: textSchema("One line on what it is for, shown when inspected."),
+                projectId: textSchema("The id of the board project it belongs to, copied exactly. Omit when it belongs to none."),
+              },
+              required: ["name", "kind", "ownerCode", "status"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["eventIndex", "structures"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of what was put on the map this turn."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
+
 // The Projects & Operations board, moved OUT of the jump and into its own call.
 //
 // Why: projectOps was the single largest thing in the jump contract by a wide
@@ -2294,7 +2911,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
     },
     territorialComponentSplitText: {
       type: "string",
@@ -2306,7 +2923,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       properties: {
         gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
-        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        inflation: statNumberSchema("Annual inflation estimate in percent; negative is deflation.", { minimum: -100, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
         publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
         budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
@@ -2453,7 +3070,7 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
         otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
-        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        inflation: statNumberSchema("Annual inflation estimate in percent; negative is deflation.", { minimum: -1000, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
         publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
         budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
@@ -2483,6 +3100,32 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
     "economy",
     "gdpBreakdown",
   ],
+  additionalProperties: false,
+};
+
+// Optional prose-only political assessment derived from spy collection.
+// Native code owns access/confidence; the model may not expose raw hidden PWv2 values.
+const spyPoliticalAssessmentSchema = {
+  type: "object",
+  description: "A narrative intelligence assessment of hidden political decision drivers inside the target. Never output raw simulation trait numbers, internal field names, or exact hidden scores.",
+  properties: {
+    summary: nonEmptyTextSchema("One concise overall assessment of the target leadership's current political decision posture."),
+    findings: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: {
+        type: "object",
+        properties: {
+          topic: nonEmptyTextSchema("Short player-readable topic, e.g. Leadership risk appetite, Elite pressure, Alliance perception."),
+          assessment: nonEmptyTextSchema("Narrative assessment only. No raw hidden numeric values or simulation field names."),
+        },
+        required: ["topic", "assessment"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "findings"],
   additionalProperties: false,
 };
 
@@ -2522,6 +3165,7 @@ const SPY_INTERCEPT_SCHEMA = {
         additionalProperties: false,
       },
     },
+    politicalAssessment: spyPoliticalAssessmentSchema,
   },
   required: ["exchanges"],
   additionalProperties: false,
@@ -2553,14 +3197,101 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   additionalProperties: false,
 };
 
+// Listen in (runtime/listenIn.js): what ordinary people in one place are posting,
+// for the phone a region's card and a country's panel open. Everything but the
+// author and the text is optional, and the list carries no count to fail: an
+// answer two posts long, or twenty, still shows (runtime/listenIn.js keeps what
+// a feed holds), where a bound here would cost the player the whole request.
+const LISTEN_IN_SCHEMA = {
+  type: "object",
+  description: "The posts ordinary people in one place are writing today, and what the place is talking about.",
+  properties: {
+    posts: {
+      type: "array",
+      description: "Ten to twelve posts, newest first.",
+      items: {
+        type: "object",
+        properties: {
+          author: nonEmptyTextSchema("The name the poster goes by: a full name, a first name or a nickname, as people of this place and time are called."),
+          handle: textSchema("Their account name, with no @ and no spaces (mariakowal88). Blank in a world that has no such thing."),
+          about: textSchema("Who they are in a few words, as a profile line would put it: night-shift nurse, Lviv."),
+          text: nonEmptyTextSchema("The post itself, in the poster's own voice: one to three short sentences."),
+          filler: { type: "boolean", description: "true for a post that has nothing to do with the events of the day: a lost cat, a recipe, last night's match." },
+          minutesAgo: { type: "number", minimum: 0, description: "How long ago it was posted, in minutes: 0 for just now, none older than three days (4320)." },
+          likes: { type: "number", minimum: 0, description: "Whole number. Small for a local account; one or two posts may have caught fire." },
+          reposts: { type: "number", minimum: 0, description: "Whole number, usually well below the likes." },
+          replies: { type: "number", minimum: 0, description: "Whole number." },
+        },
+        required: ["author", "text"],
+        additionalProperties: false,
+      },
+    },
+    trends: {
+      type: "array",
+      description: "Three to five things this place is talking about today, a few words each, as a trending list names them.",
+      maxItems: LISTEN_IN_MAX_TRENDS,
+      items: nonEmptyTextSchema("One trend: a few words or a tag."),
+    },
+  },
+  required: ["posts"],
+  additionalProperties: false,
+};
+
+// A first reading of a polity with neither a stat sheet nor a rated service asks
+// for both in ONE request (gameplay.js ensureCountryAssessed): the stat-sheet
+// tool, standard or scenario-defined, with the intelligence assessment's own
+// fields added LAST, so the rating is written after the numbers it rests on.
+// Only the tool shown to the model changes: the field is a transport field,
+// taken off the answer before the sheet is validated, and no other request
+// carries it.
+export const INTELLIGENCE_RATING_FIELD = "intelligenceService";
+export const withIntelligenceRating = (tool) => {
+  if (!tool?.schema?.properties) return tool;
+  return {
+    ...tool,
+    description: `${tool.description} Also rate the polity's intelligence service in ${INTELLIGENCE_RATING_FIELD}.`,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        [INTELLIGENCE_RATING_FIELD]: {
+          ...INTELLIGENCE_ASSESSMENT_SCHEMA,
+          description: "The polity's intelligence service as it stands on the current date: how well it reads other governments and keeps its own secrets. Written after the sheet's values.",
+        },
+      },
+      required: [...(Array.isArray(tool.schema.required) ? tool.schema.required : []), INTELLIGENCE_RATING_FIELD],
+    },
+  };
+};
+
+// Groups switched off for a game (server/gameFeatures.js): the same tool with
+// groupOps taken out of every impacts object, so the model is never offered the
+// field. Only the tool shown to the model changes; the payload is validated
+// against the full schema, and validateGeneratedWorldChanges (gameplay.js)
+// leaves out any groupOps a model writes anyway.
+const dropGroupOps = (schema) => {
+  if (Array.isArray(schema)) return schema.map(dropGroupOps);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => [
+    key,
+    key === "properties" && value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value)
+        .filter(([field]) => field !== "groupOps")
+        .map(([field, entry]) => [field, dropGroupOps(entry)]))
+      : dropGroupOps(value),
+  ]));
+};
+export const withoutGroupOps = (tool) => (tool?.schema ? { ...tool, schema: dropGroupOps(tool.schema) } : tool);
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
+  listenIn: LISTEN_IN_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
-  nextSpeaker: NEXT_SPEAKER_SCHEMA,
+  demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
   interactiveCreation: INTERACTIVE_CREATION_SCHEMA,
@@ -2568,6 +3299,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   interactiveSummary: INTERACTIVE_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
+  structureDirector: STRUCTURE_DIRECTOR_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
@@ -2589,14 +3321,76 @@ export const ACTIONS_TOOL = makeTool(
 export const JUMP_FORWARD_TOOL = makeTool(
   "submit_jump_result",
   "Submit the events, stop date, summary and resolved-action state from a timeline jump.",
-  JUMP_FORWARD_SCHEMA,
+  JUMP_FORWARD_LEAN_SCHEMA,
 );
 
 export const AUTO_JUMP_FORWARD_TOOL = makeTool(
   "submit_jump_result",
   "Submit the events and result of an automatic timeline jump that stops at the next notable moment.",
-  AUTO_JUMP_FORWARD_SCHEMA,
+  JUMP_FORWARD_LEAN_SCHEMA,
 );
+
+// A skip's tool as the folded contract (see "The folded time skip"): the board
+// under each event's impacts when `board` is set (a skip with nothing on the
+// board is not asked to keep one), the agents' reports when `agentReports` is,
+// and the history document when `history` is. Takes the tool the task would
+// have been sent, so a scenario's own stat keys (getGameplayToolForStatIndices)
+// are kept. The reports come after the events they have to agree with, and the
+// history last of all: it is the longest thing in the answer and the one an
+// answer cut short can best do without. Anything that is not a skip's tool, and
+// a skip with none of the three, comes back as it was.
+export const foldJumpTool = (tool, { board = true, agentReports = false, history = false } = {}) => {
+  const events = tool?.schema?.properties?.events;
+  const impacts = events?.items?.properties?.impacts;
+  if (!impacts?.properties || (!board && !agentReports && !history)) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        events: board ? {
+          ...events,
+          items: {
+            ...events.items,
+            properties: {
+              ...events.items.properties,
+              impacts: { ...impacts, properties: { ...impacts.properties, projectOps: foldedProjectOpsSchema } },
+            },
+          },
+        } : events,
+        ...(agentReports ? {
+          [AGENT_REPORTS_FIELD]: {
+            type: "array",
+            description:
+              "One report per agent listed under [Agents' Reports], written after the events and consistent with them. "
+              + "None for an agent that is not listed.",
+            items: {
+              type: "object",
+              properties: {
+                agent: nonEmptyTextSchema("The agent's key, copied exactly from [Agents' Reports], such as agent_1."),
+                ...SPY_INTERCEPT_SCHEMA.properties,
+              },
+              required: ["agent", "exchanges"],
+              additionalProperties: false,
+            },
+          },
+        } : {}),
+        ...(history ? {
+          [HISTORY_FIELD]: {
+            type: "object",
+            description:
+              "The answer to the separate job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last. "
+              + "It covers only what that job lists, never the events of this answer.",
+            properties: EVENT_CONSOLIDATOR_SCHEMA.properties,
+            required: ["summary", "document"],
+            additionalProperties: false,
+          },
+        } : {}),
+      },
+    },
+  };
+};
 
 export const DESCRIPTION_TO_ACTION_TOOL = makeTool(
   "submit_description_to_action",
@@ -2610,10 +3404,10 @@ export const CHAT_ACTIONS_TOOL = makeTool(
   CHAT_ACTIONS_SCHEMA,
 );
 
-export const NEXT_SPEAKER_TOOL = makeTool(
-  "submit_next_speaker",
-  "Submit the exact diplomatic chat participant who should speak next.",
-  NEXT_SPEAKER_SCHEMA,
+export const DEMAND_CHECK_TOOL = makeTool(
+  "submit_demand_check",
+  "Submit what this reply does about a demand between an overlord and its own puppet state.",
+  DEMAND_CHECK_SCHEMA,
 );
 
 export const EVENT_CONSOLIDATOR_TOOL = makeTool(
@@ -2664,6 +3458,12 @@ export const UNIT_DIRECTOR_TOOL = makeTool(
   UNIT_DIRECTOR_SCHEMA,
 );
 
+export const STRUCTURE_DIRECTOR_TOOL = makeTool(
+  "submit_structure_director",
+  "Submit the new structures the supplied events built, opened or completed.",
+  STRUCTURE_DIRECTOR_SCHEMA,
+);
+
 export const WORLD_MOTION_REPAIR_TOOL = makeTool(
   "submit_world_motion_repair",
   "Submit exactly one semantic update for one existing persistent storyline. This tool cannot create events or mutate any other canonical ledger.",
@@ -2698,8 +3498,8 @@ export const IDLE_DIPLOMACY_TOOL = makeTool(
 
 export const PREGAME_HISTORY_TOOL = makeTool(
   "submit_pregame_history",
-  "Submit the pre-game backstory events that led up to the campaign's start date.",
-  PREGAME_HISTORY_SCHEMA,
+  "Submit the compact provider transport for the pre-game backstory and Round-Zero canonical bootstrap. Native code decodes and validates the full structured payload.",
+  PREGAME_HISTORY_TRANSPORT_SCHEMA,
 );
 
 export const SPY_INTERCEPT_TOOL = makeTool(
@@ -2714,14 +3514,21 @@ export const INTELLIGENCE_ASSESSMENT_TOOL = makeTool(
   INTELLIGENCE_ASSESSMENT_SCHEMA,
 );
 
+export const LISTEN_IN_TOOL = makeTool(
+  "submit_listen_in_feed",
+  "Submit the posts ordinary people in the place are writing today, and what the place is talking about.",
+  LISTEN_IN_SCHEMA,
+);
+
 export const GAMEPLAY_TOOLS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
+  listenIn: LISTEN_IN_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
   descriptionToAction: DESCRIPTION_TO_ACTION_TOOL,
-  nextSpeaker: NEXT_SPEAKER_TOOL,
+  demandCheck: DEMAND_CHECK_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
   interactiveCreation: INTERACTIVE_CREATION_TOOL,
@@ -2729,6 +3536,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   interactiveSummary: INTERACTIVE_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
+  structureDirector: STRUCTURE_DIRECTOR_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   territoryDirector: TERRITORY_DIRECTOR_TOOL,
@@ -3195,9 +4003,11 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "actionIds",
   "createdChats",
   "polityChanges",
+  "politicalActorOps",
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
+  "groupOps",
   "unitOps",
   "markerOps",
   "projectOps",
@@ -3238,12 +4048,18 @@ const normalizeEventShape = (entry) => {
     for (const alias of fieldAliases) delete event[alias];
   }
 
+  const presentation = normalizeEventPresentation({ description: event.description, quote: event.quote });
+  if (event.description !== undefined || presentation.description) event.description = presentation.description;
+  if (presentation.quote) event.quote = presentation.quote;
+  else delete event.quote;
+
   if (isPlainRecord(event.impacts)) {
     const impacts = flattenImpactWrappers(event.impacts);
     const impactAliases = {
       regionTransfers: ["transfers", "territoryChanges"],
       regionControlOps: ["controlOps", "controlChanges"],
       regionClaims: ["claims"],
+      groupOps: ["groups", "groupOperations"],
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],
@@ -3278,6 +4094,9 @@ const normalizeIdleDiplomacyShape = (value) => {
   const candidate = { ...value };
   if (typeof candidate.chat === "string") candidate.chat = null;
   if (isPlainRecord(candidate.chat)) candidate.chat = normalizeChatShape(candidate.chat);
+  if (candidate.chatInstitutionId === undefined && candidate.institutionId !== undefined) candidate.chatInstitutionId = candidate.institutionId;
+  if (candidate.chatInstitutionId === null) candidate.chatInstitutionId = "";
+  delete candidate.institutionId;
   if (Array.isArray(candidate.unitOps)) candidate.unitOps = candidate.unitOps.map(normalizeUnitOperationShape);
   return candidate;
 };
@@ -3303,6 +4122,128 @@ const normalizeProjectsShape = (value) => {
 // this when omitted", says its description) — so a missing, null or zero value
 // from the model is filled here, before the schema sees it, rather than
 // costing the sheet its attempt.
+
+// Raw-JSON chat turns (used by lifecycle negotiations) do not receive Gemini's
+// submit_chat_actions function declaration, so providers sometimes answer in a
+// natural dialogue shape and/or return lifecycleResponsesJson as a real array.
+// Normalize those transport aliases before CHAT_ACTIONS_SCHEMA validation. The
+// canonical task schema stays unchanged for function-calling providers.
+const normalizeChatActionsShape = (value) => {
+  // Institution Council turns use raw JSON transport for Gemini. In live play it
+  // has returned the action array directly and used conversational aliases such
+  // as `speak`, `polity` and `vote`. Canonicalize those transport spellings
+  // before CHAT_ACTIONS_SCHEMA sees them; native chat/institution validators still
+  // decide whether the resulting action is legal.
+  const source = Array.isArray(value) ? { actions: value } : value;
+  if (!isPlainRecord(source)) return value;
+  const candidate = { ...source };
+
+  const normalizeAction = (entry) => {
+    if (!isPlainRecord(entry)) return entry;
+    const action = { ...entry };
+    const rawType = action.type ?? action.action ?? action.op;
+    const foldedType = String(rawType ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const type = ({ speak: "send_message", say: "send_message", message: "send_message" })[foldedType] || foldedType;
+    const speaker = action.actorName ?? action.actor ?? action.speaker ?? action.polity;
+    const text = action.content ?? action.text ?? action.message;
+    if (action.actorName === undefined && speaker !== undefined) action.actorName = speaker;
+    if (type) action.type = type;
+    if (!action.type && speaker !== undefined && text !== undefined) action.type = "send_message";
+    const canonicalType = String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (action.content === undefined && text !== undefined && canonicalType === "send_message") action.content = text;
+    if (canonicalType === "institution_vote" && action.voteChoice === undefined) {
+      action.voteChoice = action.vote ?? action.choice ?? action.optionRef;
+    }
+    delete action.action;
+    delete action.op;
+    delete action.actor;
+    delete action.speaker;
+    delete action.polity;
+    delete action.text;
+    delete action.message;
+    delete action.recipient;
+    delete action.vote;
+    delete action.choice;
+    // Institution identity comes from the canonical Council thread. A model may
+    // echo it in raw JSON, but it must not be able to redirect formal authority.
+    if (canonicalType.startsWith("institution_")) delete action.institutionId;
+    return action;
+  };
+
+  if (!Array.isArray(candidate.actions) && Array.isArray(candidate.dialogue)) {
+    candidate.actions = candidate.dialogue.map(normalizeAction);
+  } else if (Array.isArray(candidate.actions)) {
+    candidate.actions = candidate.actions.map(normalizeAction);
+  }
+  if (!Array.isArray(candidate.actions)) candidate.actions = [];
+  delete candidate.dialogue;
+
+  const lifecycleAlias = candidate.lifecycleResponsesJson ?? candidate.lifecycleResponses;
+  if (Array.isArray(lifecycleAlias)) candidate.lifecycleResponsesJson = JSON.stringify(lifecycleAlias);
+  else if (candidate.lifecycleResponsesJson === undefined && typeof lifecycleAlias === "string") candidate.lifecycleResponsesJson = lifecycleAlias;
+  delete candidate.lifecycleResponses;
+
+  return candidate;
+};
+// A feed written a little differently is still a feed. The usual variations —
+// the list under another name or bare, a post's fields under the names a real
+// feed uses, a count as text, a field the schema does not have — are rewritten
+// to the schema's shape here, so none of them costs the player a second request
+// or a post. What the phone shows is cleaned again by runtime/listenIn.js.
+const LISTEN_IN_POST_FIELDS = Object.freeze({
+  author: ["author", "name", "displayName", "display_name", "user"],
+  handle: ["handle", "username", "userName", "account", "screenName"],
+  about: ["about", "bio", "profile", "description"],
+  text: ["text", "content", "body", "message", "post"],
+});
+const LISTEN_IN_POST_COUNTS = Object.freeze({
+  minutesAgo: ["minutesAgo", "minutes_ago", "minutes"],
+  likes: ["likes", "likeCount", "hearts"],
+  reposts: ["reposts", "shares", "retweets", "repostCount"],
+  replies: ["replies", "comments", "replyCount"],
+});
+const listenInCount = (value) => {
+  const number = typeof value === "string" ? Number(value.replace(/[\s,]/g, "")) : Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+};
+const normalizeListenInPostShape = (value) => {
+  if (!isPlainRecord(value)) return value;
+  const post = {};
+  for (const [field, names] of Object.entries(LISTEN_IN_POST_FIELDS)) {
+    const found = firstDefinedKey(value, names);
+    if (found !== undefined && found !== null) post[field] = String(found).trim();
+  }
+  if (typeof post.handle === "string") post.handle = post.handle.replace(/^@+/, "");
+  for (const [field, names] of Object.entries(LISTEN_IN_POST_COUNTS)) {
+    const found = firstDefinedKey(value, names);
+    if (found !== undefined && found !== null) post[field] = listenInCount(found);
+  }
+  if (post.minutesAgo === undefined && value.hoursAgo !== undefined) post.minutesAgo = listenInCount(Number(value.hoursAgo) * 60);
+  const filler = firstDefinedKey(value, ["filler", "offTopic", "off_topic"]);
+  if (filler !== undefined) post.filler = filler === true || String(filler).trim().toLowerCase() === "true";
+  return post;
+};
+const normalizeListenInShape = (value) => {
+  let source = value;
+  if (isPlainRecord(value)) {
+    for (const wrapper of ["result", "output", "payload", "data", "feed"]) {
+      if (isPlainRecord(value[wrapper]) && firstDefinedKey(value[wrapper], ["posts", "feed", "tweets"]) !== undefined) {
+        source = value[wrapper];
+        break;
+      }
+    }
+  }
+  const list = Array.isArray(source) ? source : firstDefinedKey(source, ["posts", "feed", "tweets", "items"]);
+  if (!Array.isArray(list)) return value;
+  const trends = isPlainRecord(source) ? firstDefinedKey(source, ["trends", "trending", "topics"]) : undefined;
+  return {
+    posts: list.map(normalizeListenInPostShape),
+    ...(Array.isArray(trends)
+      ? { trends: trends.map((entry) => String(entry ?? "").trim()).filter(Boolean).slice(0, LISTEN_IN_MAX_TRENDS) }
+      : {}),
+  };
+};
+
 const normalizeCountryStatSheetShape = (value) => {
   if (!isPlainRecord(value)) return value;
   const version = Number(value.statsSchemaVersion);
@@ -3310,10 +4251,63 @@ const normalizeCountryStatSheetShape = (value) => {
   return { ...value, statsSchemaVersion: 1 };
 };
 
+// Round-Zero semantic facts are already expressed in the compiler contract.
+// Do not adapt lifecycle verbs, invent padding, or otherwise normalize meaning
+// before the native compiler sees it. Legacy lifecycle-shaped answers remain
+// visible to schema validation and are rejected rather than silently migrated.
+const normalizePregameHistoryShape = (value) => {
+  if (!isPlainRecord(value) || !Array.isArray(value.canonicalUpdates)) return value;
+  let changed = false;
+  const canonicalUpdates = value.canonicalUpdates.map((fact) => {
+    if (!isPlainRecord(fact)) return fact;
+    let next = fact;
+    // These fields are semantically lists. A provider occasionally emits the
+    // unambiguous singleton spelling (sideA: "Alpha") even though the tool
+    // schema says array. Canonicalize only that lossless representation here;
+    // never split delimited text or infer additional actors.
+    for (const field of ["sourceEventRefs", "sideA", "sideB", "parties", "participants"]) {
+      if (typeof next[field] !== "string" || !next[field].trim()) continue;
+      if (next === fact) next = { ...fact };
+      next[field] = [next[field].trim()];
+      changed = true;
+    }
+    return next;
+  });
+  return changed ? { ...value, canonicalUpdates } : value;
+};
+
+// Corrective retries may freeze independently valid historical cards even when
+// the overall Round-Zero answer fails schema validation in canonical state. Do
+// not freeze canonicalUpdates here: shape-valid canonical facts still require
+// domain/identity validation before they are safe to preserve across a retry.
+// CP2's compiler will own that stronger guarantee at the cutover boundary.
+export const extractPregameHistoryStableRetrySections = (value, { includeCanonical = false } = {}) => {
+  if (!isPlainRecord(value)) return {};
+  const sections = {};
+  if (Array.isArray(value.events)) {
+    const error = validateAgainstSchema(PREGAME_HISTORY_SCHEMA.properties.events, value.events, "$.events");
+    if (!error) sections.events = value.events.map(clonePregameTransportEntry);
+  }
+  if (includeCanonical && Array.isArray(value.canonicalUpdates)) {
+    const error = validateAgainstSchema(
+      PREGAME_HISTORY_SCHEMA.properties.canonicalUpdates,
+      value.canonicalUpdates,
+      "$.canonicalUpdates",
+    );
+    if (!error) sections.canonicalUpdates = value.canonicalUpdates.map(clonePregameTransportEntry);
+  }
+  const summary = String(value.summary ?? "").trim();
+  if (summary) sections.summary = summary;
+  return sections;
+};
+
 export const normalizeGameplayPayload = (taskKey, value) => {
+  if (taskKey === "chatActions") return normalizeChatActionsShape(value);
+  if (taskKey === "pregameHistory") return normalizePregameHistoryShape(value);
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
+  if (taskKey === "listenIn") return normalizeListenInShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   if (!isPlainRecord(value)) return value;
 
@@ -3413,7 +4407,6 @@ export const validateGameplayPayload = (taskKey, value) => {
 
   const requiredTextByTask = {
     descriptionToAction: ["title", "text", "kind"],
-    nextSpeaker: ["nextSpeaker"],
     eventConsolidator: ["summary"],
     interactiveCreation: ["title", "premise", "opening"],
     interactiveExecutor: ["summary"],

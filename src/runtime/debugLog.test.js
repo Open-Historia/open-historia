@@ -23,14 +23,17 @@ const {
     buildDebugLogReport,
     buildIncidentReport,
     buildLoggingFile,
+    buildRenderCrashIncident,
     clearDebugLog,
     debugLogFilename,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogEntries,
     getLoggingFileEntries,
     installDebugLogCapture,
     isDebugLogEnabled,
     isDebugLogVerbose,
+    localClock,
     logDebugEvent,
     logSettingChange,
     redactSecrets,
@@ -38,6 +41,8 @@ const {
     setDebugLogContext,
     setDebugLogEnabled,
     setDebugLogVerbose,
+    subscribeToDebugLog,
+    utcOffsetLabel,
     withConsoleCaptureMuted,
 } = await import("./debugLog.js");
 
@@ -584,6 +589,25 @@ test("I6 the copied incident report carries the context and every field", () => 
     assert.equal(buildIncidentReport(null), "");
 });
 
+test("I8 a render crash's report keeps the whole stack and component stack", () => {
+    reset();
+    // The crash screen had only Reload, and its log entry keeps four frames of
+    // the component stack and none of the error's own.
+    const error = new TypeError("Cannot read properties of undefined (reading 'map')");
+    error.stack = [`TypeError: ${error.message}`, ...Array.from({ length: 12 }, (_, index) => `    at frame${index} (Panel.jsx:${index + 1}:1)`)].join("\n");
+    const componentStack = Array.from({ length: 9 }, (_, index) => `    at Component${index}`).join("\n");
+    const incident = buildRenderCrashIncident(error, componentStack);
+    assert.equal(incident.kind, "render-crash");
+    const report = buildDebugLogReport({ incident });
+    assert.ok(report.includes("-- Reported problem: Render crash --"));
+    assert.ok(report.includes("Error: TypeError: Cannot read properties of undefined (reading 'map')"));
+    assert.ok(report.includes("at frame11 (Panel.jsx:12:1)"), "the last frame of the error's stack");
+    assert.ok(report.includes("at Component8"), "the last frame of the component stack");
+    // With logging off the copy carries the same.
+    assert.ok(buildIncidentReport(incident).includes("at frame11 (Panel.jsx:12:1)"));
+    assert.ok(debugLogFilename(incident.kind).endsWith("-render-crash.txt"));
+});
+
 // ---- Group D: the Desktop log merged into the Logging file -----------------
 //
 // The page's clock is mocked so page entries and Desktop log entries can be
@@ -685,7 +709,8 @@ test("D4 a storm of identical Desktop log entries folds into one line", () => {
         return buildDebugLogReport({ desktop: { status: "included", entries: storm } });
     });
     assert.equal(logSection(report).split("Flag not found").length - 1, 1);
-    assert.match(report, /Flag not found \(×30, last 10:00:30\)/);
+    // The stamps are this computer's clock (K1 below), so the expected time is too.
+    assert.ok(report.includes(`Flag not found (×30, last ${localClock(new Date(T0 + 30_000).toISOString())})`), report);
 });
 
 test("D5 an oversized Desktop log entry is trimmed like a page entry", () => {
@@ -977,4 +1002,126 @@ test("I7 the filename says what the log was saved for", () => {
     assert.match(debugLogFilename("turn-fallback"), /^open-historia-log-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-turn-fallback\.txt$/);
     assert.match(debugLogFilename(), /^open-historia-log-[\dT-]+\.txt$/);
     assert.match(debugLogFilename("Advisor error!"), /-advisor-error\.txt$/);
+});
+
+// ---- The file's clock -------------------------------------------------------
+// A player's report printed its line stamps in UTC beside the game's own
+// "is busy; skipped until 23:26" in local time, so a ten-minute pause read as
+// two hours and ten minutes. The stamps are local now, and the header says the
+// offset.
+
+const clockOf = (iso) => {
+    const at = new Date(iso);
+    return [at.getHours(), at.getMinutes(), at.getSeconds()].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+test("K1 line stamps are this computer's local time, and the header says which offset that is", () => {
+    reset();
+    logDebugEvent("turn", "a stamped line");
+    const entry = getDebugLogEntries().at(-1);
+    const report = buildDebugLogReport();
+    assert.ok(report.includes(`[${clockOf(entry.at)}] [turn] a stamped line`), "the line carries the local time of day");
+    assert.match(report, /^Clock: the times below are this computer's local time \(UTC[+-]\d\d:\d\d\)/m);
+    assert.equal(localClock("2026-09-22T21:16:38.000Z"), clockOf("2026-09-22T21:16:38.000Z"));
+    assert.equal(localClock("not a time"), "");
+    assert.equal(localClock(undefined), "");
+});
+
+test("K2 the offset is written the way a person reads it", () => {
+    const at = (minutes) => ({ getTimezoneOffset: () => minutes });
+    assert.equal(utcOffsetLabel(at(-120)), "UTC+02:00", "two hours east");
+    assert.equal(utcOffsetLabel(at(240)), "UTC-04:00", "four hours west");
+    assert.equal(utcOffsetLabel(at(0)), "UTC+00:00");
+    assert.equal(utcOffsetLabel(at(-330)), "UTC+05:30", "and half hours");
+});
+
+// ---- Group E: what one entry may cost ---------------------------------------
+//
+// The console capture passed a warning's whole first argument as the message,
+// and only the detail was ever cut: a failed JSON task put up to 12,000
+// characters of the model's campaign prose into the normal log. And every entry
+// read every value in localStorage, the log's own megabyte included, several
+// times over to find the stored keys.
+
+test("E1 a long console warning is cut to the entry limit, as a detail is", () => {
+    reset();
+    installDebugLogCapture();
+    const prose = `[ai] campaign JSON could not be parsed: ${"The legions crossed the Rhine at dawn. ".repeat(320)}`;
+    const quiet = mock.method(process.stderr, "write", () => true);
+    try {
+        console.warn(prose);
+    } finally {
+        quiet.mock.restore();
+    }
+    const entry = getDebugLogEntries().at(-1);
+    assert.ok(entry.message.startsWith("[ai] campaign JSON could not be parsed:"));
+    assert.ok(entry.message.length < 700, `${entry.message.length} characters kept`);
+    assert.match(entry.message, /… \(\+\d+ chars\)$/, "and it says how much was cut");
+
+    // Detailed mode keeps as much of a message as of a detail.
+    setDebugLogVerbose(true);
+    logDebugEvent("warn", prose);
+    assert.equal(getDebugLogEntries().at(-1).message, prose);
+});
+
+test("E2 a key the cut runs through is still redacted", () => {
+    reset();
+    store.set("gateway_api_key", "correcthorsebatterystaple");
+    logDebugEvent("warn", `${"x".repeat(590)} correcthorsebatterystaple and more`);
+    const entry = getDebugLogEntries().at(-1);
+    assert.equal(entry.message.includes("correcthor"), false, entry.message.slice(580));
+});
+
+test("E3 redaction reads only the entries named like secrets, never the log itself", () => {
+    reset();
+    store.set("oh_debug_log_v1", "x".repeat(200_000));
+    store.set("i18n_v2_de", "{}");
+    store.set("gemini_api_key", "hunter2hunter2hunter2");
+    const reads = new Map();
+    const getItem = globalThis.localStorage.getItem;
+    globalThis.localStorage.getItem = (key) => {
+        reads.set(key, (reads.get(key) ?? 0) + 1);
+        return getItem(key);
+    };
+    try {
+        logDebugEvent("ai", "request with hunter2hunter2hunter2 failed", "detail hunter2hunter2hunter2");
+    } finally {
+        globalThis.localStorage.getItem = getItem;
+    }
+    assert.equal(reads.get("oh_debug_log_v1"), undefined, "the log's megabyte is never read to redact an entry");
+    assert.equal(reads.get("i18n_v2_de"), undefined);
+    assert.ok(reads.get("gemini_api_key") >= 1);
+    const entry = getDebugLogEntries().at(-1);
+    assert.equal(`${entry.message} ${entry.detail}`.includes("hunter2"), false);
+});
+
+test("E4 a key replaced in place is redacted at once, and one key inside another is redacted whole", () => {
+    reset();
+    store.set("gateway_api_key", "firstsecretword1");
+    assert.equal(redactSecrets("a firstsecretword1 b").includes("firstsecret"), false);
+    // Same number of stored entries, a different value: still found.
+    store.set("gateway_api_key", "secondsecretword2");
+    assert.equal(redactSecrets("a secondsecretword2 b").includes("secondsecret"), false);
+    store.set("other_token", "secondsecretword2andmore");
+    const out = redactSecrets("x secondsecretword2andmore y");
+    assert.equal(out.includes("andmore"), false, out);
+});
+
+test("E5 the dropped count the Diagnostics panel shows is what the cap rolled off, and the panel hears it change", () => {
+    reset();
+    assert.equal(getDebugLogDroppedCount(), 0);
+    let heard = 0;
+    const unsubscribe = subscribeToDebugLog(() => { heard += 1; });
+    try {
+        setDebugLogVerbose(true);
+        for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    } finally {
+        unsubscribe();
+    }
+    const dropped = getDebugLogDroppedCount();
+    assert.ok(dropped > 0, "the cap rolled entries off");
+    assert.equal(dropped + getDebugLogEntries().length, 2000 + 1, "every entry is either kept or counted (plus the switch's own line)");
+    assert.ok(heard >= 2000, "each entry notifies the panel, which reads the count on the same tick");
+    clearDebugLog({ silent: true });
+    assert.equal(getDebugLogDroppedCount(), 0, "a cleared log has dropped nothing");
 });
