@@ -20,7 +20,6 @@ const css = `
   --ink:#ece4d2;--sepia:#a4987f;--sepia2:#877c66;
   --line:rgba(233,220,192,.14);--line2:rgba(233,220,192,.26);
   --bronze:#c9932f;--gold:#c9932f;--gold-l:#dcb954;--red:#a8394a;--red-d:#7a1e2b;--green:#5d9149;
-  --grad-gold:linear-gradient(100deg,#a7761f 0%,#e0b44a 52%,#b98f2e 100%);
   --shadow:0 18px 42px -22px rgba(0,0,0,.8);--radius:14px;
   --serif:'EB Garamond',Georgia,'Times New Roman',serif;
   --display:'Cinzel',Georgia,'Times New Roman',serif;
@@ -28,8 +27,6 @@ const css = `
   padding:26px 20px;overflow:auto;color:var(--ink);font-family:var(--serif);font-size:17px;line-height:1.6;
   -webkit-font-smoothing:antialiased;
   background:
-  radial-gradient(1200px 540px at 50% -12%, rgba(201,147,47,.14), transparent 60%),
-  radial-gradient(1000px 560px at 100% 2%, rgba(168,57,74,.08), transparent 55%),
   repeating-linear-gradient(112deg, rgba(233,220,192,.02) 0 2px, transparent 2px 7px),
   var(--parch);
 }
@@ -52,9 +49,9 @@ const css = `
     .oh-badge b{color:#d4677a;font-weight:600}
     .oh-badge-icon{width:1.15em;height:1.15em;border-radius:3px;display:block;flex:none;object-fit:contain}
     .oh-logo{font-family:var(--display);font-weight:800;font-size:2.35rem;letter-spacing:.02em;line-height:1.05;margin:18px 0 0;color:var(--ink)}
-    .oh-grad{background:var(--grad-gold);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .oh-grad{color:var(--gold-l)}
     .oh-tag{color:var(--sepia);font-size:1.04rem;margin:12px auto 0;max-width:400px}
-    .oh-rule{width:110px;height:2px;margin:20px auto;background:linear-gradient(90deg,transparent,var(--bronze),transparent)}
+    .oh-rule{width:110px;height:2px;margin:20px auto;background:var(--bronze);opacity:.55}
 
     /* connection panel */
     .oh-conn{background:var(--marble2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;text-align:left;box-shadow:inset 0 1px 0 rgba(255,248,228,.05)}
@@ -85,8 +82,8 @@ const css = `
       .oh-btn:disabled:hover{transform:none}
       .oh-btn.ghost{background:var(--marble);border-color:var(--line2);color:var(--ink)}
       .oh-btn.ghost:hover{background:var(--marble2)}
-      .oh-btn.primary{background:linear-gradient(180deg,#98283a,var(--red-d));color:#f7eccf;border-color:rgba(255,222,160,.4);box-shadow:0 12px 30px -12px rgba(0,0,0,.85);font-size:1rem;padding:15px}
-      .oh-btn.primary:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
+      .oh-btn.primary{background:#892333;color:#f7eccf;border-color:rgba(255,222,160,.4);box-shadow:0 12px 30px -12px rgba(0,0,0,.85);font-size:1rem;padding:15px}
+      .oh-btn.primary:hover{background:#962839}
       .oh-foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin-top:20px;font-family:var(--display);font-size:.78rem;letter-spacing:.05em;color:var(--sepia2)}
       .oh-foot a{border:0;color:var(--sepia2)}.oh-foot a:hover{color:var(--ink)}
       .oh-trust{margin-top:14px;font-size:.82rem;color:var(--sepia2);font-style:italic}

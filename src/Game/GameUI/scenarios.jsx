@@ -170,13 +170,22 @@ const ScenarioCard = ({
     >
     <div
     style={{
-      background:
-      `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
-      `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
-      "url('/loading_screen.jpg') center/cover",
+      background: "url('/loading_screen.jpg') center/cover",
+      boxShadow: "inset 0 0 0 100vmax rgba(4,6,12,0.58)",
           inset: 0,
           opacity: 0.92,
           position: "absolute",
+    }}
+    />
+    <div
+    aria-hidden="true"
+    style={{
+      // The Accent of the scenario: the one fade the interface keeps.
+      background: `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%)`,
+      inset: 0,
+      opacity: 0.6,
+      pointerEvents: "none",
+      position: "absolute",
     }}
     />
     <div

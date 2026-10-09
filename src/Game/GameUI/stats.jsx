@@ -819,13 +819,6 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     return (
         <div style={{ minHeight: 0, position: "relative", width: "100%" }}>
             <svg aria-label="Historical statistics chart" role="img" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", height: "auto", maxHeight: "58vh", minHeight: "340px", width: "100%", ...(compact ? { maxHeight: "none", minHeight: 0 } : fill ? { height: "100%", maxHeight: "none", minHeight: 0 } : null) }}>
-                <defs>
-                    <linearGradient id="ohStatsGridFade" x1="0" x2="1">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.02)" />
-                        <stop offset="50%" stopColor="rgba(255,255,255,0.06)" />
-                        <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
-                    </linearGradient>
-                </defs>
                 <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(8,8,10,0.18)" stroke="rgba(255,255,255,0.06)" />
                 {yTicks.map((tick, index) => {
                     const y = pad.top + (plotHeight * index) / Math.max(1, yTicks.length - 1);
@@ -981,7 +974,7 @@ const AdvancedStatsModal = ({
 
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
+            <div style={{ background: "rgba(20,20,22,0.995)", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
                         {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
@@ -1010,7 +1003,7 @@ const AdvancedStatsModal = ({
                             </div>
                         </div>
 
-                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: isMobile ? "10rem" : fit ? 0 : "390px", overflow: "hidden", padding: "0.35rem" }}>
+                        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: isMobile ? "10rem" : fit ? 0 : "390px", overflow: "hidden", padding: "0.35rem" }}>
                             {status === "loading" ? (
                                 <div style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center" }}>Loading campaign history…</div>
                             ) : status === "error" ? (
@@ -1170,7 +1163,7 @@ const HistoricalTrackingModal = ({
 
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(760px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
+            <div style={{ background: "rgba(20,20,22,0.995)", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(760px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "1rem 1.05rem 0.95rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
                         <div style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "1.2rem", height: "2.5rem", justifyContent: "center", width: "2.5rem" }}>⚙</div>
@@ -2183,7 +2176,7 @@ const StatsPaneBody = ({ active }) => {
                 <button
                 type="button"
                 onClick={() => setTrackingOpen(true)}
-                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.04))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "center", background: "rgba(255,255,255,0.045)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
                 >
                     <span style={{ alignItems: "center", display: "flex", gap: "0.65rem", minWidth: 0 }}>
                         <span style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "8px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "0.98rem", height: "2rem", justifyContent: "center", width: "2rem" }}>⚙</span>
