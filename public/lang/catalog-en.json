@@ -4279,6 +4279,7 @@
  "This scenario has no canonical polity roster to choose from.",
  "This scenario has no editable polity roster yet.",
  "This scenario pack does not contain any custom flag images that can be selected individually.",
+ "This scenario uses its own basemap, which cannot be replaced.",
  "This server has no password. Anyone on the same network can open, change and delete your games while this is on — fine at home, not on public Wi-Fi.",
  "This suggestion holds no changes this version of the game can read.",
  "This suggestion is not among the ones the community hub has checked. It may still be waiting to be checked, or it was removed.",
