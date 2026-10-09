@@ -103,7 +103,7 @@ const describeUnit = (unit, { units, orders, territories }) => {
     .join(" · ");
 
   return (
-    `  - ${unit.name} (${unit.type}, id ${unit.id})` +
+    `  - ${unit.name} (${unit.type})` +
     `${unit.covert ? " [unconfirmed — no known line of support]" : ""}` +
     ` — ${detail}. ${clauses.join("; ")}.` +
     `${norm(unit.note) ? ` "${norm(unit.note)}"` : ""}`

@@ -74,7 +74,7 @@ test("list_groups: every group by its exact name, what it is, and where it contr
   assert.equal(isis.description, "A jihadist insurgency across the desert.");
   assert.equal(isis.regionsControlled, 2, "the row the map does not draw is not counted");
   assert.deepEqual(isis.inCountries, [{ country: "Iraq", regions: 1 }, { country: "Syria", regions: 1 }]);
-  assert.deepEqual(isis.regions, [{ id: "syr-3", name: "Deir ez-Zor", owner: "Syria" }, { id: "irq-1", name: "Anbar", owner: "Iraq" }]);
+  assert.deepEqual(isis.regions, [{ name: "Deir ez-Zor", owner: "Syria" }, { name: "Anbar", owner: "Iraq" }]);
   const hts = groups.find((group) => group.name === "Hayat Tahrir al-Sham");
   assert.deepEqual(hts.formerNames, ["Jabhat al-Nusra"]);
   const quiet = groups.find((group) => group.name === "Quiet Circle");
@@ -131,7 +131,7 @@ test("group_info: one group in full, by its exact name, any case or a former nam
   assert.equal(hts.description, "An Islamist coalition holding the north-west.");
   assert.deepEqual(hts.formerNames, ["Jabhat al-Nusra"]);
   assert.equal(hts.regionsControlled, 2);
-  assert.deepEqual(hts.regions, [{ id: "syr-1", name: "Idlib", owner: "Syria" }, { id: "syr-2", name: "Aleppo", owner: "Syria" }]);
+  assert.deepEqual(hts.regions, [{ name: "Idlib", owner: "Syria" }, { name: "Aleppo", owner: "Syria" }]);
   assert.deepEqual(hts.inCountries, [{ country: "Syria", regions: 2 }]);
   assert.equal(ask("group_info", { name: "hayat tahrir al-sham" }).name, "Hayat Tahrir al-Sham");
   assert.equal(ask("group_info", { name: "Jabhat al-Nusra" }).name, "Hayat Tahrir al-Sham", "found by the name it had");

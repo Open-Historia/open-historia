@@ -33,10 +33,12 @@ import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacin
 import { createApplicationReceipt, noteReceipt } from "../../runtime/applicationReceipt.js";
 import { placementNote } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
+import { seaShareOf } from "../../runtime/unitMotion.js";
+import { findUnitByRef, readNameRef } from "./nameRefs.js";
 
 const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const start = source.indexOf("const LAND_UNIT_TYPES = new Set(");
-const end = source.indexOf("// A garrison or base on another power's land needs");
+const end = source.indexOf("// A garrison or base on another power's land is deployed by");
 assert.ok(start !== -1 && end > start, "could not find the placement pass in gameplay.js");
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -47,12 +49,12 @@ const fold = (value) => asText(value).toLowerCase();
 const placementPass = (gazetteer) => new Function(
     "normalizeArray", "normalizeString", "lazyLookupContext", "buildPlacementGazetteer", "obstaclesOf", "spaceOut", "FOOTPRINT_KM",
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
-    "noteReceipt", "placementNote", "refuseUndeployedPosts", "logDebugEvent",
+    "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
-    noteReceipt, placementNote, () => {}, () => {},
+    noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
 );
 
 // What gameplay.js's gazetteer offers the pass, over a list of regions.

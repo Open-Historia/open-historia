@@ -98,9 +98,9 @@ test("the same region id and unit land in the same spot every time", () => {
 });
 
 test("an id no region has says so, in words the model can act on", () => {
-    assert.match(resolveRegionPlacement("116", gazetteer).error, /no region on this map has the id "116"/);
-    assert.equal(resolveRegionPlacement("", gazetteer).error, "no region id");
-    assert.equal(resolveRegionPlacement("wm-n", { regionAt: () => null }).error, 'no region on this map has the id "wm-n"');
+    assert.match(resolveRegionPlacement("116", gazetteer).error, /no region on this map is called "116"/);
+    assert.equal(resolveRegionPlacement("", gazetteer).error, "no region was named");
+    assert.equal(resolveRegionPlacement("wm-n", { regionAt: () => null }).error, 'no region on this map is called "wm-n"');
 });
 
 test("a phrase that finds nothing reports every place it could have been naming", () => {
@@ -1072,7 +1072,7 @@ test("a vector lands that far, that way, from where the thing is", () => {
 });
 
 test("the model is told it can place by a vector", () => {
-    assert.match(PLACEMENT_DIRECTIVE, /120 km north-east of Kharkiv, Ukraine/);
+    assert.match(PLACEMENT_DIRECTIVE, /120 km north-east of city: Kharkiv, country: Ukraine/);
     assert.match(PLACEMENT_DIRECTIVE, /bearing of 045/);
-    assert.match(PLACEMENT_DIRECTIVE, /80 km from Kyiv, Ukraine toward Kharkiv, Ukraine/);
+    assert.match(PLACEMENT_DIRECTIVE, /80 km from city: Kyiv, country: Ukraine toward city: Kharkiv, country: Ukraine/);
 });

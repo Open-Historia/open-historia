@@ -96,7 +96,7 @@ test("the narrator's lookups say nothing of groups while they are off", () => {
   for (const tool of LOOKUP_TOOLS_WITHOUT_GROUPS) assert.equal(mentionsGroups(tool), false, tool.name);
   const listRegions = LOOKUP_TOOLS_WITHOUT_GROUPS.find((tool) => tool.name === "list_regions");
   assert.deepEqual(Object.keys(listRegions.schema.properties), ["owner", "offset", "limit"]);
-  assert.ok(listRegions.description.endsWith("regionClaims."), listRegions.description);
+  assert.ok(listRegions.description.endsWith('regionClaims, each as "region: <name>".'), listRegions.description);
 });
 
 test("no lookup answer names a group or its area while groups are off", () => {

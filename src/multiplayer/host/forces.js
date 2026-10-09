@@ -103,7 +103,7 @@ export const disbandFor = ({ world, actions }, seat, unitId, { orderId, at, maxO
   }
   const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
   if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
-  const text = `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`;
+  const text = `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`;
   return {
     world: nextWorld,
     actions: [...list(actions), orderAction(text, { id: orderId, owner, at, unitRevert: { unitId: id, restore: unit } })],

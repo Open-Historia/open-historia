@@ -31,9 +31,10 @@ test("a long units list keeps the player's and the turn's powers' units and coun
     player: "Ruritania",
     actions: [{ title: "Warn Slavonia", text: "Warn Slavonia off the border.", status: "planned" }],
   });
-  for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`[id r${index}]`), `player unit r${index} is listed`);
-  for (let index = 0; index < 3; index += 1) assert.ok(text.includes(`[id s${index}]`), `ordered-on unit s${index} is listed`);
-  assert.ok(text.indexOf("[id r0]") < text.indexOf("[id s0]") && text.indexOf("[id s0]") < text.indexOf("[id b0]"));
+  for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`- Ruritania unit r${index} (`), `player unit r${index} is listed`);
+  for (let index = 0; index < 3; index += 1) assert.ok(text.includes(`- Slavonia unit s${index} (`), `ordered-on unit s${index} is listed`);
+  assert.ok(text.indexOf("- Ruritania unit r0 (") < text.indexOf("- Slavonia unit s0 (") && text.indexOf("- Slavonia unit s0 (") < text.indexOf("- Borduria unit b0 ("));
+  assert.equal(text.includes("[id "), false, "a unit is listed by its name, never its id");
   assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 60);
   assert.match(text, /\[13 more units omitted; they remain on the map\]$/);
 });
@@ -41,8 +42,21 @@ test("a long units list keeps the player's and the turn's powers' units and coun
 test("a units list that fits keeps its saved order and has no omission line", () => {
   const units = [unit("b0", "Borduria"), unit("r0", "Ruritania")];
   const text = buildUnitsSummaryText({ units }, { player: "Ruritania" });
-  assert.ok(text.indexOf("[id b0]") < text.indexOf("[id r0]"));
+  assert.ok(text.indexOf("- Borduria unit b0 (") < text.indexOf("- Ruritania unit r0 ("));
   assert.doesNotMatch(text, /omitted/);
+});
+
+test("two units of one name are told apart by their owner, and a region id is never shown", () => {
+  const units = [
+    { id: "a", name: "1st Army", type: "infantry", ownerCode: "Borduria", strength: 100, lat: 50, lng: 10, regionId: "4441" },
+    { id: "b", name: "1st Army", type: "infantry", ownerCode: "Ruritania", strength: 100, lat: 51, lng: 11 },
+    { id: "c", name: "Guards", type: "armor", ownerCode: "Ruritania", strength: 100, lat: 52, lng: 12 },
+  ];
+  const text = buildUnitsSummaryText({ units }, { player: "Ruritania" });
+  assert.match(text, /^- 1st Army \(Borduria\) \(infantry, owner Borduria/m);
+  assert.match(text, /^- 1st Army \(Ruritania\) \(infantry, owner Ruritania/m);
+  assert.match(text, /^- Guards \(armor, owner Ruritania/m);
+  assert.equal(text.includes("4441"), false);
 });
 
 test("marker attention reads the queued orders, not the answered ones", async () => {
@@ -184,6 +198,7 @@ test("a conversation's world summary gives counts, and names only for the player
   assert.equal(chat.includes("polityChanges"), false);
 
   const jump = await buildWorldSummary(bundle, regions);
-  assert.match(jump, /Ruritania province 0 \(Ruritania-0\)/, "the jump keeps its vocabulary");
+  assert.match(jump, /Ruritania province 0, Ruritania province 1/, "the jump keeps its vocabulary");
+  assert.equal(jump.includes("(Ruritania-0)"), false, "by name, with no region ids");
   assert.match(jump, /region vocabulary for regionTransfers/);
 });

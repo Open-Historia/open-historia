@@ -71,7 +71,10 @@ const createdChatSchema = {
 // request and a test holds it to a size (projectOpSchema.test.js); the long form
 // of every lever is in the actions reference and the directives the jump is
 // always given, so a description here only has to say what the field IS.
-const regionIdSchema = textSchema("The region's id, or its plain name.");
+// A region is written by its NAME (AI/nameRefs.js). The field keeps its old
+// name because saved turns and previews carry it; what goes in it is
+// "region: <name>", or "country: <name>" for the whole of a country's land.
+const regionIdSchema = textSchema("The region's NAME as the map spells it, written \"region: Hamhung\" (or \"country: North Korea\" for ALL of a country's land). Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
 
 const regionTransferSchema = {
@@ -284,7 +287,8 @@ const polityChangeSchema = {
 // schema has a size budget (projectOpSchema.test.js) and five copies of a
 // grammar would spend it.
 // The country after the comma is not optional: two countries have a Montana.
-const atSchema = { type: "string", description: "Where, in words, WITH the country: \"Montana, United States\" — see [Placing Things]. Preferred to lng/lat." };
+// Each name is said with its kind (AI/nameRefs.js): Georgia is a country and a state.
+const atSchema = { type: "string", description: "Where, in words, each name with its kind and its country: \"region: Montana, country: United States\" — see [Placing Things]. Preferred to lng/lat." };
 
 const unitSchema = {
   type: "object",
@@ -308,7 +312,7 @@ const unitSchema = {
     at: atSchema,
     lng: { type: "number", description: "Only with no `at`.", minimum: -180, maximum: 180 },
     lat: { type: "number", description: "Only with no `at`.", minimum: -90, maximum: 90 },
-    regionId: textSchema("Region id, when known."),
+    regionId: textSchema("Only with no `at`: the region's name, as \"region: <name>\"."),
     status: {
       type: "string",
       description: "Optional unit status.",
@@ -348,11 +352,11 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["move"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         at: atSchema,
         toLng: { type: "number", minimum: -180, maximum: 180 },
         toLat: { type: "number", minimum: -90, maximum: 90 },
-        regionId: textSchema("Destination region id, when known."),
+        regionId: textSchema("Only with no `at`: the destination region's name, as \"region: <name>\"."),
         posture: {
           type: "string",
           description: "Only when the move changes what it is doing.",
@@ -367,7 +371,7 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["strength"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         strength: {
           type: "integer",
           description: "The formation's remaining percentage of established strength. 0 destroys it.",
@@ -383,7 +387,7 @@ const unitOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["remove"] },
-        unitId: nonEmptyTextSchema("Existing unit identifier."),
+        unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId"],
@@ -505,8 +509,8 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["update"] },
-        markerId: textSchema("Existing marker id, preferred when the structures list shows one."),
-        name: textSchema("Existing name, only when markerId is unavailable."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
+        name: textSchema("The existing structure's name, exactly as the structures list spells it."),
         kind: textSchema("New kind, when it materially changed."),
         ownerCode: textSchema("New operating polity's FULL name, when control changes."),
         status: markerStatusSchema,
@@ -522,8 +526,8 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["remove"] },
-        markerId: textSchema("Existing marker id, preferred when known."),
-        name: textSchema("Existing name, when markerId is unavailable."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
+        name: textSchema("The existing structure's name, exactly as the structures list spells it."),
         note: textSchema("Brief explanation."),
       },
       required: ["op"],
@@ -533,7 +537,7 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["rename"] },
-        markerId: textSchema("Existing marker id, when known."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
         name: nonEmptyTextSchema("Current name of the structure or city."),
         newName: nonEmptyTextSchema("New display name."),
         note: textSchema("Brief explanation."),
@@ -545,7 +549,7 @@ const markerOpSchema = {
       type: "object",
       properties: {
         op: { type: "string", enum: ["population"] },
-        markerId: textSchema("Existing marker id, when known."),
+        markerId: textSchema("Leave out: a structure is found by its name."),
         name: nonEmptyTextSchema("The city."),
         population: {
           type: "integer",
@@ -893,7 +897,7 @@ const groupOpSchema = {
     newName: textSchema("update only: the group's new name."),
     description: textSchema("What the group is and does: for create, or when it changes."),
     color: textSchema("#RRGGBB tint for its area; optional."),
-    regionIds: stringArraySchema("The regions it takes (create/take) or releases: exact ids or plain region names."),
+    regionIds: stringArraySchema("The regions it takes (create/take) or releases, each by NAME as the map spells it: \"region: Aleppo\"."),
     note: textSchema("Brief reason."),
   },
   required: ["op", "name"],

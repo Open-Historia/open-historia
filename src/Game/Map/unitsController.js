@@ -589,14 +589,14 @@ export const requestUnitOrders = async (unitId, text) => {
   // In a shared game an order is asked of the host, like any other
   // (multiplayer/): the same words, under this player's country.
   if (inSharedGame()) {
-    const wording = `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+    const wording = `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
       `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
       `situation allow, or explain in an event why it could not be done.`;
     return (await requestFromHost("order", { text: wording.slice(0, 1500) })).ok;
   }
   return queueOrder(
-    `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+    `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
       `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
       `situation allow, or explain in an event why it could not be done.`,
@@ -632,7 +632,7 @@ export const disbandUnit = async (unitId) => {
     : (actions) => [
       ...actions,
       orderAction(
-        `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
+        `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
         { unitId: unit.id, restore: unit },
       ),
     ];

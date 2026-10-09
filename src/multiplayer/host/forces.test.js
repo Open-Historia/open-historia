@@ -65,7 +65,7 @@ test("standing down a standing formation takes it off the map and queues the ord
   assert.deepEqual(result.world.units.map((entry) => entry.id), ["de-1"]);
   assert.deepEqual(result.world.pendingUnitOrders.map((order) => order.id), ["march-2"], "its march goes with it");
   const order = result.actions.at(-1);
-  assert.match(order.text, /^Disband order: fr-1 \(infantry, id fr-1, owner France\)/);
+  assert.match(order.text, /^Disband order: fr-1 \(infantry, owner France\)/);
   assert.equal(order.unitRevert.restore.id, "fr-1");
 
   const back = revertOrderFor(result.world, order, FRANCE, { at: AT });
