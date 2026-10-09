@@ -182,7 +182,7 @@ test("a region is listed where its lawful owner, its holder and its claimants ar
   assert.deepEqual(rows.map((row) => row.regionId).sort(), ["MDA.1_1", "UKR.11_1", "UKR.5_1"]);
   const crimea = rows.find((row) => row.regionId === "UKR.11_1");
   assert.deepEqual(crimea, { regionId: "UKR.11_1", name: "Crimea", sovereign: "Ukraine", controller: "Russian Federation", claimants: [] }, "occupied, not ceded");
-  assert.equal(describeTerritorialRows(rows.slice(0, 1)), "- Crimea (UKR.11_1): sovereign Ukraine; controller Russian Federation");
+  assert.equal(describeTerritorialRows(rows.slice(0, 1)), "- Crimea: sovereign Ukraine; controller Russian Federation");
   assert.match(describeTerritorialRows(rows, { maxRows: 1, viaLookups: true }), /\n\(\+2 more non-normal territorial states omitted; contested_regions lists them all\)$/);
   assert.equal(describeTerritorialRows([]), NO_TERRITORIAL_ROWS);
 });
@@ -196,7 +196,7 @@ test("a conversation is shown only the rows that involve its own side, exactly b
   const advisor = describeTerritoryFor(TERRITORY_WORLD, CATALOG, ["Ukraine"]);
   assert.match(advisor, /^\[Occupied and Contested Regions\]\n/);
   assert.match(advisor, /Occupation is not annexation/);
-  assert.match(advisor, /- Donetsk \(UKR\.5_1\): sovereign Russian Federation; controller Russian Federation; active claimants\/contenders Ukraine/);
+  assert.match(advisor, /- Donetsk: sovereign Russian Federation; controller Russian Federation; active claimants\/contenders Ukraine/);
   assert.doesNotMatch(advisor, /Transnistria/);
   assert.equal(describeTerritoryFor(TERRITORY_WORLD, CATALOG, ["Georgia"]), "", "nothing to say, nothing said");
   assert.equal(describeTerritoryFor({}, CATALOG, ["Ukraine"]), "");
@@ -230,9 +230,9 @@ test("a conversation reads the rows from the world as the jump does, owners fold
   const asked = [];
   const loadCatalog = async () => { asked.push(true); return catalog; };
   const german = await describeTerritoryForConversation(stored, loadCatalog, ["Germany"]);
-  assert.match(german, /- Danzig \(POL\.1_1\): sovereign Poland; controller Germany/);
+  assert.match(german, /- Danzig: sovereign Poland; controller Germany/);
   assert.doesNotMatch(german, /Catalonia/);
-  assert.match(await describeTerritoryForConversation(stored, loadCatalog, ["France"]), /- Catalonia \(ESP\.1_1\): sovereign Spain; controller Spain; active claimants\/contenders France/);
+  assert.match(await describeTerritoryForConversation(stored, loadCatalog, ["France"]), /- Catalonia: sovereign Spain; controller Spain; active claimants\/contenders France/);
   assert.equal(asked.length, 2);
 
   // A world with nothing recorded never loads the catalog.
@@ -240,7 +240,7 @@ test("a conversation reads the rows from the world as the jump does, owners fold
   assert.equal(await describeTerritoryForConversation({}, loadCatalog, ["Germany"]), "");
   assert.equal(asked.length, 2);
   // A catalog that fails to load still gives the rows, by region id.
-  assert.match(await describeTerritoryForConversation(stored, async () => { throw new Error("offline"); }, ["Germany"]), /- POL\.1_1 \(POL\.1_1\): sovereign Poland; controller Germany/);
+  assert.match(await describeTerritoryForConversation(stored, async () => { throw new Error("offline"); }, ["Germany"]), /- POL\.1_1: sovereign Poland; controller Germany/);
 });
 
 test("a cleared reputation entry is no rating, so the saved stat sheet answers", () => {

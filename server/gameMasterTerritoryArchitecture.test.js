@@ -68,8 +68,8 @@ test("failed whole-country expansion cannot fall through to one province", async
 
 test("GM prompt explicitly binds whole-country scope to the losing polity", async () => {
   const source = await sourceText(promptPath);
-  assert.match(source, /for wholeCountry=true, fromCode MUST be the losing polity's full current name/);
-  assert.match(source, /regionId MUST repeat that polity name/);
+  assert.match(source, /For ALL of a polity's land write regionId "country: <that polity's full current name>" with the same name in fromCode/);
+  assert.match(source, /never one province\/colony/);
 });
 
 test("GM Apply distinguishes same-prose corrections by canonical effects", async () => {

@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
+import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 
 const calais = [1.86, 50.95];
 const lille = [3.06, 50.63];
@@ -29,7 +29,7 @@ test("a post on its owner's own land needs nobody to deploy it", () => {
     assert.equal(postWantsFormation({ owner: "British Empire", groundOwner: "British Empire", point: calais }), false);
 });
 
-test("a post on another power's land is refused with none of its owner's formations near", () => {
+test("a post on another power's land wants a formation when none of its owner's is near", () => {
     assert.equal(postWantsFormation({ owner: "British Empire", groundOwner: "France", point: calais }), true);
     const far = [{ owner: "British Empire", point: [-0.12, 51.5] }];
     assert.equal(postWantsFormation({ owner: "British Empire", groundOwner: "France", point: calais, formations: far }), true);
@@ -43,26 +43,30 @@ test("a formation of its owner within reach deploys it; someone else's does not"
     assert.equal(postWantsFormation({ owner: "British Empire", groundOwner: "France", point: calais, formations: [{ owner: "British Empire", point: lille }] }), true, "Lille is 90 km off");
 });
 
-test("names for one power count as one, and the sea is no one's to refuse it", () => {
+test("names for one power count as one, and the sea is no one's ground", () => {
     const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
     assert.equal(postWantsFormation({ owner: "british empire", groundOwner: "British Empire", point: calais, same }), false);
     assert.equal(postWantsFormation({ owner: "British Empire", groundOwner: "", point: calais }), false);
 });
 
-test("the model is told what was refused and what to do instead", () => {
+test("the model is told the post stands and what it still wants", () => {
     assert.equal(
-        describeRefusedPost({ title: "Britain Garrisons Calais", name: "Calais Garrison", owner: "British Empire", groundOwner: "France" }),
-        'Event "Britain Garrisons Calais": Calais Garrison was not placed: it stands on France\'s land, and none of British Empire\'s formations is within 50 km to deploy it. '
-        + "Move one of British Empire's formations there first; the post can follow once it has arrived.",
+        describeUndeployedPost({ title: "Britain Garrisons Calais", name: "Calais Garrison", owner: "British Empire", groundOwner: "France" }),
+        'Event "Britain Garrisons Calais": Calais Garrison was placed on France\'s land, as the event says, with none of British Empire\'s formations within 50 km of it. '
+        + "Station one of British Empire's formations there to hold it: move one there in an event of the next period.",
     );
 });
 
-test("placement refuses such posts for every payload, the Directors' included", async () => {
+test("such a post is always placed: placement says so and takes nothing out", async () => {
     // gameplay.js does not load under bare node; the wiring is checked in its source.
+    // A 45-skip test (2026-10-09) emplaced a missile battery in an ally's country,
+    // in words, and the map never showed it: the post had been taken out of its turn.
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
     const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
-    assert.ok(body.includes("refuseUndeployedPosts({ containers, placing, world, gazetteer, formations, receipt })"), "every placement checks its posts");
+    assert.ok(body.includes("noteUndeployedPosts({ placing, world, gazetteer, formations, receipt })"), "every placement looks at its posts");
+    assert.ok(body.includes('noteReceipt(receipt, "adjusted", describeUndeployedPost('), "a post with no formation near is noted, not dropped");
+    assert.ok(!source.includes("refusedPost"), "nothing marks a post refused any more");
+    assert.ok(!/\.splice\(index, 1\)/.test(body.slice(body.indexOf("const noteUndeployedPosts"))), "no operation is taken out of its payload");
     assert.ok(source.includes("formations: formationsInEvents(events, world)"), "a Director counts the turn's own moves");
-    assert.ok(source.includes('marker?.refusedPost !== true'), "a refused structure leaves the structure Director's orders");
 });

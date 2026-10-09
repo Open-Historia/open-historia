@@ -265,7 +265,7 @@ export const NO_TERRITORIAL_ROWS = "No active occupation/control-vs-sovereignty 
 export const describeTerritorialRows = (rows, { maxRows = 80, viaLookups = false, empty = NO_TERRITORIAL_ROWS } = {}) => {
   if (!rows.length) return empty;
   const lines = rows.slice(0, maxRows).map((row) =>
-    `- ${row.name} (${row.regionId}): sovereign ${row.sovereign || "unknown"}; `
+    `- ${row.name}: sovereign ${row.sovereign || "unknown"}; `
     + `controller ${row.controller || "unknown"}`
     + (row.claimants.length ? `; active claimants/contenders ${row.claimants.join(", ")}` : ""));
   return lines.join("\n") + (rows.length > maxRows
