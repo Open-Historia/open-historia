@@ -17,6 +17,8 @@ What the game keeps on your device, what it sends and to whom, and what the proj
   <strong>An open-source, better alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
 </div>
 
+> **Open Historia is an independent, open-source project** and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.
+
 <br />
 
 <div align="center">
