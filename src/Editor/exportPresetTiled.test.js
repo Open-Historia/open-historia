@@ -27,7 +27,7 @@ test("an old download link, size or only-map flag on the choice is never written
   assert.deepEqual(background.tiled, { hash: "a".repeat(64), name: "Mine" });
 });
 
-// Remove detailed map (MapEditor removeDetailedMap) clears the name and keeps
+// A detailed starting map taken out (scenarioMaps.js removeMap) clears the name and keeps
 // the drawing: the scenario still has its own map, now without the detailed one.
 test("with its detailed map removed a scenario keeps the basemap drawn under it", () => {
   const { background, backgroundData } = buildBackgroundForGame(DRAWN, null);

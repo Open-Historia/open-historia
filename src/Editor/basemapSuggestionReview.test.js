@@ -128,3 +128,29 @@ test("taking the detailed map off comes before a change of projection", () => {
   // Putting the old detailed map back now would put it on a map out of Mercator.
   assert.equal(undoRefusal(off, ctx), DETAILED_MAP_PROJECTION_MESSAGE);
 });
+
+test("a detailed map among the scenario's maps: added over a drawn one, which comes with it", () => {
+  const { state, ctx } = setup();
+  const drawn = { id: "own-basemap-add:terrain", area: "map", kind: "own-basemap-add", key: "terrain", to: { name: "Terrain", kind: "vector", hash: hashOf({ geojson: DRAWN }), data: { geojson: DRAWN } } };
+  const data = { tiled: { id: "got-world", version: 2 }, over: "terrain" };
+  const relief = { id: "own-basemap-add:relief", area: "map", kind: "own-basemap-add", key: "relief", to: { name: "Relief", kind: "tiled", hash: hashOf(data), data } };
+  const changes = [relief, drawn];
+  assert.deepEqual(planAccept([relief], ctx, { changes }).map((change) => change.id), ["own-basemap-add:terrain", "own-basemap-add:relief"]);
+  const result = acceptMapChanges([relief], ctx, { changes });
+  assert.equal(result.refused, undefined);
+  assert.deepEqual(state.doc.metadata.ownBasemaps.at(-1), { id: "relief", name: "Relief", detailed: { id: "got-world", version: 2 }, over: "terrain" });
+  assert.equal(mapChangeStatus(relief, ctx), "applied");
+  const moved = { id: "own-basemap-change:relief", area: "map", kind: "own-basemap-change", key: "relief", from: { name: "Relief", kind: "tiled", hash: relief.to.hash }, to: { ...relief.to, hash: hashOf({ ...data, over: "" }), data: { ...data, over: "" } } };
+  assert.equal(mapChangeStatus(moved, ctx), "open");
+});
+
+test("the starting map's name: open, accepted, undone", () => {
+  const { state, ctx } = setup();
+  const change = { id: "map:startingMapName", area: "map", kind: "map-field", field: "startingMapName", from: "", to: "Westeros" };
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const undo = applyMapChange(change, ctx);
+  assert.equal(state.doc.metadata.startingMapName, "Westeros");
+  assert.equal(mapChangeStatus(change, ctx), "applied");
+  undo();
+  assert.equal(state.doc.metadata.startingMapName, "");
+});

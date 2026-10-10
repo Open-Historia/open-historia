@@ -530,7 +530,7 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
-  // The maps players may switch to (runtime/assets.js basemapOverrideFor).
+  // The maps players may switch to (runtime/basemapPick.js).
   "allowedBasemaps",
   "ownBasemaps",
   "canonModelVersion",
@@ -3973,18 +3973,22 @@ const runEmbeddedArchiveMigration = async () => {
   }
 };
 
-// The scenarios whose background names a Tiled Basemap, by its official id or
-// by one of its checksums: what deleting it would leave on their painted
-// fallback.
+// Every detailed map a world names: its starting map's and those among its
+// other maps (world.ownBasemaps, docs/adr/0007).
+const namedTiledBasemaps = (world) => [
+  world?.background?.tiled,
+  ...(Array.isArray(world?.ownBasemaps) ? world.ownBasemaps.filter((own) => own?.kind === "tiled").map((own) => own.tiled) : []),
+].filter((tiled) => tiled && typeof tiled === "object");
+
+// The scenarios that name a Tiled Basemap, by its official id or by one of its
+// checksums: what deleting it would leave on their painted fallback.
 const listScenariosNamingTiledBasemap = (meta) => {
   const hashes = new Set([meta?.contentHash, ...(meta?.supersedes || [])].filter(Boolean));
   const officialId = meta?.official?.id || null;
   if (!hashes.size && !officialId) return [];
   return listScenarioIdsOnDisk()
-    .filter((scenarioId) => {
-      const tiled = readJsonFile(getScenarioJsonPath(scenarioId, "world"), null)?.background?.tiled;
-      return Boolean(tiled) && ((officialId && tiled.id === officialId) || hashes.has(tiled.hash));
-    })
+    .filter((scenarioId) => namedTiledBasemaps(readJsonFile(getScenarioJsonPath(scenarioId, "world"), null))
+      .some((tiled) => (officialId && tiled.id === officialId) || hashes.has(tiled.hash)))
     .map((scenarioId) => ({ id: scenarioId, name: readJsonFile(getScenarioMetaPath(scenarioId), {})?.name || scenarioId }));
 };
 
@@ -4080,13 +4084,21 @@ const buildScenarioBundleAsset = (scenarioId, assetKey) => {
 // names its map by checksum (made before the map was on the list, or from the
 // author's own file) is exported naming the official map that file is, when it
 // is one; otherwise it stays as it is, and players see its painted map.
-const withOfficialTiledName = (world) => {
-  const tiled = world?.background?.tiled;
-  if (!tiled?.hash || tiled.id) return world;
+// The same for each detailed map among its other maps (docs/adr/0007).
+const officialTiledName = (tiled) => {
+  if (!tiled?.hash || tiled.id) return tiled;
   const official = findBasemapMetaByHash(tiled.hash)?.official;
-  if (!official?.id) return world;
+  if (!official?.id) return tiled;
   const { hash: _hash, hubUrl: _hubUrl, ...rest } = tiled;
-  return { ...world, background: { ...world.background, tiled: { ...rest, id: official.id, version: official.version } } };
+  return { ...rest, id: official.id, version: official.version };
+};
+const withOfficialTiledName = (world) => {
+  if (!world || typeof world !== "object") return world;
+  const background = world.background?.tiled ? { ...world.background, tiled: officialTiledName(world.background.tiled) } : world.background;
+  const ownBasemaps = Array.isArray(world.ownBasemaps)
+    ? world.ownBasemaps.map((own) => (own?.kind === "tiled" ? { ...own, tiled: officialTiledName(own.tiled) } : own))
+    : world.ownBasemaps;
+  return { ...world, background, ownBasemaps };
 };
 
 const exportScenarioBundle = (scenarioId) => {

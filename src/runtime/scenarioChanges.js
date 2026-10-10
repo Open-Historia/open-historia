@@ -555,13 +555,24 @@ const metaOf = (scenario) => {
 // change makes the author's canon current too (suggestionApply.js).
 const canonContextOf = (world) => (isCurrentCanonWorld(world) ? world.canonContext ?? null : null);
 
-// The scenario's other basemaps of its own (world.ownBasemaps, payloads in the
+// What tells a detailed map among the scenario's maps apart (docs/adr/0007):
+// how it is named, the map it is shown over, its fill ramp. It has no payload;
+// this stands in for one (Editor/suggestionReview.js hashes the same).
+export const ownDetailedBody = ({ tiled, over, fillOpacity }) => ({
+  tiled,
+  over: typeof over === "string" ? over : "",
+  ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}),
+});
+
+// The scenario's other maps (world.ownBasemaps, payloads in the
 // ownBasemapsData asset), by id: each told apart by its kind and a hash of its
 // payload, as the main basemap is. One whose payload is not in the file is
-// left out rather than read as a map with nothing on it.
+// left out rather than read as a map with nothing on it; a detailed map is
+// told apart by ownDetailedBody.
 const ownBasemapsOf = (list, data) => new globalThis.Map(normalizeOwnBasemaps(list).flatMap((own) => {
   const payload = isRecord(data) ? data[own.id] : null;
-  const body = own.kind === "image"
+  const body = own.kind === "tiled" ? ownDetailedBody(own)
+    : own.kind === "image"
     ? (typeof payload?.dataUrl === "string" && payload.dataUrl ? { dataUrl: payload.dataUrl } : null)
     : (isRecord(payload?.geojson) ? { geojson: payload.geojson } : null);
   return body ? [[own.id, { name: own.name, kind: own.kind, hash: hashText(canonicalJson(body)), data: body }]] : [];
@@ -631,6 +642,8 @@ export const buildScenarioSnapshot = (bundle) => {
       cities: citiesFC && Array.isArray(citiesFC.features) ? citiesFC.features.map(cityView).filter(Boolean) : null,
       author: clean(world.author),
       basemap: clean(world.basemap),
+      // The starting map's name, as Settings → Map lists it (CONTEXT.md).
+      startingMapName: clean(world.background?.name),
       // The map's projection (server/mapProjection.js) with its two switches,
       // and where the picture lies on it. The picture is told apart by what
       // it is, not by where it lies: the bounds follow the projection.
@@ -1194,6 +1207,9 @@ const diffMapFields = (base, next, changes) => {
   }
   if (base.map.author !== next.map.author) {
     changes.push({ id: "map:author", area: "map", kind: "map-field", field: "author", from: base.map.author, to: next.map.author });
+  }
+  if ((base.map.startingMapName || "") !== (next.map.startingMapName || "")) {
+    changes.push({ id: "map:startingMapName", area: "map", kind: "map-field", field: "startingMapName", from: base.map.startingMapName || "", to: next.map.startingMapName || "" });
   }
   if ((base.map.basemap || "") !== (next.map.basemap || "") && next.map.basemap) {
     changes.push({ id: "map:basemap", area: "map", kind: "map-field", field: "basemap", from: base.map.basemap, to: next.map.basemap });

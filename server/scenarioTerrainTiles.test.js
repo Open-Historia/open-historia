@@ -214,3 +214,22 @@ test("a scenario naming a detailed map must carry a basemap: one without is refu
   assert.match(result.update, /has no basemap/);
   assert.deepEqual(result.dirs, ["no-basic", "painted"], "the refused imports left no scenario behind");
 });
+
+test("a detailed map among a scenario's maps counts as using it, and an export names it as the official map", () => {
+  const root = buildDataDir();
+  const result = runStore(root, `
+    ${LEGACY_BUNDLE}
+    store.importScenarioBundle(bundle);
+    await store.migrateEmbeddedTiledArchives();
+    const hash = store.getScenarioDetails("relief").data.world.background.tiled.hash;
+    const painted = store.exportScenarioBundle("painted");
+    painted.scenario = { ...painted.scenario, id: "also-relief", name: "Also Relief" };
+    painted.data.world = { ...painted.data.world, ownBasemaps: [{ id: "relief", name: "Relief", kind: "tiled", tiled: { hash }, over: "" }] };
+    store.importScenarioBundle(painted, { setSelected: false });
+    basemaps.tagOfficialBasemaps({ basemaps: [{ id: "relief-world", versions: [{ version: 3, sha256: hash }] }] });
+    const meta = basemaps.findOfficialBasemapMeta("relief-world");
+    ${report(`{ own: store.exportScenarioBundle("also-relief").data.world.ownBasemaps, users: store.listScenariosNamingTiledBasemap(meta).map((user) => user.id).sort() }`)}
+  `);
+  assert.deepEqual(result.own, [{ id: "relief", name: "Relief", kind: "tiled", tiled: { id: "relief-world", version: 3 }, over: "" }]);
+  assert.deepEqual(result.users, ["also-relief", "relief"]);
+});

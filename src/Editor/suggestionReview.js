@@ -17,7 +17,7 @@
 import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
-import { canonicalJson, cityTierOf, detailedMapKey, detailedMapView, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { canonicalJson, cityTierOf, detailedMapKey, detailedMapView, hashText, measureGeometry, ownDetailedBody, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, hasDetailedMap, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
@@ -157,19 +157,29 @@ const backgroundOf = (saved) => {
   backgroundHashes.set(saved, fingerprint);
   return fingerprint;
 };
-// One of the scenario's other basemaps (ownBasemaps.js) as the diff tells it
-// apart: its name, and its basemap's kind and hash.
+// One of the scenario's other maps (ownBasemaps.js) as the diff tells it
+// apart: its name, and its basemap's kind and hash (a detailed map's,
+// scenarioChanges.js ownDetailedBody).
 const ownBasemapOf = (doc, key) => normalizeEditorOwnBasemaps(doc?.metadata?.ownBasemaps).find((own) => own.id === key) ?? null;
 const sameOwnBasemap = (own, entry) => {
-  const fingerprint = backgroundOf(own?.background);
+  const fingerprint = own?.detailed
+    ? { kind: "tiled", hash: hashText(canonicalJson(ownDetailedBody({ tiled: own.detailed, over: own.over, fillOpacity: own.fillOpacity }))) }
+    : backgroundOf(own?.background);
   return Boolean(fingerprint && entry) && clean(own.name) === clean(entry.name) && fingerprint.kind === clean(entry.kind) && fingerprint.hash === entry.hash;
 };
 // What a suggested basemap of the scenario's own is in the document.
 const ownBasemapEntry = (key, to) => {
+  if (to?.kind === "tiled") {
+    const body = isRecord(to.data?.tiled) ? ownDetailedBody(to.data) : null;
+    return body ? { id: key, name: clean(to.name) || "Detailed map", detailed: body.tiled, ...(body.fillOpacity ? { fillOpacity: body.fillOpacity } : {}), over: body.over } : null;
+  }
   const background = to?.kind === "image" && to.data?.dataUrl ? { kind: "image", dataUrl: to.data.dataUrl }
     : to?.kind === "vector" && to.data?.geojson ? { kind: "vector", geojson: to.data.geojson } : null;
   return background ? { id: key, name: clean(to.name) || "Basemap", background } : null;
 };
+// The metadata field a map setting change writes (scenarioChanges.js).
+const MAP_FIELDS = new Set(["author", "basemap", "startingMapName"]);
+const mapFieldOf = (change) => (MAP_FIELDS.has(change.field) ? change.field : "basemap");
 // Whether a basemap is a drawn one, which a detailed map needs under it.
 const isDrawnBasemap = (saved) => saved?.kind === "vector" && Array.isArray(saved.geojson?.features) && saved.geojson.features.length > 0;
 const puppetView = (row) => row ? {
@@ -356,7 +366,7 @@ export const mapChangeStatus = (change, ctx, { renames = {}, cache = null } = {}
       return current === projectionKey(change.from) ? "open" : "conflict";
     }
     case "map-field": {
-      const current = change.field === "author" ? clean(ctx.doc?.metadata?.author) : clean(ctx.doc?.metadata?.basemap);
+      const current = clean(ctx.doc?.metadata?.[mapFieldOf(change)]);
       if (current === clean(change.to)) return "applied";
       return current === clean(change.from) ? "open" : "conflict";
     }
@@ -426,6 +436,13 @@ export const changeDependencies = (change, changes, ctx) => {
     default: break;
   }
   const needed = [];
+  // A detailed map among the scenario's maps comes with the drawn map it is
+  // shown over, when the suggestion adds that too.
+  const over = (change.kind === "own-basemap-add" || change.kind === "own-basemap-change") && change.to?.kind === "tiled" ? clean(change.to.data?.over) : "";
+  if (over && !ownBasemapOf(ctx.doc, over)) {
+    const drawn = changes.find((entry) => entry.kind === "own-basemap-add" && entry.key === over);
+    if (drawn) needed.push(drawn.id);
+  }
   // The map is moved to the suggested projection before anything is placed on it.
   const projection = projectionChangeOf(changes);
   if (projection && projection.id !== change.id && PLACED_KINDS.has(change.kind)
@@ -758,7 +775,7 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       return () => ctx.convertProjection(change.to, from, fromBounds);
     }
     case "map-field": {
-      const field = change.field === "author" ? "author" : "basemap";
+      const field = mapFieldOf(change);
       const before = ctx.doc?.metadata?.[field] ?? "";
       d.patchMetadata({ [field]: change.to || (field === "basemap" ? before : "") });
       return () => d.patchMetadata({ [field]: before });

@@ -362,17 +362,26 @@ const changeText = (change, doc) => {
       const projection = PROJECTIONS.find((entry) => entry.id === change.to?.type)?.name ?? change.to?.type;
       return `Map projection: ${projection}`;
     }
-    case "map-field": return change.field === "author" ? `Map author: ${change.to || "—"}` : `New basemap: ${change.to || "—"}`;
+    case "map-field":
+      if (change.field === "author") return `Map author: ${change.to || "—"}`;
+      if (change.field === "startingMapName") return `Name the starting map: ${change.to || "—"}`;
+      return `New basemap: ${change.to || "—"}`;
     case "background": return change.to ? "New custom basemap" : "Remove the custom basemap";
     case "allowed-basemaps":
       return change.to === null
         ? "Built-in maps players can switch to: the default"
         : change.to.length ? `Built-in maps players can switch to: ${builtinNames(change.to)}` : "Players can switch to no built-in map";
-    case "own-basemap-add": return `Offer another basemap: ${change.to?.name || change.key}`;
+    case "own-basemap-add":
+      return change.to?.kind === "tiled"
+        ? `Add the detailed map ${change.to?.name || change.key} to this scenario's maps`
+        : `Offer another basemap: ${change.to?.name || change.key}`;
     case "own-basemap-remove": return `Stop offering the basemap ${change.from?.name || change.key}`;
     case "own-basemap-change":
-      return change.from?.name && change.to?.name && change.from.name !== change.to.name && change.from.hash === change.to.hash
-        ? `Rename the basemap ${change.from.name} to ${change.to.name}`
+      if (change.from?.name && change.to?.name && change.from.name !== change.to.name && change.from.hash === change.to.hash) {
+        return `Rename the basemap ${change.from.name} to ${change.to.name}`;
+      }
+      return change.to?.kind === "tiled"
+        ? `Change the detailed map ${change.to?.name || change.key}`
         : `New version of the basemap ${change.to?.name || change.key}`;
     case "detailed-map": {
       if (!change.to) return change.from?.name ? `Take the detailed map ${change.from.name} off` : "Take the detailed map off";

@@ -55,7 +55,7 @@ The flat map drawn beneath a Scenario's regions: a built-in Earth map, an upload
 _Avoid_: Basic map, painted map (as separate terms), background (as the term for the record)
 
 **Tiled Basemap** (players see: **detailed map**):
-An optional layer of picture tiles drawn on top of a Scenario's basemap, read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size, kept in the library, and shared by every Scenario that names it. A Scenario names it; it never carries it.
+One of a Scenario's maps (`CONTEXT.md`, [ADR 0007](adr/0007-detailed-maps-are-scenario-maps.md)): picture tiles **shown over** a drawn basemap of the Scenario, which players see in its place without the download, read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size, kept in the library, and shared by every Scenario that names it. A Scenario may name several, one of them maybe its starting map (`world.background.tiled`), the others in `world.ownBasemaps`; it names them, never carries them.
 _Avoid_: Relief, terrain (as the term for the record)
 
 **Official Basemap**:

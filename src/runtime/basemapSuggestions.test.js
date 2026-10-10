@@ -129,3 +129,37 @@ test("a basemap named by an id that is not safe is dropped from the file", () =>
   const proto = { ...bad, id: "own-basemap-add:p", key: "__proto__" };
   assert.deepEqual(buildSuggestion({ changes: [bad, proto], scenario: {} }).changes, []);
 });
+
+test("a detailed map among the scenario's maps is a change of its own, named and never carried", async () => {
+  const base = bundle({
+    world: { ownBasemaps: [{ id: "terrain", name: "Terrain", kind: "vector" }] },
+    assets: { ownBasemapsData: embedded({ terrain: { geojson: DRAWN } }) },
+  });
+  const relief = { id: "relief", name: "Relief", kind: "tiled", tiled: { id: "got-world", version: 2 }, over: "terrain" };
+  const next = bundle({
+    world: { ownBasemaps: [{ id: "terrain", name: "Terrain", kind: "vector" }, relief] },
+    assets: { ownBasemapsData: embedded({ terrain: { geojson: DRAWN } }) },
+  });
+  const [added] = mapChanges(base, next);
+  assert.equal(added.id, "own-basemap-add:relief");
+  assert.equal(added.to.kind, "tiled");
+  assert.deepEqual(added.to.data, { tiled: { id: "got-world", version: 2 }, over: "terrain" });
+  // Shown over another map: a change.
+  const moved = bundle({
+    world: { ownBasemaps: [{ id: "terrain", name: "Terrain", kind: "vector" }, { ...relief, over: "" }] },
+    assets: { ownBasemapsData: embedded({ terrain: { geojson: DRAWN } }) },
+  });
+  assert.deepEqual(mapChanges(next, moved).map((change) => change.id), ["own-basemap-change:relief"]);
+  // Through the .zip and back.
+  const zip = await buildSuggestionZip(buildSuggestion({ changes: [added], scenario: { name: "Westeros" } }));
+  const read = await readSuggestionFile(new Uint8Array(await zip.arrayBuffer()));
+  assert.deepEqual(read.changes[0].to.data, added.to.data);
+});
+
+test("the starting map's name is a map setting of its own", () => {
+  const [renamed] = mapChanges(bundle(), bundle({ world: { background: { kind: "vector", name: "Westeros" } } }));
+  assert.equal(renamed.kind, "map-field");
+  assert.equal(renamed.field, "startingMapName");
+  assert.equal(renamed.from, "");
+  assert.equal(renamed.to, "Westeros");
+});
