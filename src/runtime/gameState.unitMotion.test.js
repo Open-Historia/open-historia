@@ -4,6 +4,7 @@
 // Needs a full install: gameState.js -> assets.js -> maplibre-gl. The pure
 // motion math is covered dependency-free in unitMotion.test.js.
 
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -17,6 +18,7 @@ import {
   clampUnitStrength,
   clearStaleUnitMotion,
   enforceUnitVolume,
+  lastUnitMoveDates,
   normalizePendingUnitOrders,
   normalizeUnits,
   normalizeWorldState,
@@ -362,6 +364,103 @@ test("an expired order is dropped and the unit stands down", () => {
   assert.equal(next.units[0].status, "idle");
 });
 
+// A fleet on a standing move order far from its destination.
+const crossing = () => ({
+  units: normalizeUnits([unit({ type: "naval", lng: 0, lat: 1 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "move", toLng: 80, toLat: 1 },
+  ]),
+});
+const coveredKm = (world) => haversineKm(1, 0, world.units[0].lat, world.units[0].lng);
+
+test("only a move or a spawn counts as moving a unit, dated by its last event", () => {
+  const moved = lastUnitMoveDates([
+    { date: "2024-01-03", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "strength", unitId: "b" }] } },
+    { date: "2024-01-20", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "remove", unitId: "c" }] } },
+    { date: "2024-01-10", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "spawn", unit: { id: "d" } }] } },
+    { impacts: { unitOps: [{ op: "move", unitId: "e" }] } },
+  ], "2024-01-01");
+  assert.deepEqual(Object.fromEntries(moved), { a: "2024-01-20", d: "2024-01-10", e: "2024-01-01" });
+});
+
+test("a unit that only took losses keeps advancing on its standing order", () => {
+  const movedAt = lastUnitMoveDates([
+    { date: "2024-01-05", impacts: { unitOps: [{ op: "strength", unitId: "unit-1", strength: 80 }] } },
+  ], "2024-01-01");
+  const next = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, movedAt });
+  const full = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  assert.ok(coveredKm(next) > 0, "attrition must not freeze the fleet for the whole jump");
+  assert.equal(coveredKm(next), coveredKm(full));
+});
+
+test("a unit an event moved is credited only the days after its last move", () => {
+  const whole = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-01-04", round: 3 });
+  const late = advanceStandingOrders(crossing(), {
+    fromDate: "2024-01-01", toDate: "2024-01-04", round: 3, movedAt: new Map([["unit-1", "2024-01-03"]]),
+  });
+  assert.equal(whole.pendingUnitOrders.length, 1, "the fixture must not arrive, or the ratio means nothing");
+  const ratio = coveredKm(late) / coveredKm(whole);
+  assert.ok(Math.abs(ratio - 1 / 3) < 0.02, `one of three days, got ${ratio}`);
+  assert.equal(late.pendingUnitOrders.length, 1);
+});
+
+test("a unit moved on the period's last day is not advanced again", () => {
+  const world = crossing();
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-01-31", round: 3, movedAt: { "unit-1": "2024-01-31" },
+  });
+  assert.equal(next.units[0].lng, world.units[0].lng);
+});
+
+test("a moved unit's order still expires on schedule", () => {
+  const world = {
+    units: normalizeUnits([unit({ type: "naval", lng: -30, lat: 50, posture: "patrol" })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250, untilRound: 5 },
+    ]),
+  };
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-02-01", round: 6, movedAt: { "unit-1": "2024-02-01" },
+  });
+  assert.equal(next.pendingUnitOrders.length, 0);
+});
+
+// Seen in a replay of 45 recorded skips (2026-10-09): on this line every unit an
+// event moved was left out of the advance that follows the events, so a
+// division ordered from Texas to Poland early in a 30-day skip got only the
+// days up to its event and arrived in the NEXT skip, 60 days after its order.
+// The events move it for the days before its event; the rest of the skip is
+// credited after it (lastUnitMoveDates, movedAt).
+test("a division ordered overseas early in a skip arrives in that skip", () => {
+  const texas = { lng: -97.7, lat: 31.1 };
+  const poland = { lng: 21.0, lat: 52.2 };
+  const start = normalizeWorldState({ units: [unit({ id: "u1", type: "armor", ownerCode: "United States", ...texas })] });
+  const events = [
+    { date: "2016-03-04", title: "1st Armored Division ordered to Poland", description: "x", impacts: {
+      unitOps: [{ op: "move", unitId: "u1", toLng: poland.lng, toLat: poland.lat, seaShare: 0.6, posture: "transit" }] } },
+  ];
+  const { world: afterEvents } = applyEventImpactsToWorld({ world: start, events, motion: { originDate: "2016-03-01", round: 2 } });
+  assert.equal(afterEvents.pendingUnitOrders.length, 1, "three days do not carry it across");
+  const period = { fromDate: "2016-03-01", toDate: "2016-03-31", round: 2 };
+
+  const arrived = advanceStandingOrders(afterEvents, { ...period, movedAt: lastUnitMoveDates(events, period.fromDate) });
+  assert.equal(arrived.pendingUnitOrders.length, 0, "the 27 days after its event bring it there");
+  assert.equal(arrived.units[0].lng, poland.lng);
+  assert.equal(arrived.units[0].lat, poland.lat);
+  assert.notEqual(arrived.units[0].status, "moving");
+
+  // What this line did: the unit left out, still most of an ocean away.
+  const frozen = advanceStandingOrders(afterEvents, { ...period, skipUnitIds: ["u1"] });
+  assert.ok(haversineKm(frozen.units[0].lat, frozen.units[0].lng, poland.lat, poland.lng) > 5000);
+});
+
+test("the turn credits a moved unit the days after its move, and leaves none out", () => {
+  const gameplay = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /const movedThisTurn = lastUnitMoveDates\(freshEvents, baseGame\.gameDate\);/);
+  assert.match(gameplay, /movedAt: movedThisTurn,/);
+  assert.equal(/skipUnitIds: movedThisTurn/.test(gameplay), false);
+});
+
 test("advanceStandingOrders is a no-op when nothing has a standing order", () => {
   const world = { units: normalizeUnits([unit()]), pendingUnitOrders: [] };
   assert.equal(advanceStandingOrders(world, { fromDate: "2024-01-01", toDate: "2024-02-01" }), world);
@@ -513,6 +612,30 @@ test("falling short of the destination still reads as moving", () => {
     { gameDate: "2024-01-01", elapsedDays: 7 },
   );
   assert.equal(result.units[0].status, "moving");
+});
+
+// Seen in a player's Game (2026-09-29): an armoured division sent 149 km
+// marched 90 km in a one-day skip and stopped 59 km short. Its order was pruned
+// as satisfied, being inside the arrival radius, and the division stood there
+// reading "moving" for good. Here, Glasgow to Stranraer: 118 km, 28 short. A unit still on its
+// way keeps its order until it gets there.
+test("a unit that stops inside the arrival radius but short of its destination keeps marching", () => {
+  const glasgow = { lng: -4.25, lat: 55.86 };
+  const stranraer = { lng: -5.03, lat: 54.9 };
+  // In contact, so at an advance's pace: 50 km a day for armour.
+  let world = { units: [unit({ type: "armor", ...glasgow, status: "moving", posture: "assaulting" })], pendingUnitOrders: [{ id: "o1", unitId: "unit-1", kind: "move", toLng: stranraer.lng, toLat: stranraer.lat }] };
+  world = advanceStandingOrders(world, { fromDate: "2016-02-13", toDate: "2016-02-14", round: 15 });
+  world = advanceStandingOrders(world, { fromDate: "2016-02-14", toDate: "2016-02-15", round: 16 });
+  const short = haversineKm(world.units[0].lat, world.units[0].lng, stranraer.lat, stranraer.lng);
+  assert.ok(short > 0 && short < 60, `expected to stop inside the radius but short, got ${short} km`);
+  assert.equal(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 1, "the order to Stranraer was dropped short of it");
+
+  world = advanceStandingOrders(world, { fromDate: "2016-02-15", toDate: "2016-02-16", round: 17 });
+  assert.equal(world.units[0].lng, stranraer.lng);
+  assert.equal(world.units[0].lat, stranraer.lat);
+  assert.notEqual(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 0);
 });
 
 // ---- stale "moving" on old saves -------------------------------------------

@@ -171,6 +171,7 @@ import {
 } from "../../runtime/assets.js";
 import {
   advanceStandingOrders,
+  lastUnitMoveDates,
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
   enforceUnitVolume,
@@ -7474,11 +7475,14 @@ const applySimulationResult = async ({
   // Advance every standing order the model did NOT touch across the whole jump,
   // and drift the patrols. This is what keeps a fleet crossing an ocean moving
   // turn after turn, and a squadron visibly working its station, with none of it
-  // having to come back from the model. Units the model DID move are skipped:
-  // they already stepped once per event against that event's own budget, and
-  // advancing them again here would move them twice for the same elapsed time.
-  const movedThisTurn = freshEvents.flatMap((event) =>
-    normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  // having to come back from the model. Units the model DID move already
+  // stepped once per event against that event's own budget, so they advance
+  // only by the days after their last move; a unit that merely took losses or
+  // reinforcements was not moved and advances like any other. Leaving a moved
+  // unit out altogether cost it the rest of the skip: a division ordered
+  // overseas on the third day of a month's skip stood still for the other
+  // twenty-seven and arrived a skip late.
+  const movedThisTurn = lastUnitMoveDates(freshEvents, baseGame.gameDate);
   let worldWithImpacts = enforceUnitVolume(
     advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
@@ -7492,7 +7496,7 @@ const applySimulationResult = async ({
         fromDate: baseGame.gameDate,
         toDate: nextGame.gameDate,
         round: nextGame.round,
-        skipUnitIds: movedThisTurn,
+        movedAt: movedThisTurn,
       },
     ),
     { playerCode: baseGame.country },

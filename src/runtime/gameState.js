@@ -1010,6 +1010,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // delete every patrol the instant it was created. It ends by expiry
     // (untilRound, in advanceStandingOrders) or when its unit goes away.
     if (order.kind === "patrol") return true;
+    // A unit still on its way keeps its order until it arrives: a step that stops
+    // inside the radius but short of the destination is not an arrival. Dropping
+    // it there left a division 59 km short of its destination reading "moving" with
+    // nothing to move it. The radius is for a unit already standing near.
+    if (unit.status === "moving") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
@@ -2715,7 +2720,7 @@ export const applyUnitOps = (units, ops, context = {}) =>
 // order repositions deterministically around its station.
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [] } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -2723,10 +2728,14 @@ export const advanceStandingOrders = (
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
-  // Units the caller already moved this turn (an event's own unit ops). Advancing
-  // them again here would move them twice for the same elapsed time — their step
-  // was taken per-event, against that event's own budget.
+  // Units the caller wants left alone entirely.
   const skip = new Set(normalizeArray(skipUnitIds));
+  // Units an event MOVED this period (lastUnitMoveDates), with the date of their
+  // last move: they already stepped once per event against that event's own
+  // budget, so they are credited only the days after it. Skipping them outright
+  // froze them for the rest of the jump, and a unit that only took losses or
+  // reinforcements was skipped too.
+  const lastMoved = movedAt instanceof Map ? movedAt : new Map(Object.entries(movedAt || {}));
   const expired = new Set();
   // Formations that marched in under posture "patrol" and arrived this turn:
   // they start working a station where they stand, as a unit that gets there
@@ -2745,6 +2754,11 @@ export const advanceStandingOrders = (
       return { ...unit, orderId: "", posture: "", status: "idle", updatedAt: stamp };
     }
 
+    // The days left after this unit's last move, or the whole period. Moved on
+    // its last day (or on a date that does not parse): nothing left to credit.
+    const unitElapsed = lastMoved.has(unit.id) ? (daysBetweenDates(lastMoved.get(unit.id), toDate) ?? 0) : elapsed;
+    if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
+
     if (order.kind === "patrol") {
       const point = patrolPoint(
         { lng: order.toLng, lat: order.toLat },
@@ -2758,7 +2772,7 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
-      maxTravelKm(unit.type, toDate || fromDate, elapsed, {
+      maxTravelKm(unit.type, toDate || fromDate, unitElapsed, {
         posture: unit.posture,
         seaShare: order.seaShare ?? null,
         remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
@@ -2796,6 +2810,27 @@ export const advanceStandingOrders = (
     units: nextUnits,
     pendingUnitOrders: pruneSatisfiedUnitOrders(nextUnits, kept),
   };
+};
+
+// The units a period's events MOVED, each with the date of its last move, for
+// advanceStandingOrders' movedAt. Only a move op changes where a unit is (and a
+// spawn puts one somewhere, so a unit raised mid-period is credited from then):
+// a strength change or a removal does not, and counting them froze a fleet that
+// only took attrition for the whole jump. An event with no date of its own
+// counts as `fallbackDate` (the period's start).
+export const lastUnitMoveDates = (events, fallbackDate = "") => {
+  const moved = new Map();
+  for (const event of normalizeArray(events)) {
+    const date = normalizeOptionalString(event?.date) || normalizeOptionalString(fallbackDate);
+    for (const op of normalizeArray(event?.impacts?.unitOps)) {
+      if (op?.op !== "move" && op?.op !== "spawn") continue;
+      const unitId = normalizeOptionalString(op.unitId || op.unit?.id);
+      if (!unitId) continue;
+      const previous = moved.get(unitId);
+      if (previous === undefined || compareGameDates(date, previous) > 0) moved.set(unitId, date);
+    }
+  }
+  return moved;
 };
 
 // Repair units that claim to be moving when nothing is moving them. This is a
