@@ -106,7 +106,8 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { allowedBuiltinBasemaps, basemapOverrideFor, decodeAllowedBasemaps, hasOwnMap, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { uiString } from "../../runtime/translator.js";
+import { basemapOverrideFor, builtinBasemapChoices, decodeAllowedBasemaps, decodeOwnBasemaps, hasOwnMap, isBuiltinBasemapId, ownBasemapIdOf, ownBasemapPick } from "../../runtime/assets.js";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
@@ -333,29 +334,41 @@ const ChatLanguageSelector = () => {
     );
 };
 
-// The Basemap pick, which replaces a scenario's built-in basemap on this
-// device. A scenario with a map of its own (a picture, a drawn map, the plain
-// sea of a flat sheet) keeps it (World.jsx), so there the pick is switched off
-// and says why. On a real-Earth scenario only the built-in maps its author
-// allows are offered (world.allowedBasemaps, chosen in the Map Editor). What
-// was picked stays stored for the scenarios it applies to. The main menu's
-// Settings are for every game, so there every built-in map is offered.
+// The Basemap pick, which replaces a scenario's basemap on this device with
+// another its author offers: one of the built-in maps they ticked in the Map
+// Editor (world.allowedBasemaps; on a scenario with a map of its own, none
+// until they tick some), or another basemap of the scenario's own
+// (world.ownBasemaps). With nothing offered the pick is switched off and says
+// why. What was picked stays stored for the scenarios it applies to. The main
+// menu's Settings are for every game, so there every built-in map is offered.
+const BASEMAP_GROUP_LABELS = { own: "This scenario's maps", builtin: "Built-in maps" };
 const BasemapField = ({ value, forGame, onChange }) => {
-    const { background, allowedBasemaps: allowedKey } = useWorldBackground();
+    const { background, allowedBasemaps: allowedKey, ownBasemaps: ownKey } = useWorldBackground();
     const ownMap = forGame && hasOwnMap(background);
     const allowed = forGame ? decodeAllowedBasemaps(allowedKey) : null;
-    const choices = ownMap ? [] : allowedBuiltinBasemaps(allowed);
-    const shown = basemapOverrideFor(value, { scenarioHasOwnMap: ownMap, allowedBasemaps: allowed });
-    const off = choices.length === 0;
+    const own = forGame ? decodeOwnBasemaps(ownKey) : [];
+    const choices = builtinBasemapChoices(allowed, { scenarioHasOwnMap: ownMap });
+    const shown = basemapOverrideFor(value, { scenarioHasOwnMap: ownMap, allowedBasemaps: allowed, ownBasemaps: own });
+    const off = choices.length === 0 && own.length === 0;
+    // The select holds map names (data-no-translate), so the DOM translator
+    // never reads its group labels: they are looked up here.
+    const builtinOptions = choices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>);
     return (
         <div style={fieldGroupStyle}>
             <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
             <select id="game-basemap-style" data-no-translate value={shown} disabled={off} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1 }}>
                 <option value="" style={{ color: "black" }}>Scenario default</option>
-                {choices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+                {own.length > 0 && (
+                    <optgroup label={uiString(BASEMAP_GROUP_LABELS.own)}>
+                        {own.map((basemap) => <option key={basemap.id} value={ownBasemapPick(basemap.id)} style={{ color: "black" }}>{basemap.name}</option>)}
+                    </optgroup>
+                )}
+                {own.length > 0 && choices.length > 0
+                    ? <optgroup label={uiString(BASEMAP_GROUP_LABELS.builtin)}>{builtinOptions}</optgroup>
+                    : builtinOptions}
             </select>
             <div style={helperStyle}>
-                {ownMap
+                {ownMap && off
                     ? "This scenario uses its own basemap, which cannot be replaced."
                     : off
                         ? "This scenario uses its own basemap only."
@@ -2735,7 +2748,7 @@ const SettingsMenu = ({
     // The basemap override is a value setting (a basemap id, or empty for the
     // scenario's own), read live so the picker follows a change made elsewhere.
     const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-    const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) ? storedBasemapStyle : "";
+    const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) || ownBasemapIdOf(storedBasemapStyle) ? storedBasemapStyle : "";
     // Relief tiles or the painted vector map, for scenarios that ship both.
     const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";
 

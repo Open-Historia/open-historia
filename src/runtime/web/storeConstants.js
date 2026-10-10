@@ -34,7 +34,7 @@ export const JSON_ASSET_KEYS = [...STORAGE_JSON_ASSET_KEYS, ...CORE_JSON_ASSET_K
 export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags", "stats", "institutionLogos"];
 export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts"];
 export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions"];
-export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData"];
+export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData", "ownBasemapsData"];
 // Order matters for assetStatus (Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)).
 export const UPLOADABLE_SCENARIO_ASSET_KEYS = [
   COVER_IMAGE_ASSET_KEY,
@@ -70,6 +70,9 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
+  // The maps players may switch to (runtime/assets.js basemapOverrideFor).
+  "allowedBasemaps",
+  "ownBasemaps",
   "canonModelVersion",
   "canonContext",
   "customCities",

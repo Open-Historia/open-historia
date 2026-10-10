@@ -160,7 +160,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 `readRuntimeJsonAsset(key)` resolves an asset by precedence: **active game record → active runtime scenario → fallback default**. Special cases:
 
-- `SCENARIO_GEOJSON_ASSET_KEYS` (`regionsGeojson`/`citiesGeojson`/`backgroundData`) come from the scenario; a scenario without its own `regionsGeojson` **borrows Modern Day's** (migrated as *default's* record, since those owners live in default's owner-space).
+- `SCENARIO_GEOJSON_ASSET_KEYS` (`regionsGeojson`/`citiesGeojson`/`backgroundData`/`ownBasemapsData`) come from the scenario; a scenario without its own `regionsGeojson` **borrows Modern Day's** (migrated as *default's* record, since those owners live in default's owner-space).
 - The stock world (the web-sized GADM world with owners as country names, 13.1 MB) is **not** in the seed. `fetchDefaultRegionsGeojson()` fetches it from the build's own assets folder, `default-regions.geojson` (`worldFileUrl("stock")`, `src/runtime/worldFiles.js`; §8), once per session, never pinning an empty/failed result, so a transient miss retries. The editor's default world is read the same way, from `regions-seed.geojson` (`worldFileUrl("seed")`). Without the stock world the political map renders blank.
 - These session caches (the built-in and stock regions, and the coarse copy of the regions for the scenario being looked at, `coarseRegionsCache.js`, one slot) are all dropped when Android sends `oh:memory-pressure` (`src/runtime/memoryPressure.js`); the next read fetches and builds them again.
 - `colors` falls back to the immutable app palette (`generated/fallbackColors.js`), **not** the mutable default-scenario colors.
@@ -218,7 +218,7 @@ A faithful mirror of the constants and pure helpers in `server/libraryStore.js`.
 | `CORE_JSON_ASSET_KEYS` | `game, prompts, world` |
 | `OPTIONAL_JSON_ASSET_KEYS` | `colors, flags, tags` |
 | `PMTILES_ASSET_KEYS` | `cities, countries, regions` |
-| `SCENARIO_GEOJSON_ASSET_KEYS` | `regionsGeojson, citiesGeojson, backgroundData` |
+| `SCENARIO_GEOJSON_ASSET_KEYS` | `regionsGeojson, citiesGeojson, backgroundData, ownBasemapsData` |
 | `UPLOADABLE_SCENARIO_ASSET_KEYS` | `cover` + optional + pmtiles + geojson |
 | `UPLOADABLE_GAME_ASSET_KEYS` | `cover` only |
 

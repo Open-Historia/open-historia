@@ -109,7 +109,7 @@ A 403 from anywhere but the machine running the server. The library's **Recently
 | HEAD | `/api/runtime/pmtiles/:assetKey` | Size probe for the PMTiles reader (`Content-Length`, `Accept-Ranges`) | `resolveRuntimeBinaryAsset` |
 | GET | `/api/runtime/institution-logo/:institutionId` | One institution's logo from the active game's `institutionLogos` | `readRuntimeJsonAsset("institutionLogos")` → `sendInstitutionLogo` |
 
-`assetKey` for JSON is one of `world`, `game`, `prompts`, `actions`, `advisor`, `chat`, `events`, `colors`, `flags`, `tags`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData` and the other runtime keys; for PMTiles one of `cities`, `countries`, `regions`. See [Runtime asset resolution](#runtime-asset-resolution).
+`assetKey` for JSON is one of `world`, `game`, `prompts`, `actions`, `advisor`, `chat`, `events`, `colors`, `flags`, `tags`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData`, `ownBasemapsData` and the other runtime keys; for PMTiles one of `cities`, `countries`, `regions`. See [Runtime asset resolution](#runtime-asset-resolution).
 
 **The turn commit.** The end of a turn writes six domains that must agree with each other, so it is one request, not six PUTs (`commitCanonicalTurnPayload` in `src/runtime/gameState.js`; the web store answers the same route). Body:
 
@@ -193,7 +193,7 @@ server/data/
       colors.json flags.json tags.json       # OPTIONAL_JSON_ASSET_FILES
       cover-image.bin            # uploaded cover (content type in scenario.json)
       cities.pmtiles countries.pmtiles regions.pmtiles   # per-scenario PMTiles overrides
-      regions.geojson cities.geojson background.json      # custom map geometry
+      regions.geojson cities.geojson background.json own-basemaps.json  # custom map geometry
       storage/
         actions.json advisor.json chat.json events.json   # STORAGE_JSON_ASSET_FILES
   games/
@@ -230,7 +230,7 @@ Defined near the top of `server/libraryStore.js`, after the path constants. Thes
 | `OPTIONAL_JSON_ASSET_FILES` | `colors`,`flags`,`tags` → `*.json` | Static author data kept **out** of the 5 s `world.json` poll |
 | `RUNTIME_ONLY_JSON_ASSET_FILES` | `snapshots`→`storage/snapshots.json` (the old single file), `snapshotsIndex`→`storage/snapshots-index.json`, `intercepts`→`storage/intercepts.json` | Roll-back points (each a pre-turn `state`, the `round` the turn started on, the `campaignId` it was captured in and, for a time skip, the `turn` journal Intervene re-applies from — `src/Game/AI/intervene.js`); never copied/exported. Kept one file each, see below |
 | `PMTILES_ASSET_FILES` | `cities`,`countries`,`regions` → `*.pmtiles` | Per-scenario binary map overrides |
-| `SCENARIO_GEOJSON_ASSET_FILES` | `regionsGeojson`→`regions.geojson`, `citiesGeojson`→`cities.geojson`, `backgroundData`→`background.json` | Custom map geometry; always embedded in bundles |
+| `SCENARIO_GEOJSON_ASSET_FILES` | `regionsGeojson`→`regions.geojson`, `citiesGeojson`→`cities.geojson`, `backgroundData`→`background.json`, `ownBasemapsData`→`own-basemaps.json` | Custom map geometry; always embedded in bundles |
 | `*_IMAGE_ASSET_FILES` | `cover`→`cover-image.bin` | Content type recorded in meta |
 | `UPLOADABLE_SCENARIO_ASSET_FILES` | image ∪ optional-JSON ∪ PMTiles ∪ geojson | The valid `:assetKey` set for scenario upload/serve/delete |
 | `UPLOADABLE_GAME_ASSET_FILES` | just `cover` | Games only accept a cover upload |

@@ -59,6 +59,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { ownMapHash } from "./ownMapHash.js";
+import { moveOwnBasemapsBetween, normalizeEditorOwnBasemaps, ownBasemapFromLibrary } from "./ownBasemaps.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature, scenarioHasOwnMap } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
@@ -402,6 +403,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     setCustomBgId(null);
   };
 
+  // The scenario's other basemaps of its own, which players may switch to
+  // (ownBasemaps.js): one of Your basemaps added to them, or taken off.
+  const ownBasemaps = normalizeEditorOwnBasemaps(d.doc?.metadata?.ownBasemaps);
+  const addOwnBasemap = async (bm) => {
+    try {
+      const entry = ownBasemapFromLibrary(bm, await getBasemapPayload(bm.id));
+      if (!entry) throw new Error("It has no picture or drawn map in it.");
+      if (ownBasemaps.some((own) => own.id === entry.id)) return;
+      d.patchMetadata({ ownBasemaps: [...ownBasemaps, entry] });
+    } catch (e) {
+      window.alert(`Could not add that basemap: ${e?.message || e}`);
+    }
+  };
+  const removeOwnBasemap = (id) => {
+    const next = ownBasemaps.filter((own) => own.id !== id);
+    d.patchMetadata({ ownBasemaps: next.length ? next : null });
+  };
+
   // Upload a new basemap: apply it now AND save it to the library for reuse.
   // Answers what the picker then tells the author, both of which used to go
   // unsaid: { sessionOnly: true } for a GeoTIFF or PMTiles background, which is
@@ -510,8 +529,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       api.transformRegions(moveXY);
       d.setFeatures((list) => moveFeatureCoords(list, from, to));
       d.setUnits((list) => moveUnits(list, from, to));
+      // The scenario's other drawn basemaps move with it; a picture fills the
+      // sheet in any projection and stays as it is.
+      const movedOwnBasemaps = moveOwnBasemapsBetween(d.doc?.metadata?.ownBasemaps, from, to);
       // The two switches about how the game shows the map stay as they were.
-      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}) });
+      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}), ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
       if (nextBg !== customBg) {
         setCustomBg(nextBg);
         // A redrawn picture is no longer the one in Your basemaps.
@@ -1064,6 +1086,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (initialMap.basemap) base.metadata.basemap = initialMap.basemap;
     // And which built-in maps players may switch to, so Apply keeps the choice.
     if (Array.isArray(initialMap.allowedBasemaps)) base.metadata.allowedBasemaps = initialMap.allowedBasemaps;
+    // And its other basemaps of its own (ownBasemaps.js), so Apply keeps them.
+    if (Array.isArray(initialMap.ownBasemaps) && initialMap.ownBasemaps.length) base.metadata.ownBasemaps = initialMap.ownBasemaps;
     // Carry the restored background in the document metadata so Apply & Play
     // (buildGameSeed reads doc.metadata.customBackground) re-persists it instead of
     // clearing the scenario's background when the user re-opens and re-applies.
@@ -1846,6 +1870,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
         onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
         scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
+        ownBasemaps={ownBasemaps}
+        onAddOwnBasemap={addOwnBasemap}
+        onRemoveOwnBasemap={removeOwnBasemap}
         detailedMap={d.doc?.metadata?.tiledBasemap || null}
         ownMapHash={savedOwnMapHash}
         onRemoveDetailedMap={removeDetailedMap}

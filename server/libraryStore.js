@@ -474,6 +474,11 @@ const SCENARIO_GEOJSON_ASSET_FILES = {
   // heavy payload ({ dataUrl } for images, { geojson } for vector) so world.json
   // stays light for the 5s poll. Loaded once by the game when world.background is set.
   backgroundData: "background.json",
+  // The scenario's other basemaps of its own (world.ownBasemaps), which players
+  // may switch to: { [id]: { dataUrl } | { geojson } }. Apart from
+  // backgroundData so a hub reference or a zip that lifts out the main basemap
+  // leaves them as they are.
+  ownBasemapsData: "own-basemaps.json",
 };
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
@@ -525,6 +530,9 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
+  // The maps players may switch to (runtime/assets.js basemapOverrideFor).
+  "allowedBasemaps",
+  "ownBasemaps",
   "canonModelVersion",
   "canonContext",
   "customCities",
@@ -4111,6 +4119,7 @@ const exportScenarioBundle = (scenarioId) => {
       backgroundData: !fs.existsSync(getScenarioUploadPath(scenarioId, "backgroundData")) && summary.missingBasemap
         ? { ...summary.missingBasemap.reference }
         : buildScenarioBundleAsset(scenarioId, "backgroundData"),
+      ownBasemapsData: buildScenarioBundleAsset(scenarioId, "ownBasemapsData"),
     },
     data: {
       actions: cloneJson(details.data.actions),

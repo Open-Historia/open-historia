@@ -1,6 +1,6 @@
 /*! Open Historia — custom map background loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { useEffect, useRef, useState } from "react";
-import { JSON_URLS, getPmtilesArchive, hasOwnMap, readJson } from "../../runtime/assets.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { JSON_URLS, decodeOwnBasemaps, getPmtilesArchive, hasOwnMap, readJson } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import {
   fetchOfficialBasemaps,
@@ -34,7 +34,7 @@ const probeArchive = async (pmtilesUrl) => {
 const EMPTY = { background: null, declared: false, basemap: null, missingTiled: null, tiledUpdate: null };
 
 export function useCustomBackground() {
-  const { background: bgDescriptor, basemap: worldBasemap, allowedBasemaps } = useWorldBackground();
+  const { background: bgDescriptor, basemap: worldBasemap, allowedBasemaps, ownBasemaps } = useWorldBackground();
   const terrainSetting = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain);
   const [state, setState] = useState(EMPTY);
   const keyRef = useRef("");
@@ -141,6 +141,41 @@ export function useCustomBackground() {
     };
   }, [bgKey, basemap, bgDescriptor, namedTiledBasemap, terrainSetting]);
 
-  // Which built-in maps the scenario lets the player switch to (a string; null = any).
-  return { ...state, allowedBasemaps };
+  // Which built-in maps the scenario lets the player switch to (a string; null =
+  // any), and its other basemaps of its own (a string; runtime/assets.js).
+  return { ...state, allowedBasemaps, ownBasemaps };
+}
+
+// One of the scenario's other basemaps of its own, which the player picked in
+// Settings → Map, as the map draws it: its payload from the ownBasemapsData
+// asset. null until it has loaded, or when `id` is "" or the payload is not
+// there (World.jsx then keeps the scenario's main one on screen).
+// A picture is laid on the scenario's sheet (useWorldState.js pictureSheet).
+export function useOwnBasemap(id) {
+  const { ownBasemaps, pictureSheet } = useWorldBackground();
+  const entry = id ? decodeOwnBasemaps(ownBasemaps).find((own) => own.id === id) : null;
+  const kind = entry?.kind || "";
+  const [loaded, setLoaded] = useState({ id: "", background: null });
+  const bounds = useMemo(() => (pictureSheet ? normalizeImageBounds(JSON.parse(pictureSheet)) : null), [pictureSheet]);
+
+  useEffect(() => {
+    if (!id || !kind) return undefined;
+    let cancelled = false;
+    readJson(JSON_URLS.ownBasemapsData, { force: true })
+      .catch(() => null)
+      .then((data) => {
+        if (cancelled) return;
+        const payload = data && typeof data === "object" ? data[id] : null;
+        const background = kind === "image" && payload?.dataUrl
+          ? { kind: "image", imageUrl: payload.dataUrl, bounds: null }
+          : kind === "vector" && payload?.geojson ? { kind: "vector", geojson: payload.geojson } : null;
+        setLoaded({ id, background });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, kind]);
+
+  const background = entry && loaded.id === id ? loaded.background : null;
+  return useMemo(() => (background?.kind === "image" ? { ...background, bounds } : background), [background, bounds]);
 }

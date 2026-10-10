@@ -469,6 +469,7 @@ Save robustness:
 | `regions` | Normalized game-ready FC (uploaded only when tier 2). |
 | `cities` | Authored `cities.geojson`. |
 | `backgroundData` | Heavy `{dataUrl}` / `{geojson}`, or `null`. |
+| `ownBasemapsData` | The scenario's other basemaps, `{ [id]: {dataUrl} \| {geojson} }`, or `null` (`ownBasemaps.js`). |
 
 **Tier 1 vs tier 2 recap:** tier 1 = re-ownership only → the game renders shapes from `regions.pmtiles` and needs just `world.json` (`regionOwnershipOverrides`+`polityOverrides`) + `colors.json` (like the bundled WWII/Medieval presets). Tier 2 = new/split/merged/reshaped geometry → the exported `regions.geojson` carries the shapes and `world.customRegions` tells the game to render from the GeoJSON layer (`src/Game/Map/Nations.jsx`).
 
@@ -486,6 +487,7 @@ In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEdit
 | `regions` | `regionsGeojson` | always written |
 | `cities` | `citiesGeojson` | always written |
 | `backgroundData` | `backgroundData` | `clearScenarioAsset` when null |
+| `ownBasemapsData` | `ownBasemapsData` | `clearScenarioAsset` when null |
 
 The `null`-means-clear contract is why hydration (§20) must reload the scenario's existing flags/tags/background — otherwise a round-trip that "loaded none" would clear the author's work. For the same reason a piece that fails to download (rather than one the scenario lacks: `downloadScenarioJsonAsset` throws for anything but a 404) closes the Workshop before it can save, with the reason shown in the scenario drawer. Finally it creates + activates a fresh game so the running map reflects the edit, starting as the scenario's own player country just saved (never the seed's first owner). The activation remounts the UI (App keys it on the active game), so the optional "pick who you control" picker is handed to the instance mounted for the new game (`src/runtime/afterActivation.js`) rather than set up in the one being unmounted.
 
@@ -493,7 +495,7 @@ The `null`-means-clear contract is why hydration (§20) must reload the scenario
 
 ## 20. Opening a scenario's current map (hydration)
 
-When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. A download that finishes after that Workshop was closed, or reopened on another scenario, is dropped (`src/runtime/latestRequest.js`): the Workshop hydrates once, from the first map it is handed, and saves into its own scenario whatever that map was. `MapEditor`'s hydrate effect (runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features (`gameCityToFeature`, `exportPreset.js`: size, series, tags, symbol and country come back; `exportPreset.test.js`), then:
+When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData` and `ownBasemapsData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap, allowedBasemaps, ownBasemaps }`. A download that finishes after that Workshop was closed, or reopened on another scenario, is dropped (`src/runtime/latestRequest.js`): the Workshop hydrates once, from the first map it is handed, and saves into its own scenario whatever that map was. `MapEditor`'s hydrate effect (runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features (`gameCityToFeature`, `exportPreset.js`: size, series, tags, symbol and country come back; `exportPreset.test.js`), then:
 - `api.loadRegions(initialMap.regions)` if the scenario has custom geometry, **else** `api.reseedWorldWithOwners(initialMap.ownershipOverrides)` (stock world + overrides = its tier-1 map).
 - `hydrated` (which enables Save, Save & Exit and Apply & Play) is set only once the map is on it; the stock world arrives seconds after the Workshop opens. Loading it is not an edit: it used to mark the map dirty when it landed, so closing without an edit asked about unsaved changes, and the autosave wrote the whole stock world as a new "Scenario Map" document on every open.
 

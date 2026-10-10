@@ -17,6 +17,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
 import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { buildOwnBasemapsForGame } from "./ownBasemaps.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { hasOwnMap } from "../runtime/assets.js";
@@ -251,9 +252,8 @@ export const buildBackgroundForGame = (customBackground, tiledBasemap = null) =>
 };
 
 // Whether the game will treat this scenario as having a map of its own (its
-// world.background): then the player's built-in Basemap pick never replaces it
-// (runtime/assets.js basemapOverrideFor), so the list of built-in maps players
-// may switch to has no effect.
+// world.background): then players see only it until the author ticks built-in
+// maps they may switch to (runtime/assets.js builtinBasemapChoices).
 export const scenarioHasOwnMap = (doc) => hasOwnMap(buildBackgroundForGame(doc?.metadata?.customBackground).background);
 
 // Every country the stock world already knows by name. An owner in here is a real
@@ -401,6 +401,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
   const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap);
+  const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame(doc.metadata?.ownBasemaps);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
@@ -442,9 +443,13 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.
     basemap: doc.metadata?.basemap || null,
-    // Which built-in maps players may switch to in Settings → Map (null = any;
-    // [] = only the scenario's own map). Chosen in the basemap picker.
+    // Which built-in maps players may switch to in Settings → Map (null = any,
+    // or none on a scenario with a map of its own; [] = none). Chosen in the
+    // basemap picker.
     allowedBasemaps: Array.isArray(doc.metadata?.allowedBasemaps) ? doc.metadata.allowedBasemaps : null,
+    // The scenario's other basemaps of its own players may switch to
+    // (ownBasemaps.js); their payloads ride in the seed's ownBasemapsData.
+    ownBasemaps,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.
@@ -496,5 +501,8 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // Heavy background payload ({ dataUrl } or { geojson }) — uploaded as the
     // backgroundData scenario asset; null when there's no custom background.
     backgroundData,
+    // The other basemaps' payloads, by id: the ownBasemapsData scenario asset;
+    // null when there are none.
+    ownBasemapsData,
   };
 };

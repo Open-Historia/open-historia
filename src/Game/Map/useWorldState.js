@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { JSON_URLS, encodeOwnBasemaps, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
 import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
-import { mapViewOf } from "../../../server/mapProjection.js";
+import { mapViewOf, projectionIsDefault, sheetBounds } from "../../../server/mapProjection.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -153,6 +153,12 @@ const deriveMapState = (state) => ({
   background: state?.background ?? null,
   // A string, so an unchanged list keeps its identity: null = any built-in map.
   allowedBasemaps: Array.isArray(state?.allowedBasemaps) ? state.allowedBasemaps.map(String).join(",") : null,
+  // The scenario's other basemaps of its own, a string for the same reason.
+  ownBasemaps: encodeOwnBasemaps(state?.ownBasemaps),
+  // Where a picture with no bounds of its own lies: the scenario's sheet, as
+  // an imported picture is laid (server/mapProjection.js layOutScenarioBundle);
+  // null for Mercator, whose sheet is the whole square. A string, as above.
+  pictureSheet: projectionIsDefault(state?.projection) ? null : JSON.stringify(sheetBounds(state.projection)),
   // How the scenario lets its map be shown (world.projection: mapViewOf).
   noGlobe: mapViewOf(state?.projection).noGlobe,
   noWrap: mapViewOf(state?.projection).noWrap,
@@ -194,6 +200,8 @@ const sameMapState = (prev, next) =>
   prev.basemap === next.basemap &&
   prev.background === next.background &&
   prev.allowedBasemaps === next.allowedBasemaps &&
+  prev.ownBasemaps === next.ownBasemaps &&
+  prev.pictureSheet === next.pictureSheet &&
   prev.noGlobe === next.noGlobe &&
   prev.noWrap === next.noWrap &&
   prev.labelFont === next.labelFont &&
@@ -374,6 +382,8 @@ export function useWorldBackground() {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
       allowedBasemaps: current?.allowedBasemaps ?? null,
+      ownBasemaps: current?.ownBasemaps ?? null,
+      pictureSheet: current?.pictureSheet ?? null,
       noGlobe: Boolean(current?.noGlobe),
       noWrap: Boolean(current?.noWrap),
     };
@@ -386,6 +396,8 @@ export function useWorldBackground() {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
       const allowedBasemaps = data?.allowedBasemaps ?? null;
+      const ownBasemaps = data?.ownBasemaps ?? null;
+      const pictureSheet = data?.pictureSheet ?? null;
       const noGlobe = Boolean(data?.noGlobe);
       const noWrap = Boolean(data?.noWrap);
 
@@ -394,11 +406,11 @@ export function useWorldBackground() {
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
+        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps && prev.ownBasemaps === ownBasemaps && prev.pictureSheet === pictureSheet && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
           return prev;
         }
 
-        return { background, basemap, allowedBasemaps, noGlobe, noWrap };
+        return { background, basemap, allowedBasemaps, ownBasemaps, pictureSheet, noGlobe, noWrap };
       });
     };
 

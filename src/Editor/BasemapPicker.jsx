@@ -28,6 +28,7 @@ import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap
 import { acceptFor } from "../runtime/fileAccept.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { basemapInUse } from "./basemapInUse.js";
+import { ownBasemapIdOfLibrary } from "./ownBasemaps.js";
 
 const overlay = {
   position: "fixed",
@@ -128,7 +129,9 @@ export const CommunitySourceBadge = ({ url }) => {
   );
 };
 
-const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish, communityUrl = null, fromCommunity = false }) => (
+// `onOffer`: offers the basemap to players as another of the scenario's own
+// (ownBasemaps.js); `offered` once it is one.
+const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish, onOffer, offered = false, communityUrl = null, fromCommunity = false }) => (
   <div
     style={{ ...cardSurface, outline: active ? "2px solid rgba(255,255,255,0.22)" : "none", outlineOffset: "-2px" }}
     onClick={onClick}
@@ -167,6 +170,17 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
           style={{ position: "absolute", left: 6, bottom: 6, background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: "999px", color: "#fff", cursor: "pointer", fontSize: "0.7rem", height: "1.5rem", width: "1.5rem", lineHeight: 1 }}
         >
           ⤴
+        </button>
+      )}
+      {(onOffer || offered) && (
+        <button
+          type="button"
+          disabled={offered}
+          title={offered ? "Players can switch to this map" : "Also offer this map to players: they can switch to it in Settings → Map"}
+          onClick={(e) => { e.stopPropagation(); onOffer?.(); }}
+          style={{ position: "absolute", right: 34, bottom: 6, background: offered ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "999px", color: "#fff", cursor: offered ? "default" : "pointer", fontSize: "0.7rem", height: "1.5rem", width: "1.5rem", lineHeight: 1 }}
+        >
+          {offered ? "✓" : "＋"}
         </button>
       )}
       {onDelete && (
@@ -262,42 +276,65 @@ const DetailedMaps = ({ list, loading, download, onDownload, onCancel }) => {
   );
 };
 
-// Which of the built-in (real-world) maps players may switch to in Settings →
-// Map while playing this scenario. null = any of them (the default, and every
-// scenario made before this existed); [] = only the scenario's own map, which
-// is what a made-up world wants (runtime/assets.js allowedBasemapIds).
-// `ownMap`: the scenario has a map of its own, which players' built-in pick
-// never replaces (runtime/assets.js basemapOverrideFor), so the list does
-// nothing and is not offered.
-const AllowedBasemaps = ({ value, onChange, ownMap = false }) => {
-  const all = value === null || value === undefined;
-  const chosen = new Set(all ? ESRI_BASEMAPS.map((b) => b.id) : value);
+// Which basemaps players may switch to in Settings → Map while playing this
+// scenario, beside the one it starts on: any mix of the built-in (real-world)
+// maps and the scenario's other basemaps of its own (ownBasemaps.js).
+//
+// Built-in: null = all of them on a real-Earth scenario (the default, and
+// every scenario made before this existed) but none on one with a map of its
+// own (`ownMap`), so a made-up world saved before the choice existed never gets
+// the Earth under it; a list = those (runtime/assets.js builtinBasemapChoices).
+// "All" on a scenario with a map of its own is therefore the whole list,
+// written out.
+const OWN_MAP_KIND_LABELS = { vectorLabel: "painted", imageLabel: "picture" };
+const AllowedBasemaps = ({ value, onChange, ownMap = false, ownBasemaps = [], onRemoveOwnBasemap }) => {
+  const ids = ESRI_BASEMAPS.map((b) => b.id);
+  const unset = value === null || value === undefined;
+  const chosen = new Set(unset ? (ownMap ? [] : ids) : value);
+  const all = chosen.size === ids.length;
+  const pick = (next) => onChange(next.size === ids.length && !ownMap ? null : ids.filter((x) => next.has(x)));
   const toggle = (id) => {
     const next = new Set(chosen);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onChange(next.size === ESRI_BASEMAPS.length ? null : ESRI_BASEMAPS.map((b) => b.id).filter((x) => next.has(x)));
+    pick(next);
   };
   const box = { marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" };
-  if (ownMap) {
-    return (
-      <div style={box}>
-        <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
-        <div style={{ ...dim, padding: 0 }}>
-          None: this scenario has a map of its own, and players always see it. This list only applies to a scenario on a built-in basemap.
-        </div>
-      </div>
-    );
-  }
   return (
     <div style={box}>
       <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
       <div style={{ ...dim, padding: "0 0 0.5rem" }}>
-        Players start on this scenario&apos;s basemap. Tick the built-in basemaps they may also pick in Settings → Map, or untick them all to keep everyone on this one.
+        Players start on this scenario&apos;s basemap and may switch in Settings → Map to any map listed here. Every map must fit your regions: they stay where they are on each one.
       </div>
+      <div style={{ ...dim, padding: "0 0 0.4rem", color: "rgba(255,255,255,0.7)" }}>This scenario&apos;s other maps</div>
+      {ownBasemaps.length ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.7rem" }}>
+          {ownBasemaps.map((own) => (
+            <span key={own.id} style={{ ...tabBtn(true), cursor: "default", display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+              {own.name}
+              <span style={{ opacity: 0.55, fontWeight: 600 }}>{OWN_MAP_KIND_LABELS[`${own.background.kind}Label`]}</span>
+              {onRemoveOwnBasemap && (
+                <button
+                  type="button"
+                  title="Stop offering this map to players"
+                  onClick={() => onRemoveOwnBasemap(own.id)}
+                  style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: "0.75rem", padding: 0 }}
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div style={{ ...dim, padding: "0 0 0.7rem" }}>
+          None yet. Use the ＋ button on a card in Your basemaps to offer it as another map of this scenario&apos;s own.
+        </div>
+      )}
+      <div style={{ ...dim, padding: "0 0 0.4rem", color: "rgba(255,255,255,0.7)" }}>Built-in maps</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", alignItems: "center" }}>
-        <button type="button" style={tabBtn(all)} onClick={() => onChange(null)}>All</button>
-        <button type="button" style={tabBtn(!all && chosen.size === 0)} onClick={() => onChange([])}>None (own basemap only)</button>
+        <button type="button" style={tabBtn(all)} onClick={() => pick(new Set(ids))}>All</button>
+        <button type="button" style={tabBtn(chosen.size === 0)} onClick={() => onChange([])}>None</button>
         {ESRI_BASEMAPS.map((b) => (
           <label key={b.id} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.78rem", cursor: "pointer" }}>
             <input type="checkbox" checked={chosen.has(b.id)} onChange={() => toggle(b.id)} />
@@ -324,6 +361,11 @@ const BasemapPicker = ({
   allowedBasemaps,
   onAllowedBasemapsChange,
   scenarioHasOwnMap = false,
+  // The scenario's other basemaps of its own players may switch to
+  // (ownBasemaps.js), and adding one of Your basemaps to them or taking one off.
+  ownBasemaps = [],
+  onAddOwnBasemap = null,
+  onRemoveOwnBasemap = null,
   // For the "In use" mark (basemapInUse.js), beside scenarioHasOwnMap: the
   // detailed map the scenario names, and its own map's checksum
   // (ownMapHash.js).
@@ -404,6 +446,7 @@ const BasemapPicker = ({
   const painted = mine.filter((bm) => bm.kind !== "tiled");
   // The scenario's own map when no card in Your basemaps holds it.
   const showOwnMapCard = !browse && inUse.ownMapCard(painted);
+  const offeredIds = new Set(ownBasemaps.map((own) => own.id));
 
   // What Your basemaps already holds, so a post installed before says so
   // instead of offering to download its whole payload again (the store would
@@ -592,7 +635,13 @@ const BasemapPicker = ({
           {tab === "mine" ? (
             <>
               {!browse && onAllowedBasemapsChange && (
-                <AllowedBasemaps value={allowedBasemaps} onChange={onAllowedBasemapsChange} ownMap={scenarioHasOwnMap} />
+                <AllowedBasemaps
+                  value={allowedBasemaps}
+                  onChange={onAllowedBasemapsChange}
+                  ownMap={scenarioHasOwnMap}
+                  ownBasemaps={ownBasemaps}
+                  onRemoveOwnBasemap={onRemoveOwnBasemap}
+                />
               )}
               {!browse && (
               <div style={{ marginBottom: "1.3rem" }}>
@@ -634,6 +683,8 @@ const BasemapPicker = ({
                         // Someone else's work, installed from the hub: it links
                         // to its post rather than offering to publish it again.
                         onPublish={() => handlePublish(bm)}
+                        onOffer={!browse && onAddOwnBasemap ? () => onAddOwnBasemap(bm) : undefined}
+                        offered={!browse && offeredIds.has(ownBasemapIdOfLibrary(bm))}
                         fromCommunity={Boolean(bm.source?.community)}
                         communityUrl={bm.source?.url || null}
                       />

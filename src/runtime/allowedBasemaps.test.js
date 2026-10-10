@@ -34,9 +34,8 @@ test("the Map Editor writes the author's choice into the scenario", () => {
   assert.equal(buildGameSeed({ ...doc, metadata: {} }, empty).world.allowedBasemaps, null);
 });
 
-// The list only limits a real-Earth scenario: one with a map of its own never
-// takes a built-in map (basemapOverride.test.js), so the Map Editor turns the
-// list off there.
+// On a scenario with a map of its own an unset list offers no built-in map
+// (basemapOverride.test.js), so the Map Editor shows nothing ticked there.
 test("the Map Editor knows when the scenario has a map of its own", () => {
   const drawn = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: {} }] } };
   assert.equal(scenarioHasOwnMap({ metadata: {} }), false);

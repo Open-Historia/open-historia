@@ -81,6 +81,7 @@ export const JSON_URLS = {
   regionsGeojson: "",
   citiesGeojson: "",
   backgroundData: "",
+  ownBasemapsData: "",
   world: "",
   intercepts: "",
 };
@@ -138,16 +139,49 @@ export const decodeAllowedBasemaps = (key) => (key == null ? null : String(key).
 // the Map Editor (exportPreset.js scenarioHasOwnMap) all ask this.
 export const hasOwnMap = (background) => Boolean(background?.kind);
 export const isAllowedBasemapOverride = (id, allowed) => isBuiltinBasemapId(id) && (allowed == null || allowed.includes(id));
-// The player's basemap pick (Settings > Map) as it applies to the scenario on
-// screen: a built-in basemap's id, or "" for the scenario's own. It replaces a
-// built-in basemap only. A scenario with a map of its own (a picture, a drawn
-// map, the plain sea of a flat sheet) keeps it: its regions are drawn for that
-// map, and a built-in basemap under them is the Earth under another world. On
-// a real-Earth scenario the pick counts only if the scenario allows that map
-// (allowedBasemaps, as above).
-export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false, allowedBasemaps = null } = {}) => (
-  !scenarioHasOwnMap && isAllowedBasemapOverride(pickedId, allowedBasemaps) ? pickedId : ""
+// The built-in maps Settings → Map offers on a scenario. One with a map of its
+// own that never chose (allowedBasemaps null) offers none, so a made-up world
+// saved before the choice existed never gets the Earth under it; a list it
+// chose in the Map Editor is offered as on any scenario.
+export const builtinBasemapChoices = (allowed, { scenarioHasOwnMap = false } = {}) => (
+  scenarioHasOwnMap && allowed == null ? [] : allowedBuiltinBasemaps(allowed)
 );
+
+// A scenario's other basemaps of its own (world.ownBasemaps: [{ id, name,
+// kind }]), which players may switch to beside its main one. Each payload
+// ({ dataUrl } or { geojson }) rides in the ownBasemapsData asset, keyed by id,
+// so world.json stays light. A pick of one is stored as "own:<id>".
+export const OWN_BASEMAP_PREFIX = "own:";
+export const ownBasemapPick = (id) => `${OWN_BASEMAP_PREFIX}${id}`;
+export const ownBasemapIdOf = (pick) => (typeof pick === "string" && pick.startsWith(OWN_BASEMAP_PREFIX) ? pick.slice(OWN_BASEMAP_PREFIX.length) : "");
+export const normalizeOwnBasemaps = (value) => (Array.isArray(value) ? value : [])
+  .filter((entry) => entry && typeof entry.id === "string" && entry.id && (entry.kind === "image" || entry.kind === "vector"))
+  .map((entry) => ({ id: entry.id, name: String(entry.name || "").trim() || "Basemap", kind: entry.kind }));
+// The list as world state carries it (one string, as allowedBasemaps), read back.
+export const encodeOwnBasemaps = (value) => {
+  const list = normalizeOwnBasemaps(value);
+  return list.length ? JSON.stringify(list) : null;
+};
+export const decodeOwnBasemaps = (key) => {
+  if (key == null) return [];
+  try {
+    return normalizeOwnBasemaps(JSON.parse(key));
+  } catch {
+    return [];
+  }
+};
+
+// The player's basemap pick (Settings > Map) as it applies to the scenario on
+// screen: a built-in basemap's id, "own:<id>" for one of the scenario's other
+// basemaps, or "" for the scenario's main one. Its regions are drawn for the
+// maps the author offers, so only those count (builtinBasemapChoices above,
+// world.ownBasemaps); anything else, a pick made on another scenario, leaves
+// the scenario's main map.
+export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false, allowedBasemaps = null, ownBasemaps = [] } = {}) => {
+  const ownId = ownBasemapIdOf(pickedId);
+  if (ownId) return (ownBasemaps ?? []).some((own) => own.id === ownId) ? pickedId : "";
+  return builtinBasemapChoices(allowedBasemaps, { scenarioHasOwnMap }).some((basemap) => basemap.id === pickedId) ? pickedId : "";
+};
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
@@ -561,6 +595,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.regionsGeojson = withRuntimeToken("/api/runtime/json/regionsGeojson");
   JSON_URLS.citiesGeojson = withRuntimeToken("/api/runtime/json/citiesGeojson");
   JSON_URLS.backgroundData = withRuntimeToken("/api/runtime/json/backgroundData");
+  JSON_URLS.ownBasemapsData = withRuntimeToken("/api/runtime/json/ownBasemapsData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
   JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
 
