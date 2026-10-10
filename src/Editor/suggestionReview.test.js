@@ -18,9 +18,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { acceptMapChanges, applyMapChange, undoRefusal, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
-import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -456,6 +456,35 @@ const projectionSetup = () => {
 };
 const FLAT = { type: "equirectangular", globe: false };
 const flatPlace = (lon, lat) => convertDisplayPoint("mercator", FLAT, lon, lat);
+
+test("on a map with a detailed map a change of projection is refused before anything is accepted", () => {
+  // The detailed map cannot move with the map (projectionConvert.js), and a
+  // city placed for the suggested projection would land in the wrong place.
+  const { state, ctx, d, calls } = projectionSetup();
+  d.patchMetadata({ tiledBasemap: { id: "got-world", version: 1, name: "Westeros" } });
+  const projection = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  const polity = { id: "polity:Gamma", area: "polities", kind: "polity-add", key: "Gamma", to: { name: "Gamma" } };
+  const city = { id: "city:new", area: "cities", kind: "city-add", to: { name: "Southport", coord: flatPlace(10, 10), population: 100 } };
+  const changes = [projection, polity, city];
+  const before = JSON.stringify(state.doc);
+  const result = acceptMapChanges([polity, city], ctx, { changes });
+  assert.equal(result.refused, DETAILED_MAP_CONVERSION_MESSAGE);
+  assert.deepEqual(result.accepted, []);
+  assert.deepEqual(calls, []);
+  assert.equal(JSON.stringify(state.doc), before, "nothing was accepted");
+});
+
+test("an accepted change of projection is not undone once the map has a detailed map", () => {
+  // Accepted, then a detailed map picked: undoing would convert the map under
+  // it, which no other path allows (projectionConvert.js).
+  const { ctx, d } = projectionSetup();
+  const change = { id: "map:projection", area: "map", kind: "projection", from: { type: "equirectangular" }, to: { type: "mercator" }, bounds: null };
+  assert.equal(undoRefusal(change, ctx), null);
+  d.patchMetadata({ tiledBasemap: { id: "got-world", version: 1 } });
+  assert.equal(undoRefusal(change, ctx), DETAILED_MAP_CONVERSION_MESSAGE);
+  // Any other change undoes as before.
+  assert.equal(undoRefusal({ ...change, kind: "polity-add" }, ctx), null);
+});
 
 test("a change of projection is the Workshop's own conversion, and Undo converts back", () => {
   const { api, state, ctx, calls } = projectionSetup();

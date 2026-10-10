@@ -330,6 +330,8 @@ const MAP_SECTION_LABELS = {
   units: "Units",
   features: "Map features",
   puppets: "Puppet states",
+  basemaps: "Basemaps",
+  detailedMap: "Detailed map",
   settings: "Map settings",
 };
 const MapChangeSummary = ({ changes, decided = null }) => {

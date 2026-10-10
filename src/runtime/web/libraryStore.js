@@ -1730,7 +1730,7 @@ const exportScenarioBundle = async (id) => {
   // JSON assets travel as JSON, not base64: the geometry is most of a shared
   // map's weight, and base64 added a third to it for nothing. The desktop
   // exporter writes the same shape (server/libraryStore.js encodeJsonFile).
-  for (const [key, fileName] of [["regionsGeojson", "regions.geojson"], ["citiesGeojson", "cities.geojson"], ["backgroundData", "background.json"]]) {
+  for (const [key, fileName] of [["regionsGeojson", "regions.geojson"], ["citiesGeojson", "cities.geojson"], ["backgroundData", "background.json"], ["ownBasemapsData", "own-basemaps.json"]]) {
     assets[key] = record.geojson?.[key] !== undefined
       ? { contentType: "application/json", data: parseJsonValue(record.geojson[key], null), fileName, mode: "embedded" }
       : { fileName, mode: "default" };

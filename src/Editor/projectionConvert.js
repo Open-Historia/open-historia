@@ -31,10 +31,26 @@ import { DEFAULT_PROJECTION, FREEFORM, convertBounds, convertDisplayPoint, moveP
 //   "vector"  its geometry moved with the map
 //   "plain"   a plain sea in place of the built-in tiles
 //   "tiles"   the built-in tiles again
-export const planBasemapChange = ({ from, to, background = null, keepPicture = false }) => {
+//   "blocked" not converted at all, and `reason` says why
+//
+// A detailed map (doc.metadata.tiledBasemap) is a Mercator tile archive the
+// editor cannot move (docs/adr/0005): converting would move the regions and
+// the basemap under it and leave it where it was, out of line with both.
+export const DETAILED_MAP_CONVERSION_MESSAGE = "This map has a detailed map, which is always drawn in the Mercator projection and cannot be converted with the rest of the map. To change the projection, take its detailed maps out of This scenario's maps first (Basemap → My Maps, the ✕ beside each; for the starting map, make another map the starting map first). The drawn maps under them stay.";
+// The other way round: a detailed map put on a map already in another
+// projection would lie under regions drawn for that one.
+export const DETAILED_MAP_PROJECTION_MESSAGE = "A detailed map is always drawn in the Mercator projection, and this map is in another one. To use a detailed map, convert the map back to Mercator first (Projection, in the bottom bar).";
+// Whether the map names a detailed map: its starting one
+// (doc.metadata.tiledBasemap), or another in the scenario's maps
+// (doc.metadata.ownBasemaps, scenarioMaps.js).
+export const hasDetailedMap = (doc) => Boolean(doc?.metadata?.tiledBasemap)
+  || (Array.isArray(doc?.metadata?.ownBasemaps) && doc.metadata.ownBasemaps.some((entry) => entry?.detailed));
+export const detailedMapFits = (projection) => normalizeProjection(projection).type === DEFAULT_PROJECTION;
+export const planBasemapChange = ({ from, to, background = null, keepPicture = false, detailedMap = false }) => {
   const source = normalizeProjection(from);
   const target = normalizeProjection(to);
   if (sameProjection(source, target)) return { kind: "none" };
+  if (detailedMap) return { kind: "blocked", reason: DETAILED_MAP_CONVERSION_MESSAGE };
   const kind = background?.kind ?? null;
   if (kind === "image") {
     if (source.type === FREEFORM || target.type === FREEFORM) {

@@ -64,6 +64,8 @@ const buildAbsoluteUrl = (pathname) => {
   const relativePath = withRuntimeToken(pathname);
   return origin ? new URL(relativePath, origin).toString() : relativePath;
 };
+// For archives served outside the runtime set: a Tiled Basemap's, by id.
+export const runtimeAbsoluteUrl = (pathname) => buildAbsoluteUrl(pathname);
 
 export const JSON_URLS = {
   advisor: "",
@@ -79,6 +81,7 @@ export const JSON_URLS = {
   regionsGeojson: "",
   citiesGeojson: "",
   backgroundData: "",
+  ownBasemapsData: "",
   world: "",
   intercepts: "",
 };
@@ -114,18 +117,98 @@ export const ESRI_BASEMAPS = [
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
-// Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
-const BASEMAP_STORAGE_KEY = "map_basemap_style";
+// Mirror runtime/basemapPick.js's keys (it imports this module); the last is
+// the one pick for every game before picks were kept per game.
+const DEFAULT_BASEMAP_STORAGE_KEY = "map_basemap_default";
+const DEFAULT_BASEMAP_ON_STORAGE_KEY = "map_basemap_default_on";
+export const LEGACY_BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
-// The player's basemap pick (Settings > Map) as it applies to the scenario on
-// screen: a built-in basemap's id, or "" for the scenario's own. It replaces a
-// built-in basemap only. A scenario with a map of its own (a picture, a drawn
-// map, the plain sea of a flat sheet) keeps it: its regions are drawn for that
-// map, and a built-in basemap under them is the Earth under another world.
-export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false } = {}) => (
-  !scenarioHasOwnMap && isBuiltinBasemapId(pickedId) ? pickedId : ""
+// Which built-in maps a scenario lets players switch to in Settings → Map
+// (world.allowedBasemaps, chosen in the Map Editor): null or absent = all of
+// them, as before; a list = only those; an empty list = only the scenario's own
+// map, as a made-up world wants. Unknown ids are ignored.
+export const normalizeAllowedBasemaps = (value) => (Array.isArray(value)
+  ? ESRI_BASEMAPS.map((basemap) => basemap.id).filter((id) => value.includes(id))
+  : null);
+export const allowedBuiltinBasemaps = (allowed) => (allowed == null
+  ? ESRI_BASEMAPS
+  : ESRI_BASEMAPS.filter((basemap) => allowed.includes(basemap.id)));
+// The list as world state carries it (one comma-joined string, so an unchanged
+// list keeps its identity between polls: useWorldState.js), read back.
+export const decodeAllowedBasemaps = (key) => (key == null ? null : String(key).split(",").filter(Boolean));
+// Whether a scenario has a map of its own: a world.background of any kind (a
+// picture, a drawn map, the plain sea of a flat sheet). The game, Settings and
+// the Map Editor (exportPreset.js scenarioHasOwnMap) all ask this.
+export const hasOwnMap = (background) => Boolean(background?.kind);
+// The built-in maps Settings → Map offers on a scenario. One with a map of its
+// own that never chose (allowedBasemaps null) offers none, so a made-up world
+// saved before the choice existed never gets the Earth under it; a list it
+// chose in the Map Editor is offered as on any scenario.
+export const builtinBasemapChoices = (allowed, { scenarioHasOwnMap = false } = {}) => (
+  scenarioHasOwnMap && allowed == null ? [] : allowedBuiltinBasemaps(allowed)
 );
+
+// A scenario's other basemaps of its own (world.ownBasemaps: [{ id, name,
+// kind }]), which players may switch to beside its main one. Each payload
+// ({ dataUrl } or { geojson }) rides in the ownBasemapsData asset, keyed by id,
+// so world.json stays light. A pick of one is stored as "own:<id>".
+export const OWN_BASEMAP_PREFIX = "own:";
+export const ownBasemapPick = (id) => `${OWN_BASEMAP_PREFIX}${id}`;
+export const ownBasemapIdOf = (pick) => (typeof pick === "string" && pick.startsWith(OWN_BASEMAP_PREFIX) ? pick.slice(OWN_BASEMAP_PREFIX.length) : "");
+// A detailed map among them (docs/adr/0007) is named, never carried, and has
+// no payload: { id, name, kind: "tiled", tiled: { id, version } | { hash },
+// fillOpacity?, over }, shown over another entry's drawing (`over`, its id) or
+// the starting map's ("").
+const DETAILED_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DETAILED_CHECKSUM = /^[a-f0-9]{64}$/;
+export const detailedNamingOf = (tiled) => {
+  const id = DETAILED_ID.test(String(tiled?.id || "")) ? String(tiled.id) : "";
+  const hash = DETAILED_CHECKSUM.test(String(tiled?.hash || "").toLowerCase()) ? String(tiled.hash).toLowerCase() : "";
+  if (id) {
+    const version = Number(tiled.version);
+    return { id, version: Number.isInteger(version) && version >= 1 ? version : 1 };
+  }
+  return hash ? { hash } : null;
+};
+// One entry, checked on its own: null when it is not one.
+export const normalizeOwnBasemap = (entry) => {
+  if (!(entry && typeof entry.id === "string" && entry.id && ["image", "vector", "tiled"].includes(entry.kind))) return null;
+  const name = String(entry.name || "").trim() || "Basemap";
+  if (entry.kind !== "tiled") return { id: entry.id, name, kind: entry.kind };
+  const tiled = detailedNamingOf(entry.tiled);
+  if (!tiled) return null;
+  return {
+    id: entry.id,
+    name,
+    kind: "tiled",
+    tiled,
+    ...(Array.isArray(entry.fillOpacity) ? { fillOpacity: entry.fillOpacity } : {}),
+    over: typeof entry.over === "string" ? entry.over : "",
+  };
+};
+// The list: a detailed map shown over a map that is not a drawn one of the
+// list is dropped.
+export const normalizeOwnBasemaps = (value) => (Array.isArray(value) ? value : [])
+  .map(normalizeOwnBasemap)
+  .filter(Boolean)
+  .filter((entry, _, list) => entry.kind !== "tiled" || entry.over === "" || list.some((other) => other.id === entry.over && other.kind === "vector"));
+// The list as world state carries it (one string, as allowedBasemaps), read back.
+export const encodeOwnBasemaps = (value) => {
+  const list = normalizeOwnBasemaps(value);
+  return list.length ? JSON.stringify(list) : null;
+};
+export const decodeOwnBasemaps = (key) => {
+  if (key == null) return [];
+  try {
+    return normalizeOwnBasemaps(JSON.parse(key));
+  } catch {
+    return [];
+  }
+};
+
+// Which map a player sees, of the scenario's maps, is runtime/basemapPick.js
+// basemapShownFor; this is the built-in map drawn when it is one.
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
@@ -155,11 +238,14 @@ export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
 // so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
 // placeholders can be swapped for an upscaled crop of the nearest real ancestor.
 export const basemapProtocolTemplate = (id) => `ohbase://${basemapById(id).id}/{z}/{y}/{x}`;
-// The picked basemap id straight from localStorage — used by preload before
-// React mounts (mapSettings.js drives it reactively once mounted).
+// The player's default basemap straight from localStorage, when they turned it
+// on (runtime/basemapPick.js) — used by preload to warm its tiles before React
+// mounts. A pick made before picks were kept per game counts the same.
 export const selectedBasemapId = () => {
   try {
-    return resolveBasemapId({ overrideId: localStorage.getItem(BASEMAP_STORAGE_KEY) });
+    const legacy = localStorage.getItem(LEGACY_BASEMAP_STORAGE_KEY);
+    const chosen = localStorage.getItem(DEFAULT_BASEMAP_ON_STORAGE_KEY) === "1" ? localStorage.getItem(DEFAULT_BASEMAP_STORAGE_KEY) : legacy;
+    return resolveBasemapId({ overrideId: chosen });
   } catch {
     return DEFAULT_BASEMAP_ID;
   }
@@ -539,6 +625,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.regionsGeojson = withRuntimeToken("/api/runtime/json/regionsGeojson");
   JSON_URLS.citiesGeojson = withRuntimeToken("/api/runtime/json/citiesGeojson");
   JSON_URLS.backgroundData = withRuntimeToken("/api/runtime/json/backgroundData");
+  JSON_URLS.ownBasemapsData = withRuntimeToken("/api/runtime/json/ownBasemapsData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
   JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
 

@@ -23,6 +23,8 @@ Every runtime asset the map depends on, with its physical filename, MIME, and ho
 | Nation flags | `flags` | `flags.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/flags` | Owner code → PNG data URL; `{}` when absent |
 | Nation tags | `tags` | `tags.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/tags` | Owner code → `string[]`; **starting** tags only (merge with `world.countryTags`) |
 | Map background | `backgroundData` | `background.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/backgroundData` | Heavy `{dataUrl}`/`{geojson}` payload; loaded only when `world.background` set |
+| Other basemaps of the scenario's own | `ownBasemapsData` | `own-basemaps.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/ownBasemapsData` | `{ [id]: {dataUrl} \| {geojson} }`; loaded only when the player picks one of `world.ownBasemaps` |
+| Tiled Basemap archive | — | `basemaps/<id>.pmtiles` (raster PMTiles) + `<id>.json` meta + optional `<id>.payload.json` (`{ geojson }`, its vector fallback) | Basemap library (`DATA_DIR/basemaps`) — **never in a scenario** | `GET/HEAD /api/basemaps/:id/archive` (byte ranges) | A **Tiled Basemap** ([ADR 0005](adr/0005-tiled-basemaps-stream-to-disk.md)): named by a scenario's `world.background.tiled` (an official map's `id` and lowest `version`, or the author's own map's `hash`) and drawn over its vector background unless the player picked Painted. Installed only from the official list ([ADR 0006](adr/0006-official-basemap-list.md)), by streaming to disk (≤ 500 MB) and checking the list's SHA-256; one copy per map, a newer version replacing the older; a scenario naming one the player lacks shows its vector background and offers the download — see [Game map §3](game-map.md#3-the-base-style-buildworldstyle) |
 | World state | `world` | `world.json` (per-game/scenario) | Game dir, else scenario | `GET /api/runtime/json/world` | The live simulation document — see [World state](world-state.md) |
 | Runtime game JSON | `game`, `events`, `chat`, `actions`, `advisor`, `prompts`, `snapshots` | under game `storage/` | Game dir | `GET/PUT /api/runtime/json/<key>` | Per-game session state; polled ~5s |
 
@@ -351,7 +353,7 @@ Common invariants: each drops its promise on failure so the next call **retries*
 
 ## 10. Basemap raster + terrain (asset-adjacent)
 
-Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"`. The selected id is read from `localStorage["map_basemap_style"]` (`selectedBasemapId`).
+Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"`. `selectedBasemapId` reads the player's default basemap (`localStorage["map_basemap_default"]` while `map_basemap_default_on` is on, or the older `map_basemap_style` not yet migrated) so preload can warm its tiles; which map a game shows is `basemapShownFor` (`runtime/basemapPick.js`).
 
 | Concern | Mechanism |
 |---|---|

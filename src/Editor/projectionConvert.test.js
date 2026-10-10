@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatAspect, moveFeatureCoords, moveUnits, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, formatAspect, moveFeatureCoords, moveUnits, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
 import { MAX_REDRAWN_WIDTH, redrawnSize, reprojectPixels } from "./projectionImage.js";
 import { convertDisplayPoint, geoToDisplay, sheetBounds } from "../../server/mapProjection.js";
 
@@ -41,6 +41,33 @@ test("a vector basemap moves with the map, and the built-in tiles give way to a 
   assert.deepEqual(planBasemapChange({ from: "mollweide", to: "mercator", background: { kind: "plain" } }), { kind: "tiles" });
   assert.deepEqual(planBasemapChange({ from: "mollweide", to: "mercator", background: null }), { kind: "none" });
   assert.deepEqual(planBasemapChange({ from: "mercator", to: "miller", background: { kind: "raster" } }), { kind: "none" }, "a session-only reference is left alone");
+});
+
+test("a map on a detailed map is not converted: the detailed map cannot move with it", () => {
+  // A detailed map is a Mercator tile archive; the regions and the drawn
+  // basemap would move and it would not, so nothing moves.
+  const drawn = { kind: "vector" };
+  assert.deepEqual(
+    planBasemapChange({ from: "mercator", to: "robinson", background: drawn, detailedMap: true }),
+    { kind: "blocked", reason: DETAILED_MAP_CONVERSION_MESSAGE },
+  );
+  // It sends the author to taking the detailed maps out of the scenario's
+  // maps, which keeps the drawn maps under them, not to picking another basemap.
+  assert.match(DETAILED_MAP_CONVERSION_MESSAGE, /This scenario's maps/);
+  assert.doesNotMatch(DETAILED_MAP_CONVERSION_MESSAGE, /pick a basemap/);
+  // Nothing to convert, nothing to block; and without one the map converts.
+  assert.deepEqual(planBasemapChange({ from: "mercator", to: "mercator", background: drawn, detailedMap: true }), { kind: "none" });
+  assert.deepEqual(planBasemapChange({ from: "mercator", to: "robinson", background: drawn }), { kind: "vector" });
+});
+
+test("a detailed map is only put on a map in Mercator", () => {
+  // Its tiles are Mercator: on a map converted to another projection they would
+  // lie under regions drawn for that one.
+  assert.equal(detailedMapFits(undefined), true);
+  assert.equal(detailedMapFits({ type: "mercator", globe: false }), true);
+  assert.equal(detailedMapFits("robinson"), false);
+  assert.equal(detailedMapFits({ type: "freeform", aspect: 2 }), false);
+  assert.match(DETAILED_MAP_PROJECTION_MESSAGE, /Mercator/);
 });
 
 test("cities, features and units go where their map goes", () => {

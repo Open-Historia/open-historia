@@ -25,6 +25,8 @@ import {
   getScenarioDetails,
   importGameBundle,
   importScenarioBundle,
+  listScenariosNamingTiledBasemap,
+  migrateEmbeddedTiledArchives,
   listTrash,
   purgeOldTrash,
   restoreFromTrash,
@@ -67,9 +69,32 @@ import {
   createBasemap,
   deleteBasemap,
   ensureBasemapStore,
+  clearInterruptedDownloads,
+  createTiledBasemap,
+  findBasemapMetaByHash,
+  findOfficialBasemapMeta,
+  getBasemapArchivePath,
   getBasemapCatalog,
   getBasemapPayload,
+  getBasemapMeta,
+  incomingArchivePath,
+  setTiledBasemapFallback,
+  tagOfficialBasemaps,
 } from "./basemapStore.js";
+import {
+  TooLargeError,
+  cancelInstallJob,
+  downloadToFile,
+  getInstallJob,
+  receiveToFile,
+  startInstallJob,
+} from "./tiledBasemaps.js";
+import {
+  createOfficialCatalogReader,
+  findOfficialEntry,
+  isOfficialReleaseUrl,
+  latestOfficialVersion,
+} from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
@@ -266,6 +291,11 @@ ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
+clearInterruptedDownloads();
+// A scenario or game still carrying a tiled archive inside it (the first cut of
+// scenario relief) moves it into the Basemap library (docs/adr/0005).
+migrateEmbeddedTiledArchives().catch((error) => console.warn("[basemaps] moving embedded archives into the library failed:", error.message));
+
 // What was deleted more than TRASH_KEEP_DAYS ago goes for good.
 try {
   const purged = purgeOldTrash();
@@ -754,9 +784,13 @@ app.get("/api/scenarios/:scenarioId/export", (req, res) => {
   }
 });
 
-app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
+app.post("/api/scenarios/import", largeJsonParser, async (req, res) => {
   try {
-    res.status(201).json(importScenarioBundle(req.body ?? {}, { setSelected: true }));
+    const imported = importScenarioBundle(req.body ?? {}, { setSelected: true });
+    // A bundle from the first cut of scenario relief carries its archive; it
+    // becomes a Tiled Basemap before anyone reads the scenario back.
+    await migrateEmbeddedTiledArchives();
+    res.status(201).json(getScenarioDetails(imported.scenario.id));
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -764,9 +798,11 @@ app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
 
 // Replace an existing scenario's content with a fresh bundle — the community
 // hub's "Update" button for scenarios imported unmodified from a post.
-app.put("/api/scenarios/:scenarioId/import", largeJsonParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) => {
   try {
-    res.json(updateScenarioFromBundle(req.params.scenarioId, req.body ?? {}));
+    updateScenarioFromBundle(req.params.scenarioId, req.body ?? {});
+    await migrateEmbeddedTiledArchives();
+    res.json(getScenarioDetails(req.params.scenarioId));
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -1146,7 +1182,16 @@ const HUB_DOWNLOAD_HOSTS = new Set([
   "user-attachments.githubusercontent.com",
   "github-production-user-asset-6210df.s3.amazonaws.com",
 ]);
-const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
+// Caps: a scenario bundle, and a Tiled Basemap (docs/adr/0005). Both downloads
+// stream to disk, so a cap bounds disk use and accidents, not memory. The env
+// overrides exist for the tests, which scale them down to kilobytes.
+const HUB_MAX_BUNDLE_BYTES = Number(process.env.OH_HUB_MAX_BUNDLE_BYTES) || 200 * 1024 * 1024;
+const TILED_BASEMAP_MAX_BYTES = Number(process.env.OH_TILED_BASEMAP_MAX_BYTES) || 500 * 1024 * 1024;
+// Tests and local checks only: one exact origin (a fake "release" on this
+// machine) the hub download guard also accepts. Unset in every real run.
+const HUB_TEST_ORIGIN = process.env.OH_HUB_TEST_ORIGIN || "";
+const isHubDownloadUrl = (candidate) =>
+  isAllowedHubUrl(candidate, HUB_DOWNLOAD_HOSTS) || (Boolean(HUB_TEST_ORIGIN) && candidate.origin === HUB_TEST_ORIGIN);
 
 // One hop of a hub download. fetch() has no timeout of its own, so a connection
 // that never opens — an IPv6 route that blackholes, a proxy that drops the SYN —
@@ -1160,14 +1205,23 @@ const HUB_TRANSIENT_CODES = new Set([
   "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "EPIPE",
   "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "TimeoutError",
 ]);
-const fetchHubHop = async (url) => {
+// Each hop:
+// the timeout covers the wait for the response's headers only. A Tiled Basemap
+// can take far longer than that to arrive on a slow link, and a body that stalls
+// is caught by the download's own idle timer (tiledBasemaps.js).
+const fetchHubHop = async (url, signal) => {
   for (let attempt = 0; ; attempt += 1) {
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(new DOMException("Timed out", "TimeoutError")), HUB_HOP_TIMEOUT_MS);
     try {
-      return await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(HUB_HOP_TIMEOUT_MS) });
+      return await fetch(url, { redirect: "manual", signal: signal ? AbortSignal.any([timeout.signal, signal]) : timeout.signal });
     } catch (error) {
+      if (signal?.aborted) throw error;
       const code = error?.cause?.code || error?.code || error?.name || "";
       if (attempt >= 1 || !HUB_TRANSIENT_CODES.has(code)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 750));
+    } finally {
+      clearTimeout(timer);
     }
   }
 };
@@ -1581,7 +1635,7 @@ app.get("/api/hub/file", async (req, res) => {
   try {
     const fileUrl = String(req.query.url ?? "");
     let current = new URL(fileUrl);
-    if (!isAllowedHubUrl(current, HUB_DOWNLOAD_HOSTS)) {
+    if (!isHubDownloadUrl(current)) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
     }
 
@@ -1625,7 +1679,7 @@ app.get("/api/hub/file", async (req, res) => {
       const location = upstream.headers.get("location");
       if (!location) break;
       const next = new URL(location, current);
-      if (!isAllowedHubUrl(next, HUB_DOWNLOAD_HOSTS)) {
+      if (!isHubDownloadUrl(next)) {
         return sendError(res, 400, new Error("Scenario file redirected off GitHub."));
       }
       current = next;
@@ -1775,6 +1829,172 @@ app.post("/api/basemaps", largeJsonParser, (req, res) => {
 app.get("/api/basemaps/:id/payload", (req, res) => {
   try {
     res.json(getBasemapPayload(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// ---- Tiled Basemaps (docs/adr/0005, docs/adr/0006) -------------------------
+// Detailed maps come only from the official list (server/officialBasemaps.js):
+// the game reads which maps and versions exist, and installs one as a
+// background job the client polls. The archive streams to disk, must match the
+// list's checksum, and only then joins the library, replacing any other
+// version of the same map.
+const OFFICIAL_LIST_FILE = path.join(DATA_DIR, "basemaps-official.json");
+const readOfficialCatalog = createOfficialCatalogReader({
+  fetchHop: (url) => fetchHubHop(url),
+  isAllowed: isHubDownloadUrl,
+  readSaved: () => JSON.parse(fs.readFileSync(OFFICIAL_LIST_FILE, "utf8")),
+  save: (catalog) => fs.writeFileSync(OFFICIAL_LIST_FILE, JSON.stringify(catalog)),
+  cap: TILED_BASEMAP_MAX_BYTES,
+});
+
+// The official maps, each with the version this player has (if any), so the
+// game can offer a download or an update. Reading it also marks any copy the
+// player already has, byte for byte, as that official version.
+app.get("/api/basemaps/official", async (req, res) => {
+  try {
+    const catalog = await readOfficialCatalog({ force: req.query.refresh === "1" });
+    tagOfficialBasemaps(catalog);
+    const basemaps = catalog.basemaps.map((entry) => {
+      const installed = findOfficialBasemapMeta(entry.id);
+      return { ...entry, installed: installed ? { libraryId: installed.id, version: installed.official.version } : null };
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ basemaps, stale: Boolean(catalog.stale), ...(catalog.error ? { error: catalog.error } : {}) });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+// The player's copy of an official map, whatever its version, or 404.
+app.get("/api/basemaps/official/:officialId", (req, res) => {
+  const meta = findOfficialBasemapMeta(String(req.params.officialId));
+  if (!meta) return sendError(res, 404, new Error("This map is not downloaded."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(meta);
+});
+
+// Installs an official map: `{ id, version? }`, the newest version when none is
+// given. A version the player already has (or a newer one) is not downloaded
+// again, and asking twice while it downloads joins the download in progress.
+app.post("/api/basemaps/official/install", jsonParser, async (req, res) => {
+  try {
+    const officialId = String(req.body?.id || "");
+    const catalog = await readOfficialCatalog();
+    const entry = findOfficialEntry(catalog, officialId);
+    if (!entry) {
+      return sendError(res, 404, new Error(catalog.error
+        ? `The official map list could not be read (${catalog.error}).`
+        : "That map is not on the official list."));
+    }
+    if (entry.withdrawn || !entry.versions.length) {
+      return sendError(res, 404, new Error("This map is no longer available from the official list."));
+    }
+    const asked = req.body?.version === undefined ? null : Number(req.body.version);
+    const version = asked === null ? latestOfficialVersion(entry) : entry.versions.find((v) => v.version === asked);
+    if (!version) return sendError(res, 404, new Error(`Version ${asked} of that map is not on the official list.`));
+    // The list was checked as it was read; checked again here, where it is used.
+    if (!isOfficialReleaseUrl(version.url)) return sendError(res, 400, new Error("That map's link is not an official release."));
+    const installed = findOfficialBasemapMeta(entry.id);
+    const jobId = startInstallJob({
+      key: `${entry.id}@${version.version}`,
+      run: async ({ signal, onProgress }) => {
+        if (installed && installed.official.version >= version.version) return installed;
+        const file = incomingArchivePath();
+        await downloadToFile({
+          url: version.url,
+          dest: file,
+          cap: TILED_BASEMAP_MAX_BYTES,
+          isAllowed: isHubDownloadUrl,
+          fetchHop: fetchHubHop,
+          onProgress,
+          signal,
+        });
+        // createTiledBasemap removes the file if it is refused or cancelled.
+        return createTiledBasemap({
+          file,
+          name: entry.name,
+          author: entry.author,
+          source: { official: true, url: version.url },
+          expectedHash: version.sha256,
+          official: { id: entry.id, version: version.version },
+          signal,
+        });
+      },
+    });
+    res.status(202).json({ jobId, version: version.version });
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/basemaps/tiled/install/:jobId", (req, res) => {
+  const job = getInstallJob(req.params.jobId);
+  if (!job) return sendError(res, 404, new Error("No such download."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(job);
+});
+
+app.delete("/api/basemaps/tiled/install/:jobId", (req, res) => {
+  const job = cancelInstallJob(req.params.jobId);
+  if (!job) return sendError(res, 404, new Error("No such download."));
+  res.json(job);
+});
+
+// An author's own archive, from a file on their machine: the request body is
+// streamed to disk, never parsed or held, then checked like a download.
+app.put("/api/basemaps/tiled", async (req, res) => {
+  const file = incomingArchivePath();
+  try {
+    await receiveToFile(req, file, TILED_BASEMAP_MAX_BYTES);
+    const meta = await createTiledBasemap({ file, name: req.query.name, author: req.query.author });
+    res.status(201).json(meta);
+  } catch (error) {
+    sendError(res, error instanceof TooLargeError ? 413 : 400, error);
+  }
+});
+
+app.get("/api/basemaps/by-hash/:hash", (req, res) => {
+  const meta = findBasemapMetaByHash(String(req.params.hash));
+  if (!meta) return sendError(res, 404, new Error("Basemap not in the library."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(meta);
+});
+
+// A Tiled Basemap's vector fallback (small GeoJSON).
+app.put("/api/basemaps/:id/payload", largeJsonParser, (req, res) => {
+  try {
+    res.json(setTiledBasemapFallback(req.params.id, req.body?.geojson));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// Which scenarios name it: what deleting it would leave on their painted fallback.
+app.get("/api/basemaps/:id/users", (req, res) => {
+  const meta = getBasemapMeta(req.params.id);
+  if (!meta) return sendError(res, 404, new Error("Basemap not in the library."));
+  res.json(meta.kind === "tiled" ? listScenariosNamingTiledBasemap(meta) : []);
+});
+
+// The archive itself, by byte range, for the map's pmtiles reader.
+app.get("/api/basemaps/:id/archive", (req, res) => {
+  try {
+    streamBinaryFile(req, res, getBasemapArchivePath(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.head("/api/basemaps/:id/archive", (req, res) => {
+  try {
+    const stats = fs.statSync(getBasemapArchivePath(req.params.id));
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", stats.size);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).end();
   } catch (error) {
     sendError(res, 404, error);
   }

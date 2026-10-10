@@ -44,6 +44,10 @@ import {
   hubCopyStatus,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
+import TiledBasemapOffer from "../Map/TiledBasemapOffer.jsx";
+import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
+import { detailedMapOffers, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
+import { scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
@@ -466,6 +470,36 @@ const ScenarioDetail = ({ post, busy, onImport, onPlay, onBack, notice, error, t
   </div>
 );
 
+// A scenario on a detailed map never carries it: it names a map on the official
+// list (docs/adr/0006), and players installing it are offered that map. One
+// that names the author's own map, not on the list, plays on its basemap.
+// The detailed maps among a bundle's scenario's maps (docs/adr/0007).
+const detailedMapsOf = (bundle) => scenarioMapsOfWorld(bundle.data?.world || {}).filter((map) => map.kind === "detailed");
+
+const describeScenarioTiledBasemap = (bundle) => {
+  const detailed = detailedMapsOf(bundle);
+  if (!detailed.length) return "";
+  const unlisted = detailed.filter((map) => !map.detailed?.id);
+  const offered = detailed.length === 1
+    ? " Players installing it are offered its detailed map from the official list, with its size, as part of the install."
+    : " Players installing it are offered its detailed maps from the official list, with their sizes, as part of the install.";
+  if (!unlisted.length) return offered;
+  const names = unlisted.map((map) => map.name).join(", ");
+  const notListed = ` Not on the official Open Historia list: ${names}. Players see the drawn map it is shown over instead. To get one added, use ⤴ on it in the Map Editor's Maps window (My Maps → Your detailed maps): the Open Historia team reviews it and adds it to the list.`;
+  return (unlisted.length < detailed.length ? offered : "") + notListed;
+};
+
+// The last step of installing a scenario on official detailed maps (it may
+// name several, docs/adr/0007): what to offer for each, the starting one
+// marked, and how many detailed maps the scenario names. A player who has a
+// map (any version) downloads nothing; one with an older version than the
+// scenario was made on is offered the update.
+const installOffersFor = async (bundle) => {
+  if (import.meta.env.VITE_OH_WEB) return { offers: [], count: 0 }; // the browser version shows the drawn maps
+  const named = detailedMapsOf(bundle);
+  return { offers: detailedMapOffers(await lookUpDetailedMaps(named)), count: named.length };
+};
+
 // onPlay(scenario) opens the library's country picker for a scenario already
 // in the library: "Import & Play" imports and then plays, and a post the
 // library holds plays that copy.
@@ -477,6 +511,12 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState(null);
+  // The last step of installing a scenario on a detailed map the player lacks:
+  // { basemap, details }. The download is offered here, with its size, and the
+  // library moves on to the Scenarios tab only once it is answered (downloaded,
+  // or "Not now"). It sits above both views, so browsing posts meanwhile does
+  // not cancel it (docs/adr/0005).
+  const [missingMap, setMissingMap] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
   // The post whose Import button was clicked once while the library already
@@ -625,6 +665,10 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // Nothing is reported anywhere: the download of the post's file from the
       // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
+      // A scenario on a detailed map offers that map's download right here, with
+      // its size and the choice of its basemap, rather than leaving the player
+      // to meet it over the map.
+      const { offers: mapsToOffer, count: detailedCount } = await installOffersFor(bundle).catch(() => ({ offers: [], count: 0 }));
       // A basemap that just failed to download is not tried again this session
       // (runtime/missingBasemap.js); Import & Play opens the picker next.
       noteMissingBasemapTried(details?.scenario);
@@ -642,9 +686,19 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           setError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
         }
       }
+      // While an earlier install's map offer is still open (perhaps downloading),
+      // it keeps the page: moving on now would cancel it, and its answer moves on.
+      // This scenario's own map, if any, is then offered over the map instead.
+      if (missingMap) return;
       // "Import & Play" goes on to the country picker, which opens over the
-      // menu — unless the player has already moved on to another post.
-      if (play && details?.scenario && selectedPostRef.current?.id === post.id) onPlay?.(details.scenario);
+      // menu — once the map offer is answered, and unless the player has
+      // already moved on to another post.
+      const playNext = play && details?.scenario ? details.scenario : null;
+      // A scenario with one detailed map, the starting one, keeps the plain
+      // offer; one with several lists them.
+      if (detailedCount === 1 && mapsToOffer.length === 1 && mapsToOffer[0].starting) setMissingMap({ basemap: mapsToOffer[0], postId: post.id, playNext });
+      else if (mapsToOffer.length) setMissingMap({ basemaps: mapsToOffer, postId: post.id, playNext });
+      else if (playNext && selectedPostRef.current?.id === post.id) onPlay?.(playNext);
     } catch (nextError) {
       const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
       if (stillRelevant) {
@@ -744,6 +798,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // desktop app always opens it), and keep the post as a link the player
       // can click (publishPostUrl).
       window.open(scenarioUrl, "_blank", "noopener");
+      extra += describeScenarioTiledBasemap(bundle);
       setPublishPostUrl(scenarioUrl);
       // After the page is open: this write is not worth losing the page over.
       if (!scenario.hubPublished?.key) {
@@ -764,10 +819,28 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
     }
   };
 
+  const finishInstall = () => {
+    const { postId, playNext } = missingMap;
+    setMissingMap(null);
+    if (playNext && selectedPostRef.current?.id === postId) onPlay?.(playNext);
+  };
+
   return (
     // As the main menu's Community tab (fullPage) the surrounding page owns
     // scrolling; as a floating panel it caps its own height and scrolls itself.
     <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: `calc(${APP_HEIGHT} - 11rem)`, overflowY: "auto", paddingRight: "0.2rem" }) }}>
+      {missingMap?.basemaps && (
+        <DetailedMapsInstallOffer key={missingMap.postId} offers={missingMap.basemaps} onDone={finishInstall} />
+      )}
+      {missingMap?.basemap && (
+        <TiledBasemapOffer
+          key={`${missingMap.basemap.id}@${missingMap.basemap.version}`}
+          basemap={missingMap.basemap}
+          atInstall
+          onDone={finishInstall}
+          onDismiss={finishInstall}
+        />
+      )}
       {selectedPost ? (
         <ScenarioDetail
           post={selectedPost}

@@ -2,7 +2,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
-import { useCustomBackground } from "./useCustomBackground.js";
+import { useCustomBackground, useOwnBasemap } from "./useCustomBackground.js";
+import { useDetailedMap } from "./useDetailedMap.js";
+import { useGameBasemapPick } from "./useBasemapPick.js";
+import { basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
+import { buildScenarioTerrainStyle, publishShownRelief } from "./scenarioTerrain.js";
+import TiledBasemapOffer from "./TiledBasemapOffer.jsx";
+import { dismissTiledUpdate, isTiledUpdateDismissed } from "../../runtime/tiledBasemaps.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
@@ -14,12 +20,13 @@ import {
   basemapMaxZoom,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
-  basemapOverrideFor,
+  decodeAllowedBasemaps,
+  decodeOwnBasemaps,
   esriTileTemplate,
+  ownBasemapIdOf,
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
-import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 import { imageQuad } from "../../../server/mapProjection.js";
@@ -326,9 +333,13 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     };
   }
   if (customBg?.kind === "vector" && customBg.geojson) {
+    // Relief tiles, when the scenario ships them and the player wants them, draw
+    // over the vector shapes; the shapes stay beneath as the fallback wherever a
+    // tile is missing (Map/scenarioTerrain.js).
+    const relief = buildScenarioTerrainStyle(customBg.terrain, customBg.terrain?.url);
     return {
       version: 8,
-      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson } },
+      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson }, ...relief.sources },
       layers: [
         { id: "custom-bg-sea", type: "background", paint: { "background-color": "#0b1a2b" } },
         // A fill layer only draws (Multi)Polygons, so no geometry-type filter is
@@ -337,6 +348,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         // its own biome colour in `fill`.
         { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", paint: { "fill-color": ["coalesce", ["get", "fill"], "#33435c"] } },
         { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(0,0,0,0.18)", "line-width": 0.4 } },
+        ...relief.layers,
       ],
       sky: { "atmosphere-blend": 0 },
     };
@@ -600,25 +612,64 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   // `declared` flips on from the background descriptor in world.json (before
   // the heavy payload) so the map drops ESRI immediately rather than flashing
   // satellite Earth.
-  const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled, tiledUpdate, allowedBasemaps: worldAllowedBasemaps, ownBasemaps: worldOwnBasemaps } = useCustomBackground();
+  // A newer version of the detailed map is offered once: "Not now" is
+  // remembered for that version, unless the scenario was made on it.
+  const [dismissedUpdate, setDismissedUpdate] = useState("");
   const isGlobe = projection === "globe";
-  // The player's basemap pick (Settings → Map) is local to this browser and
-  // reversible. Empty — the default — leaves the scenario author's basemap
-  // authoritative; only a real built-in id replaces it, so a stray value left
-  // in localStorage by an older build changes nothing.
-  //
-  // It replaces a built-in basemap only. A scenario with a map of its own (a
-  // picture, a drawn map, or the plain sea of a flat sheet: `bgDeclared`)
-  // keeps it: its regions are drawn for that map, and a built-in basemap under
-  // them is the Earth under another world. The pick stays stored, and applies
-  // again in a scenario that has none (settings.jsx BasemapField says so).
-  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-  const validBasemapOverride = basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared });
-  const useScenarioBackground = !validBasemapOverride;
-  const effectiveCustomBg = useScenarioBackground ? customBg : null;
-  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
+  // The map the player sees, one of the scenario's maps (CONTEXT.md, ADR
+  // 0007; runtime/basemapPick.js): this game's own pick (Settings → Map, kept
+  // on this device), else their default basemap where the scenario offers it,
+  // else its starting map. Only maps the author offers count: the regions are
+  // drawn for them, so a made-up world never gets the Earth under it.
+  const { background: worldBackground } = useWorldBackground();
+  const { gamePick, defaultBasemap, useDefault, showDetailed } = useGameBasemapPick();
+  const scenarioMapList = useMemo(() => scenarioMapsOfWorld({
+    background: worldBackground,
+    basemap: worldBasemap,
+    allowedBasemaps: decodeAllowedBasemaps(worldAllowedBasemaps),
+    ownBasemaps: decodeOwnBasemaps(worldOwnBasemaps),
+  }), [worldBackground, worldBasemap, worldAllowedBasemaps, worldOwnBasemaps]);
+  const shownMap = basemapShownFor({ maps: scenarioMapList, gamePick, defaultBasemap, useDefault, showDetailed });
+  const useScenarioBackground = shownMap.pick === "";
+  const builtinOverride = shownMap.kind === "builtin" && !shownMap.starting ? shownMap.pick : "";
+  // The starting map's drawing alone: the drawn map under a detailed starting
+  // map, or what another detailed map is shown over.
+  const startingDrawn = useMemo(() => (customBg?.terrain ? { ...customBg, terrain: undefined } : customBg), [customBg]);
+  // Another of the scenario's maps in place of the starting one: a picture or
+  // drawn map of its own (its payload loaded on its own), or a detailed map,
+  // over the drawn map it is shown over. Until its payload has loaded, or if it
+  // is missing, the starting map's drawing stays on screen.
+  const otherDrawnPick = shownMap.kind === "detailed" ? shownMap.over : shownMap.pick;
+  const ownPick = ownBasemapIdOf(otherDrawnPick);
+  const ownPickBg = useOwnBasemap(ownPick);
+  const otherDetailed = useDetailedMap(shownMap.starting ? null : shownMap.detailed, shownMap.fillOpacity);
+  const shownOwnBg = useMemo(() => {
+    if (shownMap.starting || shownMap.kind === "builtin") return null;
+    const base = ownPick ? ownPickBg : startingDrawn;
+    if (!base) return null;
+    return shownMap.kind === "detailed" && otherDetailed.tiles && base.kind === "vector" ? { ...base, terrain: otherDetailed.tiles } : base;
+  }, [shownMap.starting, shownMap.kind, ownPick, ownPickBg, startingDrawn, otherDetailed.tiles]);
+  const otherMapShown = !shownMap.starting && shownMap.kind !== "builtin";
+  const effectiveCustomBg = otherMapShown ? shownOwnBg || startingDrawn : useScenarioBackground ? customBg : null;
+  // The download offer is for the detailed map on screen: the starting map's
+  // (useCustomBackground) or the one picked.
+  const offeredMissing = shownMap.pick === "" ? missingTiled : shownMap.kind === "detailed" ? otherDetailed.missing : null;
+  const offeredUpdate = shownMap.pick === "" ? tiledUpdate : shownMap.kind === "detailed" ? otherDetailed.update : null;
+  const updateKey = offeredUpdate ? `${offeredUpdate.id}@${offeredUpdate.version}` : "";
+  const shownUpdate = offeredUpdate && dismissedUpdate !== updateKey && (offeredUpdate.needed || !isTiledUpdateDismissed(offeredUpdate.id, offeredUpdate.version))
+    ? offeredUpdate
+    : null;
+  // Tell the political layers whether relief tiles are actually on screen, so
+  // a scenario's lighter fill ramp applies only then (Map/scenarioTerrain.js).
+  const shownRelief = effectiveCustomBg?.terrain || null;
+  useEffect(() => {
+    publishShownRelief(shownRelief);
+    return () => publishShownRelief(null);
+  }, [shownRelief]);
+  const effectiveBgDeclared = otherMapShown ? Boolean(shownOwnBg) || bgDeclared : useScenarioBackground ? bgDeclared : false;
   const effectiveBasemap = resolveBasemapId({
-    overrideId: validBasemapOverride,
+    overrideId: builtinOverride,
     scenarioId: worldBasemap,
     fallbackId: DEFAULT_BASEMAP_ID,
   });
@@ -756,7 +807,12 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   const basemapRenderKey = buildBasemapRenderKey({
     projection,
     basemapId: effectiveBasemap,
-    backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+    // Relief tiles on or off is a different style too: remount rather than swap
+    // sources under a live React Source tree. So is another of the scenario's
+    // own basemaps in place of its main one.
+    backgroundKind: effectiveBgDeclared
+      ? `${effectiveCustomBg?.kind || "declared"}${effectiveCustomBg?.terrain ? "+relief" : ""}${otherMapShown && shownOwnBg ? `+map:${shownMap.pick}` : ""}`
+      : "builtin",
   });
   // Remount once the remote vector style becomes ready. MapLibre style swaps
   // otherwise destroy/recreate style-owned layers under a live React Source
@@ -1231,6 +1287,28 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         }}>
           Loading tiles…
         </div>
+      )}
+      {/* The scenario names a Tiled Basemap the player does not have: its basic
+          map is on screen; offer the download. Or they have it, and the
+          official list has a newer version: offer that, never forced
+          (Map/TiledBasemapOffer.jsx). The same on another basemap of the
+          scenario's own, which the detailed map draws on too. */}
+      {offeredMissing && (
+        <TiledBasemapOffer
+          key={`${offeredMissing.id || offeredMissing.hash}@${offeredMissing.version || ""}`}
+          basemap={offeredMissing}
+          moreDetailedMaps={shownMap.otherDetailed.length}
+        />
+      )}
+      {!offeredMissing && shownUpdate && (
+        <TiledBasemapOffer
+          key={updateKey}
+          basemap={shownUpdate}
+          onDismiss={() => {
+            if (!shownUpdate.needed) dismissTiledUpdate(shownUpdate.id, shownUpdate.version);
+            setDismissedUpdate(updateKey);
+          }}
+        />
       )}
     </div>
   );

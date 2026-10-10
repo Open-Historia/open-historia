@@ -484,6 +484,32 @@ const moveGeojsonAsset = (asset, move) => {
   return { ...rest, data: moveGeojson(data, move) };
 };
 
+// One basemap payload ({ dataUrl } or { geojson }) in another projection: a
+// drawn one is geometry on the same globe, moved with the regions; a picture
+// fills the sheet and stays as it is. The Map Editor moves the scenario's
+// other basemaps with it too (src/Editor/ownBasemaps.js).
+export const moveBasemapPayload = (payload, move) => (
+  payload?.geojson ? { ...payload, geojson: moveGeojson(payload.geojson, move) } : payload
+);
+
+// The scenario's other basemaps of its own (ownBasemapsData: { [id]: payload }).
+const moveOwnBasemaps = (assets, move) => {
+  const asset = assets.ownBasemapsData;
+  if (!asset || asset.mode !== "embedded" || asset.data == null) return;
+  let data = asset.data;
+  if (typeof data === "string") {
+    try {
+      data = decodeBase64Json(data);
+    } catch {
+      return;
+    }
+  }
+  if (!data || typeof data !== "object") return;
+  const moved = Object.fromEntries(Object.entries(data).map(([id, payload]) => [id, moveBasemapPayload(payload, move)]));
+  const { encoding: _encoding, ...rest } = asset;
+  assets.ownBasemapsData = { ...rest, data: moved };
+};
+
 // The projection a bundle's file declares and has not been laid out in, or
 // null: nothing declared, already laid out, or Mercator, which needs nothing.
 export const declaredProjectionOf = (bundle) => {
@@ -529,6 +555,7 @@ export const layOutScenarioBundle = (bundle) => {
   if (background?.kind === "vector" && payload && typeof payload === "object" && payload.geojson) {
     assets.backgroundData = { ...assets.backgroundData, data: { ...payload, geojson: moveGeojson(payload.geojson, move) } };
   }
+  moveOwnBasemaps(assets, move);
   const data = { ...bundle.data, world };
   if (Array.isArray(data.events)) data.events = movePlaces(data.events, move);
   return { ...bundle, data, assets };
@@ -564,6 +591,7 @@ export const convertScenarioBundle = (bundle, to) => {
   if (background?.kind === "vector" && payload && typeof payload === "object" && payload.geojson) {
     assets.backgroundData = { ...assets.backgroundData, data: { ...payload, geojson: moveGeojson(payload.geojson, move) } };
   }
+  moveOwnBasemaps(assets, move);
   const data = { ...laid.data, world };
   if (Array.isArray(data.events)) data.events = movePlaces(data.events, move);
   return { ...laid, data, assets };

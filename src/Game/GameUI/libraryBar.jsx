@@ -42,7 +42,8 @@ import {
   withSingleLibraryRefresh,
   writeGameSnapshotsText,
 } from "../../runtime/library.js";
-import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
+import { loadCountryNames, normalizeOwnBasemaps, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
+import { ownBasemapsFromGame } from "../../Editor/ownBasemaps.js";
 import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
 import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
@@ -3393,7 +3394,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       world.background?.kind === "image" || world.background?.kind === "vector"
         ? downloadScenarioJsonAsset(scenario.id, "backgroundData")
         : Promise.resolve(null),
-    ]).then(([regions, cities, colors, flags, tags, bgData]) => {
+      // Its other basemaps of its own, for the same reason.
+      normalizeOwnBasemaps(world.ownBasemaps).length
+        ? downloadScenarioJsonAsset(scenario.id, "ownBasemapsData").catch(() => null)
+        : Promise.resolve(null),
+    ]).then(([regions, cities, colors, flags, tags, bgData, ownBasemapsData]) => {
       if (!isCurrent()) return;
       const bgDesc = world.background;
       const background =
@@ -3404,7 +3409,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             : bgDesc?.kind === "plain"
               ? { kind: "plain" }
               : null;
+      // A named Tiled Basemap (with the scenario's own fill ramp) re-opens as
+      // chosen, so Apply & Play keeps naming it.
+      const tiledBasemap = bgDesc?.kind === "vector" && (bgDesc.tiled?.id || bgDesc.tiled?.hash)
+        ? { ...bgDesc.tiled, ...(Array.isArray(bgDesc.fillOpacity) ? { fillOpacity: bgDesc.fillOpacity } : {}) }
+        : null;
       setMapEditorSeed({
+        tiledBasemap,
         name: scenario.name || "",
         author: world.author || "",
         ownershipOverrides: world.regionOwnershipOverrides || {},
@@ -3430,10 +3441,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           ? world.polityOverrides
           : {},
         background,
+        // The starting map's name (Editor/scenarioMaps.js).
+        startingMapName: typeof bgDesc?.name === "string" ? bgDesc.name : "",
         // The map's projection (server/mapProjection.js), which the Workshop
         // shows, converts and saves back.
         projection: world.projection ?? null,
         basemap: world.basemap || null,
+        allowedBasemaps: Array.isArray(world.allowedBasemaps) ? world.allowedBasemaps : null,
+        ownBasemaps: ownBasemapsFromGame(world.ownBasemaps, ownBasemapsData),
         // Carried like the flags above: a round-trip must not reset it.
         customCities: Boolean(world.customCities),
         // The scenario's starting units, so the Units panel edits what the game starts with.
@@ -3598,6 +3613,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         ...(seed.world?.projection ? { projection: seed.world.projection } : {}),
         // The chosen built-in basemap so the game renders it (not always ocean).
         basemap: seed.world?.basemap ?? null,
+        // Which built-in maps players may switch to (null = any).
+        allowedBasemaps: seed.world?.allowedBasemaps ?? null,
+        // Its other basemaps of its own; their payloads go to the
+        // ownBasemapsData asset just below.
+        ownBasemaps: seed.world?.ownBasemaps ?? null,
         // The starting units placed in the Workshop (world.units, source "scenario").
         units: seed.world?.units ?? [],
         // The groups and their areas: the Workshop opened with the world's, so
@@ -3695,6 +3715,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       );
     } else {
       await clearScenarioAsset(scenarioId, "backgroundData", { refresh: false });
+    }
+    // The other basemaps' payloads, the same way.
+    if (seed.ownBasemapsData) {
+      await uploadScenarioAsset(
+        scenarioId,
+        "ownBasemapsData",
+        new Blob([JSON.stringify(seed.ownBasemapsData)], { type: "application/json" }),
+        { refresh: false },
+      );
+    } else {
+      await clearScenarioAsset(scenarioId, "ownBasemapsData", { refresh: false });
     }
     return scenarioCountry;
   };

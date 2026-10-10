@@ -50,6 +50,18 @@ _Avoid_: Reviewer, pass, reconciler (as the name of the check)
 An authored starting position — the map, the polities and the opening state — that a Game is started from. Never written to during play, so one Scenario can seed many Games.
 _Avoid_: Preset, map, mod
 
+**Basemap**:
+The flat map drawn beneath a Scenario's regions: a built-in Earth map, an uploaded picture, or a painted (vector) drawing. Every Scenario has one, and a custom one travels inside the Scenario. Players see it whenever a Scenario's detailed map is not shown.
+_Avoid_: Basic map, painted map (as separate terms), background (as the term for the record)
+
+**Tiled Basemap** (players see: **detailed map**):
+One of a Scenario's maps (`CONTEXT.md`, [ADR 0007](adr/0007-detailed-maps-are-scenario-maps.md)): picture tiles **shown over** a drawn basemap of the Scenario, which players see in its place without the download, read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size, kept in the library, and shared by every Scenario that names it. A Scenario may name several, one of them maybe its starting map (`world.background.tiled`), the others in `world.ownBasemaps`; it names them, never carries them.
+_Avoid_: Relief, terrain (as the term for the record)
+
+**Official Basemap**:
+A Tiled Basemap on the official list in `Open-Historia/open-historia-basemaps`, the only place one is downloaded from. It has a fixed **map id** and numbered **versions**, each one exact file with its checksum. A Scenario names the map and the lowest version it needs; a player keeps one copy, of any version, and a newer version is offered, never forced.
+_Avoid_: Catalog entry, release (as the term for the map)
+
 **Game**:
 One playthrough of a Scenario: everything the player has done and everything the world has become since it started. The thing a player names, continues, archives and exports.
 _Avoid_: Save, save game, campaign, session (as the term for the record)
@@ -208,6 +220,8 @@ Only a **game's** `world.json` is written during play; the scenario copy stays p
 | `customCities` | `boolean` | *(pass-through)* | Render authored cities instead of the modern city set (`exportPreset.js`). Surfaced by `useWorldState`. |
 | `basemap` | `string \| null` | *(pass-through)* | ESRI basemap preset id (`ESRI_BASEMAPS`, `assets.js`); falls back to `ocean` in-game. |
 | `background` / `backgroundData` | `string \| null` / payload | *(pass-through)* | Custom map background (image-by-extent or vector overlay) that replaces Earth; heavy payload rides in a separate scenario asset (`exportPreset.js`). |
+| `allowedBasemaps` | `string[] \| null` | *(pass-through)* | Built-in maps players may switch to in Settings → Map: a list = those, `[]` = none; null = all, or none on a scenario with a map of its own (`runtime/assets.js` `builtinBasemapChoices`). |
+| `ownBasemaps` / `ownBasemapsData` | `[{ id, name, kind }] \| null` / payload | *(pass-through)* | The scenario's other basemaps of its own players may switch to (`own:<id>` pick); payloads in a separate scenario asset (`src/Editor/ownBasemaps.js`). |
 | `background.bounds` | `{ west, south, east, north }` | *(pass-through)* | Where an image background lies, in degrees as stored. Absent: it fills the whole Mercator square, as before. `background.kind` may also be `"plain"`: a plain sea in place of the built-in tiles, for a map that is not Mercator and has no basemap of its own. |
 | `projection` | `string \| { type, aspect?, globe?, wrap?, laidOut? }` | *(pass-through)* | The map's projection (`server/mapProjection.js`). Absent is Mercator. With `laidOut: true` every place in the world and the map files is already stored where the projection puts it; a bare name or an object without it is a file's declaration, applied once on import. `globe: false` keeps the game map flat; `wrap: false` stops it repeating sideways (`mapViewOf`). |
 

@@ -29,6 +29,7 @@ import { fromLonLat } from "ol/proj";
 import Panel from "./Panel.jsx";
 import { labelDim, pillButton } from "./editorStyles.js";
 import { PROJECTIONS, sameProjection } from "../../server/mapProjection.js";
+import { ESRI_BASEMAPS } from "../runtime/assets.js";
 import {
   REVIEW_SECTIONS,
   acceptMapChanges,
@@ -39,6 +40,7 @@ import {
   inSuggestedProjection,
   mapChangeStatus,
   sectionOfChange,
+  undoRefusal,
 } from "./suggestionReview.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -108,6 +110,9 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
   const accept = useCallback((list) => {
     if (!api) return;
     const result = acceptMapChanges(list, ctxRef.current, { changes, accepted: decisions.accepted, renames: renamesRef.current });
+    // Refused whole, nothing accepted (a projection change on a map with a
+    // detailed map).
+    if (result.refused) window.alert(result.refused);
     if (!result.accepted.length) return;
     for (const [id, undo] of result.undoers) undoers.current.set(id, undo);
     setRenames(result.renames);
@@ -124,6 +129,11 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
   const undo = useCallback((change) => {
     if (decisions.accepted.has(change.id)) {
       if (!undoers.current.has(change.id)) return;
+      const refused = undoRefusal(change, ctxRef.current);
+      if (refused) {
+        window.alert(refused);
+        return;
+      }
       undoers.current.get(change.id)();
       undoers.current.delete(change.id);
       if (change.kind === "polity-rename") {
@@ -305,15 +315,21 @@ const SECTION_TITLES = {
   units: "Units",
   features: "Map features",
   puppets: "Puppet states",
+  basemaps: "Basemaps",
+  detailedMap: "Detailed map",
   settings: "Map settings",
 };
 const FIELD_CHIP_LABELS = { name: "Name", aliases: "Other names", code: "Code", note: "Note", status: "Status", color: "Colour", flag: "Flag", tags: "Tags", extra: "Other details" };
 
 const polityName = (doc, key) => clean(doc?.polities?.[key]?.name) || clean(key);
+const builtinNames = (ids) => ESRI_BASEMAPS.filter((basemap) => ids.includes(basemap.id)).map((basemap) => basemap.label).join(", ");
 
 // One line saying what the change does, in the names a person uses.
 const changeText = (change, doc) => {
   const name = (key) => polityName(doc, key);
+  // One of the scenario's other maps, by the name the map has (or the
+  // suggestion's id for one it adds).
+  const ownMapName = (key) => (Array.isArray(doc?.metadata?.ownBasemaps) ? doc.metadata.ownBasemaps.find((own) => own?.id === key)?.name : "") || key;
   switch (change.kind) {
     case "polity-add": return `New country: ${clean(change.record?.name) || change.key}`;
     case "polity-remove": return `Remove ${name(change.key)}`;
@@ -349,8 +365,35 @@ const changeText = (change, doc) => {
       const projection = PROJECTIONS.find((entry) => entry.id === change.to?.type)?.name ?? change.to?.type;
       return `Map projection: ${projection}`;
     }
-    case "map-field": return change.field === "author" ? `Map author: ${change.to || "—"}` : `New basemap: ${change.to || "—"}`;
+    case "map-field":
+      if (change.field === "author") return `Map author: ${change.to || "—"}`;
+      if (change.field === "startingMapName") return `Name the starting map: ${change.to || "—"}`;
+      return `New basemap: ${change.to || "—"}`;
     case "background": return change.to ? "New custom basemap" : "Remove the custom basemap";
+    case "allowed-basemaps":
+      return change.to === null
+        ? "Built-in maps players can switch to: the default"
+        : change.to.length ? `Built-in maps players can switch to: ${builtinNames(change.to)}` : "Players can switch to no built-in map";
+    case "own-basemap-add":
+      return change.to?.kind === "tiled"
+        ? `Add the detailed map ${change.to?.name || change.key} to this scenario's maps`
+        : `Offer another basemap: ${change.to?.name || change.key}`;
+    case "own-basemap-remove": return `Stop offering the basemap ${change.from?.name || change.key}`;
+    case "own-basemap-change":
+      if (change.from?.name && change.to?.name && change.from.name !== change.to.name && change.from.hash === change.to.hash) {
+        return `Rename the basemap ${change.from.name} to ${change.to.name}`;
+      }
+      return change.to?.kind === "tiled"
+        ? `Change the detailed map ${change.to?.name || change.key}, shown over ${change.to.data?.over ? ownMapName(change.to.data.over) : "the starting map"}`
+        : `New version of the basemap ${change.to?.name || change.key}`;
+    case "detailed-map": {
+      if (!change.to) return change.from?.name ? `Take the detailed map ${change.from.name} off` : "Take the detailed map off";
+      const mapName = change.to.name || change.to.id || "a detailed map";
+      const sameMap = change.from && ((change.to.id && change.from.id === change.to.id) || (change.to.hash && change.from.hash === change.to.hash));
+      if (!sameMap) return `Detailed map: ${mapName}`;
+      if (change.to.version && change.from.version !== change.to.version) return `Use version ${change.to.version} of the detailed map ${mapName}`;
+      return `Change how strongly countries are coloured over the detailed map ${mapName}`;
+    }
     default: return change.id;
   }
 };

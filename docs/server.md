@@ -109,7 +109,7 @@ A 403 from anywhere but the machine running the server. The library's **Recently
 | HEAD | `/api/runtime/pmtiles/:assetKey` | Size probe for the PMTiles reader (`Content-Length`, `Accept-Ranges`) | `resolveRuntimeBinaryAsset` |
 | GET | `/api/runtime/institution-logo/:institutionId` | One institution's logo from the active game's `institutionLogos` | `readRuntimeJsonAsset("institutionLogos")` → `sendInstitutionLogo` |
 
-`assetKey` for JSON is one of `world`, `game`, `prompts`, `actions`, `advisor`, `chat`, `events`, `colors`, `flags`, `tags`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData` and the other runtime keys; for PMTiles one of `cities`, `countries`, `regions`. See [Runtime asset resolution](#runtime-asset-resolution).
+`assetKey` for JSON is one of `world`, `game`, `prompts`, `actions`, `advisor`, `chat`, `events`, `colors`, `flags`, `tags`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData`, `ownBasemapsData` and the other runtime keys; for PMTiles one of `cities`, `countries`, `regions`. See [Runtime asset resolution](#runtime-asset-resolution).
 
 **The turn commit.** The end of a turn writes six domains that must agree with each other, so it is one request, not six PUTs (`commitCanonicalTurnPayload` in `src/runtime/gameState.js`; the web store answers the same route). Body:
 
@@ -152,7 +152,18 @@ A 403 from anywhere but the machine running the server. The library's **Recently
 | GET | `/api/basemaps` | Basemap catalog (light metadata only) | `getBasemapCatalog` (`server/basemapStore.js`) |
 | POST | `/api/basemaps` | Create a basemap (image or vector; dedup by hash) → 201 | `createBasemap` |
 | GET | `/api/basemaps/:id/payload` | Heavy payload (`{ dataUrl }` or `{ geojson }`), fetched only when applied | `getBasemapPayload` |
-| DELETE | `/api/basemaps/:id` | Delete a basemap | `deleteBasemap` |
+| DELETE | `/api/basemaps/:id` | Delete a basemap (a Tiled Basemap's archive too) | `deleteBasemap` |
+| GET | `/api/basemaps/official` | The **official list** of detailed maps ([ADR 0006](adr/0006-official-basemap-list.md)): `{ basemaps: [{ id, name, author?, license?, versions: [{ version, url, bytes, sha256, preview?, notes? }], installed: { libraryId, version } \| null }], stale, error? }`. Read from `basemaps.json` in `Open-Historia/open-historia-basemaps` at most every 10 minutes (`?refresh=1` now); the last good copy is kept in `DATA_DIR/basemaps-official.json` and served `stale` when GitHub cannot be reached. Every entry is checked as it is read; a link outside that repository's releases is dropped. Reading it marks any copy the player has that is byte for byte a listed version as that version | `readOfficialCatalog` (`createOfficialCatalogReader`, `server/officialBasemaps.js`), `tagOfficialBasemaps` |
+| GET | `/api/basemaps/official/:officialId` | The player's copy of an official map, whatever its version, or 404 | `findOfficialBasemapMeta` |
+| POST | `/api/basemaps/official/install` | Install an official map (`{ id, version? }`, the newest by default) → 202 `{ jobId, version }`. The archive streams to disk (≤ 500 MB, `TILED_BASEMAP_MAX_BYTES`), is checked as a raster PMTiles v3 archive with a readable probe tile and against the list's SHA-256, and only then joins the library, **replacing every other version of that map** (their checksums then find it). A version the player has, or a newer one, downloads nothing; the same install asked for twice while it runs joins the first. There is no install from an arbitrary link | `startInstallJob`, `downloadToFile` (`server/tiledBasemaps.js`), `createTiledBasemap` |
+| GET / DELETE | `/api/basemaps/tiled/install/:jobId` | An install's progress (`status`, `received`, `total`, `error`, `basemap`) / cancel it (the partial file is removed) | `getInstallJob` / `cancelInstallJob` |
+| PUT | `/api/basemaps/tiled?name=` | An author's own archive, the request body streamed to disk (never parsed), checked like an install → 201; 413 past the cap. Not downloadable by players unless the same file is on the official list | `receiveToFile`, `createTiledBasemap` |
+| GET | `/api/basemaps/by-hash/:hash` | The library entry with that content hash (or the newer official version that replaced it), or 404 | `findBasemapMetaByHash` |
+| PUT | `/api/basemaps/:id/payload` | A Tiled Basemap's vector fallback (`{ geojson }`) | `setTiledBasemapFallback` |
+| GET | `/api/basemaps/:id/users` | The scenarios naming a Tiled Basemap, by official id or checksum (`[{ id, name }]`), for the delete warning | `listScenariosNamingTiledBasemap` (`server/libraryStore.js`) |
+| GET / HEAD | `/api/basemaps/:id/archive` | A Tiled Basemap's archive, by byte range, for the map | `getBasemapArchivePath`, `streamBinaryFile` |
+
+Tests scale the caps down, point the official list at a local file and admit one local "release" origin through env vars that are unset in every real run: `OH_TILED_BASEMAP_MAX_BYTES`, `OH_HUB_MAX_BUNDLE_BYTES`, `OH_BASEMAP_CATALOG_URL`, `OH_HUB_TEST_ORIGIN` (`server/tiledBasemaps.test.js`). Maintainers add a map version to the list with `node scripts/official-basemap-entry.mjs <file.pmtiles> --id <map-id> --version <n> --list <path to basemaps.json>`, which checks the file as the game will and writes its entry.
 
 ### Static / SPA
 | Path | Purpose | Handler |
@@ -182,7 +193,7 @@ server/data/
       colors.json flags.json tags.json       # OPTIONAL_JSON_ASSET_FILES
       cover-image.bin            # uploaded cover (content type in scenario.json)
       cities.pmtiles countries.pmtiles regions.pmtiles   # per-scenario PMTiles overrides
-      regions.geojson cities.geojson background.json      # custom map geometry
+      regions.geojson cities.geojson background.json own-basemaps.json  # custom map geometry
       storage/
         actions.json advisor.json chat.json events.json   # STORAGE_JSON_ASSET_FILES
   games/
@@ -219,7 +230,7 @@ Defined near the top of `server/libraryStore.js`, after the path constants. Thes
 | `OPTIONAL_JSON_ASSET_FILES` | `colors`,`flags`,`tags` → `*.json` | Static author data kept **out** of the 5 s `world.json` poll |
 | `RUNTIME_ONLY_JSON_ASSET_FILES` | `snapshots`→`storage/snapshots.json` (the old single file), `snapshotsIndex`→`storage/snapshots-index.json`, `intercepts`→`storage/intercepts.json` | Roll-back points (each a pre-turn `state`, the `round` the turn started on, the `campaignId` it was captured in and, for a time skip, the `turn` journal Intervene re-applies from — `src/Game/AI/intervene.js`); never copied/exported. Kept one file each, see below |
 | `PMTILES_ASSET_FILES` | `cities`,`countries`,`regions` → `*.pmtiles` | Per-scenario binary map overrides |
-| `SCENARIO_GEOJSON_ASSET_FILES` | `regionsGeojson`→`regions.geojson`, `citiesGeojson`→`cities.geojson`, `backgroundData`→`background.json` | Custom map geometry; always embedded in bundles |
+| `SCENARIO_GEOJSON_ASSET_FILES` | `regionsGeojson`→`regions.geojson`, `citiesGeojson`→`cities.geojson`, `backgroundData`→`background.json`, `ownBasemapsData`→`own-basemaps.json` | Custom map geometry; always embedded in bundles |
 | `*_IMAGE_ASSET_FILES` | `cover`→`cover-image.bin` | Content type recorded in meta |
 | `UPLOADABLE_SCENARIO_ASSET_FILES` | image ∪ optional-JSON ∪ PMTiles ∪ geojson | The valid `:assetKey` set for scenario upload/serve/delete |
 | `UPLOADABLE_GAME_ASSET_FILES` | just `cover` | Games only accept a cover upload |
