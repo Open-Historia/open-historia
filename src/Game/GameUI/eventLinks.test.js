@@ -1,9 +1,10 @@
 /*! Open Historia — event links tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/GameUI/eventLinks.test.js
 //
-// The invariants: an event links to what its operations touched before what its
-// words merely name; every link can be flown to; a power is shown by the name it
-// has now; nothing is linked twice; and a busy event is capped.
+// The invariants: an event links to the places it names with their kind, to what
+// its operations touched and to the polities its structured fields name, and to
+// nothing its words merely mention; every link can be flown to; a power is shown
+// by the name it has now; nothing is linked twice; and a busy event is capped.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -64,24 +65,61 @@ const makeContext = (world = null) => buildFocusContext({
 const context = makeContext();
 const summary = (links) => links.map((link) => `${link.kind}:${link.label}`);
 
-test("an event links to what it changed first, then to what its words name", () => {
+test("an event links to the places it names, then to what it changed, and never to what its words mention", () => {
   const event = {
     title: "Fighting spreads beyond Donetsk",
     description: "Guinea and Ireland call for restraint.",
+    places: [
+      { kind: "city", name: "Mariupol", lng: 37.5, lat: 47.1 },
+      { kind: "country", name: "Ukraine" },
+    ],
     impacts: {
       regionTransfers: [{ regionId: "UKR.9_1", fromCode: "Ukraine", toCode: "Romania" }],
       unitOps: [{ op: "spawn", unit: { name: "3rd Guards Brigade", lng: 37.8, lat: 48.0 } }],
     },
   };
   assert.deepEqual(summary(deriveEventLinks(event, context)), [
+    "city:Mariupol",
+    "polity:Ukraine",
     "region:Odessa",
     "polity:Romania",
-    "polity:Ukraine",
     "unit:3rd Guards Brigade",
-    "region:Donetsk",
-    "polity:Guinea",
-    "polity:Ireland",
   ]);
+});
+
+// The owner's case. The map of the built-in world has a region called Salmon.
+test("an event about salmon does not link to the place called Salmon", () => {
+  const withSalmon = buildFocusContext({
+    countries: COUNTRIES,
+    countryBounds: new Map(Object.entries(COUNTRY_BOXES)),
+    regionBounds: new Map([...Object.entries(REGION_BOXES), ["3301", [[-115.4, 44.4], [-113.4, 45.7]]]]),
+    regions: [...REGIONS, { country: "United States", countryCode: "USA", id: "3301", name: "Salmon" }],
+  });
+  const catch_ = {
+    title: "A scout tribe lands a great catch of salmon",
+    description: "Salmon fill the smokehouses, and Ireland sends buyers.",
+  };
+  assert.deepEqual(deriveEventLinks(catch_, withSalmon), []);
+  // Said to be a place, with its kind, it is one.
+  const there = { ...catch_, places: [{ kind: "region", name: "Salmon", regionId: "3301" }] };
+  assert.deepEqual(summary(deriveEventLinks(there, withSalmon)), ["region:Salmon"]);
+});
+
+test("an event from before events named their places links to its operations and its structured fields only", () => {
+  const old = {
+    title: "Romania and Ukraine open talks over Odessa",
+    description: "Guinea offers to host.",
+    combatants: [],
+    impacts: { createdChats: [{ countries: [{ code: "Romania", name: "Romania" }, "Ukraine"] }] },
+  };
+  assert.deepEqual(summary(deriveEventLinks(old, context)), ["polity:Romania", "polity:Ukraine"]);
+  assert.deepEqual(summary(deriveEventLinks({ title: "Border clashes near Odessa", combatants: ["Ukraine", "Romania"] }, context)), ["polity:Ukraine", "polity:Romania"]);
+  assert.deepEqual(deriveEventLinks({ title: "Romania and Ukraine trade accusations over Odessa" }, context), []);
+});
+
+test("a place still in the model's words, or of no kind the map has, is not linked", () => {
+  const event = { title: "A summit", places: ["city: Kyiv, country: Ukraine", { kind: "salmon", name: "Salmon", lng: 1, lat: 1 }, { kind: "city", name: "Nowhere" }, { kind: "region", name: "Donetsk" }] };
+  assert.deepEqual(deriveEventLinks(event, context), []);
 });
 
 test("the regions a group moves into are linked, after the ones the event fought over", () => {
@@ -138,12 +176,15 @@ test("on a drawn map, with no stock outlines at all, regions and polities are fr
       { country: "Kingdom of Aldmere", id: "r-3", name: "Nowhere", lng: null, lat: null },
     ],
   });
-  const links = deriveEventLinks({ title: "Unrest in Westmarch spreads across the Kingdom of Aldmere" }, drawn);
+  const links = deriveEventLinks({
+    title: "Unrest in Westmarch spreads across the Kingdom of Aldmere",
+    places: [{ kind: "region", name: "Westmarch", regionId: "r-1" }, { kind: "country", name: "Kingdom of Aldmere" }],
+  }, drawn);
   assert.deepEqual(summary(links), ["region:Westmarch", "polity:Kingdom of Aldmere"]);
   const [westmarch, kingdom] = links;
   assert.deepEqual(westmarch.bounds, [[9.4, 49.55], [10.6, 50.45]]);
   assert.ok(kingdom.bounds[0][0] <= 9.4 && kingdom.bounds[1][0] >= 12.6, "the polity frames both of its regions");
-  assert.equal(deriveEventLinks({ title: "Nowhere" }, drawn).length, 0, "a region without a centre is not placed at 0,0");
+  assert.equal(deriveEventLinks({ title: "Nowhere", places: [{ kind: "region", name: "Nowhere", regionId: "r-3" }] }, drawn).length, 0, "a region without a centre is not placed at 0,0");
 });
 
 test("the map's own records frame a drawn region by its box, and the stock outline still wins where there is one", () => {
@@ -158,7 +199,10 @@ test("the map's own records frame a drawn region by its box, and the stock outli
     regions: [...REGIONS, { country: "Ukraine", id: "r-9", name: "Southmarch" }],
     drawnRegions: drawn,
   });
-  const links = deriveEventLinks({ title: "Fighting in Southmarch and Donetsk" }, withDrawn);
+  const links = deriveEventLinks({
+    title: "Fighting in Southmarch and Donetsk",
+    places: [{ kind: "region", name: "Southmarch", regionId: "r-9" }, { kind: "region", name: "Donetsk", regionId: "UKR.5_1" }],
+  }, withDrawn);
   assert.deepEqual(links.map((link) => [link.label, link.bounds]), [
     ["Southmarch", [[20, 40], [22, 41]]],
     ["Donetsk", REGION_BOXES["UKR.5_1"]],
@@ -171,7 +215,7 @@ test("nothing is linked twice, and a busy event is capped", () => {
     impacts: { polityChanges: [{ name: "Ukraine" }, { code: "Ukraine" }] },
   };
   assert.deepEqual(summary(deriveEventLinks(event, context)), ["polity:Ukraine"]);
-  const busy = { title: COUNTRIES.map((country) => country.name).join(", ") };
+  const busy = { title: "Everybody at once", impacts: { polityChanges: COUNTRIES.map((country) => ({ code: country.name })) } };
   assert.equal(deriveEventLinks(busy, context).length, EVENT_LINKS_MAX);
   assert.equal(deriveEventLinks(busy, context, { max: 3 }).length, 3);
   assert.deepEqual(deriveEventLinks(null, context), []);

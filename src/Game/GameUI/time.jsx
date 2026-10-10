@@ -608,7 +608,10 @@ const ghostButtonStyle = {
 
 // What an event is about, as chips that fly the map there (eventFocus.js
 // deriveEventLinks). One glyph per kind, the same family as the map's own.
-const LINK_GLYPHS = { polity: "⚑", region: "⌖", unit: "⛊", structure: "▣" };
+// A chip is only ever a place the event named with its kind, something its
+// operations changed or a polity its structured fields name: a word in its
+// text that happens to be a place's name is not one.
+const LINK_GLYPHS = { polity: "⚑", region: "⌖", city: "●", unit: "⛊", structure: "▣", sea: "≈" };
 
 const LinkPill = ({ link, onFocus }) => (
     <button
@@ -3513,9 +3516,11 @@ const DateWidget = ({
         eventDocuments: (event) => documentsForEvent(documentReports, event?.id, documentPlayer),
     }), [lookups, currentFocusContext, mapRef, documentReports, documentPlayer]);
 
-    // The camera follows EVERY revealed event — impacts pin the exact spot,
-    // otherwise the polities the event involves do, and its own words are the
-    // last resort. Opt out via the "Disable camera movement during events" map
+    // The camera follows a revealed event to where it happened: its impacts
+    // pin the exact spot, then the places it names with their kind, then the
+    // polities its structured fields involve. Never its words: an event that
+    // gives none of these leaves the camera where it is (eventFocus.js). Opt
+    // out via the "Disable camera movement during events" map
     // setting (or Reduce motion, or the system's reduced-motion setting).
     useEffect(() => {
         if (!activeVisibleEvent || disableEventCamera) {

@@ -17,17 +17,28 @@
 //     dragged the camera to the midpoint of two continents.
 //
 // Hence "an event in Ireland zooms into a completely different country". The fixes
-// here: resolve names through a proper name index (with region-ownership fallback
-// so invented polities work too), match text on WORD boundaries with longest-match
-// wins, and combine several candidates by picking the dominant cluster instead of
-// unioning everything. Geometry gets the same treatment — antimeridian-aware
-// merging so Russia/Fiji don't fit the whole globe, and outlying scraps (Hawaii,
-// the Azores, the Galápagos) dropped so a country frames on its mainland.
+// then: resolve names through a proper name index (with region-ownership fallback
+// so invented polities work too), and combine several candidates by picking the
+// dominant cluster instead of unioning everything. Geometry gets the same
+// treatment — antimeridian-aware merging so Russia/Fiji don't fit the whole
+// globe, and outlying scraps (Hawaii, the Azores, the Galápagos) dropped so a
+// country frames on its mainland.
+//
+// The scan of the event's TEXT is gone altogether. Matching whole words fixed
+// "Mali" inside "Somalia" and did nothing for a word that is a place's whole
+// name: an event in which a scout tribe caught salmon flew to the region called
+// Salmon, and its card linked there. Nothing here reads a title or a
+// description now. A place comes from what the event SAYS it is about, each
+// place with its kind and found on the map by the engine
+// (runtime/eventPlaces.js); from the event's own operations; and from the
+// polities its structured fields name. An event with none of those moves no
+// camera and shows no link.
 //
 // Kept free of browser/PMTiles imports so it is unit-testable: time.jsx does the
 // tile reading and hands the decoded geometry in.
 
 import { normalizeGroupOp } from "../../runtime/groups.js";
+import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 
 // ---------------------------------------------------------------------------
 // Bounds helpers. A bounds is [[west, south], [east, north]]; `east` may exceed
@@ -272,10 +283,10 @@ export const focusNameKey = (value) => focusTokens(value).join(" ");
 
 // name/alias -> the token the bounds tables are keyed by. `entries` is
 // [{ token, names: [...] }]; the token is a GADM code for a stock country and a
-// polity NAME for anything the scenario or the AI invented.
+// polity NAME for anything the scenario or the AI invented. Looked up whole and
+// exactly, never searched for inside a text.
 export const buildNameIndex = (entries) => {
   const byName = new Map();
-  const searchable = [];
 
   for (const entry of entries ?? []) {
     const token = String(entry?.token ?? "").trim();
@@ -284,8 +295,7 @@ export const buildNameIndex = (entries) => {
     }
 
     for (const name of entry?.names ?? []) {
-      const tokens = focusTokens(name);
-      const key = tokens.join(" ");
+      const key = focusNameKey(name);
       // Names are seeded most-authoritative-first, so an alias never displaces
       // the real owner of a name.
       if (!key || byName.has(key)) {
@@ -293,85 +303,15 @@ export const buildNameIndex = (entries) => {
       }
 
       byName.set(key, token);
-      // Very short names are noise in prose ("Fiji" is fine, a two-letter code
-      // is not) — they stay resolvable by exact lookup, just not by text scan.
-      if (key.length >= 4) {
-        searchable.push({ kind: entry?.kind ?? "polity", token, tokens });
-      }
     }
   }
 
-  const byFirstToken = new Map();
-  for (const entry of searchable) {
-    const bucket = byFirstToken.get(entry.tokens[0]);
-    if (bucket) bucket.push(entry);
-    else byFirstToken.set(entry.tokens[0], [entry]);
-  }
-  // Longest name first, so "Papua New Guinea" is tried before "Guinea".
-  for (const bucket of byFirstToken.values()) {
-    bucket.sort((left, right) => right.tokens.length - left.tokens.length);
-  }
-
-  return { byFirstToken, byName };
+  return { byName };
 };
 
 export const lookupName = (index, value) => {
   const key = focusNameKey(value);
   return key ? index?.byName?.get(key) ?? "" : "";
-};
-
-// Whole-word matches of indexed names inside `text`, in reading order, with any
-// match sitting inside a longer one dropped ("Guinea" inside "Papua New Guinea",
-// "Ireland" inside "Northern Ireland"). Word-token matching is what keeps "Mali"
-// out of "Somalia" and "Oman" out of "Romania".
-//
-// Countries and regions are searched TOGETHER (pass both indexes): "Northern
-// Ireland" only outranks "Ireland" when both are candidates at the same moment.
-export const findNameMentions = (text, indexes) => {
-  const searched = (Array.isArray(indexes) ? indexes : [indexes]).filter(Boolean);
-  const tokens = focusTokens(text);
-  const matches = [];
-
-  for (let start = 0; start < tokens.length; start += 1) {
-    const candidates = searched.flatMap((index) => index.byFirstToken?.get(tokens[start]) ?? []);
-    // Each index is already longest-first; only a mixed shortlist needs sorting.
-    if (searched.length > 1) {
-      candidates.sort((left, right) => right.tokens.length - left.tokens.length);
-    }
-
-    for (const entry of candidates) {
-      const end = start + entry.tokens.length;
-      if (end > tokens.length) {
-        continue;
-      }
-
-      let matched = true;
-      for (let offset = 1; offset < entry.tokens.length; offset += 1) {
-        if (tokens[start + offset] !== entry.tokens[offset]) {
-          matched = false;
-          break;
-        }
-      }
-
-      if (matched) {
-        matches.push({ end, kind: entry.kind, start, token: entry.token });
-        // Longest first within a bucket, so the first hit here is the best one.
-        break;
-      }
-    }
-  }
-
-  const seen = new Set();
-  return matches
-    .filter((match) => !matches.some((other) =>
-      other !== match && other.start <= match.start && other.end >= match.end
-      && (other.end - other.start) > (match.end - match.start)))
-    .filter((match) => {
-      const key = `${match.kind}:${match.token}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
 };
 
 // ---------------------------------------------------------------------------
@@ -488,63 +428,52 @@ const impactPointBounds = (impacts) => {
   return points.filter(isBounds);
 };
 
-const mentionBounds = (matches, resolve) => matches.map(resolve).filter(isBounds);
-
-// Last resort: the places the event's own words name. Regions win over countries
-// when the event names both and the region lies in one of those countries ("the
-// siege of Donetsk" should frame Donetsk, not all of Ukraine).
-const textFocusBounds = (event, context) => {
-  const title = String(event?.title ?? "");
-  const description = String(event?.description ?? "");
-
-  for (const text of [title, `${title} ${description}`]) {
-    const mentions = findNameMentions(text, [context?.polityIndex, context?.regionIndex]);
-    const countryMatches = mentions.filter((match) => match.kind === "polity");
-    const regionMatches = mentions.filter((match) => match.kind === "region");
-    const countryTokens = new Set(countryMatches.map((match) => match.token));
-    const insideNamedCountry = regionMatches.filter((match) =>
-      countryTokens.has(context?.regionOwnerToken?.get(match.token) ?? ""));
-
-    const preferred = countryMatches.length === 0 ? regionMatches : insideNamedCountry;
-    const regionFocus = combineFocusBounds(
-      mentionBounds(preferred, (match) => regionBoundsFor(match.token, context)),
-    );
-    if (regionFocus) {
-      return regionFocus;
-    }
-
-    const countryFocus = combineFocusBounds(
-      mentionBounds(countryMatches, (match) => resolvePolityBounds(match.token, context)),
-    );
-    if (countryFocus) {
-      return countryFocus;
-    }
-  }
-
-  return null;
+// The frame of one place the event says it is about (runtime/eventPlaces.js):
+// a region by the map's key for it, a country by the land it holds, anything
+// else by the point the engine found for it. A region or a country whose
+// outline cannot be had falls back to its point, when it has one.
+const placeBounds = (place, context) => {
+  const point = () => pointBounds(Number(place?.lng), Number(place?.lat));
+  if (place?.kind === "region") return regionBoundsFor(place.regionId, context) ?? point();
+  if (place?.kind === "country") return resolvePolityBounds(place.name, context) ?? point();
+  return point();
 };
 
-// Every event moves the camera. Work from the most specific thing the event
-// pins down to the least: the regions that changed hands, control or claimant,
-// or came under a group, then any coordinate it states outright, then the
-// polities it changes, then its chat participants, and only then the places its
-// text merely mentions.
+const eventPlaces = (event) => normalizeEventPlaces(event?.places);
+
+// The polities a chat the event opens is between.
+const chatPolities = (impacts) => (impacts?.createdChats ?? []).flatMap((chat) =>
+  (Array.isArray(chat?.countries) ? chat.countries : [])
+    .map((country) => (typeof country === "string" ? country : country?.code || country?.name)));
+
+// The sides the event says are fighting in it (its `combatants`).
+const eventCombatants = (event) => (Array.isArray(event?.combatants) ? event.combatants : []);
+
+// Where the camera goes for an event, from the most specific thing it pins
+// down to the least: the regions that changed hands, control or claimant, or
+// came under a group; any coordinate its operations state outright; the places
+// it says it is about; then the polities its structured fields name (the ones
+// it changes, the winner and loser of a transfer the map could not place, a
+// chat's participants, the sides of its fighting).
+//
+// Never from its words. An event with none of these returns null, and the
+// camera stays where it is.
 export const deriveEventFocusBounds = (event, context) => {
   const impacts = event?.impacts ?? {};
 
   const tiers = [
     () => eventRegionRefs(impacts).map((entry) => transferBounds(entry, context)),
     () => impactPointBounds(impacts),
+    () => eventPlaces(event).map((place) => placeBounds(place, context)),
     () => (impacts.polityChanges ?? []).map((change) => resolvePolityBounds(change?.code, context)),
     // A transfer whose region we could not place still names who won and lost
-    // it, and their territory frames the event far better than its prose does.
+    // it, and their territory frames the event.
     () => (impacts.regionTransfers ?? []).flatMap((transfer) => [
       resolvePolityBounds(transfer?.toCode, context),
       resolvePolityBounds(transfer?.fromCode, context),
     ]),
-    () => (impacts.createdChats ?? []).flatMap((chat) =>
-      (chat?.countries ?? []).map((country) =>
-        resolvePolityBounds(typeof country === "string" ? country : country?.code || country?.name, context))),
+    () => chatPolities(impacts).map((polity) => resolvePolityBounds(polity, context)),
+    () => eventCombatants(event).map((polity) => resolvePolityBounds(polity, context)),
   ];
 
   for (const tier of tiers) {
@@ -554,7 +483,7 @@ export const deriveEventFocusBounds = (event, context) => {
     }
   }
 
-  return textFocusBounds(event, context);
+  return null;
 };
 
 // ---------------------------------------------------------------------------
@@ -567,10 +496,13 @@ export const deriveEventFocusBounds = (event, context) => {
 // for an event with several places in it, and for a player who switched the
 // event camera off.
 //
-// Derived, never stored: from the event's own operations first (what it moved,
-// raised, built or changed — the most specific things it pins down), then from
-// the places and powers its words name. A link the map cannot place is left out:
-// a chip that goes nowhere is noise.
+// Derived, never stored, and from three sources only: the places the event
+// says it is about, each with its kind (runtime/eventPlaces.js); its own
+// operations (what it moved, raised, built or changed); and the polities its
+// structured fields name (a chat's participants, the sides of its fighting).
+// Never from its words: a name that merely appears in the title or the
+// description links to nothing. A link the map cannot place is left out: a
+// chip that goes nowhere is noise.
 
 export const EVENT_LINKS_MAX = 8;
 
@@ -588,8 +520,10 @@ const regionLabel = (entry, context) => String(
   || "",
 ).trim();
 
-// [{ kind: "polity"|"region"|"unit"|"structure", label, bounds }], in the order
-// above. `unitName(id)` names a unit an operation refers to by id only.
+// [{ kind: "polity"|"region"|"city"|"structure"|"unit"|"sea", label, bounds }],
+// in the order above. `unitName(id)` names a unit an operation refers to by id
+// only. An event from before events named their places has no `places`, and
+// links to what its operations and its structured fields name.
 export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitName = () => "" } = {}) => {
   const impacts = event?.impacts ?? {};
   const links = [];
@@ -607,6 +541,15 @@ export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitNa
     if (raw) add("polity", polityLabel(raw, context), resolvePolityBounds(raw, context));
   };
   const addRegion = (entry) => add("region", regionLabel(entry, context), transferBounds(entry, context));
+
+  // What the event says it is about, first: a country is a power like any other.
+  for (const place of eventPlaces(event)) {
+    if (place.kind === "country") {
+      add("polity", polityLabel(place.name, context), placeBounds(place, context));
+    } else {
+      add(place.kind, place.name, placeBounds(place, context));
+    }
+  }
 
   for (const transfer of impacts.regionTransfers ?? []) {
     addRegion(transfer);
@@ -631,14 +574,8 @@ export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitNa
     if (op?.op === "build") add("structure", op?.marker?.name, pointBounds(Number(op?.marker?.lng), Number(op?.marker?.lat)));
   }
 
-  const mentions = findNameMentions(`${event?.title ?? ""} ${event?.description ?? ""}`, [context?.polityIndex, context?.regionIndex]);
-  for (const match of mentions) {
-    if (match.kind === "region") {
-      add("region", context?.regionNameById?.get(match.token) || match.token, regionBoundsFor(match.token, context));
-    } else {
-      addPolity(match.token);
-    }
-  }
+  for (const polity of chatPolities(impacts)) addPolity(polity);
+  for (const polity of eventCombatants(event)) addPolity(polity);
 
   return links.slice(0, Math.max(0, max));
 };
@@ -704,7 +641,6 @@ export const buildPlaceCatalog = ({
 
   const regionIdsByName = new Map();
   const regionNameById = new Map();
-  const regionEntries = [];
   const regionOwners = [];
 
   for (const region of regions) {
@@ -719,23 +655,16 @@ export const buildPlaceCatalog = ({
       const bucket = regionIdsByName.get(nameKey);
       if (bucket) bucket.push(id);
       else regionIdsByName.set(nameKey, [id]);
-      regionEntries.push({ kind: "region", nameKey, names: [region.name], token: id });
     }
 
     regionOwners.push({ baseOwner: String(region?.country ?? "") || String(region?.countryCode ?? ""), id });
   }
-
-  // A region name shared by several places can't localise anything, so it never
-  // enters the searchable index.
-  const uniqueRegionEntries = regionEntries.filter((entry) =>
-    (regionIdsByName.get(entry.nameKey) ?? []).length === 1);
 
   return {
     countryBounds,
     countryEntries,
     regionBounds: withDrawnRegionBounds(regionBounds, regions),
     regionIdsByName,
-    regionIndex: buildNameIndex(uniqueRegionEntries),
     regionNameById,
     regionOwners,
   };
@@ -769,7 +698,6 @@ export const buildFocusContext = ({ catalog = null, world = null, drawnRegions =
   const polityIndex = buildNameIndex(polityEntries);
   const overrides = world?.regionOwnershipOverrides ?? {};
   const regionIdsByOwner = new Map();
-  const regionOwnerToken = new Map();
   // One owner names hundreds of regions, so both the normalisation and the index
   // lookup are worth caching across the walk.
   const ownerKeys = new Map();
@@ -798,11 +726,9 @@ export const buildFocusContext = ({ catalog = null, world = null, drawnRegions =
 
     addOwnership(ownerKey, id);
 
-    // Which polity a region belongs to RIGHT NOW, as the same token the country
-    // bounds and the text scan use — so "fighting in Donetsk" can be recognised
-    // as being inside a Ukraine the same sentence names. Ownership is reachable
-    // by that token too, so a legacy save or a text match that resolved to a
-    // code still finds the territory and not only GADM's outline.
+    // Ownership is reachable by the polity's token too (a GADM code for a stock
+    // country), so a legacy save whose operations still carry a code finds the
+    // territory and not only GADM's outline.
     let ownerToken = ownerTokens.get(owner);
     if (ownerToken === undefined) {
       ownerToken = lookupName(polityIndex, owner);
@@ -812,7 +738,6 @@ export const buildFocusContext = ({ catalog = null, world = null, drawnRegions =
       continue;
     }
 
-    regionOwnerToken.set(id, ownerToken);
     const tokenKey = focusNameKey(ownerToken);
     if (tokenKey && tokenKey !== ownerKey) {
       addOwnership(tokenKey, id);
@@ -837,8 +762,6 @@ export const buildFocusContext = ({ catalog = null, world = null, drawnRegions =
       : places.regionBounds,
     regionIdsByName: places.regionIdsByName,
     regionIdsByOwner,
-    regionIndex: places.regionIndex,
     regionNameById: places.regionNameById ?? new Map(),
-    regionOwnerToken,
   };
 };
