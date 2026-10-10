@@ -16,6 +16,7 @@ import { buildRegionOwnershipText, regionOwnerName } from "./regionVocab.js";
 import { selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
+import { unitHandles } from "./nameRefs.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -929,6 +930,9 @@ export const buildRecentRoundsWithDates = (bundle) => {
 export const buildUnitsSummaryText = (world) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
+  // Each unit by its name, which is what an order on it writes (nameRefs.js);
+  // its owner follows in brackets only where another unit shares the name.
+  const handles = unitHandles(units);
   return units.slice(0, 60).map((unit) => {
     const lat = Number(unit.lat);
     const lng = Number(unit.lng);
@@ -941,8 +945,8 @@ export const buildUnitsSummaryText = (world) => {
       `${unit.strength}% of established strength`,
       unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
     ].join(", ");
-    return `- ${unit.name} [id ${unit.id}] (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
-      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
+    return `- ${handles.get(unit.id) || unit.name} (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
+      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
   }).join("\n");
 };
 
@@ -1108,7 +1112,7 @@ export const buildMarkersSummaryText = (
       changed && changed !== founded ? `last changed ${changed}` : "",
     ].filter(Boolean).join(", ");
     const note = compactMarkerNote(marker.note, 180);
-    return `- ${marker.name} [id ${marker.id}] (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
+    return `- ${marker.name} (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
   });
 
   const omitted = Math.max(0, markers.length - selected.length);
@@ -1130,16 +1134,17 @@ export const buildPendingUnitOrdersText = (world) => {
     return "No units currently have a standing order.";
   }
   const unitById = new Map(normalizeArray(world?.units).map((unit) => [unit.id, unit]));
+  const handles = unitHandles(world?.units);
   return orders.map((order) => {
     const unit = unitById.get(order.unitId);
     if (!unit) return null;
     const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
     if (order.kind === "patrol") {
-      return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is working a ` +
+      return `- ${handles.get(unit.id) || unit.name} (${unit.type}, owner ${unit.ownerCode}) is working a ` +
         `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;
     }
     const destination = order.targetLabel || `lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}`;
-    return `- ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is en route to ${destination} — ` +
+    return `- ${handles.get(unit.id) || unit.name} (${unit.type}, owner ${unit.ownerCode}) is en route to ${destination} — ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}, about ${remaining} km still to go.`;
   }).filter(Boolean).join("\n");
 };

@@ -121,16 +121,49 @@ test("a move beyond the budget lands short and keeps an order to the full destin
   const result = applyUnitOpBatch(
     [unit({ type: "infantry", lng: 0, lat: 1 })],
     [],
-    [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0 }],
+    [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0, seaShare: 0 }],
     { gameDate: "2024-01-01", elapsedDays: 7 },
   );
   const moved = result.units[0];
   const covered = haversineKm(1, 0, moved.lat, moved.lng);
-  assert.ok(Math.abs(covered - 280) < 2, `expected ~280 km covered, got ${covered}`);
+  // Seven days of a redeployment by rail and road, at 500 km a day.
+  assert.ok(Math.abs(covered - 3500) < 5, `expected ~3500 km covered, got ${covered}`);
   assert.equal(moved.status, "moving");
   assert.equal(result.orders.length, 1);
   assert.equal(result.orders[0].kind, "move");
   assert.equal(result.orders[0].toLng, 40); // the FULL destination, not the step
+  assert.equal(result.orders[0].seaShare, 0, "the order keeps how much of its way is over water");
+});
+
+test("an advance against an enemy covers a fraction of what a redeployment does", () => {
+  const go = (posture) => {
+    const result = applyUnitOpBatch(
+      [unit({ type: "infantry", lng: 0, lat: 1 })],
+      [],
+      [{ op: "move", unitId: "unit-1", toLng: 40, toLat: 0, seaShare: 0, posture }],
+      { gameDate: "2024-01-01", elapsedDays: 7 },
+    );
+    return haversineKm(1, 0, result.units[0].lat, result.units[0].lng);
+  };
+  assert.ok(Math.abs(go("assaulting") - 210) < 3, `seven days of an advance on foot is about 210 km, got ${go("assaulting")}`);
+  assert.ok(Math.abs(go("transit") - 3500) < 5, `seven days of a redeployment is about 3500 km, got ${go("transit")}`);
+});
+
+test("a division sent across an ocean arrives in weeks, on later skips, at the pace of its voyage", () => {
+  // Texas to Korea: a 45-skip test (2026-10-09) had it 127 to 328 game days on the way.
+  const texas = { lng: -97.7, lat: 31.1 };
+  const korea = { lng: 127.0, lat: 37.0 };
+  let { units, orders } = applyUnitOpBatch(
+    [unit({ type: "armor", ...texas })],
+    [],
+    [{ op: "move", unitId: "unit-1", toLng: korea.lng, toLat: korea.lat, seaShare: 0.6, posture: "transit" }],
+    { gameDate: "2016-03-01", elapsedDays: 5 },
+  );
+  assert.equal(orders.length, 1, "five days do not carry it there");
+  let world = advanceStandingOrders({ units, pendingUnitOrders: orders }, { fromDate: "2016-03-05", toDate: "2016-03-30", round: 2 });
+  assert.equal(world.pendingUnitOrders.length, 0, "it has arrived within the month");
+  assert.equal(world.units[0].lng, korea.lng);
+  assert.equal(world.units[0].status, "idle");
 });
 
 test("successive jumps converge on the destination and then clear the order", () => {
@@ -421,9 +454,10 @@ test("each event gets a budget measured from the previous event, not the jump st
   const { world: next } = applyEventImpactsToWorld({
     world, events, motion: { originDate: "2024-01-01", round: 2 },
   });
-  // 3 days of infantry travel = 120 km, not the whole 4400 km.
+  // 3 days of a redeployment = 1,500 km at most (less where its way is taken
+  // to be partly by sea), not the whole 4,400 km.
   const covered = haversineKm(1, 0, next.units[0].lat, next.units[0].lng);
-  assert.ok(Math.abs(covered - 120) < 3, `expected ~120 km, got ${covered}`);
+  assert.ok(covered > 1400 && covered < 1800, `expected about 1,500 to 1,700 km, got ${covered}`);
 });
 
 test("motion null leaves the impacts path exactly as it was", () => {

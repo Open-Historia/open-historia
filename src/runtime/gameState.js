@@ -976,6 +976,11 @@ const normalizePendingUnitOrderEntry = (entry, index = 0) => {
     note: normalizeOptionalString(entry.note),
     issuedAt: normalizeOptionalString(entry.issuedAt),
     issuedRound: numberOr(entry.issuedRound, 0),
+    // The part of the way that is over water, which paces a redeployment
+    // (unitMotion.js kmPerDay). Absent on an order nobody worked it out for.
+    ...(entry.seaShare !== null && entry.seaShare !== undefined && Number.isFinite(Number(entry.seaShare))
+      ? { seaShare: Math.max(0, Math.min(1, Number(entry.seaShare))) }
+      : {}),
   };
 };
 
@@ -2398,11 +2403,15 @@ const normalizeUnitOp = (entry) => {
     const toLat = finiteOrNull(entry.toLat ?? entry.lat);
     if (toLng === null || toLat === null || (toLng === 0 && toLat === 0)) return null;
     const posture = normalizeOptionalString(entry.posture).toLowerCase();
+    // The part of the way that is over water (unitMotion.js seaShareOf), when
+    // the pass that placed the move worked it out.
+    const seaShare = entry.seaShare === null || entry.seaShare === undefined ? null : finiteOrNull(entry.seaShare);
     return {
       op,
       unitId,
       toLng,
       toLat,
+      ...(seaShare !== null ? { seaShare: Math.max(0, Math.min(1, seaShare)) } : {}),
       regionId: normalizeOptionalString(entry.regionId),
       // Re-posturing on the move is how "this force is now massing rather than
       // in transit" reaches the map without a second op.
@@ -2594,12 +2603,17 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         // an order (the same doctrine buildMilitaryFeasibilityText already states).
         if (unit.type === "garrison") return unit;
 
+        const posture = op.posture || unit.posture;
+        // A redeployment or an advance, each at its own pace (unitMotion.js).
         const budget =
           elapsedDays === null || elapsedDays === undefined
             ? Infinity
-            : maxTravelKm(unit.type, gameDate, elapsedDays);
+            : maxTravelKm(unit.type, gameDate, elapsedDays, {
+              posture,
+              seaShare: op.seaShare ?? null,
+              remainingKm: haversineKm(unit.lat, unit.lng, op.toLat, op.toLng),
+            });
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
-        const posture = op.posture || unit.posture;
 
         if (step.arrived) {
           dropOrder(unit.id);
@@ -2630,6 +2644,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               note: op.note,
               issuedAt: gameDate,
               issuedRound: round,
+              seaShare: op.seaShare ?? null,
             }),
           );
         }
@@ -2743,7 +2758,11 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
-      maxTravelKm(unit.type, toDate || fromDate, elapsed),
+      maxTravelKm(unit.type, toDate || fromDate, elapsed, {
+        posture: unit.posture,
+        seaShare: order.seaShare ?? null,
+        remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
+      }),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
@@ -4221,7 +4240,13 @@ const applyPolityAndTerritoryImpacts = ({
     const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
     const previousSovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]) || controller || fromCode;
 
-    if (!controller || samePolity(controller, previousSovereign) || samePolity(controller, toCode)) {
+    // The power handing the region over is no third party to its own treaty.
+    // An occupier that cedes what it holds gives up the holding with the
+    // title: seen in a 45-skip test (2026-10-09), a reunification treaty by
+    // which the United States handed four occupied North Korean regions to
+    // South Korea changed their sovereign and left the United States in
+    // control of all four, so the map never showed the country reunited.
+    if (!controller || samePolity(controller, previousSovereign) || samePolity(controller, toCode) || samePolity(controller, fromCode)) {
       world.regionOwnershipOverrides[regionId] = toCode;
     }
     writeRegionSovereign(world, regionId, toCode);

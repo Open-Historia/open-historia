@@ -469,7 +469,7 @@ export const requestUnitOrders = async (unitId, text) => {
   const unit = getUnitById(unitId);
   if (!unit || !request) return false;
   await queueOrder(
-    `Orders requested for ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}), ` +
+    `Orders requested for ${unit.name} (${unit.type}, owner ${unit.ownerCode}), ` +
       `currently at lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}: ${request} — ` +
       `carry this out over the coming period as far as the era, terrain, logistics and the wider ` +
       `situation allow, or explain in an event why it could not be done.`,
@@ -490,6 +490,6 @@ export const disbandUnit = async (unitId) => {
   if (!unit) return;
   await commit((list) => list.filter((u) => u.id !== unitId));
   await queueOrder(
-    `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
+    `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
   );
 };

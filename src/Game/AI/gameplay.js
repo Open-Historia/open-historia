@@ -84,6 +84,8 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
+import { findUnitByRef, readNameRef } from "./nameRefs.js";
+import { describeTravelPace, seaShareOf } from "../../runtime/unitMotion.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
@@ -1425,8 +1427,10 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 
     if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
 
+    // By its name alone, as every region the model is shown (regionVocab.js):
+    // a line that read "Hamhung (4441)" was written back as the region's name.
     rows.push(
-      `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
+      `- ${region?.name || regionId}: sovereign ${sovereign || "unknown"}; ` +
       `controller ${controller || "unknown"}` +
       (claimants.length ? `; active claimants/contenders ${claimants.join(", ")}` : ""),
     );
@@ -1609,8 +1613,8 @@ const JUMP_LEVERS = [
 const FOLDED_SKIP_CONSEQUENCES = [
   "[Every Event Carries Its Consequences]",
   "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
-  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. Armies moving nearby change no control, and an unresolved clash names no winner.",
-  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its id, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units.",
+  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) and takes ground is written as that control entry's toCode, under its exact name: the engine founds it with that ground, and what it gains or loses afterwards is a control entry like any other. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
+  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a side attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it, under that side's exact name as ownerCode, and move it in later events as the front moves.",
   "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
   "• Orders. An event that gives one of the player's orders its outcome lists that order's id in actionIds.",
   "• The board. An event that moved one of the player's projects or operations carries its projectOps, as [Projects & Operations] says.",
@@ -1956,14 +1960,16 @@ const buildPlacementGazetteer = (context, world) => {
   // The place of that name inside one country: its city first, as everywhere else.
   // `exactOnly` is the whole-phrase attempt and stays strict here too, or "off
   // Okinawa, Japan" would match the region Okinawa and put the fleet ashore.
-  const findInCountry = (name, key, want, exactOnly) => {
+  // `kind`: "region" or "city" when the phrase said which the name is (nameRefs.js).
+  const findInCountry = (name, key, want, exactOnly, kind = "") => {
     const best = (list, rank) => list
       .map((entry) => ({ entry, rank: rank(entry) }))
       .filter((hit) => hit.rank > 0)
       .sort((a, b) => b.rank - a.rank)[0]?.entry ?? null;
     const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
-    const city = best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want));
+    const city = kind === "region" ? null : best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want));
     if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    if (kind === "city") return null;
     const pool = withGeometry.filter((row) => countryRank(row, want) > 0);
     const matched = pool.length
       ? matchRegionName(name, pool, exactOnly ? { allowFuzzy: false, minSubstring: Infinity } : { maxFuzzy: 1 })
@@ -1991,44 +1997,61 @@ const buildPlacementGazetteer = (context, world) => {
   // substring match would read "off Sevastopol" as the region Sevastopol.
   // `country`: the one the phrase named after a comma ("Montana, United States").
   // `prefer`: the polity doing the placing, which decides a bare shared name.
-  // A name asked for with neither is `lookUp`, the lookup `find` remembers.
+  // `kind`: what the phrase said the name is — "country", "region", "city",
+  // "unit", "structure" or "sea" (nameRefs.js: "region: Georgia") — and then it
+  // is looked up as that and nothing else. Georgia said as a region is never the
+  // country, and said with a country the map knows it is in that country or
+  // nowhere: a kind is the model saying it knows which of two things it means.
+  // A name asked for with none of the three is `lookUp`, the lookup `find` remembers.
   const lookUp = (name, exactOnly) => {
     return lookUpFor(name, exactOnly, "", "");
   };
-  const lookUpFor = (name, exactOnly, country, prefer) => {
+  const lookUpFor = (name, exactOnly, country, prefer, kind = "") => {
     const key = fold(name);
     if (!key) return null;
-    const unit = units.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
+    // A sea is not in the gazetteer's own names: placement.js reads it from the
+    // map's seas. (nameRefs.js also reads the kind "group"; nothing here has groups.)
+    if (kind === "sea" || kind === "group") return null;
+    const unit = !kind || kind === "unit" ? units.find((entry) => fold(entry.id) === key || fold(entry.name) === key) : null;
     if (unit) return { kind: "unit", name: unit.name, point: [unit.lng, unit.lat] };
-    const marker = markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
+    if (kind === "unit") return null;
+    const marker = !kind || kind === "structure" ? markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key) : null;
     if (marker) return { kind: "marker", name: marker.name, point: [marker.lng, marker.lat] };
+    if (kind === "structure") return null;
+    if (kind === "country") {
+      const named = context.resolveOwner(name) || context.resolveOwner(toCountryName(normalizeString(name)));
+      const held = named ? (context.ownerRows.get(named) ?? []).filter((row) => row.geometry) : [];
+      return held.length ? { kind: "polity", name: named, regions: held.map(asRegion) } : null;
+    }
     // The country the model was told to name decides between places sharing one.
     // A country the map does not know, or one holding no such place, is ignored:
-    // a wrong qualifier must not make a real place vanish.
+    // a wrong qualifier must not make a real place vanish. Said with its kind,
+    // the name is held to the country it was given.
     const wanted = countryOf(country);
-    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly) : null;
+    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly, kind) : null;
     if (qualified) return qualified;
+    if (kind && wanted && (wanted.label ? (context.ownerRows.get(wanted.label) ?? []).length > 0 : Boolean(wanted.iso3))) return null;
     // A country before a region: "Ukraine" is the country even where a region shares the name.
-    const owner = context.resolveOwner(name);
+    const owner = kind ? "" : context.resolveOwner(name);
     // Unqualified and shared: the polity placing it decides. "Montana" ordered by
     // the United States is the state, not the Bulgarian province the map lists
     // first. A country keeps its own name against any preference.
     const preferred = !wanted && !owner ? countryOf(prefer) : null;
     if (preferred && sharedName(name).length > 1) {
-      const mine = findInCountry(name, key, preferred, exactOnly);
+      const mine = findInCountry(name, key, preferred, exactOnly, kind);
       if (mine) return mine;
     }
-    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
+    const city = kind === "region" ? null : context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
     if (city) return { kind: "city", name: city.name, point: city.coordinates };
     const owned = owner ? (context.ownerRows.get(owner) ?? []).filter((row) => row.geometry) : [];
-    const exact = withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
+    const exact = kind === "city" ? null : withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
     if (owned.length && !(exact && owned.length === 1)) return { kind: "polity", name: owner, regions: owned.map(asRegion) };
     if (exact) return { kind: "region", name: exact.name, region: asRegion(exact) };
-    const matched = exactOnly
+    const matched = kind === "city" ? null : exactOnly
       ? matchRegionName(name, withGeometry, { allowFuzzy: false, minSubstring: Infinity })
       : matchRegionName(name, withGeometry, { maxFuzzy: 1 });
     if (matched?.region) return { kind: "region", name: matched.region.name, region: asRegion(matched.region) };
-    if (exactOnly) return null;
+    if (exactOnly || kind === "region") return null;
     // A city one letter out ("Kharkov" for "Kharkiv"), last: a near miss must not beat a real region.
     const stripped = stripRegionAffixes(key) || key;
     const close = stripped.length >= 5 && context.cityRows.find((entry) => editDistance(stripped, fold(entry.name), 1) <= 1);
@@ -2040,19 +2063,22 @@ const buildPlacementGazetteer = (context, world) => {
   // region on the map. Nothing a lookup reads changes while this gazetteer
   // lives, so each name is worked out once. What comes back is only ever read.
   const lookedUp = new Map();
-  const find = (name, { exact: exactOnly = false, country = "", prefer = "" } = {}) => {
+  const find = (name, { exact: exactOnly = false, country = "", prefer = "", kind = "" } = {}) => {
     const memoKey = `${exactOnly ? "=" : "~"}${String(name ?? "")}`;
-    // Asked within a country, or by the polity placing the thing: an answer of its own.
-    if (country || prefer) {
-      const askedKey = `${memoKey}\n${String(country ?? "")}\n${String(prefer ?? "")}`;
-      if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, Boolean(exactOnly), country, prefer));
+    // Asked within a country, by the polity placing the thing, or as one kind
+    // of thing: an answer of its own.
+    if (country || prefer || kind) {
+      const askedKey = `${memoKey}\n${String(country ?? "")}\n${String(prefer ?? "")}\n${String(kind ?? "")}`;
+      if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, Boolean(exactOnly), country, prefer, kind));
       return lookedUp.get(askedKey);
     }
     if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));
     return lookedUp.get(memoKey);
   };
 
-  // A region by its id, for an operation that gives `regionId` and no phrase.
+  // A region by the map's own key for it, for a saved operation that carries
+  // one in `regionId`. What the model writes there is the region's name, which
+  // `find` reads (placement.js resolveRegionPlacement).
   const findRegionId = (id) => {
     const key = normalizeString(id);
     if (!key) return null;
@@ -2175,6 +2201,62 @@ const buildPlacementGazetteer = (context, world) => {
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 
+// A unit or a structure is written by its NAME (nameRefs.js). The save keys
+// each by an id the model is not shown, so before anything looks one up, what
+// was written is turned into that id here: "3rd Infantry Division", "unit:
+// 3rd Infantry Division", "1st Army (France)", and an id itself, for a saved
+// order that carries one. A name that fits no unit, or two, is left as it was
+// written, and the checks further on say so as they always have. A structure
+// named in `markerId` is found by that name; one the map does not have keeps
+// its name for the rename of a stock city (gameState.js).
+const canonicalizeNamedThings = (containers, world) => {
+  const units = normalizeArray(world?.units);
+  const markers = normalizeArray(world?.markers);
+  const unitIds = new Set(units.map((unit) => normalizeString(unit?.id)).filter(Boolean));
+  const markerIds = new Set(markers.map((marker) => normalizeString(marker?.id)).filter(Boolean));
+  const fold = (value) => normalizeString(value).toLowerCase();
+  let named = 0;
+  for (const { event, impacts } of normalizeArray(containers)) {
+    if (!impacts || typeof impacts !== "object") continue;
+    const context = [normalizeString(event?.title), normalizeString(event?.description)].filter(Boolean).join(". ");
+    for (const op of normalizeArray(impacts.unitOps)) {
+      if (!op || typeof op !== "object" || normalizeString(op.op).toLowerCase() === "spawn") continue;
+      const written = normalizeString(op.unitId)
+        || (typeof op.unit === "string" ? normalizeString(op.unit) : "")
+        || normalizeString(op.unitName)
+        || normalizeString(op.name);
+      if (!written || unitIds.has(written)) continue;
+      const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner), context });
+      if (!unit) continue;
+      op.unitId = unit.id;
+      named += 1;
+    }
+    for (const op of normalizeArray(impacts.markerOps)) {
+      if (!op || typeof op !== "object") continue;
+      const kind = normalizeString(op.op).toLowerCase();
+      if (kind === "build" || kind === "found") continue;
+      const writtenId = normalizeString(op.markerId);
+      if (writtenId && markerIds.has(writtenId)) continue;
+      const ref = readNameRef(writtenId || op.name);
+      if (!ref.name) continue;
+      const marker = (ref.bracket && markers.find((entry) => normalizeString(entry?.id) === ref.bracket))
+        || markers.find((entry) => fold(entry?.name) === fold(ref.name)
+          || normalizeArray(entry?.aliases).some((alias) => fold(alias) === fold(ref.name)));
+      if (marker) {
+        op.markerId = marker.id;
+        named += 1;
+      } else if (writtenId) {
+        // Not a key the map has: it is the name, and is read as one.
+        if (!normalizeString(op.name)) op.name = ref.name;
+        delete op.markerId;
+      } else if (typeof op.name === "string" && ref.name !== normalizeString(op.name)) {
+        op.name = ref.name;
+      }
+    }
+  }
+  return named;
+};
+
 // Every `at` — or, failing that, every `regionId` — in a list of containers
 // ({ event, impacts, path }) becomes coordinates, and every newly placed thing is
 // spaced off the rest. Mutates the operations in place, like the region resolvers
@@ -2182,6 +2264,7 @@ const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 // no coordinates at all is left for the normalizer to drop, exactly as one that
 // never had any.
 const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
+  canonicalizeNamedThings(containers, world);
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
@@ -2200,7 +2283,7 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
         // A land formation's march ends on land, as its raising does: seen in a
         // player's Game (2026-09-29), an armoured division sent to a coastal
         // town stood in the sea, the model's guess a kilometre offshore.
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode) });
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode), from: mover && Number.isFinite(mover.lng) && Number.isFinite(mover.lat) ? { lng: mover.lng, lat: mover.lat } : null });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2437,6 +2520,17 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       if (index >= 0) standing.splice(index, 1);
     }
     standing.push({ id: entry.id || `placed-${standing.length}`, lng: Number(target[lngKey]), lat: Number(target[latKey]), radiusKm });
+    // How much of a land formation's way is over water, which paces its
+    // redeployment (unitMotion.js): the runtime that moves it has no shapes
+    // to tell a march from a voyage, so it is worked out here.
+    if (entry.from && entry.raisedOnLand) {
+      try {
+        const share = seaShareOf(entry.from, { lng: Number(target[lngKey]), lat: Number(target[latKey]) }, (point) => Boolean(gazetteer.regionAt(point)));
+        if (share !== null) target.seaShare = share;
+      } catch {
+        // one odd polygon must not cost the move: it is paced as an order with no share
+      }
+    }
   }
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
@@ -2485,6 +2579,29 @@ const JUMP_LIVE_STATE_BANNER = [
 const jumpDifficultyDirective = (difficulty) => {
   const meta = difficultyMeta(difficulty);
   return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
+};
+
+// The belligerents of the wars under way that have no formation on the map,
+// as a block for the time skip: each is to be given one by the next event of
+// its fighting. "" when every side of every war is drawn, or there is no war.
+const describeWarsWithoutFormations = (world) => {
+  const fold = (value) => normalizeString(value).toLowerCase();
+  const fielded = new Set(normalizeArray(world?.units).map((unit) => fold(unit?.ownerCode)).filter(Boolean));
+  const lines = [];
+  for (const war of normalizeArray(world?.wars)) {
+    if (normalizeString(war?.status).toLowerCase() !== "active") continue;
+    const sides = [normalizeArray(war.sideA).map(normalizeString).filter(Boolean), normalizeArray(war.sideB).map(normalizeString).filter(Boolean)];
+    const unseen = sides.flat().filter((name) => !fielded.has(fold(name)));
+    if (!unseen.length) continue;
+    lines.push(`- ${normalizeString(war.title) || `${sides[0][0]} against ${sides[1][0]}`}: ${unseen.slice(0, 6).join(", ")}${unseen.length > 6 ? ` and ${unseen.length - 6} more` : ""}`);
+    if (lines.length >= 8) break;
+  }
+  if (!lines.length) return "";
+  return [
+    "[Wars With Nobody on the Map]",
+    "These belligerents of a war under way have no formation on the map, so nothing shows their fighting. The next event that has one of them attacking, defending or falling back spawns a formation for it where that event puts its forces, and later events move it:",
+    ...lines,
+  ].join("\n");
 };
 
 const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {} } = {}) => {
@@ -2542,6 +2659,17 @@ ${continuity}`);
 The engine carries these orders out every turn — a move continues toward its destination, a patrol keeps its station. Do not move these units again; give one a unit op only when an event redirects it or ends its order, and say why.
 ${pending}`);
   }
+
+  // A war nobody is drawn fighting. Seen in a 45-skip test (2026-10-09): some
+  // ten events a run told of a town taken in Syria or Iraq and nothing moved,
+  // because neither side of those wars had a formation on the map to move.
+  const unseenWars = describeWarsWithoutFormations(world);
+  if (unseenWars) blocks.push(unseenWars);
+
+  // The paces of this game's own era (unitMotion.js), so an event does not
+  // land a formation the map still shows on its way. The template carries the
+  // rest of the unit guidance, so the paces stand under a heading of their own.
+  blocks.push(`[How Fast Formations Travel]\n${describeTravelPace(game?.gameDate)}`);
 
   // A folded skip keeps the board itself (projectsDirective.js); otherwise the
   // board is context, and its own pass moves it.
@@ -5027,6 +5155,47 @@ const resolveRegionTransfers = async (containers, world, {
     }
   }
 
+  // A region is written by its NAME, and may be written with its kind in front
+  // ("region: Hamhung") or with something in brackets after it (nameRefs.js).
+  // Each reference is taken down to the name here, before anything is looked
+  // up, so every family below reads the same thing. A 45-skip test
+  // (2026-10-09) lost a treaty's four transfers to "Hamhung (4441)": the model
+  // had been shown the region that way and wrote it back, and it matched
+  // nothing. What stood in the brackets is kept as a hint (bracketHints), used
+  // only when the name alone does not settle it. One of the map's own keys
+  // written bare is left as it is, for a saved or previewed operation.
+  const bracketHints = new WeakMap();
+  const plainRegionRef = (value) => {
+    const raw = normalizeString(value);
+    if (!raw || byId.has(raw) || byAliasId.has(raw)) return { text: raw, kind: "", bracket: "" };
+    const ref = readNameRef(raw);
+    return { text: ref.name, kind: ref.kind, bracket: ref.bracket };
+  };
+  for (const { impacts } of containers) {
+    for (const transfer of normalizeArray(impacts?.regionTransfers)) {
+      if (!transfer || typeof transfer !== "object") continue;
+      const id = plainRegionRef(transfer.regionId);
+      const name = plainRegionRef(transfer.regionName);
+      if (typeof transfer.regionId === "string") transfer.regionId = id.text;
+      if (typeof transfer.regionName === "string") transfer.regionName = name.text;
+      const bracket = id.bracket || name.bracket;
+      if (bracket) bracketHints.set(transfer, bracket);
+      // "country: North Korea" is the whole of that country's land: what
+      // wholeCountry says, said the way every other place is said. A contest
+      // or a claim's withdrawal is of one region and is left to its name.
+      const op = normalizeString(transfer.op).toLowerCase();
+      if ((id.kind || name.kind) === "country" && (!op || op === "control")) {
+        transfer.wholeCountry = true;
+        if (!normalizeString(transfer.fromCode)) transfer.fromCode = id.text || name.text;
+      }
+    }
+    for (const claim of normalizeArray(impacts?.regionClaims)) {
+      if (!claim || typeof claim !== "object") continue;
+      if (typeof claim.regionId === "string") claim.regionId = plainRegionRef(claim.regionId).text;
+      if (typeof claim.regionName === "string") claim.regionName = plainRegionRef(claim.regionName).text;
+    }
+  }
+
   const worldState = normalizeWorldState(world);
   const controlOwners = worldState.regionOwnershipOverrides;
   const sovereigntyOwners = worldState.regionSovereigntyOverrides || {};
@@ -5412,6 +5581,29 @@ const resolveRegionTransfers = async (containers, world, {
         if (owned.length === 1) return owned[0].id;
       }
 
+      // Several regions of that name and nothing above to choose by: what the
+      // model wrote in brackets after it, when that is one of them — the map's
+      // key for it, or the country it is in ("Georgia (United States)").
+      const hint = normalizeString(bracketHints.get(transfer));
+      if (matches.length > 1 && hint) {
+        const hinted = matches.filter((region) => region.id === hint
+          || regionKey(region.country) === regionKey(hint)
+          || canonicalOwnerKey(hint) === ownerKeyOf(region.id));
+        if (hinted.length === 1) return hinted[0].id;
+      }
+    }
+
+    // A name the map does not have, with one of the map's own keys in brackets
+    // after it: the key, since nothing else says which region was meant.
+    const bracketed = normalizeString(bracketHints.get(transfer));
+    if (bracketed && byId.has(bracketed) && ![transfer?.regionId, transfer?.regionName].some((candidate) => (byName.get(regionKey(candidate)) ?? []).length)) {
+      return bracketed;
+    }
+
+    for (const candidate of [transfer?.regionId, transfer?.regionName]) {
+      const query = regionKey(candidate);
+      if (!query) continue;
+
       // The shared matcher (regionMatch.js): an appended "Oblast", a stripped
       // "the ... region", a transliteration one edit away — each accepted only
       // when a single region survives. Inside the losing side when the model
@@ -5457,6 +5649,49 @@ const resolveRegionTransfers = async (containers, world, {
     }
   }
   const payloadDeclares = (token) => payloadDeclared.has(regionKey(toCountryName(normalizeString(token))));
+
+  // A front against a side the map does not show. Events of a civil war are
+  // written "control Palmyra, from Islamic State, to Syria" or "control Aleppo,
+  // from Syria, to Syria" (a 45-skip test, 2026-10-09): the government won the
+  // town back from rebels who are no power on this map, so the losing side is
+  // unknown, or is the winner itself, and the operation was dropped. It is
+  // read for what it says instead. The town is its government's again: any
+  // contest on it is cleared. Where the winner is someone other than the
+  // holder the map shows, it is an ordinary capture from that holder. A contest
+  // written the wrong way round, with the map's holder as the challenger, is
+  // turned about. Only control operations are read this way: a legal transfer
+  // still needs its losing side named. (A side the map does not know that
+  // TAKES ground is founded by receiving it: collectFoundedPolities below.)
+  for (const container of containers) {
+    for (const transfer of normalizeArray(container?.impacts?.regionTransfers)) {
+      const op = normalizeString(transfer?.op).toLowerCase();
+      if (!op || transfer?.wholeCountry === true) continue;
+      const from = normalizeString(transfer.fromCode);
+      if (!from) continue;
+      const other = op === "contest" ? normalizeString(transfer.actorCode)
+        : op === "control" && transfer.__hadRealToCode ? normalizeString(transfer.toCode) : "";
+      const sameSide = Boolean(other) && regionKey(toCountryName(from)) === regionKey(toCountryName(other));
+      const fromUnknown = !ownerIsKnown(from) && !payloadDeclares(from);
+      if (!sameSide && !fromUnknown) continue;
+      const named = [transfer.regionId, transfer.regionName]
+        .map((written) => byId.get(normalizeString(written)) ?? ((byName.get(regionKey(written)) ?? []).length === 1 ? byName.get(regionKey(written))[0] : null))
+        .find(Boolean);
+      if (!named) continue;
+      const holder = ownerNameOf(named.id);
+      if (!holder) continue;
+      const otherHolds = Boolean(other) && canonicalOwnerKey(other) === ownerKeyOf(named.id);
+      if (op === "control" && other && otherHolds) {
+        Object.assign(transfer, { op: "clear_contest", regionId: named.id, fromCode: holder, toCode: holder, claimantCode: fromUnknown ? from : "", clearAll: true, __hadRealToCode: false });
+      } else if (op === "control" && other && !sameSide && ownerIsKnown(other)) {
+        // Won from the side the map does not show, on ground the map gives to a third.
+        transfer.fromCode = holder;
+      } else if (op === "contest" && fromUnknown && otherHolds) {
+        Object.assign(transfer, { fromCode: holder, actorCode: from, toCode: from });
+      } else if (op === "clear_contest" && fromUnknown) {
+        Object.assign(transfer, { fromCode: holder, toCode: holder, claimantCode: normalizeString(transfer.claimantCode) || from });
+      }
+    }
+  }
   // resolveRegionControlOps proxies an op with no owner at all under this
   // sentinel; the ownership rules below judge it, not the name check.
   const OWNERLESS_SENTINEL = "Unresolved polity";
@@ -6026,6 +6261,7 @@ const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly =
     const foundedHere = normalizeArray(proxyContainers[index]?.impacts?.polityChanges).filter((change) => !declaredBefore.has(change));
     if (foundedHere.length) targetImpacts.polityChanges = [...foundedHere, ...normalizeArray(targetImpacts.polityChanges)];
 
+
     targetImpacts.regionControlOps = normalizeArray(proxyContainers[index]?.impacts?.regionTransfers)
       .map((entry) => {
         const next = { ...entry };
@@ -6104,7 +6340,7 @@ const buildTransferFeedback = (unresolved) => {
     }
     if (entry.candidates.length > 0) {
       const listed = entry.candidates.slice(0, 200)
-        .map((region) => `${region.name} (${region.id})`)
+        .map((region) => region.name)
         .join(", ");
       const more = entry.candidates.length > 200 ? `, +${entry.candidates.length - 200} more` : "";
       lines.push(
@@ -6115,12 +6351,12 @@ const buildTransferFeedback = (unresolved) => {
       lines.push(
         `${entry.path}.regionTransfers: no map region matches "${target}"` +
           `${entry.fromCode ? ` and no regions are recorded for owner "${entry.fromCode}"` : ""}. ` +
-          `Use the region's exact in-game name in regionId, and set fromCode to the region's current owner so the engine can locate it.`,
+          `Write the region's exact in-game name in regionId, as "region: <name>", and set fromCode to the region's current owner so the engine can locate it.`,
       );
     }
   }
   lines.push(
-    "Resend the same response with these regionTransfers corrected to exact regionId values (or exact names) from the lists above; drop a transfer only if no listed region matches your intent.",
+    "Resend the same response with these regionTransfers corrected to exact region names from the lists above, each written in regionId as \"region: <name>\"; drop a transfer only if no listed region matches your intent.",
   );
   return lines.join("\n");
 };
@@ -6147,10 +6383,10 @@ const buildControlFeedback = (unresolved) => {
   for (const entry of coverage) {
     chunks.push(
       `${entry.path}.regionControlOps: event narration explicitly says de-facto control changes in ` +
-        `${entry.cityName || entry.label}, which the rendered map places in ` +
-        `${entry.regionName} (${entry.regionId}), but no control operation targets that region. ` +
-        `Add the matching control operation using regionId "${entry.regionId}" and regionName ` +
-        `"${entry.regionName}" with the correct current controller/fromCode and new controller/toCode, ` +
+        `${entry.cityName || entry.label}, which the rendered map places in the region ` +
+        `${entry.regionName}, but no control operation targets that region. ` +
+        `Add the matching control operation with regionId "region: ${entry.regionName}" ` +
+        `and the correct current controller/fromCode and new controller/toCode, ` +
         `or revise the event prose so it does not claim control changed there.`,
     );
   }
@@ -6262,6 +6498,10 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   const drop = (path, text) => noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`);
 
+  // Units and structures are written by name; the save's own keys for them
+  // are put in before anything below looks one up (canonicalizeNamedThings).
+  canonicalizeNamedThings(containers, world);
+
   // A transfer or control flip that says its own basis is a claim, a threat or a
   // raid moves no border (runtime/territoryBasis.js). Never an error and never a
   // retry: the intent is unambiguous, so the claim is recorded, the rest is left
@@ -6347,13 +6587,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const controlEvent = candidate.events.find((event) =>
         CONTROL_CHANGE_LANGUAGE.test(text(event)) && !LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (controlEvent) {
-        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the exact region id or the grounded place wording, fromCode = the current controller) or rewrite the event so that no control changed hands.`;
+        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the region's name as the map spells it, written "region: <name>", or the grounded place wording; fromCode = the current controller) or rewrite the event so that no control changed hands.`;
       }
     }
     if (totalTransfers === 0) {
       const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (legalEvent) {
-        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region, or wholeCountry:true for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
+        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region as "region: <name>", or regionId "country: <name>" for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
       }
     }
   }
@@ -6405,13 +6645,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const unitId = normalizeString(operation.unitId);
       const unitOpName = normalizeString(operation.op) || "unit";
       if (!unitId) {
-        if (strict) return `${operationPath}.unitId must not be blank.`;
-        drop(path, `a ${unitOpName} operation was dropped — it named no unitId, so no formation changed.`);
+        if (strict) return `${operationPath}.unitId must name the unit.`;
+        drop(path, `a ${unitOpName} operation was dropped — it named no unit, so no formation changed.`);
         continue;
       }
       if (!unitIds.has(unitId)) {
-        if (strict) return `${operationPath}.unitId does not identify an existing unit.`;
-        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no unit has that id (it may have been destroyed or never existed).`);
+        if (strict) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
+        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no single unit on the map has that name (it may have been destroyed, or never existed, or two units share the name and no owner was given).`);
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
@@ -6440,7 +6680,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         }
       } else if (op === "remove" || op === "destroy") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
-          if (strict) return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+          if (strict) return `${operationPath} must carry the name of the structure to remove.`;
           drop(path, "a structure removal was dropped — it named nothing to remove.");
           continue;
         }
