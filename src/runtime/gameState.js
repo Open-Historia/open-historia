@@ -9,6 +9,7 @@ import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, sameP
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventPlaces } from "./eventPlaces.js";
 import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
@@ -3551,6 +3552,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // resolveEspionage): the polities whose players may read the event. Absent,
   // as on every event of a one-player game, it is everybody's.
   const audience = [...new Set(normalizeActionParticipants(entry.audience))].slice(0, 12);
+  // The places the event said it is about, as the engine found them on the
+  // map (runtime/eventPlaces.js): what its card links to.
+  const places = normalizeEventPlaces(entry.places);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3560,6 +3564,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
     ...(audience.length ? { audience } : {}),
+    ...(places.length ? { places } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts, entry),
     agency: normalizeEventAgency(entry.agency),
