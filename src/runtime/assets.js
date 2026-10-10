@@ -135,9 +135,11 @@ export const isAllowedBasemapOverride = (id, allowed) => isBuiltinBasemapId(id) 
 // screen: a built-in basemap's id, or "" for the scenario's own. It replaces a
 // built-in basemap only. A scenario with a map of its own (a picture, a drawn
 // map, the plain sea of a flat sheet) keeps it: its regions are drawn for that
-// map, and a built-in basemap under them is the Earth under another world.
-export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false } = {}) => (
-  !scenarioHasOwnMap && isBuiltinBasemapId(pickedId) ? pickedId : ""
+// map, and a built-in basemap under them is the Earth under another world. On
+// a real-Earth scenario the pick counts only if the scenario allows that map
+// (allowedBasemaps, as above).
+export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false, allowedBasemaps = null } = {}) => (
+  !scenarioHasOwnMap && isAllowedBasemapOverride(pickedId, allowedBasemaps) ? pickedId : ""
 );
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;

@@ -19,7 +19,6 @@ import {
   buildBasemapRenderKey,
   basemapOverrideFor,
   esriTileTemplate,
-  isAllowedBasemapOverride,
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
@@ -632,9 +631,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   // The player's pick counts only on a scenario without a map of its own, and
   // only if the scenario allows that built-in map (chosen in the Map Editor).
   const allowedBasemaps = worldAllowedBasemaps == null ? null : worldAllowedBasemaps.split(",").filter(Boolean);
-  const validBasemapOverride = isAllowedBasemapOverride(basemapOverride, allowedBasemaps)
-    ? basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared })
-    : "";
+  const validBasemapOverride = basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared, allowedBasemaps });
   const useScenarioBackground = !validBasemapOverride;
   const effectiveCustomBg = useScenarioBackground ? customBg : null;
   // Tell the political layers whether relief tiles are actually on screen, so

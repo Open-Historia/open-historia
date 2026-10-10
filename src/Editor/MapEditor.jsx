@@ -58,7 +58,7 @@ import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } 
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { DETAILED_MAP_NEEDS_BASIC_MAP, buildGameSeed, gameCityToFeature } from "./exportPreset.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP, buildGameSeed, gameCityToFeature, scenarioHasOwnMap } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -1814,6 +1814,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         currentVectorGeojson={normalizeBackground(customBg)?.kind === "vector" ? normalizeBackground(customBg).geojson : null}
         allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
         onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
+        scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
       />
 
       <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />

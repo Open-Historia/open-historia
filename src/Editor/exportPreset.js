@@ -252,6 +252,12 @@ export const buildBackgroundForGame = (customBackground, tiledBasemap = null) =>
   return { background: null, backgroundData: null };
 };
 
+// Whether the game will treat this scenario as having a map of its own (its
+// world.background): then the player's built-in Basemap pick never replaces it
+// (runtime/assets.js basemapOverrideFor), so the list of built-in maps players
+// may switch to has no effect.
+export const scenarioHasOwnMap = (doc) => Boolean(buildBackgroundForGame(doc?.metadata?.customBackground).background);
+
 // Every country the stock world already knows by name. An owner in here is a real
 // GADM country the game can name, colour and flag on its own; an owner outside it
 // is something the map-maker invented, and only a polity entry tells the game and

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ESRI_BASEMAPS, allowedBuiltinBasemaps, isAllowedBasemapOverride, normalizeAllowedBasemaps } from "./assets.js";
-import { buildGameSeed } from "../Editor/exportPreset.js";
+import { buildGameSeed, scenarioHasOwnMap } from "../Editor/exportPreset.js";
 
 test("no choice made: every built-in map is allowed, as before", () => {
   assert.equal(normalizeAllowedBasemaps(undefined), null);
@@ -32,4 +32,18 @@ test("the Map Editor writes the author's choice into the scenario", () => {
   const empty = { type: "FeatureCollection", features: [] };
   assert.deepEqual(buildGameSeed(doc, empty).world.allowedBasemaps, []);
   assert.equal(buildGameSeed({ ...doc, metadata: {} }, empty).world.allowedBasemaps, null);
+});
+
+// The list only limits a real-Earth scenario: one with a map of its own never
+// takes a built-in map (basemapOverride.test.js), so the Map Editor turns the
+// list off there.
+test("the Map Editor knows when the scenario has a map of its own", () => {
+  const drawn = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: {} }] } };
+  assert.equal(scenarioHasOwnMap({ metadata: {} }), false);
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: null } }), false);
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: drawn } }), true);
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: { kind: "image", dataUrl: "data:image/png;base64,AA==" } } }), true);
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: { kind: "plain" } } }), true);
+  // A detailed map always sits on a drawn basemap of its own.
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: drawn, tiledBasemap: { id: "got-world", version: 1 } } }), true);
 });

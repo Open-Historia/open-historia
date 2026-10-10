@@ -265,7 +265,10 @@ const DetailedMaps = ({ list, loading, download, onDownload, onCancel }) => {
 // Map while playing this scenario. null = any of them (the default, and every
 // scenario made before this existed); [] = only the scenario's own map, which
 // is what a made-up world wants (runtime/assets.js allowedBasemapIds).
-const AllowedBasemaps = ({ value, onChange }) => {
+// `ownMap`: the scenario has a map of its own, which players' built-in pick
+// never replaces (runtime/assets.js basemapOverrideFor), so the list does
+// nothing and is not offered.
+const AllowedBasemaps = ({ value, onChange, ownMap = false }) => {
   const all = value === null || value === undefined;
   const chosen = new Set(all ? ESRI_BASEMAPS.map((b) => b.id) : value);
   const toggle = (id) => {
@@ -274,11 +277,22 @@ const AllowedBasemaps = ({ value, onChange }) => {
     else next.add(id);
     onChange(next.size === ESRI_BASEMAPS.length ? null : ESRI_BASEMAPS.map((b) => b.id).filter((x) => next.has(x)));
   };
+  const box = { marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" };
+  if (ownMap) {
+    return (
+      <div style={box}>
+        <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
+        <div style={{ ...dim, padding: 0 }}>
+          None: this scenario has a map of its own, and players always see it. This list only applies to a scenario on a built-in basemap.
+        </div>
+      </div>
+    );
+  }
   return (
-    <div style={{ marginBottom: "1.3rem", padding: "0.7rem 0.8rem", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", background: "rgba(255,255,255,0.03)" }}>
+    <div style={box}>
       <div style={{ ...rowTitle, marginBottom: "0.3rem" }}>Basemaps players can switch to</div>
       <div style={{ ...dim, padding: "0 0 0.5rem" }}>
-        Players always get this scenario&apos;s own basemap (and its detailed map, if it has one). Tick the built-in basemaps they may also pick in Settings → Map. For a made-up world, untick them all.
+        Players start on this scenario&apos;s basemap. Tick the built-in basemaps they may also pick in Settings → Map, or untick them all to keep everyone on this one.
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", alignItems: "center" }}>
         <button type="button" style={tabBtn(all)} onClick={() => onChange(null)}>All</button>
@@ -308,6 +322,7 @@ const BasemapPicker = ({
   browse = false,
   allowedBasemaps,
   onAllowedBasemapsChange,
+  scenarioHasOwnMap = false,
 }) => {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
@@ -563,7 +578,7 @@ const BasemapPicker = ({
           {tab === "mine" ? (
             <>
               {!browse && onAllowedBasemapsChange && (
-                <AllowedBasemaps value={allowedBasemaps} onChange={onAllowedBasemapsChange} />
+                <AllowedBasemaps value={allowedBasemaps} onChange={onAllowedBasemapsChange} ownMap={scenarioHasOwnMap} />
               )}
               {!browse && (
               <div style={{ marginBottom: "1.3rem" }}>
