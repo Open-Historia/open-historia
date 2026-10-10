@@ -91,7 +91,8 @@ flag, because it is not that state.
 
 A country can exist while holding no territory at all: governments in exile, national movements,
 international organisations, rebel administrations. They are full participants — they talk, they
-are talked about, they can be spied on, and they can acquire territory later.
+are talked about, they can be spied on, and they can acquire territory later. An armed force that
+holds ground without being a country at all is a [group](/wiki/territory/#groups) instead.
 
 You can play one. It is a genuinely different game: nothing to defend, nothing to lose
 territorially, and everything resting on what you can talk other people into.

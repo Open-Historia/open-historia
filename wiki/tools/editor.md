@@ -88,6 +88,12 @@ picker** for countries, and **search** to find a place by name.
 territory they cover (one covered entirely is removed), and countries the target map does not know
 yet arrive with their colour and flag.
 
+**Groups.** The **Groups** chip in the bottom bar opens a panel for actors that are not countries
+— a cartel, a militia, an outbreak: name one, say what it is (the AI is told this), pick its tint,
+and add or remove the selected regions. **Controlled by group** in the region inspector sets it
+per selection. A group's area is tinted and outlined on the map and owns nothing; see
+[territory](/wiki/territory/#groups).
+
 ## Importing
 
 **Cities** can be imported from the built-in database of roughly seventy thousand, filtered to

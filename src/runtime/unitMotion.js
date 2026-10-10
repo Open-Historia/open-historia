@@ -56,39 +56,128 @@ export const hashSeed = (text) => {
 };
 
 // ---- pace ------------------------------------------------------------------
-
-// Sustained OPERATIONAL pace in km/day at a post-1945 baseline — what a
-// formation actually covers day after day, not its dash speed. Garrisons are 0
-// because they are fixed by definition (buildMilitaryFeasibilityText already
-// tells the model as much).
-const KM_PER_DAY = {
-  garrison: 0,
-  artillery: 35,
-  infantry: 40,
-  armor: 90,
-  naval: 600,
-  air: 2000,
+//
+// Two things are both called "a move", and they do not go at the same speed.
+//
+//   A REDEPLOYMENT is a formation being moved: marched along its own roads,
+//   and since the railway carried by train, by road convoy and by ship. A
+//   modern heavy division goes from Texas to Korea in about three weeks, and
+//   across Germany by rail in two days.
+//
+//   An ADVANCE is a formation going forward against an enemy under its own
+//   power, fighting or ready to, fed from behind. Thirty kilometres a day is a
+//   good day for infantry in any century; fifty for armour.
+//
+// One table used to serve for both — infantry 40 km a day, armour 90, in a
+// straight line. A 45-skip test (2026-10-09) showed what that did to a
+// redeployment: a division ordered from Texas to Korea was 127 to 328 game
+// days on the way, across Canada, the Arctic and Siberia, while the events of
+// those months had it landed and fighting. So a move is now paced by what it
+// is. It is an advance when the formation's posture is "assaulting", and a
+// redeployment otherwise; and a redeployment is paced by how much of its way
+// lies over water (`seaShare`, worked out where the map's shapes are to hand,
+// AI/gameplay.js resolvePlacements), because before the railway a march and a
+// voyage were very different speeds.
+//
+// Everything is km a day, sustained: loading, unloading, halts and weather
+// are inside the figure, which is why a ship's is well under its speed
+// through the water. Four eras, read off the game's own date: before 1500,
+// 1500 to 1849 (sail and the musket), 1850 to 1944 (rail and steam), and from
+// 1945. Garrisons are 0 because they are fixed by definition
+// (buildMilitaryFeasibilityText already tells the model as much).
+const ERA_STARTS = [1500, 1850, 1945];
+// A formation going forward against an enemy. Before the tank, "armor" is the
+// heavy cavalry of its day.
+const ADVANCE_KM_PER_DAY = {
+  infantry: [18, 20, 20, 30],
+  armor: [30, 35, 35, 50],
+  artillery: [12, 15, 18, 30],
 };
+// A redeployment over land: the march, then the troop train, then rail and road.
+const OVERLAND_KM_PER_DAY = {
+  infantry: [25, 28, 300, 500],
+  armor: [40, 45, 300, 500],
+  artillery: [18, 22, 300, 500],
+};
+// A redeployment by sea, port to port: galleys and coasters, sail, steam, sealift.
+const SEALIFT_KM_PER_DAY = [110, 170, 400, 650];
+// A fleet under way, and an air wing changing its base.
+const FLEET_KM_PER_DAY = [130, 200, 480, 750];
+const AIR_KM_PER_DAY = [700, 1000, 1500, 5000];
 
-// Logistics scale with the era: a 1200 BC army does not march like 1944.
-// Same year/BCE parsing as the deleted unitCombat.js's eraReachFactor, retuned
-// for sustained pace rather than strike reach.
-export const eraSpeedFactor = (gameDate) => {
+// The formation is in contact with an enemy and goes at an advance's pace.
+export const ADVANCING_POSTURES = new Set(["assaulting"]);
+
+// Which of the four eras a game date is in. A date that carries no year reads
+// as the present, as it always has here.
+export const eraOf = (gameDate) => {
   const text = String(gameDate ?? "");
   const match = /(-?\d{3,4})/.exec(text);
   const bce = /BC|BCE/i.test(text);
   const year = match ? Number(match[1]) * (bce ? -1 : 1) : 2000;
-  if (year < 1500) return 0.35;
-  if (year < 1850) return 0.5;
-  if (year < 1945) return 0.75;
-  return 1;
+  return ERA_STARTS.filter((start) => year >= start).length;
 };
 
-export const kmPerDay = (type, gameDate) =>
-  Math.round((KM_PER_DAY[type] ?? 40) * eraSpeedFactor(gameDate));
+// Kept for whoever scales something else by the era (strike reach, supply).
+export const eraSpeedFactor = (gameDate) => [0.35, 0.5, 0.75, 1][eraOf(gameDate)];
 
-export const maxTravelKm = (type, gameDate, days) =>
-  kmPerDay(type, gameDate) * Math.max(0, Number(days) || 0);
+// How far a formation gets in a day.
+//   posture      "assaulting" is an advance; anything else a redeployment.
+//   seaShare     the part of the way that is over water, 0 to 1; null when
+//                nobody worked it out (an order from an older save): a long
+//                journey is then taken to be half by sea.
+//   remainingKm  how far it still has to go, for that guess.
+export const kmPerDay = (type, gameDate, { posture = "", seaShare = null, remainingKm = 0 } = {}) => {
+  const era = eraOf(gameDate);
+  if (type === "garrison") return 0;
+  if (type === "naval") return FLEET_KM_PER_DAY[era];
+  if (type === "air") return AIR_KM_PER_DAY[era];
+  const kind = Object.hasOwn(OVERLAND_KM_PER_DAY, type) ? type : "infantry";
+  if (ADVANCING_POSTURES.has(String(posture ?? "").toLowerCase())) return ADVANCE_KM_PER_DAY[kind][era];
+  const told = Number(seaShare);
+  const share = seaShare !== null && seaShare !== undefined && Number.isFinite(told)
+    ? Math.max(0, Math.min(1, told))
+    : (Number(remainingKm) > 1500 ? 0.5 : 0);
+  const overland = OVERLAND_KM_PER_DAY[kind][era];
+  const sealift = SEALIFT_KM_PER_DAY[era];
+  // Each part of the way at its own pace: the days add, not the speeds.
+  return Math.round(1 / ((1 - share) / overland + share / sealift));
+};
+
+export const maxTravelKm = (type, gameDate, days, options = {}) =>
+  kmPerDay(type, gameDate, options) * Math.max(0, Number(days) || 0);
+
+// The part of the great circle between two points that lies over water,
+// 0 to 1, by `isLand([lng, lat])`. Sampled about every 150 km, the ends left
+// out: a port is on land and its ship is not.
+export const seaShareOf = (from, to, isLand) => {
+  if (typeof isLand !== "function") return null;
+  const start = { lng: Number(from?.lng), lat: Number(from?.lat) };
+  const end = { lng: Number(to?.lng), lat: Number(to?.lat) };
+  if (![start.lng, start.lat, end.lng, end.lat].every(Number.isFinite)) return null;
+  const distance = haversineKm(start.lat, start.lng, end.lat, end.lng);
+  if (distance < 60) return 0;
+  const steps = Math.max(6, Math.min(48, Math.round(distance / 150)));
+  let water = 0;
+  for (let index = 1; index < steps; index += 1) {
+    const point = stepToward(start, end, (distance * index) / steps);
+    if (!isLand([point.lng, point.lat])) water += 1;
+  }
+  return Number((water / (steps - 1)).toFixed(2));
+};
+
+// What the model is told of all this, so an event does not land a division
+// the map still shows at sea: the paces of this game's own era, in a line.
+export const describeTravelPace = (gameDate) => {
+  const era = eraOf(gameDate);
+  const overland = OVERLAND_KM_PER_DAY.infantry[era];
+  const how = ["on the march", "on the march", "by rail", "by rail and road"][era];
+  return `A formation that is redeployed covers about ${overland} km a day ${how} and about ${SEALIFT_KM_PER_DAY[era]} by sea; `
+    + `a fleet about ${FLEET_KM_PER_DAY[era]}${era >= 2 ? `, an air wing about ${AIR_KM_PER_DAY[era]}` : ""}. `
+    + `A formation advancing against an enemy (posture "assaulting") covers about ${ADVANCE_KM_PER_DAY.infantry[era]} km a day on foot `
+    + `and ${ADVANCE_KM_PER_DAY.armor[era]} ${era >= 2 ? "with armour" : "mounted"}. `
+    + "The engine moves each formation at that pace, and goes on moving it on later turns until it arrives: an event says a formation HAS ARRIVED only when the days since its order allow it, and otherwise that it is on its way.";
+};
 
 // Whole days between two YYYY-MM-DD dates, or null when either side is not a
 // plain Gregorian date ("1200 BCE", "Third Age 3019"). null means "do not clamp":

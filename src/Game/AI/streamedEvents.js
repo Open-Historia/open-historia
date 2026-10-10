@@ -7,13 +7,20 @@
 // with nobody watching, and a half-written event is never emitted.
 //
 // Two input shapes, because providers stream a tool call two ways:
-//   pushJson  partial JSON text (OpenAI-compatible, Anthropic)
+//   pushJson  partial JSON text (OpenAI-compatible, Anthropic, and a Gemini
+//             skip asked for as JSON text: main.jsx callGemini)
 //   pushArgs  the object assembled from Vertex AI partialArgs path fragments
-// The Gemini Developer API sends neither, so a Gemini skip does not stream here;
-// callGemini says why.
 //
-// Import-free and out of gameplay.js so it runs under bare node, like
-// jsonSalvage.js and providerErrors.js.
+// The text is read as leniently as the finished answer will be
+// (jsonSalvage.js): a model that writes a key without its quotes, or leaves a
+// comment in, still has its events shown as they close.
+//
+// Out of gameplay.js and free of the game's runtime, so it runs under bare
+// node, like jsonSalvage.js (its one import) and providerErrors.js.
+import { parseLooseJson } from "./jsonSalvage.js";
+
+// A word that could be an unquoted key.
+const BARE_WORD_CHAR = /[A-Za-z0-9_$]/;
 
 // "$.events[0].title" and "$['events'][0].title" both give ["events", 0, "title"].
 // An index is a number and a name a string, so the assembler can tell an array
@@ -107,7 +114,9 @@ export const createStreamedEventReader = ({ key = "events", onEvent = null } = {
     let inString = false;
     let escaped = false;
     let closedString = "";      // the last string literal that closed
-    let lastKey = "";           // that string, once a ':' proved it was a key
+    let bareWord = "";          // the last unquoted word, in case it is a key
+    let bareOpen = false;       // that word is still being read
+    let lastKey = "";           // either of them, once a ':' proved it was a key
     let stringStart = -1;
     let arrayDepth = -1;        // depth inside the events array, once found
     let elementStart = -1;
@@ -123,13 +132,27 @@ export const createStreamedEventReader = ({ key = "events", onEvent = null } = {
                 else if (char === '"') {
                     inString = false;
                     closedString = text.slice(stringStart + 1, at);
+                    bareWord = "";
                 }
                 at += 1;
                 continue;
             }
-            if (char === '"') { inString = true; escaped = false; stringStart = at; at += 1; continue; }
-            if (char === ":") { lastKey = closedString; closedString = ""; at += 1; continue; }
+            if (char === '"') { inString = true; escaped = false; stringStart = at; bareOpen = false; at += 1; continue; }
+            // A comment a model left in is not part of the answer, and a quote
+            // or a brace inside one must not be read as structure. Its end may
+            // not have arrived yet: the scan waits for it.
+            if (char === "/") {
+                if (at + 1 >= text.length) return;
+                if (text[at + 1] === "/") {
+                    const lineEnd = text.indexOf("\n", at);
+                    if (lineEnd === -1) return;
+                    at = lineEnd + 1;
+                    continue;
+                }
+            }
+            if (char === ":") { lastKey = closedString || bareWord; closedString = ""; bareWord = ""; bareOpen = false; at += 1; continue; }
             if (char === "{" || char === "[") {
+                bareWord = ""; bareOpen = false;
                 // Prose, a fence or a sentinel before the object is skipped, not parsed.
                 if (!started) {
                     if (char !== "{") { at += 1; continue; }
@@ -146,10 +169,12 @@ export const createStreamedEventReader = ({ key = "events", onEvent = null } = {
                 continue;
             }
             if (char === "}" || char === "]") {
+                bareWord = ""; bareOpen = false;
                 if (!started) { at += 1; continue; }
                 if (char === "}" && arrayDepth === depth - 1 && elementStart >= 0) {
+                    const written = text.slice(elementStart, at + 1);
                     let parsed = null;
-                    try { parsed = JSON.parse(text.slice(elementStart, at + 1)); } catch { parsed = null; }
+                    try { parsed = JSON.parse(written); } catch { parsed = parseLooseJson(written); }
                     // Every closed element takes its own index, so an unreadable one costs only itself.
                     emit(parsed, elementIndex);
                     elementIndex += 1;
@@ -161,6 +186,14 @@ export const createStreamedEventReader = ({ key = "events", onEvent = null } = {
                 closedString = "";
                 at += 1;
                 continue;
+            }
+            // An unquoted word, kept until it is known whether a ':' follows it.
+            if (BARE_WORD_CHAR.test(char)) {
+                bareWord = bareOpen ? bareWord + char : char;
+                bareOpen = true;
+            } else {
+                bareOpen = false;
+                if (char === ",") bareWord = "";
             }
             at += 1;
         }
@@ -187,7 +220,7 @@ export const createStreamedEventReader = ({ key = "events", onEvent = null } = {
             if (next.length < text.length || (text && !next.startsWith(text.slice(0, 32)))) {
                 text = next;
                 at = 0; started = false; depth = 0; inString = false; escaped = false;
-                closedString = ""; lastKey = ""; stringStart = -1;
+                closedString = ""; bareWord = ""; bareOpen = false; lastKey = ""; stringStart = -1;
                 arrayDepth = -1; elementStart = -1; elementIndex = 0; arrayDone = false;
             } else {
                 text = next;

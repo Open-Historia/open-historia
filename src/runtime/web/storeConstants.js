@@ -79,6 +79,10 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "ownerCodes",
   "polityOverrides",
   "units",
+  // What the Workshop authors besides the map: groups, with the areas they
+  // control.
+  "groups",
+  "groupAreas",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",

@@ -44,14 +44,14 @@ const context = buildLookupContext({
 test("a named region comes back with who controls it, who lawfully owns it, and who claims it", () => {
   const places = placesNamedIn(context, "Separatist columns enter Luhansk Oblast while Crimea stays quiet.");
   assert.deepEqual(places, [
-    { place: "Luhansk Oblast", kind: "region", regionId: "r-luhansk", controller: "Luhansk People's Republic", lawfulOwner: "Ukraine" },
-    { place: "Crimea", kind: "region", regionId: "r-crimea", controller: "Russian Federation", lawfulOwner: "Ukraine", claimants: ["Ukraine"] },
+    { place: "Luhansk Oblast", kind: "region", controller: "Luhansk People's Republic", lawfulOwner: "Ukraine" },
+    { place: "Crimea", kind: "region", controller: "Russian Federation", lawfulOwner: "Ukraine", claimants: ["Ukraine"] },
   ]);
 });
 
 test("a city answers with the region it stands in and that region's controller", () => {
   assert.deepEqual(placesNamedIn(context, "Shelling resumes around Mariupol."), [
-    { place: "Mariupol", kind: "city", regionId: "r-donetsk", region: "Donetsk Oblast", controller: "Ukraine" },
+    { place: "Mariupol", kind: "city", region: "Donetsk Oblast", controller: "Ukraine" },
   ]);
   // Under an alias, too, reported as the text spelled it.
   assert.equal(placesNamedIn(context, "The garrison of Melitopolis surrenders.")[0].place, "Melitopolis");
@@ -66,15 +66,15 @@ test("a city the map has no region for is said to be off the map rather than gue
 
 test("the longer name wins: South Ossetia is not also Ossetia", () => {
   const places = placesNamedIn(context, "Georgian police withdraw from South Ossetia.");
-  assert.deepEqual(places.map((place) => place.regionId), ["r-ossetia-s"]);
+  assert.deepEqual(places.map((place) => place.place), ["South Ossetia"]);
   // But both are named when the text names both.
   const both = placesNamedIn(context, "Refugees cross from South Ossetia into Ossetia.");
-  assert.deepEqual(both.map((place) => place.regionId), ["r-ossetia-s", "r-ossetia-n"]);
+  assert.deepEqual(both.map((place) => place.place), ["South Ossetia", "Ossetia"]);
 });
 
 test("an alias finds its region, reported under the word the text used", () => {
   const places = placesNamedIn(context, "Fighting around Donetsk intensifies.");
-  assert.deepEqual(places, [{ place: "Donetsk", kind: "region", regionId: "r-donetsk", region: "Donetsk Oblast", controller: "Ukraine" }]);
+  assert.deepEqual(places, [{ place: "Donetsk", kind: "region", region: "Donetsk Oblast", controller: "Ukraine" }]);
 });
 
 test("whole words only, and never a name of three letters or fewer", () => {
@@ -84,7 +84,7 @@ test("whole words only, and never a name of three letters or fewer", () => {
 });
 
 test("accents and case are folded on both sides", () => {
-  assert.equal(placesNamedIn(context, "ZAPORÍZHZHIA falls silent.")[0]?.regionId, "r-zaporizhia");
+  assert.equal(placesNamedIn(context, "ZAPORÍZHZHIA falls silent.")[0]?.place, "Zaporizhzhia");
 });
 
 test("places come back in the order the text names them, each once, and capped", () => {

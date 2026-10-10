@@ -89,6 +89,7 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 | `polityChanges` | `polityChangeSchema[]` | Polity metadata changes (name/color/reputation/tags…) | no |
 | `regionTransfers` | `regionTransferSchema[]` | **Map ownership changes.** Required by prompt whenever narration says territory changed hands — one entry per region | no |
 | `regionClaims` | `regionClaimSchema[]` | **Territory claimed but not held.** Marks a region disputed (striped) *without* moving the border — an irredentist declaration, a proclaimed union, a contested frontier. `drop: true` withdraws a claim | no |
+| `groupOps` | `groupOpSchema[]` | **Groups** — actors that are not countries (a terrorist organisation, a cartel, a militia, a zombie outbreak) and the areas they control. One object discriminated by `op`: `create` (a new group, its `description` and optionally `color` and `regionIds`), `update` (`description`, `color`, or `newName`), `take` (regions into its area), `release` (regions out of it; all of them when `regionIds` is empty), `dissolve` (the group and its area erased). A group owns no land: taking a region moves no border. `regionIds` are exact ids or plain region names, resolved like claims; one that matches nothing is dropped with a note. See [World state](world-state.md) (`groups`, `groupAreas`) | no |
 | `unitOps` | `unitOpSchema[]` | Military unit mutations | no |
 | `markerOps` | `markerOpSchema[]` | Structures built/destroyed on the map | no |
 | `reports` | `reportOpSchema[]` | **Documents only some governments hold** — `create` (title, body, `visibleTo` of full polity names, optional `reportId`/`from`/`dateline`) or `share` (`reportId`, `visibleTo`, optional `from` — the holder who passed it on). `from` decides the thread and the speaker when a document reaches the player through diplomacy. Never carries impacts: what moved the map stays in the public event. See [reports](ai-overview.md#reports-what-only-some-governments-know) | no |
@@ -97,7 +98,7 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 
 | Field | Type | Meaning | Req? |
 |---|---|---|---|
-| `regionId` | string | Exact region id **or plain name** (engine resolves names → ids) | **yes** |
+| `regionId` | string | The region's **name** as the map spells it, written `region: <name>`; `country: <name>` is the whole of a country's land, or of a territory or dependency of that name (`country: Puerto Rico`, `country: Greenland`; see `namedAreas.js`). Never an id (one that arrives is still read; see `nameRefs.js`) | **yes** |
 | `regionName` | string | Human-readable name, when known | no |
 | `fromCode` | string | Previous owner polity code — lets the resolver locate the region | no |
 | `toCode` | string | New owner polity code | **yes** |
@@ -178,7 +179,9 @@ Required: `op` and `name`. `eventIndex` says which of the events this op follows
 
 ### 4.5-ter `PROJECTS_SCHEMA` — the board's own task (`:2082`)
 
-`projectOps` no longer appears on a jump at all. `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
+A skip keeps the board itself, in every mode: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `priority`, `startedAt`, the links, `focus`, the nested `project` and `onComplete`), `agentReports` at the top level when an agent's report is due, and `history` (`{ summary*, document* }`, the consolidator's two fields) last of all when a fold of the history document is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts both contracts, and takes `agentReports` and `history` loosely: each is judged where it is read, so a poor one costs that report or that fold and never the turn. See [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences).
+
+For a skip a provider refused in its folded form, `projectOps` does not appear on the jump the model is sent: `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by the `board` job of the one turn review that skip gets, after the segments merge and before anything is written.
 
 ```
 { "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
@@ -224,7 +227,9 @@ Also used for `autoJumpForward`. This is the largest task.
 | `clearActions` | boolean | Were queued player actions resolved | **yes** |
 | `diplomaticOutreach` | `createdChatSchema[]` | Polities reaching out on their own initiative, not tied to any event | no |
 
-`eventSchema` (`:322`): `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+
+`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stays under its 28,000-character guard (27,985); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
 
 There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 

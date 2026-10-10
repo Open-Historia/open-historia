@@ -4,6 +4,8 @@ import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -66,31 +68,42 @@ import {
   buildBoardPassDirective,
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
-import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
+  AGENT_REPORTS_FIELD,
   decodeGameMasterTransportPayload,
+  foldJumpTool,
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  HISTORY_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
+import { findUnitByRef, readNameRef } from "./nameRefs.js";
+import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
+import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture } from "./narratedCapture.js";
+import { EVENT_PLACES_RULE, findEventPlaces } from "./eventPlaces.js";
+import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
+import { describeTravelPace, seaShareOf } from "../../runtime/unitMotion.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { loadWorldCities } from "./worldCities.js";
+import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
   BACKGROUND_REQUEST,
+  SKIP_SPENDERS,
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
   requestLedger,
-  requestSettings,
   savingRequests,
 } from "./requestBudget.js";
 import { describeSchemaRemoval, salvageBySchema } from "./schemaSalvage.js";
@@ -116,6 +129,8 @@ import {
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
+import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
+import { assignAgentReports, boardOpsOf, liftBoardOps, providerRefusedContract, withoutBoardOps } from "./foldedSkip.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
 import {
@@ -130,10 +145,14 @@ import {
   resolveHelperValues,
 } from "./promptContext.js";
 import {
+  HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
+  buildSkipHistoryJob,
   countWords,
+  judgeSkipHistoryAnswer,
   planHistoryConsolidation,
+  seedHistoryDocumentText,
 } from "./historyConsolidation.js";
 import {
   expandBakedRegionsForRename,
@@ -158,6 +177,7 @@ import {
 } from "../../runtime/assets.js";
 import {
   advanceStandingOrders,
+  lastUnitMoveDates,
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
   enforceUnitVolume,
@@ -192,7 +212,7 @@ import {
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
-import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "../../runtime/polityIdentity.js";
 import {
   applyWarUpdates,
   bindWarUpdatesToEvents,
@@ -1414,8 +1434,10 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 
     if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
 
+    // By its name alone, as every region the model is shown (regionVocab.js):
+    // a line that read "Hamhung (4441)" was written back as the region's name.
     rows.push(
-      `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
+      `- ${region?.name || regionId}: sovereign ${sovereign || "unknown"}; ` +
       `controller ${controller || "unknown"}` +
       (claimants.length ? `; active claimants/contenders ${claimants.join(", ")}` : ""),
     );
@@ -1426,6 +1448,29 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
       ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
       : "")
     : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+};
+
+// Groups (runtime/groups.js) as the model reads them: each exact name, what it
+// is, and the regions it controls, by name with the id a groupOps entry copies.
+// Empty when the world has none, so a game without groups pays nothing.
+//
+// A release names the region ids it gives up, and lookups are off while Save AI
+// requests is on (the default), so the ids a release may name are shown here:
+// GROUP_REGIONS_IN_PROMPT shared among the groups, never fewer than twelve each.
+// A group larger than its share ends "+N more" (list_regions with a group when
+// lookups are on).
+const GROUP_REGIONS_IN_PROMPT = 400;
+const buildGroupsContext = async (worldLike) => {
+  if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
+  const world = normalizeWorldState(worldLike);
+  const count = Object.keys(world.groups).length;
+  if (!count) return "";
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const names = new Map(catalog.map((region) => [region.id, region.name]));
+  return describeGroupsForPrompt(world, {
+    regionName: (id) => names.get(id) || id,
+    maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
+  });
 };
 
 const buildGameMasterStorylineContext = (worldLike) => {
@@ -1544,6 +1589,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
+  variables.groupsContext = await buildGroupsContext(bundle.world);
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1580,9 +1626,59 @@ const JUMP_LEVERS = [
   "Everything you change rides on an event's impacts, and no event's text may claim a change its impacts do not make. The output function describes each field; these need a word more:",
   "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"stats\":{\"leader\":\"\",\"government\":\"\",\"stability\":0-100,\"<any other field that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A country's figures move only through stats — just the fields that changed — and that includes who leads: when a leader falls, dies, resigns or is voted out, the successor goes in stats.leader (with government and stability when those moved too), or the stat sheet keeps the old name. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
+  "• groupOps {\"op\":\"create | update | dissolve | take | release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"<what it is and wants>\",\"color\":\"#RRGGBB\",\"regionIds\":[\"region: <name>\"],\"note\":\"\"}; create founds a group (with its first regions if it holds any), take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it.",
   "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
+
+// ---- The folded skip's own rules -------------------------------------------------
+// A skip is ONE request (requestBudget.js): no second request reconciles its
+// events with the units, the fronts or the board afterwards, so the simulator
+// is told to finish each event itself. These are the rules the separate checks
+// carried (the unit and territory directors' templates, the curator's, in
+// defaultPrompts.json), said once, in the simulator's own terms, with the
+// structures an event builds, which were always the simulator's to place.
+// Built at call time, like the levers above: a campaign's frozen templates
+// never see an edit to defaultPrompts.json, and the one skip that is not folded
+// (a provider refused the folded request, so its checks follow as a request of
+// their own) must not be told nothing checks it.
+const FOLDED_SKIP_CONSEQUENCES = [
+  "[Every Event Carries Its Consequences]",
+  "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
+  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. The whole of a country, territory or dependency is \"country: <name>\" in the region field (\"country: Puerto Rico\", \"country: Greenland\"): that one entry is every region of it the losing side holds. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) is a group: the first event that has it holding ground founds it with that ground (groupOps create), a town it captures is a groupOps take, and a town a government wins back from it is a groupOps release. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
+  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a power or a group attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it (a group's formation carries the group's exact name as ownerCode), and move it in later events as the front moves.",
+  "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
+  EVENT_PLACES_RULE,
+  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in actionIds.",
+  "• The board. An event that moved one of the player's projects or operations carries its projectOps, as [Projects & Operations] says.",
+  "An event whose text changes nothing material carries no ops, and that is correct: never invent one to fill a field. But an event that says a town fell, a fleet sailed or a base opened, with nothing in its impacts, leaves the player looking at a map that contradicts the story.",
+  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome.",
+  // Measured against the live API (2026-10-05): asked to finish each event,
+  // the model wrote six and seven events for a month that called for ten.
+  "Finishing each event is not a reason to write fewer of them: the period still holds the number of events its instruction asks for, and most of the world's events need few ops or none.",
+].join("\n");
+
+// The agents whose reports ride on a folded skip (prepareFoldedSkip): the rules
+// are the spyIntercept template's, the brief under each agent is the one its own
+// request would have carried.
+const buildFoldedAgentReportsBlock = (jobs, playerName) => {
+  const list = normalizeArray(jobs);
+  if (!list.length) return "";
+  const player = normalizeString(playerName) || "the player's polity";
+  return [
+    "[Agents' Reports]",
+    `${player}'s service has agents in place whose reports are due. After the events, file one entry in ${AGENT_REPORTS_FIELD} for each agent listed here, and for no one else: `
+      + "what that agent intercepted of its target's PRIVATE diplomatic traffic with OTHER polities during this period, consistent with the events you have just written. "
+      + "Treat the records in this prompt as ground truth and write what the target actually said in private to its counterparts: intentions, terms, threats, promises, doubts, never public statements or press lines. "
+      + `Each report gives \`agent\`, copied exactly from this list, and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
+      + `a short subject, and 2 to 6 alternating messages in the leaders' own voices. Where ${player} is discussed, show what the target really thinks of it.`,
+    ...list.map((job) => [
+      `${job.key}: the agent inside ${job.name}.`,
+      job.disinformation,
+      job.brief,
+    ].filter(Boolean).join("\n")),
+  ].join("\n\n");
+};
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -1660,6 +1756,11 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // with its passes was measured at 23 requests where the player expected three.
 // The full prompt costs more characters and no extra request, which on a free
 // key is the right way round. The toggle takes effect once saving is off.
+//
+// Inside a time skip the rounds are the skip's own budget's to give
+// (requestBudget.js, runJsonTask below): two for an ordinary skip, so the skip
+// is three requests at most, and that function calling is the only thing that
+// makes it more than one.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 
 // audience: who is asking (audience.js). Every task that carries lookups today is
@@ -1845,40 +1946,220 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
 // It runs where region names are resolved — at validation — because the runtime
 // layer that APPLIES operations has no geometry (see buildOwnerFootprint in
 // gameState.js) and must go on receiving plain coordinates.
+
+// The world's towns (worldCities.js), for a phrase naming one this map does
+// not carry: Grand Forks, on a map of 2,527 cities. Null until a placing pass
+// first wants them, because the list is 7.9 MB and most skips name only places
+// the map has. What comes back is a compact index, kept for the session. A
+// list that could not be read stays null (loadWorldCities says why) and is
+// asked for again by a later pass.
+let worldCities = null;
+const readWorldCities = async () => {
+  if (worldCities) return worldCities;
+  worldCities = await loadWorldCities();
+  if (worldCities) {
+    logDebugEvent("turn", `Placement: the world city list was read for a place this map does not carry (${worldCities.towns} towns under ${worldCities.names} names).`, undefined, { verbose: true });
+  }
+  return worldCities;
+};
+
 const buildPlacementGazetteer = (context, world) => {
   const fold = (value) => foldRegionKey(value);
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
   const markers = normalizeArray(world?.markers).filter((marker) => Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat));
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
-  const asRegion = (row) => ({ id: row.id, name: row.name, geometry: row.geometry });
+  const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
+
+  // Which country a token names, as this map knows it: the owner label its
+  // regions carry (aliases and legacy codes included), and the ISO3 a stock
+  // map's region ids start with, so "US", "USA" and "United States" all land on
+  // USA.27_1 whoever holds it now.
+  const countryOf = (token) => {
+    const raw = normalizeString(token).replace(/^the\s+/i, "");
+    if (!raw) return null;
+    const label = context.resolveOwner(raw) || context.resolveOwner(toCountryName(raw));
+    // Its official name, its ISO3, or its ISO2, written any way a model writes it.
+    const iso3 = normalizeString(resolveStockCountryCode(raw) || countryGidFromIdentity(raw) || countryGidFromIdentity(fold(raw))).toUpperCase();
+    // A territory, which holds nothing and may have no code a region's id shows:
+    // Greenland on a map whose regions are numbered (namedAreas.js).
+    const area = context.areaNamed?.(raw)?.name ?? "";
+    return label || iso3 || area ? { label, iso3, area } : null;
+  };
+  // 2 for a region the country holds, 1 for one that is geographically its, 0 for neither.
+  const countryRank = (row, want) => {
+    if (!row || !want) return 0;
+    if (want.label && fold(row.owner) === fold(want.label)) return 2;
+    if (want.area && fold(row.base) === fold(want.area)) return 1;
+    if (!want.iso3) return 0;
+    const gid = normalizeString(row.id).split(".")[0].toUpperCase();
+    return gid === want.iso3 || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3 ? 1 : 0;
+  };
+  // A name said to be a city, without the article the map writes it with or
+  // with one the map leaves off: "Raqqa" for the map's "Ar-Raqqa". Only for a
+  // name given its kind, and only when what is left is a name of its own.
+  const bareName = (key) => {
+    const bare = key.replace(/^(?:al|ar|as|ash|ad|an|at|az|el) /, "");
+    return bare.length >= 4 ? bare : key;
+  };
+  const sameBareName = (name, key) => bareName(fold(name)) === bareName(key);
+  const oneOf = (list) => (list.length === 1 ? list[0] : null);
+  // The place of that name inside one country: its city first, as everywhere else.
+  // `exactOnly` is the whole-phrase attempt and stays strict here too, or "off
+  // Okinawa, Japan" would match the region Okinawa and put the fleet ashore.
+  // `kind`: "region" or "city" when the phrase said which the name is (nameRefs.js).
+  const findInCountry = (name, key, want, exactOnly, kind = "") => {
+    const best = (list, rank) => list
+      .map((entry) => ({ entry, rank: rank(entry) }))
+      .filter((hit) => hit.rank > 0)
+      .sort((a, b) => b.rank - a.rank)[0]?.entry ?? null;
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const city = kind === "region" ? null : best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want))
+      ?? (kind === "city" ? best(context.cityRows.filter((entry) => sameBareName(entry.name, key)), (entry) => countryRank(context.regionOfCity(entry), want)) : null);
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    if (kind === "city") return null;
+    const pool = withGeometry.filter((row) => countryRank(row, want) > 0);
+    const matched = pool.length
+      ? matchRegionName(name, pool, exactOnly ? { allowFuzzy: false, minSubstring: Infinity } : { maxFuzzy: 1 })
+      : null;
+    return matched?.region ? { kind: "region", name: matched.region.name, region: asRegion(matched.region) } : null;
+  };
+  // Every country holding a place of this name, for telling the model to say which.
+  // Cached: one payload asks for the same handful of names several times over.
+  const sharedNames = new Map();
+  const sharedName = (name) => {
+    const key = fold(name);
+    if (!key) return [];
+    if (sharedNames.has(key)) return sharedNames.get(key);
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const owners = [...context.cityRows.filter(named).map((city) => context.regionOfCity(city)), ...withGeometry.filter(named)]
+      .map((row) => normalizeString(row?.owner))
+      .filter(Boolean);
+    const found = [...new Set(owners)];
+    sharedNames.set(key, found);
+    return found;
+  };
 
   // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
   // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
   // substring match would read "off Sevastopol" as the region Sevastopol.
-  const find = (name, { exact: exactOnly = false } = {}) => {
+  // `country`: the one the phrase named after a comma ("Montana, United States").
+  // `prefer`: the polity doing the placing, which decides a bare shared name.
+  // `kind`: what the phrase said the name is — "country", "region", "city",
+  // "unit", "structure" or "sea" (nameRefs.js: "region: Georgia") — and then it
+  // is looked up as that and nothing else. Georgia said as a region is never the
+  // country, and said with a country the map knows it is in that country or
+  // nowhere: a kind is the model saying it knows which of two things it means.
+  // A name asked for with none of the three is `lookUp`, the lookup `find` remembers.
+  const lookUp = (name, exactOnly) => {
+    return lookUpFor(name, exactOnly, "", "");
+  };
+  // A territory or dependency, which is no polity and no region of the map but
+  // the regions that belong to it by geography (namedAreas.js): Greenland,
+  // whoever holds it. Placed in like a country.
+  const areaOf = (name) => {
+    const area = context.areaNamed?.(name);
+    const regions = normalizeArray(area?.rows).filter((row) => row.geometry);
+    return regions.length ? { kind: "polity", name: area.name, regions: regions.map(asRegion) } : null;
+  };
+  const lookUpFor = (name, exactOnly, country, prefer, kind = "") => {
     const key = fold(name);
     if (!key) return null;
-    const unit = units.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
+    // A sea is not in the gazetteer's own names: placement.js reads it from the map's seas.
+    if (kind === "sea" || kind === "group") return null;
+    const unit = !kind || kind === "unit" ? units.find((entry) => fold(entry.id) === key || fold(entry.name) === key) : null;
     if (unit) return { kind: "unit", name: unit.name, point: [unit.lng, unit.lat] };
-    const marker = markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
+    if (kind === "unit") return null;
+    const marker = !kind || kind === "structure" ? markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key) : null;
     if (marker) return { kind: "marker", name: marker.name, point: [marker.lng, marker.lat] };
-    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
-    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    if (kind === "structure") return null;
+    if (kind === "country") {
+      const named = context.resolveOwner(name) || context.resolveOwner(toCountryName(normalizeString(name)));
+      const held = named ? (context.ownerRows.get(named) ?? []).filter((row) => row.geometry) : [];
+      return held.length ? { kind: "polity", name: named, regions: held.map(asRegion) } : areaOf(name);
+    }
+    // The country the model was told to name decides between places sharing one.
+    // A country the map does not know, or one holding no such place, is ignored:
+    // a wrong qualifier must not make a real place vanish. Said with its kind,
+    // the name is held to the country it was given.
+    const wanted = countryOf(country);
+    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly, kind) : null;
+    if (qualified) return qualified;
+    if (kind && wanted && (wanted.label ? (context.ownerRows.get(wanted.label) ?? []).length > 0 : Boolean(wanted.iso3 || wanted.area))) return null;
     // A country before a region: "Ukraine" is the country even where a region shares the name.
-    const owner = context.resolveOwner(name);
+    const owner = kind ? "" : context.resolveOwner(name);
+    // Unqualified and shared: the polity placing it decides. "Montana" ordered by
+    // the United States is the state, not the Bulgarian province the map lists
+    // first. A country keeps its own name against any preference.
+    const preferred = !wanted && !owner ? countryOf(prefer) : null;
+    if (preferred && sharedName(name).length > 1) {
+      const mine = findInCountry(name, key, preferred, exactOnly, kind);
+      if (mine) return mine;
+    }
+    const city = kind === "region" ? null : context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key))
+      ?? (kind === "city" ? oneOf(context.cityRows.filter((entry) => sameBareName(entry.name, key))) : null);
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
     const owned = owner ? (context.ownerRows.get(owner) ?? []).filter((row) => row.geometry) : [];
-    const exact = withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
+    const exact = kind === "city" ? null : withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
     if (owned.length && !(exact && owned.length === 1)) return { kind: "polity", name: owner, regions: owned.map(asRegion) };
     if (exact) return { kind: "region", name: exact.name, region: asRegion(exact) };
-    const matched = exactOnly
+    // A territory by its own name, before any looser reading of it: "Greenland"
+    // is the eighteen regions of Greenland, and not the one region whose name
+    // has the word in it.
+    // Said to be a region, a name that is also a country stays unfound: Georgia
+    // the region is never Georgia the country.
+    const area = kind === "city" || (kind && context.resolveOwner(name)) ? null : areaOf(name);
+    if (area) return area;
+    const matched = kind === "city" ? null : exactOnly
       ? matchRegionName(name, withGeometry, { allowFuzzy: false, minSubstring: Infinity })
       : matchRegionName(name, withGeometry, { maxFuzzy: 1 });
     if (matched?.region) return { kind: "region", name: matched.region.name, region: asRegion(matched.region) };
-    if (exactOnly) return null;
+    if (exactOnly || kind === "region") return null;
     // A city one letter out ("Kharkov" for "Kharkiv"), last: a near miss must not beat a real region.
     const stripped = stripRegionAffixes(key) || key;
     const close = stripped.length >= 5 && context.cityRows.find((entry) => editDistance(stripped, fold(entry.name), 1) <= 1);
     return close ? { kind: "city", name: close.name, point: close.coordinates } : null;
+  };
+  // Reading one phrase asks for the same names again and again: an address asks
+  // for each of its parts, as the map spells it and then loosely, once for
+  // every way the phrase can be read, and a failed lookup walks every city and
+  // region on the map. Nothing a lookup reads changes while this gazetteer
+  // lives, so each name is worked out once. What comes back is only ever read.
+  const lookedUp = new Map();
+  const find = (name, { exact: exactOnly = false, country = "", prefer = "", kind = "" } = {}) => {
+    const memoKey = `${exactOnly ? "=" : "~"}${String(name ?? "")}`;
+    // Asked within a country, by the polity placing the thing, or as one kind
+    // of thing: an answer of its own.
+    if (country || prefer || kind) {
+      const askedKey = `${memoKey}\n${String(country ?? "")}\n${String(prefer ?? "")}\n${String(kind ?? "")}`;
+      if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, Boolean(exactOnly), country, prefer, kind));
+      return lookedUp.get(askedKey);
+    }
+    if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));
+    return lookedUp.get(memoKey);
+  };
+
+  // A region by the map's own key for it, for a saved operation that carries
+  // one in `regionId`. What the model writes there is the region's name, which
+  // `find` reads (placement.js resolveRegionPlacement).
+  const findRegionId = (id) => {
+    const key = normalizeString(id);
+    if (!key) return null;
+    const row = withGeometry.find((candidate) => normalizeString(candidate.id) === key);
+    return row ? asRegion(row) : null;
+  };
+
+  // What a phrase ALMOST matched, for the receipt. The usual dead end is a name
+  // that fits several regions at once — "Falkland Islands" over East and West
+  // Falkland Islands — which matchRegionName refuses on purpose rather than pick
+  // one of them. Refusing is right; leaving the model to guess again is not, so
+  // the receipt names them and it can write one exactly next turn.
+  const suggest = (phrase) => {
+    const key = fold(phrase);
+    if (key.length < 4) return [];
+    return withGeometry
+      .filter((row) => fold(row.name).includes(key) || key.includes(fold(row.name)))
+      .slice(0, 4)
+      .map((row) => row.name);
   };
 
   const regionAt = (point) => {
@@ -1891,39 +2172,186 @@ const buildPlacementGazetteer = (context, world) => {
   // The nearest region to a point that is in none, within maxKm, and the spot
   // inside it nearest that point: where something put in the sea comes ashore.
   const nearestLand = (point, maxKm) => {
+    // The bbox only rules a region out: most of the world is nowhere near. It is
+    // no measure of how near the land is — a large region's bbox can take in the sea off
+    // another's coast, and ranking by it put a division ashore on the far side.
+    // Of the regions whose bbox is in reach, the one whose land is nearest wins.
     let best = null; let bestKm = maxKm;
     for (const row of withGeometry) {
-      // The bbox first: most of the world is nowhere near.
       const clamped = [Math.min(Math.max(point[0], row.bbox[0]), row.bbox[2]), Math.min(Math.max(point[1], row.bbox[1]), row.bbox[3])];
-      const km = placementDistanceKm(point, clamped);
-      if (km < bestKm) { bestKm = km; best = row; }
+      if (placementDistanceKm(point, clamped) >= bestKm) continue;
+      const ashore = nearestInteriorPoint(row.geometry, point);
+      const km = ashore ? placementDistanceKm(point, ashore) : Infinity;
+      if (km < bestKm) { bestKm = km; best = { point: ashore, region: asRegion(row) }; }
     }
-    if (!best) return null;
-    const ashore = nearestInteriorPoint(best.geometry, point);
-    return ashore ? { point: ashore, region: asRegion(best) } : null;
+    return best;
   };
-  return { find, regionAt, nearestLand };
+  // Whether a polity, by any of its names, holds any land on the map right now;
+  // null for a name the map does not know at all — a polity this very turn
+  // founds is not on the map yet, and must not read as one that lost its land.
+  const holdsLand = (name) => {
+    const owner = context.resolveOwner(name);
+    if (!owner) return null;
+    return (context.ownerRows.get(owner) ?? []).length > 0;
+  };
+  // A country's capital as the Scenario's cities mark it ("primary"), held by that
+  // country now: where approximate placement (AI/placement.js) puts a thing whose
+  // town the map does not know.
+  const capitalOf = (name) => {
+    const owner = context.resolveOwner(name) || normalizeString(name);
+    const key = fold(owner);
+    if (!key) return null;
+    const held = context.cityRows.filter((city) => city.capital && fold(context.regionOfCity(city)?.owner) === key);
+    // A country of several nations marks each one's capital "primary" (London,
+    // Cardiff, Edinburgh, Belfast): the largest is the country's own.
+    const byPopulation = (list) => [...list].sort((a, b) => b.population - a.population);
+    const city = byPopulation(held.filter((entry) => fold(entry.capital) === "primary"))[0] ?? byPopulation(held)[0];
+    return city ? { name: city.name, point: city.coordinates } : null;
+  };
+  // The provinces and cities a text names that `country` holds, in the order it
+  // names them, as anchors for approximate placement (AI/placement.js). Whole
+  // words only, and names of four letters or more, so "Ure" is not found in
+  // "secure".
+  const placesNamedIn = (text, country) => {
+    const owner = fold(context.resolveOwner(country) || country);
+    const haystack = ` ${fold(text).replace(/[^\p{L}\p{N}]+/gu, " ")} `;
+    if (!owner || haystack.trim().length === 0) return [];
+    const at = (name) => {
+      const key = fold(name).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      return key.length >= 4 ? haystack.indexOf(` ${key} `) : -1;
+    };
+    const found = [
+      ...withGeometry.filter((row) => fold(row.owner) === owner).map((row) => ({ kind: "region", name: row.name, region: asRegion(row), at: at(row.name) })),
+      ...context.cityRows.filter((city) => fold(context.regionOfCity(city)?.owner) === owner)
+        .map((city) => ({ kind: "city", name: city.name, point: city.coordinates, at: at(city.name) })),
+    ];
+    return found.filter((place) => place.at >= 0).sort((a, b) => a.at - b.at);
+  };
+  // Whether two names are one polity as the map knows them (an alias, a code).
+  const samePolity = (a, b) => {
+    const key = (name) => fold(context.resolveOwner(name) || name);
+    return Boolean(key(a)) && key(a) === key(b);
+  };
+  // The named seas this map has: the real ones, on the real-world map
+  // (placement.js seasForMap).
+  const seas = seasForMap({ regionAt });
+  // A sea by its name, for an event that says it happens there (eventPlaces.js).
+  const seaPoint = (name) => {
+    const key = fold(normalizeString(name).replace(/^the +/i, ""));
+    const sea = key ? seas.find((entry) => [entry.name, ...normalizeArray(entry.aliases)].some((alias) => fold(normalizeString(alias).replace(/^the +/i, "")) === key)) : null;
+    return sea ? { name: sea.name, point: sea.point } : null;
+  };
+
+  // Where each town of that name stands in the wider world, for placement.js
+  // to test against this map (resolveWorldTown). While the list is not here
+  // the answer is none, and that a name went unanswered is remembered: the
+  // placing pass then asks for the list, once, and reads its phrase again.
+  let unanswered = false;
+  let asked = false;
+  const worldCitiesNamed = (name) => {
+    if (worldCities) return worldCities.find(name);
+    unanswered = true;
+    return [];
+  };
+  // True once, when a name went unanswered and the list is here now.
+  const worldCitiesArrived = async () => {
+    if (!unanswered) return false;
+    if (!worldCities && !asked) {
+      asked = true;
+      await readWorldCities();
+    }
+    if (!worldCities) return false;
+    unanswered = false;
+    return true;
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, seaPoint, holdsLand, capitalOf, placesNamedIn, samePolity, worldCities: worldCitiesNamed, worldCitiesArrived };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 
-// Every `at` in a list of containers ({ event, impacts, path }) becomes
-// coordinates, and every newly placed thing is spaced off the rest. Mutates the
-// operations in place, like the region resolvers beside it. `receipt` hears what
-// could not be placed; an operation that then has no coordinates at all is left
-// for the normalizer to drop, exactly as one that never had any.
-const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
+// A unit or a structure is written by its NAME (nameRefs.js). The save keys
+// each by an id the model is not shown, so before anything looks one up, what
+// was written is turned into that id here: "3rd Infantry Division", "unit:
+// 3rd Infantry Division", "1st Army (France)", and an id itself, for a saved
+// order that carries one. A name that fits no unit, or two, is left as it was
+// written, and the checks further on say so as they always have. A structure
+// named in `markerId` is found by that name; one the map does not have keeps
+// its name for the rename of a stock city (gameState.js).
+const canonicalizeNamedThings = (containers, world) => {
+  const units = normalizeArray(world?.units);
+  const markers = normalizeArray(world?.markers);
+  const unitIds = new Set(units.map((unit) => normalizeString(unit?.id)).filter(Boolean));
+  const markerIds = new Set(markers.map((marker) => normalizeString(marker?.id)).filter(Boolean));
+  const fold = (value) => normalizeString(value).toLowerCase();
+  let named = 0;
+  for (const { event, impacts } of normalizeArray(containers)) {
+    if (!impacts || typeof impacts !== "object") continue;
+    const context = [normalizeString(event?.title), normalizeString(event?.description)].filter(Boolean).join(". ");
+    for (const op of normalizeArray(impacts.unitOps)) {
+      if (!op || typeof op !== "object" || normalizeString(op.op).toLowerCase() === "spawn") continue;
+      const written = normalizeString(op.unitId)
+        || (typeof op.unit === "string" ? normalizeString(op.unit) : "")
+        || normalizeString(op.unitName)
+        || normalizeString(op.name);
+      if (!written || unitIds.has(written)) continue;
+      const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner), context });
+      if (!unit) continue;
+      op.unitId = unit.id;
+      named += 1;
+    }
+    for (const op of normalizeArray(impacts.markerOps)) {
+      if (!op || typeof op !== "object") continue;
+      const kind = normalizeString(op.op).toLowerCase();
+      if (kind === "build" || kind === "found") continue;
+      const writtenId = normalizeString(op.markerId);
+      if (writtenId && markerIds.has(writtenId)) continue;
+      const ref = readNameRef(writtenId || op.name);
+      if (!ref.name) continue;
+      const marker = (ref.bracket && markers.find((entry) => normalizeString(entry?.id) === ref.bracket))
+        || markers.find((entry) => fold(entry?.name) === fold(ref.name)
+          || normalizeArray(entry?.aliases).some((alias) => fold(alias) === fold(ref.name)));
+      if (marker) {
+        op.markerId = marker.id;
+        named += 1;
+      } else if (writtenId) {
+        // Not a key the map has: it is the name, and is read as one.
+        if (!normalizeString(op.name)) op.name = ref.name;
+        delete op.markerId;
+      } else if (typeof op.name === "string" && ref.name !== normalizeString(op.name)) {
+        op.name = ref.name;
+      }
+    }
+  }
+  return named;
+};
+
+// Every `at` — or, failing that, every `regionId` — in a list of containers
+// ({ event, impacts, path }) becomes coordinates, and every newly placed thing is
+// spaced off the rest. Mutates the operations in place, like the region resolvers
+// beside it. `receipt` hears what could not be placed; an operation that then has
+// no coordinates at all is left for the normalizer to drop, exactly as one that
+// never had any.
+const resolvePlacements = async (containers, world, { receipt = null, lookupContext = null } = {}) => {
+  canonicalizeNamedThings(containers, world);
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
     const title = normalizeString(event?.title);
+    // What the event itself says, for a place the map does not know: a province
+    // the event names puts a garrison the model sited at an unknown town in that
+    // province rather than by the capital.
+    const context = [title, normalizeString(event?.description)].filter(Boolean).join(". ");
     for (const op of normalizeArray(impacts.unitOps)) {
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), atSea: normalizeString(unit.type).toLowerCase() === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
+        const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
+        // A land formation's march ends on land, as its raising does: seen in a
+        // player's Game (2026-09-29), an armoured division sent to a coastal
+        // town stood in the sea, the model's guess a kilometre offshore.
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode), from: mover && Number.isFinite(mover.lng) && Number.isFinite(mover.lat) ? { lng: mover.lng, lat: mover.lat } : null });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -1933,14 +2361,18 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path });
+      // `owner`: the polity building it, which decides which Montana "Montana" is.
+      // `home`: whose structure it is, for an address the map cannot check
+      // (placement.js addressSpot) and a town it does not carry
+      // (resolveWorldTown).
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, context, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
 
   let gazetteer;
   try {
-    gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+    gazetteer = buildPlacementGazetteer(await (lookupContext ?? lazyLookupContext({ world }))(), world);
   } catch (error) {
     console.warn("[placement] the map could not be read; operations keep the coordinates they came with.", error);
     return { placed: 0, spaced: 0 };
@@ -1951,20 +2383,124 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
-    if (entry.phrase) {
-      const resolved = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name });
-      if (resolved.error) {
-        const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
-        noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
-          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${resolved.error}. `
-          + (hasCoordinates ? "Its coordinates were used instead." : "It was left off the map. Name a city, region, structure or unit as the map spells it."));
-        if (!hasCoordinates) continue;
-      } else {
-        target[lngKey] = resolved.lng;
-        target[latKey] = resolved.lat;
-        if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
-        placed += 1;
+    // A new unit or structure given no place at all is put where its own event
+    // says it is, in its owner's land. Seen in a replayed turn (2026-09-29): a
+    // forward operating base was built with no `at` while its event named where
+    // it was, and it was dropped.
+    if (!entry.phrase && !entry.regionId && (entry.spawn || entry.build)
+      && !(Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey])))) {
+      const named = entry.context && entry.owner ? normalizeArray(gazetteer.placesNamedIn(entry.context, entry.owner))[0] : null;
+      if (named) {
+        entry.phrase = named.name;
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a new thing"} was given no place, so it was placed in ${named.name}, where its event says it is. Give every new unit and structure \`at\`.`);
       }
+    }
+    // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
+    // the region it belongs to is not. `regionId` is the fallback, and for an
+    // operation that gives only an id it is the whole answer. It used to be
+    // ignored, so such an operation was dropped for having no coordinates: the
+    // exact move a model reaches for after being told its `at` was not on the map.
+    const readPhrase = () => resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home });
+    let byPhrase = entry.phrase ? readPhrase() : null;
+    // A phrase naming a place this map does not carry is read a second time
+    // with the world's towns to hand. They are fetched here, the first time a
+    // pass wants them, and never by a skip whose places the map all has.
+    if (byPhrase && await gazetteer.worldCitiesArrived()) byPhrase = readPhrase();
+    // An address the map could answer only with its country, beside a region
+    // field naming a region of that country: the region (placement.js).
+    byPhrase = regionWithinContainer(byPhrase, entry.regionId, gazetteer, { seedText: entry.name }) ?? byPhrase;
+    const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
+      ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
+      : null;
+    const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    const givenLng = Number(target[lngKey]); const givenLat = Number(target[latKey]);
+    const hasCoordinates = target[lngKey] != null && target[latKey] != null
+      && Number.isFinite(givenLng) && Number.isFinite(givenLat) && !(givenLng === 0 && givenLat === 0);
+    // A NEW formation that nothing places — no phrase the map knows, no region
+    // id, no coordinates of its own — is raised in its owner's own territory
+    // rather than not at all. The receipt that told the model to name a place
+    // did not stop a player's Ecuador losing the same brigade on consecutive
+    // turns, to "northern frontier with Colombia" and then "northern border with
+    // Colombia". A moved unit is not treated so: a move that cannot be placed
+    // leaves the unit where it stands.
+    //
+    // A NEW unit or structure whose place is not on the map at all gets an
+    // approximate placement (AI/placement.js): by a province or city the phrase or
+    // the event names, near the country's capital, inside it, or in its owner's
+    // own land. Seen in a live game (2026-09-27): a base at "Djibo, Burkina Faso"
+    // was dropped because the map has no Djibo.
+    const approximated = (() => {
+      // A structure given no place at all still goes into its owner's land, marked
+      // so (placement.js `unnamed`); a unit with none is raised at home, below.
+      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !(entry.phrase || (entry.build && !entry.regionId))) return null;
+      const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
+      return attempt?.approximate && !attempt.error ? attempt : null;
+    })();
+    const homeland = !resolved && !approximated && !hasCoordinates && entry.spawn && entry.owner
+      ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
+      : null;
+    if (resolved) {
+      // A phrase that failed still gets said: the model wrote it, and next turn
+      // it should know which of the two the engine went with.
+      if (byPhrase?.error) {
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
+          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
+      }
+      // A name two countries share, written without the country the directive asks
+      // for. Only the phrase can be ambiguous: a regionId names one region.
+      const shared = byPhrase && !byPhrase.error && !resolved.country && resolved.label
+        ? gazetteer.sharedName(resolved.label)
+        : [];
+      if (shared.length > 1 && !["unit", "marker"].includes(gazetteer.find(resolved.label)?.kind)) {
+        // Where it actually went, which is the builder's own country when it has one.
+        const went = gazetteer.regionAt([resolved.lng, resolved.lat])?.owner || shared[0];
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}"${entry.phrase}" could be ${shared.slice(0, 3).join(" or ")}: `
+          + `it was placed in ${went}. Always name the country, as "${resolved.label}, ${went}".`);
+      }
+      target[lngKey] = resolved.lng;
+      target[latKey] = resolved.lat;
+      if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (approximated) {
+      noteReceipt(receipt, "adjusted", describeApproximatePlacement({
+        title: entry.title, name: entry.name, phrase: entry.phrase, reason: byPhrase?.error, placed: approximated,
+      }));
+      target[lngKey] = approximated.lng;
+      target[latKey] = approximated.lat;
+      if (entry.family === "unit" && approximated.regionId) target.regionId = approximated.regionId;
+      placed += 1;
+    } else if (homeland && !homeland.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+        : byRegion?.error
+          ? `could not be placed in region "${entry.regionId}" — ${byRegion.error}`
+          : "came with no place and no coordinates";
+      noteReceipt(receipt, "adjusted",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}. `
+        + `It was raised in ${homeland.regionName || entry.owner}, inside ${entry.owner}'s own territory, rather than left off the map. `
+        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.");
+      target[lngKey] = homeland.lng;
+      target[latKey] = homeland.lat;
+      if (homeland.regionId) target.regionId = homeland.regionId;
+      placed += 1;
+    } else if (byPhrase?.error || byRegion?.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+          + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
+        : `could not be placed in region "${entry.regionId}" — ${byRegion.error}`;
+      // The commonest dead end is a name that fits several regions at once, which
+      // the matcher refuses rather than guess between. Naming them turns a turn
+      // wasted guessing again into one exact name.
+      const near = (byPhrase?.names ?? [entry.phrase])
+        .map((name) => gazetteer.suggest(name))
+        .find((hits) => hits.length) ?? [];
+      noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}.`
+        + (near.length ? ` Did you mean ${near.map((name) => `"${name}"`).join(" or ")}?` : "")
+        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."));
+      if (!hasCoordinates) continue;
     }
     delete target.at;
     let lng = Number(target[lngKey]); let lat = Number(target[latKey]);
@@ -1972,9 +2508,9 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 
     // An army is not raised at sea. This is what a guessed longitude looks like:
     // a rifle division standing in the Black Sea, forty kilometres off the city
-    // it was meant for. Only a land formation being CREATED, and only close to a
-    // shore — one that moves may be at sea in transit, and a point in mid-ocean
-    // is not a near miss.
+    // it was meant for. Only a land formation, raised or sent somewhere, and only
+    // close to a shore: its destination is land, while the steps of its march may
+    // cross water, and a point in mid-ocean is not a near miss.
     if (entry.raisedOnLand && !gazetteer.regionAt([lng, lat])) {
       const ashore = gazetteer.nearestLand([lng, lat], 150);
       if (ashore) {
@@ -1982,6 +2518,54 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
         lng = Number(ashore.point[0].toFixed(5)); lat = Number(ashore.point[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = ashore.region.id;
+      }
+    }
+
+    // And a fleet is not put ashore. Sent to a port or a province by its name or
+    // its regionId, it was given a point inside that land, and sailed about on
+    // it (a player's Game, 2026-09-30). It goes to the water off that coast.
+    if (entry.atSea && gazetteer.regionAt([lng, lat])) {
+      const seaSeed = placementHash(entry.id || entry.name);
+      const offshore = nearestSea([lng, lat], gazetteer, { seed: seaSeed });
+      // A NEW fleet inland in its owner's own country, with no sea in reach,
+      // goes to its owner's own waters (placement.js homeWaters), as a new army
+      // nothing places is raised in its owner's own land. The inland point is
+      // usually the engine's own: a place the map could not read is put near
+      // the capital, a unit given no place in the middle of its country, and
+      // for Russia, India or Brazil neither is within reach of a sea. Seen in a
+      // player's Game (2026-10-05): a Black Sea Fleet squadron was raised that
+      // way and then dropped here, so the event's formation never reached the
+      // map. Off the coast nearest where it was put; nearest the capital when
+      // it was given no place at all. A fleet put inland in another power's
+      // country is not sent home to a coast an ocean away: it is dropped, below.
+      const ownWaters = !offshore && entry.spawn && entry.owner
+        && gazetteer.samePolity(gazetteer.regionAt([lng, lat])?.owner, entry.owner)
+        ? homeWaters(entry.owner, gazetteer, {
+          near: (homeland && !homeland.error && gazetteer.capitalOf(entry.owner)?.point) || [lng, lat],
+          seed: seaSeed,
+        })
+        : null;
+      if (offshore) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed on land and was moved to the sea off its coast. Place fleets with "off <port>" or the name of a sea.`);
+        lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
+      } else if (ownWaters) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was put to sea off ${ownWaters.coast || entry.owner}, on ${entry.owner}'s own coast, instead. Place fleets with "off <port>" or the name of a sea.`);
+        lng = ownWaters.lng; lat = ownWaters.lat;
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
+      } else {
+        // Inland, with no sea within reach: there is nowhere for a fleet to go,
+        // so the placement is dropped (a move with no destination is not made;
+        // a new fleet with no waters of its own to go to is not raised) rather
+        // than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", entry.spawn
+          ? `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was left off the map. Place fleets with "off <port>" or the name of a sea.`
+          : `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        delete target[lngKey]; delete target[latKey];
+        target.regionId = "";
+        continue;
       }
     }
 
@@ -2007,6 +2591,17 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       if (index >= 0) standing.splice(index, 1);
     }
     standing.push({ id: entry.id || `placed-${standing.length}`, lng: Number(target[lngKey]), lat: Number(target[latKey]), radiusKm });
+    // How much of a land formation's way is over water, which paces its
+    // redeployment (unitMotion.js): the runtime that moves it has no shapes
+    // to tell a march from a voyage, so it is worked out here.
+    if (entry.from && entry.raisedOnLand) {
+      try {
+        const share = seaShareOf(entry.from, { lng: Number(target[lngKey]), lat: Number(target[latKey]) }, (point) => Boolean(gazetteer.regionAt(point)));
+        if (share !== null) target.seaShare = share;
+      } catch {
+        // one odd polygon must not cost the move: it is paced as an order with no share
+      }
+    }
   }
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
@@ -2057,6 +2652,37 @@ const jumpDifficultyDirective = (difficulty) => {
   return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
 };
 
+// Groups (runtime/groups.js): the rule and the current areas, on every jump,
+// because the world may found one at any time.
+const buildJumpGroupsBlock = (groupsContext) => [
+  "[Groups]",
+  "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.",
+  normalizeString(groupsContext) || "No groups exist yet.",
+].join("\n");
+
+// The belligerents of the wars under way that have no formation on the map,
+// as a block for the time skip: each is to be given one by the next event of
+// its fighting. "" when every side of every war is drawn, or there is no war.
+const describeWarsWithoutFormations = (world) => {
+  const fold = (value) => normalizeString(value).toLowerCase();
+  const fielded = new Set(normalizeArray(world?.units).map((unit) => fold(unit?.ownerCode)).filter(Boolean));
+  const lines = [];
+  for (const war of normalizeArray(world?.wars)) {
+    if (normalizeString(war?.status).toLowerCase() !== "active") continue;
+    const sides = [normalizeArray(war.sideA).map(normalizeString).filter(Boolean), normalizeArray(war.sideB).map(normalizeString).filter(Boolean)];
+    const unseen = sides.flat().filter((name) => !fielded.has(fold(name)));
+    if (!unseen.length) continue;
+    lines.push(`- ${normalizeString(war.title) || `${sides[0][0]} against ${sides[1][0]}`}: ${unseen.slice(0, 6).join(", ")}${unseen.length > 6 ? ` and ${unseen.length - 6} more` : ""}`);
+    if (lines.length >= 8) break;
+  }
+  if (!lines.length) return "";
+  return [
+    "[Wars With Nobody on the Map]",
+    "These belligerents of a war under way have no formation on the map, so nothing shows their fighting. The next event that has one of them attacking, defending or falling back spawns a formation for it where that event puts its forces, and later events move it:",
+    ...lines,
+  ].join("\n");
+};
+
 const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {} } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   let world = {};
@@ -2079,6 +2705,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  blocks.push(buildJumpGroupsBlock(variables.groupsContext));
 
   // What is in motion: storylines, pressures, economies and the diplomatic
   // slice (nativeWorldDirector.js), built per segment.
@@ -2113,7 +2740,24 @@ The engine carries these orders out every turn — a move continues toward its d
 ${pending}`);
   }
 
-  const board = buildJumpProjectsDirective(variables.projectsSummary);
+  // A war nobody is drawn fighting. Seen in a 45-skip test (2026-10-09): some
+  // ten events a run told of a town taken in Syria or Iraq and nothing moved,
+  // because neither side of those wars had a formation on the map to move.
+  const unseenWars = describeWarsWithoutFormations(world);
+  if (unseenWars) blocks.push(unseenWars);
+
+  // The paces of this game's own era (unitMotion.js), so an event does not
+  // land a formation the map still shows on its way. The template carries the
+  // rest of the unit guidance, so the paces stand under a heading of their own.
+  blocks.push(`[How Fast Formations Travel]\n${describeTravelPace(game?.gameDate)}`);
+
+  // A folded skip keeps the board itself (projectsDirective.js); otherwise the
+  // board is context, and its own pass moves it.
+  const foldedSkip = Boolean(variables.foldedSkip);
+  const board = buildJumpProjectsDirective(variables.projectsSummary, {
+    folded: foldedSkip,
+    doubted: normalizeString(variables.foldedBoardDoubts),
+  });
   if (board) blocks.push(board);
 
   if (isActiveFeatureEnabled("espionage")) {
@@ -2140,7 +2784,16 @@ ${brief}`);
   else if (stats.customStatIndices) blocks.push(scenarioStatIndicesDirective(stats.statIndexRows));
 
   blocks.push(JUMP_LEVERS);
+  // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES).
+  if (foldedSkip) blocks.push(FOLDED_SKIP_CONSEQUENCES);
   if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
+  // And the agents whose reports are due ride on it (prepareFoldedSkip).
+  const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
+  if (agentReports) blocks.push(agentReports);
+  // The history document's fold, when one is due, is a job of its own inside
+  // its fences (historyConsolidation.js buildSkipHistoryJob). It goes at the
+  // very end of the prompt, below, where nothing of the skip's follows it.
+  const historyJob = foldedSkip ? normalizeString(variables.foldedHistoryJob) : "";
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
   // orders (playerFocus.js): each order's id is what an event cites in actionIds.
@@ -2172,6 +2825,7 @@ ${brief}`);
   }
 
   if (Array.isArray(lookups?.tools) && lookups.tools.length) blocks.push(LOOKUP_DIRECTIVE);
+  if (historyJob) blocks.push(historyJob);
 
   return blocks.filter(Boolean).join("\n\n");
 };
@@ -2462,6 +3116,9 @@ So use the wider picture to choose the sender and the moment — never to give t
   // every narrated place must have its own operation.
   if (taskKey === "gameMaster") {
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    if (normalizeString(variables.groupsContext)) {
+      systemPrompt = `${systemPrompt}\n\n[Groups]\nActors that are not countries, each controlling an area of regions that stay their countries'. Their exact names, what each is, and where it controls (groupOps creates, changes, erases them and moves their areas):\n${normalizeString(variables.groupsContext)}`;
+    }
   }
 
   if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
@@ -2691,6 +3348,12 @@ const runJsonTask = async (taskKey, {
   // model's calls are answered inside callAI and the answers go back as the
   // next turns of the same conversation (main.jsx runWithLookups).
   lookups = null,
+  // The task's own output function, reshaped for this call: a folded time skip
+  // adds the board and the agents' reports to the contract it is sent
+  // (gameplaySchemas.js foldJumpTool). Applied to the tool the task would have
+  // been sent, so a scenario's stat keys are already in it; the answer is still
+  // validated by the task's schema, which accepts both contracts.
+  toolTransform = null,
   // The request budget (requestBudget.js). `budget` is the time skip this task
   // belongs to and `spender` who it is within it: each attempt asks the budget
   // first, and a refusal ends the task the way a failure would (its fallback, or
@@ -2705,6 +3368,11 @@ const runJsonTask = async (taskKey, {
   // saved: it keeps strict-then-retry. For something asked once per campaign and
   // built on for the rest of it, not for anything asked every turn.
   strictFirst = false,
+  // The opposite, whatever the setting: the first answer is repaired in place
+  // and a flaw the schema names is cut out, never sent back. A time skip passes
+  // it, because a skip is one request in every mode (requestBudget.js) and being
+  // told to redo it is a second one.
+  salvage = false,
   // The answer's events as the model writes them (streamedEvents.js): every
   // complete event this attempt has produced, and an empty list when an attempt
   // begins. A preview only, through no validator. Only a time skip passes it.
@@ -2756,9 +3424,11 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const tool = customFullStatSheet
+  const taskTool = customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+  // Reshaped for this call when asked (toolTransform above).
+  const tool = typeof toolTransform === "function" ? toolTransform(taskTool) : taskTool;
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
   // shapes, never the prompt itself: a jump's system prompt is tens of thousands
@@ -2809,7 +3479,7 @@ const runJsonTask = async (taskKey, {
   // made only when there is nothing usable to keep. The model still learns what
   // was dropped or changed — the jump's application receipt tells it at the top
   // of the next turn — it just does not cost the player a request to say so.
-  const salvageFirst = savingRequests() && !strictFirst;
+  const salvageFirst = (salvage || savingRequests()) && !strictFirst;
   // What schema salvage cut out of the answer that was finally taken.
   let removedFromAnswer = [];
 
@@ -2819,11 +3489,21 @@ const runJsonTask = async (taskKey, {
       // means the skip has nothing left for this task at all; a refused retry
       // leaves whatever the first answer can still give (the salvage pass below).
       if (budget && !budget.take(outputAttempt === 1 ? (spender || taskKey) : `${spender || taskKey}Retry`)) {
-        const spent = `this time skip has used its ${budget.cap} requests`;
+        // Refused for the cap, or because a skip does not spend on this at all.
+        const spent = budget.allows?.(spender || taskKey) === false
+          ? "a time skip makes no request of its own for this"
+          : `this time skip has used its ${budget.cap} requests`;
         failureReason = outputAttempt === 1 ? `Not asked: ${spent}.` : `${failureReason} Not asked again: ${spent}.`;
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} not made: ${spent}.`, { spends: budget.log }, { verbose: true });
         break;
       }
+      // Function calling inside a time skip is the skip's budget's to give: every
+      // round of questions is a whole request, so this attempt may ask only as
+      // many as the budget has free once every segment has kept its own (two
+      // for an ordinary skip, which makes three requests the most a skip is).
+      const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
+        ? budget.free
+        : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
       // Observational only, and off unless enabled from DevTools: measures the
       // exact prompt about to be sent; never filters or reorders it.
@@ -2899,7 +3579,16 @@ const runJsonTask = async (taskKey, {
           // Lookup rounds re-evaluate the prompt, so each one restarts the long
           // first-byte window rather than being timed as a stalled answer.
           lookups: Array.isArray(lookups?.tools) && lookups.tools.length
-            ? { ...lookups, onRound: () => { idle.cancel(); idle.start(); } }
+            ? {
+              ...lookups,
+              ...(lookupRounds === null ? {} : { maxRounds: Number.isInteger(lookups.maxRounds) ? Math.min(lookups.maxRounds, lookupRounds) : lookupRounds }),
+              onRound: () => {
+                idle.cancel();
+                idle.start();
+                // The request this round is about to make is one of the skip's.
+                budget?.take(`${spender || taskKey}Lookup`);
+              },
+            }
             : null,
           // Names this call in the ai-call transport entries, so a task's own
           // entries and the request/response pair underneath them line up.
@@ -2960,10 +3649,28 @@ const runJsonTask = async (taskKey, {
       sawResponseBody = true;
       logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} answered.`, {
         responseChars: rawText.length,
-        viaToolCall: Boolean(response?.toolInput),
+        viaToolCall: Boolean(response?.toolInput) && !response?.answeredAsText,
+        ...(response?.answeredAsText ? { viaJsonText: true } : {}),
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // A time skip's answer ends with its riders, the agents' reports and the
+      // history fold, each of which fails open by itself. One that broke the
+      // JSON, or was cut off when the answer ran out of room, must not cost the
+      // turn written in full before it: the answer is read again without them
+      // (jsonSalvage.js parseWithoutTrailingFields). Asking again would be a
+      // second request for a turn already in hand.
+      if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
+        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD]);
+        if (rescued) {
+          parsed = rescued.value;
+          console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
+          logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: the answer's ${rescued.dropped.join(" and ")} could not be read (broken or cut off) and ${rescued.dropped.length === 1 ? "was" : "were"} left out; the turn before ${rescued.dropped.length === 1 ? "it" : "them"} is kept.`, {
+            responseChars: rawText.length,
+            tail: rawText.slice(-240),
+          }, { problem: true });
+        }
+      }
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.
@@ -3283,8 +3990,9 @@ const runJsonTask = async (taskKey, {
         // A model that answered with a tool call is told to call it again; one
         // that answered in prose (local models without tool support) is told to
         // answer in raw JSON — telling it to call a tool it cannot see wastes
-        // the one retry this task gets.
-        const retryInstruction = response?.toolInput
+        // the one retry this task gets. A Gemini skip asked for as JSON text
+        // (main.jsx callGemini) was shown no tool either.
+        const retryInstruction = response?.toolInput && !response?.answeredAsText
           ? `Call ${tool?.name || "the required tool"} again with corrected input.`
           : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
         history.push({
@@ -3555,7 +4263,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
   "regionTransfers", "regionClaims", "regionControlOps", "polityChanges",
-  "createdChats", "unitOps", "markerOps", "spyOps", "actionIds",
+  "createdChats", "unitOps", "markerOps", "spyOps", "groupOps", "actionIds",
 ];
 const eventCarriesOwnConsequence = (event) =>
   OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
@@ -3585,13 +4293,11 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest } = {}) => {
-  // The document this pass revises, and the revision it was read at: a pass
-  // that lands against a different revision (a hand edit in the meantime)
-  // appends rather than overwrites (applyHistoryDocumentUpdate).
-  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
-  const historyDocumentContext = buildHistoryDocumentDirective(bundle.world);
-  const variables = await buildTemplateVariables(bundle, {
+// What one pass of the consolidator is shown: the material it folds, as text,
+// and the document directive (historyConsolidation.js). Shared by the pass that
+// is a request of its own and the one a time skip carries (prepareSkipHistoryFold).
+const historyConsolidationVariables = async (bundle, events, chats, actions = []) => ({
+  ...(await buildTemplateVariables(bundle, {
     // Resolved orders are consolidated alongside the events they caused. Capping
     // the history that gets SENT each turn is not enough on its own: drop the old
     // orders without recording what they did and the model loses the campaign's
@@ -3604,7 +4310,77 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     }),
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
-  });
+  })),
+  historyDocumentContext: buildHistoryDocumentDirective(bundle.world),
+});
+
+// A pass's boundary as plain data: what its ledger entry records. Taken from
+// the plan, so a fold a time skip carries records the boundary it was planned
+// at, before the skip wrote anything.
+const consolidationResume = (plan, bundle, { world }) => ({
+  actionIds: plan.actionsToConsolidate.map((action) => action.id),
+  chatIds: plan.closedChats.map((chat) => chat.id),
+  throughDate: plan.throughEvent?.date || bundle.game.gameDate,
+  throughEventId: plan.throughEvent?.id || "",
+  throughRound: bundle.game.round,
+  baseRevision: world.historyDocument?.revision ?? 0,
+  eventCount: plan.eventsToConsolidate.length,
+  chatCount: plan.closedChats.length,
+});
+
+// One shape for every writer — the pass that is a request of its own, its
+// deferred applier, and the fold a time skip carried — so an entry reads the
+// same whichever of them wrote it.
+const consolidationEntryFor = (resume, summary, source, priorHistory) => ({
+  actionIds: normalizeArray(resume?.actionIds),
+  chatIds: normalizeArray(resume?.chatIds),
+  createdAt: new Date().toISOString(),
+  source,
+  summary,
+  throughDate: normalizeString(resume?.throughDate),
+  throughEventId: normalizeString(resume?.throughEventId) || normalizeArray(priorHistory).at(-1)?.throughEventId || "",
+  throughRound: resume?.throughRound,
+});
+
+// ---- The history fold a time skip carries ---------------------------------------
+// A skip is ONE request (requestBudget.js), so a fold that is due is not a
+// request after it: it is a job inside the skip's own prompt
+// (historyConsolidation.js buildSkipHistoryJob) and a field of its answer.
+//
+// Planned HERE, before the skip, on the campaign as it stands and for the round
+// the skip is about to produce, so the cadence is the one a pass after the skip
+// kept, and nothing the skip writes is in it. Three things come back:
+//   null                nothing is due: nothing is asked, and nothing is asked
+//                       after the skip either. Whatever the skip adds waits
+//                       for the next one.
+//   { separate: true }  due, but not the skip's to carry: the player sends
+//                       this pass through the provider's batch endpoint
+//                       (Settings → Batch background AI tasks). The pass after
+//                       the skip handles it, as it always has.
+//   { brief, resume, baseRevision, currentText }
+//                       due and carried: the consolidator's own prompt, whole,
+//                       and the boundary the fold will record.
+const prepareSkipHistoryFold = async (bundle) => {
+  const plan = planHistoryConsolidation(bundle, { round: (Number(bundle.game?.round) || 0) + 1 });
+  if (!plan.due) return null;
+  if (batchBackgroundTasksEnabled() && providerSupportsBatch("eventConsolidator")) return { separate: true };
+  const world = normalizeWorldState(bundle.world);
+  const variables = await historyConsolidationVariables(bundle, plan.eventsToConsolidate, plan.closedChats, plan.actionsToConsolidate);
+  const { systemPrompt } = await buildTaskSystemPrompt("eventConsolidator", { variables, lookups: null, reminders: false });
+  return {
+    brief: systemPrompt,
+    resume: consolidationResume(plan, bundle, { world }),
+    baseRevision: world.historyDocument?.revision ?? 0,
+    currentText: seedHistoryDocumentText(world),
+  };
+};
+
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest } = {}) => {
+  // The document this pass revises, and the revision it was read at: a pass
+  // that lands against a different revision (a hand edit in the meantime)
+  // appends rather than overwrites (applyHistoryDocumentUpdate).
+  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
+  const variables = await historyConsolidationVariables(bundle, events, chats, actions);
   const { generation, payload, deferred } = await runJsonTask("eventConsolidator", {
     // The deterministic digest cannot judge importance, so it carries no
     // document: the pass appends it to the document instead of rewriting.
@@ -3618,7 +4394,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     }),
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     ...(typeof onRequest === "function" ? { onRequest } : {}),
-    variables: { ...variables, historyDocumentContext },
+    variables,
     // Off the critical path when the caller supplies an applier: the summary
     // may land later through the batch poller.
     sync: typeof onBatchResult !== "function",
@@ -3637,12 +4413,53 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null } = {}) => {
+// `skipFold`: what the time skip this turn came from did about the fold itself
+// (foldedTurnReview's `review.history`), when it was a folded skip:
+//   { due: false }                  nothing was due before the skip, so nothing
+//                                   is folded now either;
+//   { due: true, ok: true, ... }    the skip's own answer carried the fold, and
+//                                   it is written here with no request;
+//   { due: true, ok: false, ... }   the answer's fold could not be used. It
+//                                   waits for the next skip, unless the pile
+//                                   has outgrown HISTORY_CONSOLIDATION's
+//                                   ownRequestThreshold, when it is asked for
+//                                   below like any pass.
+// Absent, this is a pass of its own, as it is for everything that is not a
+// folded skip.
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, skipFold = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
+  if (skipFold && !force) {
+    if (!skipFold.due) return world;
+    if (skipFold.ok) {
+      const entry = consolidationEntryFor(skipFold.resume, skipFold.summary, "ai", world.consolidatedHistory);
+      const documentUpdate = applyHistoryDocumentUpdate(world, {
+        document: skipFold.document,
+        summary: skipFold.summary,
+        source: "ai",
+        throughDate: entry.throughDate,
+        throughEventId: entry.throughEventId,
+        throughRound: entry.throughRound,
+        baseRevision: skipFold.baseRevision,
+      });
+      logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
+      return normalizeWorldState({
+        ...world,
+        consolidatedHistory: [...world.consolidatedHistory, entry],
+        historyDocument: documentUpdate.historyDocument,
+      });
+    }
+    const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
+    if (waiting <= HISTORY_CONSOLIDATION.ownRequestThreshold) {
+      logDebugEvent("turn", `History consolidation waits for the next skip: this skip's answer ${skipFold.reason || "gave no usable fold"}.`, { unfoldedEvents: waiting }, { problem: true });
+      return world;
+    }
+    logDebugEvent("turn", `History consolidation is asked for on its own: ${waiting} events are unfolded and this skip's answer ${skipFold.reason || "gave no usable fold"}.`, undefined, { problem: true });
+  }
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
   // Cheats tool and the tests.
-  const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = planHistoryConsolidation(bundle, { force });
+  const plan = planHistoryConsolidation(bundle, { force });
+  const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = plan;
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
   // The skip's budget is asked HERE, not inside the task: a refused task falls
@@ -3656,19 +4473,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
     });
     return world;
   }
-  // One shape for both writers — the synchronous return below and the
-  // deferred applier — so a batch-consolidated entry reads exactly like a
-  // live one.
-  const entryFor = (summary, source, priorHistory) => ({
-    actionIds: actionsToConsolidate.map((action) => action.id),
-    chatIds: closedChats.map((chat) => chat.id),
-    createdAt: new Date().toISOString(),
-    source,
-    summary,
-    throughDate: throughEvent?.date || bundle.game.gameDate,
-    throughEventId: throughEvent?.id || priorHistory.at(-1)?.throughEventId || "",
-    throughRound: bundle.game.round,
-  });
+  const resume = consolidationResume(plan, bundle, { world });
   const { generation, summary, document, baseRevision } = await consolidateHistoryBatch(
     bundle,
     eventsToConsolidate,
@@ -3692,7 +4497,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
           ? getUnconsolidatedEvents(current.events, currentWorld).some((event) => event.id === throughEvent.id)
           : true;
         if (!stillOpen) return true;
-        const entry = entryFor(summaryText, source, currentWorld.consolidatedHistory);
+        const entry = consolidationEntryFor(resume, summaryText, source, currentWorld.consolidatedHistory);
         const documentUpdate = applyHistoryDocumentUpdate(currentWorld, {
           document: resultPayload?.document,
           summary: summaryText,
@@ -3714,7 +4519,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
   );
   if (!summary) return world;
 
-  const entry = entryFor(summary, generation.source, world.consolidatedHistory);
+  const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
     document,
     summary,
@@ -4433,6 +5238,58 @@ const resolveRegionTransfers = async (containers, world, {
     }
   }
 
+  // A region is written by its NAME, and may be written with its kind in front
+  // ("region: Hamhung") or with something in brackets after it (nameRefs.js).
+  // Each reference is taken down to the name here, before anything is looked
+  // up, so every family below reads the same thing. A 45-skip test
+  // (2026-10-09) lost a treaty's four transfers to "Hamhung (4441)": the model
+  // had been shown the region that way and wrote it back, and it matched
+  // nothing. What stood in the brackets is kept as a hint (bracketHints), used
+  // only when the name alone does not settle it. One of the map's own keys
+  // written bare is left as it is, for a saved or previewed operation.
+  const bracketHints = new WeakMap();
+  // The transfers written "country: <name>", and the name each was written
+  // with. What that means is settled further down, once the map's owners are
+  // known: the whole of that polity's land, or the area of that name
+  // (namedAreas.js).
+  const countryRefs = new WeakMap();
+  const plainRegionRef = (value) => {
+    const raw = normalizeString(value);
+    if (!raw || byId.has(raw) || byAliasId.has(raw)) return { text: raw, kind: "", bracket: "" };
+    const ref = readNameRef(raw);
+    return { text: ref.name, kind: ref.kind, bracket: ref.bracket };
+  };
+  for (const { impacts } of containers) {
+    for (const transfer of normalizeArray(impacts?.regionTransfers)) {
+      if (!transfer || typeof transfer !== "object") continue;
+      const id = plainRegionRef(transfer.regionId);
+      const name = plainRegionRef(transfer.regionName);
+      if (typeof transfer.regionId === "string") transfer.regionId = id.text;
+      if (typeof transfer.regionName === "string") transfer.regionName = name.text;
+      const bracket = id.bracket || name.bracket;
+      if (bracket) bracketHints.set(transfer, bracket);
+      // "country: North Korea" is the whole of that country's land: what
+      // wholeCountry says, said the way every other place is said. A contest
+      // or a claim's withdrawal is of one region and is left to its name.
+      const op = normalizeString(transfer.op).toLowerCase();
+      if ((id.kind || name.kind) === "country" && (!op || op === "control")) {
+        countryRefs.set(transfer, id.kind === "country" ? id.text : name.text);
+      }
+    }
+    for (const claim of normalizeArray(impacts?.regionClaims)) {
+      if (!claim || typeof claim !== "object") continue;
+      if (typeof claim.regionId === "string") claim.regionId = plainRegionRef(claim.regionId).text;
+      if (typeof claim.regionName === "string") claim.regionName = plainRegionRef(claim.regionName).text;
+    }
+    for (const op of normalizeArray(impacts?.groupOps)) {
+      if (!op || typeof op !== "object") continue;
+      for (const key of ["regionIds", "regions"]) {
+        if (Array.isArray(op[key])) op[key] = op[key].map((token) => (typeof token === "string" ? plainRegionRef(token).text : token));
+      }
+      if (typeof op.regionId === "string") op.regionId = plainRegionRef(op.regionId).text;
+    }
+  }
+
   const worldState = normalizeWorldState(world);
   const controlOwners = worldState.regionOwnershipOverrides;
   const sovereigntyOwners = worldState.regionSovereigntyOverrides || {};
@@ -4549,6 +5406,69 @@ const resolveRegionTransfers = async (containers, world, {
     const region = byId.get(regionId);
     return resolveOwnerName(region?.country || toCountryName(region?.countryCode) || "");
   };
+
+  // A territory or dependency is written by its own name (namedAreas.js). The
+  // map has no region called Greenland, only its eighteen regions, each of
+  // which belongs to Greenland by geography and to Denmark by who holds it; so
+  // "country: Greenland" from Denmark is all eighteen, and "country: Puerto
+  // Rico" from the United States is Puerto Rico. The name of a polity that
+  // holds land today still means that polity's whole country, as it did, but
+  // only when it is the losing side itself: "country: Ukraine" written beside
+  // "from Russia" used to hand over the whole of Russia, since the scope was
+  // taken from fromCode, and is now the Ukrainian land Russia holds. A bare
+  // name is read as an area only where it is neither a region nor a polity
+  // with land, which leaves every older rule where it was.
+  const areaIndex = buildAreaIndex(catalog, { toName: toCountryName, fold: regionKey });
+  const areaNamed = (written) => findArea(areaIndex, written, { toName: toCountryName, fold: regionKey });
+  const namesARegion = (written) => {
+    const raw = normalizeString(written);
+    return Boolean(raw) && (byId.has(raw) || byAliasId.has(raw) || (byName.get(regionKey(raw)) ?? []).length > 0);
+  };
+  // transfer -> { area, label }; `area` is null for a name that may move nothing.
+  const areaRefs = new WeakMap();
+  for (const { impacts } of containers) {
+    for (const transfer of normalizeArray(impacts?.regionTransfers)) {
+      if (!transfer || typeof transfer !== "object") continue;
+      const op = normalizeString(transfer.op).toLowerCase();
+      if (op && op !== "control") continue;
+      const tagged = normalizeString(countryRefs.get(transfer));
+      if (!tagged && transfer.wholeCountry === true) continue;
+      const written = tagged
+        ? [tagged]
+        : [transfer.regionId, transfer.regionName].map(normalizeString).filter(Boolean);
+      if (!tagged && written.some(namesARegion)) continue;
+      const from = normalizeString(transfer.fromCode);
+      for (const name of written) {
+        const area = areaNamed(name);
+        const namedKey = canonicalOwnerKey(name);
+        const reading = readAreaName({
+          tagged: Boolean(tagged),
+          named: { isArea: Boolean(area), isOwner: ownerIsKnown(name), holdsLand: regionsOwnedBy(name).length > 0 },
+          loser: { given: Boolean(from), sameAsNamed: Boolean(from) && Boolean(namedKey) && namedKey === canonicalOwnerKey(from) },
+        });
+        if (reading === "area") {
+          areaRefs.set(transfer, { area, label: name });
+          transfer.wholeCountry = undefined;
+          break;
+        }
+        if (!tagged) continue;
+        if (reading === "country") {
+          transfer.wholeCountry = true;
+          if (!from) transfer.fromCode = name;
+        } else {
+          areaRefs.set(transfer, { area: null, label: name });
+          transfer.wholeCountry = undefined;
+        }
+      }
+    }
+  }
+  // The same for a claim and for a group's area, which take the whole of the
+  // area whoever holds it: every region of it, as its own entry. Only for a
+  // name that is no polity with land: a claim on "Ukraine" is not a claim on
+  // each of its regions.
+  const areaRegionIds = (written) => (namesARegion(written) || regionsOwnedBy(written).length > 0
+    ? []
+    : normalizeArray(areaNamed(written)?.regions).map((region) => region.id));
 
   // GM-only exhaustive base-geography scope. "All North Korean states" means
   // the rendered PRK footprint even when those regions are currently held by a
@@ -4818,6 +5738,29 @@ const resolveRegionTransfers = async (containers, world, {
         if (owned.length === 1) return owned[0].id;
       }
 
+      // Several regions of that name and nothing above to choose by: what the
+      // model wrote in brackets after it, when that is one of them — the map's
+      // key for it, or the country it is in ("Georgia (United States)").
+      const hint = normalizeString(bracketHints.get(transfer));
+      if (matches.length > 1 && hint) {
+        const hinted = matches.filter((region) => region.id === hint
+          || regionKey(region.country) === regionKey(hint)
+          || canonicalOwnerKey(hint) === ownerKeyOf(region.id));
+        if (hinted.length === 1) return hinted[0].id;
+      }
+    }
+
+    // A name the map does not have, with one of the map's own keys in brackets
+    // after it: the key, since nothing else says which region was meant.
+    const bracketed = normalizeString(bracketHints.get(transfer));
+    if (bracketed && byId.has(bracketed) && ![transfer?.regionId, transfer?.regionName].some((candidate) => (byName.get(regionKey(candidate)) ?? []).length)) {
+      return bracketed;
+    }
+
+    for (const candidate of [transfer?.regionId, transfer?.regionName]) {
+      const query = regionKey(candidate);
+      if (!query) continue;
+
       // The shared matcher (regionMatch.js): an appended "Oblast", a stripped
       // "the ... region", a transliteration one edit away — each accepted only
       // when a single region survives. Inside the losing side when the model
@@ -4863,6 +5806,55 @@ const resolveRegionTransfers = async (containers, world, {
     }
   }
   const payloadDeclares = (token) => payloadDeclared.has(regionKey(toCountryName(normalizeString(token))));
+
+  // A front against a side the map does not show. Events of a civil war are
+  // written "control Palmyra, from Islamic State, to Syria" or "control Aleppo,
+  // from Syria, to Syria" (a 45-skip test, 2026-10-09): the government won the
+  // town back from rebels who are no power on this map, so the losing side is
+  // unknown, or is the winner itself, and the operation was dropped. It is
+  // read for what it says instead. The town is its government's again: any
+  // contest on it is cleared, and a group holding it lets it go (groupReleases,
+  // handed back to the caller). Where the winner is someone other than the
+  // holder the map shows, it is an ordinary capture from that holder. A contest
+  // written the wrong way round, with the map's holder as the challenger, is
+  // turned about. Only control operations are read this way: a legal transfer
+  // still needs its losing side named.
+  const groupReleases = [];
+  for (const container of containers) {
+    for (const transfer of normalizeArray(container?.impacts?.regionTransfers)) {
+      const op = normalizeString(transfer?.op).toLowerCase();
+      if (!op || transfer?.wholeCountry === true) continue;
+      const from = normalizeString(transfer.fromCode);
+      if (!from) continue;
+      const other = op === "contest" ? normalizeString(transfer.actorCode)
+        : op === "control" && transfer.__hadRealToCode ? normalizeString(transfer.toCode) : "";
+      const sameSide = Boolean(other) && regionKey(toCountryName(from)) === regionKey(toCountryName(other));
+      const fromUnknown = !ownerIsKnown(from) && !payloadDeclares(from);
+      if (!sameSide && !fromUnknown) continue;
+      const named = [transfer.regionId, transfer.regionName]
+        .map((written) => byId.get(normalizeString(written)) ?? ((byName.get(regionKey(written)) ?? []).length === 1 ? byName.get(regionKey(written))[0] : null))
+        .find(Boolean);
+      if (!named) continue;
+      const holder = ownerNameOf(named.id);
+      if (!holder) continue;
+      const otherHolds = Boolean(other) && canonicalOwnerKey(other) === ownerKeyOf(named.id);
+      if (op === "control" && other && otherHolds) {
+        groupReleases.push({ container, regionId: named.id, group: fromUnknown ? from : "" });
+        Object.assign(transfer, { op: "clear_contest", regionId: named.id, fromCode: holder, toCode: holder, claimantCode: fromUnknown ? from : "", clearAll: true, __hadRealToCode: false });
+      } else if (op === "control" && other && !sameSide && ownerIsKnown(other)) {
+        // Won from the side the map does not show, on ground the map gives to a third.
+        groupReleases.push({ container, regionId: named.id, group: from });
+        transfer.fromCode = holder;
+      } else if (op === "contest" && fromUnknown && otherHolds) {
+        Object.assign(transfer, { fromCode: holder, actorCode: from, toCode: from });
+      } else if (op === "clear_contest" && fromUnknown) {
+        Object.assign(transfer, { fromCode: holder, toCode: holder, claimantCode: normalizeString(transfer.claimantCode) || from });
+      }
+    }
+  }
+  for (const { container, regionId, group } of groupReleases) {
+    (container.impacts.__groupReleases ??= []).push({ regionId, group });
+  }
   // resolveRegionControlOps proxies an op with no owner at all under this
   // sentinel; the ownership rules below judge it, not the name check.
   const OWNERLESS_SENTINEL = "Unresolved polity";
@@ -4917,6 +5909,44 @@ const resolveRegionTransfers = async (containers, world, {
           candidates: [],
           unknownOwner,
           knownOwners: knownOwnerLabels,
+        });
+        continue;
+      }
+      // An area written by its name: each of its regions the losing side
+      // holds, and nothing else of the losing side's.
+      const areaRef = areaRefs.get(transfer);
+      if (areaRef) {
+        const fromKey = canonicalOwnerKey(transfer?.fromCode);
+        const moving = areaRef.area
+          ? areaRegionsFor(areaRef.area, { holderKeyOf: ownerKeyOf, fromKey, toKey: canonicalOwnerKey(transfer?.toCode) })
+          : [];
+        if (moving.length) {
+          console.info(
+            `[ai] ${path}.regionTransfers read "${areaRef.label}" as the area of that name ` +
+              `-> ${normalizeString(transfer?.toCode)}: ${moving.length} region(s).`,
+          );
+          for (const region of moving) {
+            const item = {
+              ...transfer,
+              fromCode: fromKey ? (resolveOwnerName(transfer.fromCode) || normalizeString(transfer.fromCode)) : ownerNameOf(region.id),
+              regionId: region.id,
+              regionName: region.name || region.id,
+              wholeCountry: undefined,
+            };
+            pushUniqueTransfer(resolved, item);
+            destinationByRegion.set(region.id, regionKey(item.toCode));
+          }
+          continue;
+        }
+        // Nothing of that name is the losing side's to give. It is refused,
+        // and never widened to the losing side's whole country.
+        unresolved.push({
+          label: areaRef.label,
+          fromCode: normalizeString(transfer?.fromCode),
+          path,
+          candidates: fromKey ? regionsOwnedBy(transfer?.fromCode) : [],
+          reason: "the losing side holds no region of the country or territory that was named",
+          transferIndex,
         });
         continue;
       }
@@ -5109,7 +6139,13 @@ const resolveRegionTransfers = async (containers, world, {
     let payload = fallback();
     let source = "fallback";
 
-    try {
+    // Inside a time skip nothing asks but the skip itself (requestBudget.js
+    // SKIP_SPENDERS). The label stays unresolved, its transfer fails safe below,
+    // and the receipt tells the model, which writes the map's own name next
+    // time, or looks it up first when function calling is on.
+    const insideSkip = Boolean(requests?.budget) && !requests.budget.allows("geography");
+    if (insideSkip) requests.budget.take("geography");
+    else try {
       const response = await runJsonTask("geographyResolver", {
         lookups: buildTaskLookups({ world }),
         fallback,
@@ -5352,6 +6388,15 @@ const resolveRegionTransfers = async (containers, world, {
           break;
         }
       }
+      // A territory claimed by its name ("country: Greenland") is a claim on
+      // each of its regions the claimant does not hold.
+      const claimedArea = regionId ? [] : [claim?.regionId, claim?.regionName]
+        .map((written) => areaRegionIds(written).filter((id) => ownerKeyOf(id) !== claimantKey))
+        .find((ids) => ids.length) ?? [];
+      if (claimedArea.length) {
+        for (const id of claimedArea) kept.push({ ...claim, regionId: id, regionName: byId.get(id)?.name || "" });
+        continue;
+      }
       if (!regionId) {
         console.warn(
           `[ai] ${path}.regionClaims dropped "${normalizeString(claim?.regionId)}" for ` +
@@ -5363,6 +6408,53 @@ const resolveRegionTransfers = async (containers, world, {
       kept.push(claim);
     }
     impacts.regionClaims = kept;
+  }
+
+  // A group's area names regions the way a claim does — an exact id, or a plain
+  // name — and, like a claim, moves no border, so a region that matches nothing
+  // is dropped with a note instead of costing a retry. A release whose every
+  // region was dropped is dropped whole: an empty list means "release all".
+  for (const { impacts, path } of containers) {
+    const ops = normalizeArray(impacts?.groupOps);
+    if (ops.length === 0) continue;
+    const kept = [];
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const list = Array.isArray(op.regionIds) ? op.regionIds
+        : Array.isArray(op.regions) ? op.regions
+          : op.regionId ? [op.regionId] : [];
+      const resolved = [];
+      for (const token of list) {
+        const id = normalizeString(token);
+        if (byId.has(id)) {
+          resolved.push(id);
+          continue;
+        }
+        const aliased = byAliasId.get(id) ?? [];
+        const named = byName.get(regionKey(token)) ?? [];
+        const matches = aliased.length === 1 ? aliased : named;
+        if (matches.length === 1) {
+          resolved.push(matches[0].id);
+          continue;
+        }
+        // A territory by its name is every region of it.
+        const ofArea = areaRegionIds(token);
+        if (ofArea.length) {
+          resolved.push(...ofArea);
+          continue;
+        }
+        console.warn(
+          `[ai] ${path}.groupOps dropped region "${id}" for ${normalizeString(op.name)}: ` +
+            "no single map region matches that id or name.",
+        );
+      }
+      if (list.length > 0 && resolved.length === 0 && normalizeGroupOp(op)?.op === "release") continue;
+      delete op.regions;
+      delete op.regionId;
+      op.regionIds = [...new Set(resolved)];
+      kept.push(op);
+    }
+    impacts.groupOps = kept;
   }
   // The foundings this pass decided, as create entries on the first event that
   // named each polity (the collector skipped names the payload already declares).
@@ -5426,6 +6518,18 @@ const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly =
     const foundedHere = normalizeArray(proxyContainers[index]?.impacts?.polityChanges).filter((change) => !declaredBefore.has(change));
     if (foundedHere.length) targetImpacts.polityChanges = [...foundedHere, ...normalizeArray(targetImpacts.polityChanges)];
 
+
+    // A town a government took back from a side the map does not show
+    // (resolveRegionTransfers): the group holding it there, if one is, lets it go.
+    const worldGroups = normalizeWorldState(world);
+    for (const { regionId, group } of normalizeArray(proxyContainers[index]?.impacts?.__groupReleases)) {
+      const holding = normalizeString(worldGroups.groupAreas?.[regionId])
+        || Object.keys(worldGroups.groups ?? {}).find((name) => name.toLowerCase() === normalizeString(group).toLowerCase())
+        || "";
+      if (!holding) continue;
+      targetImpacts.groupOps = [...normalizeArray(targetImpacts.groupOps), { op: "release", name: holding, regionIds: [regionId], note: "Retaken by its government." }];
+    }
+
     targetImpacts.regionControlOps = normalizeArray(proxyContainers[index]?.impacts?.regionTransfers)
       .map((entry) => {
         const next = { ...entry };
@@ -5475,6 +6579,29 @@ const validateExactApprovedRegionClaims = (containers) => {
   return "";
 };
 
+// The same guard for groups' areas: Apply takes the previewed ids as they are.
+const validateExactApprovedGroupAreas = (containers) => {
+  const entries = [];
+  for (const { impacts, path } of containers) {
+    for (const [opIndex, op] of normalizeArray(impacts?.groupOps).entries()) {
+      for (const regionId of normalizeArray(op?.regionIds)) entries.push({ regionId: normalizeString(regionId), opIndex, path });
+    }
+  }
+  if (entries.length === 0) return "";
+
+  const exactCatalog = getPrimedScenarioRegionCatalog() ?? [];
+  if (!Array.isArray(exactCatalog) || exactCatalog.length === 0) {
+    return "Approved group areas cannot be revalidated because the compact scenario region catalog is not primed; regenerate the GM preview after the map finishes loading.";
+  }
+  const exactIds = new Set(exactCatalog.map((region) => normalizeString(region?.id)).filter(Boolean));
+  for (const { regionId, opIndex, path } of entries) {
+    if (!regionId || !exactIds.has(regionId)) {
+      return `${path}.groupOps[${opIndex}].regionIds has "${regionId || "(blank)"}", which is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved group area.`;
+    }
+  }
+  return "";
+};
+
 // One retry's worth of corrective vocabulary: the exact regions the losing side
 // currently owns, so a model that wrote "Pomerania" can resend the same answer
 // with the real names/ids ("Pomorskie (POL.11_1)") instead of losing the map
@@ -5504,7 +6631,7 @@ const buildTransferFeedback = (unresolved) => {
     }
     if (entry.candidates.length > 0) {
       const listed = entry.candidates.slice(0, 200)
-        .map((region) => `${region.name} (${region.id})`)
+        .map((region) => region.name)
         .join(", ");
       const more = entry.candidates.length > 200 ? `, +${entry.candidates.length - 200} more` : "";
       lines.push(
@@ -5515,12 +6642,12 @@ const buildTransferFeedback = (unresolved) => {
       lines.push(
         `${entry.path}.regionTransfers: no map region matches "${target}"` +
           `${entry.fromCode ? ` and no regions are recorded for owner "${entry.fromCode}"` : ""}. ` +
-          `Use the region's exact in-game name in regionId, and set fromCode to the region's current owner so the engine can locate it.`,
+          `Write the region's exact in-game name in regionId, as "region: <name>", and set fromCode to the region's current owner so the engine can locate it.`,
       );
     }
   }
   lines.push(
-    "Resend the same response with these regionTransfers corrected to exact regionId values (or exact names) from the lists above; drop a transfer only if no listed region matches your intent.",
+    "Resend the same response with these regionTransfers corrected to exact region names from the lists above, each written in regionId as \"region: <name>\"; drop a transfer only if no listed region matches your intent.",
   );
   return lines.join("\n");
 };
@@ -5547,10 +6674,10 @@ const buildControlFeedback = (unresolved) => {
   for (const entry of coverage) {
     chunks.push(
       `${entry.path}.regionControlOps: event narration explicitly says de-facto control changes in ` +
-        `${entry.cityName || entry.label}, which the rendered map places in ` +
-        `${entry.regionName} (${entry.regionId}), but no control operation targets that region. ` +
-        `Add the matching control operation using regionId "${entry.regionId}" and regionName ` +
-        `"${entry.regionName}" with the correct current controller/fromCode and new controller/toCode, ` +
+        `${entry.cityName || entry.label}, which the rendered map places in the region ` +
+        `${entry.regionName}, but no control operation targets that region. ` +
+        `Add the matching control operation with regionId "region: ${entry.regionName}" ` +
+        `and the correct current controller/fromCode and new controller/toCode, ` +
         `or revise the event prose so it does not claim control changed there.`,
     );
   }
@@ -5593,6 +6720,151 @@ const validateChatOpener = (chatLike, path) => {
 // moved no borders never trips the reluctance guards below.
 const CONTROL_CHANGE_LANGUAGE = /\b(captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|fell to|falls? to|takes? control|assumes? control)\b/i;
 const LEGAL_TRANSFER_LANGUAGE = /\b(annex\w*|cedes?|ceded|ceding|cession|sovereignty (?:passes|transfers?|is transferred)|treaty transfer|formal(?:ly)? transfer(?:red)?|incorporat\w*|unification|territorial award|sold|sale of territory)\b/i;
+
+// A capture an event tells of and does not carry is put on the map, where the
+// event's own operations show who took what (narratedCapture.js). Seen in a
+// 45-skip test (2026-10-09): a time skip is one request, so the reluctance
+// guard above never gets its retry, and an event that had a formation storm a
+// town and wrote no control operation left the map as it was.
+//
+// Only for a land formation the same event moves or raises, at the place the
+// event's own words say fell: the region it ends in, or the region of a city
+// within CAPTURE_REACH_KM of where it ends. The pure module decides whether the
+// words state a capture and whose it is; this finds the places and writes the
+// operation, after the event's own territory operations and placements have
+// been resolved. Mutates the events' impacts; returns how many were added.
+const completeNarratedCaptures = async (containers, world, { receipt = null, lookupContext = null } = {}) => {
+  const worldState = normalizeWorldState(world);
+  const unitsById = new Map(normalizeArray(worldState.units).map((unit) => [normalizeString(unit?.id), unit]));
+  const finitePoint = (lng, lat) => (lng != null && lat != null && Number.isFinite(Number(lng)) && Number.isFinite(Number(lat))
+    && !(Number(lng) === 0 && Number(lat) === 0) ? [Number(lng), Number(lat)] : null);
+  const pending = [];
+  for (const container of normalizeArray(containers)) {
+    const { event, impacts } = container;
+    if (!impacts || typeof impacts !== "object") continue;
+    // Read before the map is: most events tell of no capture at all.
+    if (!mayNarrateCapture(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`)) continue;
+    const moves = [];
+    for (const op of normalizeArray(impacts.unitOps)) {
+      const kind = normalizeString(op?.op).toLowerCase();
+      const unit = kind === "move" ? unitsById.get(normalizeString(op.unitId))
+        : kind === "spawn" ? (op.unit && typeof op.unit === "object" ? op.unit : op)
+          : null;
+      if (!unit || !LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase())) continue;
+      const point = kind === "move" ? finitePoint(op.toLng, op.toLat) : finitePoint(unit.lng, unit.lat);
+      const owner = normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode);
+      if (point && owner) moves.push({ owner, unitName: normalizeString(unit.name), point });
+    }
+    if (moves.length) pending.push({ container, moves });
+  }
+  if (!pending.length) return 0;
+
+  let context;
+  try {
+    context = await (lookupContext ?? lazyLookupContext({ world }))();
+  } catch (error) {
+    console.warn("[narrated capture] the map could not be read; nothing was added.", error);
+    return 0;
+  }
+  const regionAt = (point) => context.rows.find((row) => row.geometry && row.bbox
+    && point[0] >= row.bbox[0] && point[0] <= row.bbox[2] && point[1] >= row.bbox[1] && point[1] <= row.bbox[3]
+    && pointInGeometry(point, row.geometry)) ?? null;
+  const labelOf = (name) => context.resolveOwner(name) || normalizeString(name);
+  const samePower = (a, b) => Boolean(foldRegionKey(labelOf(a))) && foldRegionKey(labelOf(a)) === foldRegionKey(labelOf(b));
+  const groupNames = isActiveFeatureEnabled("groups") ? Object.keys(worldState.groups ?? {}) : [];
+  const powers = [...context.ownerRows.keys(), ...normalizeArray(context.landless), ...groupNames];
+  const aliasesOf = (owner) => {
+    const label = labelOf(owner);
+    return Object.entries(worldState.polityOverrides ?? {})
+      .filter(([token, record]) => samePower(token, label) || samePower(record?.name, label))
+      .flatMap(([token, record]) => [token, record?.name, ...normalizeArray(record?.aliases)])
+      .map(normalizeString)
+      .filter(Boolean);
+  };
+
+  let added = 0;
+  for (const { container, moves } of pending) {
+    const { event, impacts } = container;
+    const candidates = [];
+    for (const move of moves) {
+      const mover = { owner: move.owner, aliases: aliasesOf(move.owner), unitName: move.unitName };
+      const standsIn = regionAt(move.point);
+      if (standsIn) {
+        candidates.push({ regionId: standsIn.id, regionName: standsIn.name, names: [standsIn.name, ...standsIn.aliases], controller: standsIn.owner, move: mover });
+      }
+      for (const city of context.cityRows) {
+        if (placementDistanceKm(move.point, city.coordinates) > CAPTURE_REACH_KM) continue;
+        // A city the map puts in one region; a guess at its region is not enough.
+        const placed = context.placeCity(city);
+        if (!placed?.row || placed.approximate) continue;
+        candidates.push({ regionId: placed.row.id, regionName: placed.row.name, names: [city.name, ...city.aliases], controller: placed.row.owner, move: mover });
+      }
+    }
+    const changed = [
+      ...normalizeArray(impacts.regionControlOps).map((op) => op?.regionId),
+      ...normalizeArray(impacts.regionTransfers).map((transfer) => transfer?.regionId),
+      ...normalizeArray(impacts.groupOps).flatMap((op) => normalizeArray(op?.regionIds)),
+    ].map(normalizeString).filter(Boolean);
+    const captures = findNarratedCaptures({
+      title: normalizeString(event?.title),
+      description: normalizeString(event?.description),
+      candidates,
+      powers,
+      changed,
+      samePower,
+    });
+    for (const capture of captures) {
+      const taker = context.resolveOwner(capture.toCode);
+      const group = taker ? "" : groupNames.find((name) => name.toLowerCase() === capture.toCode.toLowerCase()) ?? "";
+      const note = `Taken, as the event tells: ${capture.place}.`;
+      if (taker) {
+        impacts.regionControlOps = [...normalizeArray(impacts.regionControlOps), {
+          op: "control", regionId: capture.regionId, regionName: capture.regionName,
+          fromCode: labelOf(capture.fromCode), toCode: taker, basis: "occupation", note,
+        }];
+      } else if (group) {
+        // A side that is no country holds ground as a group does.
+        impacts.groupOps = [...normalizeArray(impacts.groupOps), { op: "take", name: group, regionIds: [capture.regionId], note }];
+      } else {
+        continue;
+      }
+      added += 1;
+      const title = normalizeString(event?.title);
+      noteReceipt(receipt, "adjusted",
+        `${title ? `Event "${title}": ` : ""}the text says ${capture.place} was taken and the event moved ${taker || group}'s formation there, `
+        + `but it carried no control operation, so ${capture.regionName} was put under ${taker || group}'s control. `
+        + "Write the regionControlOps control entry yourself for every capture an event tells of.");
+      console.info(`[narrated capture] ${container.path}: ${capture.regionName} (${capture.regionId}) ${capture.fromCode} -> ${taker || group}, from "${capture.sentence}".`);
+    }
+  }
+  return added;
+};
+
+// An event's `places`, as the model wrote them ("city: Kharkiv, country:
+// Ukraine"), become the places the map has (runtime/eventPlaces.js). Each is
+// looked up as the kind it was given and nothing else; one with no kind, or
+// that the map does not have, is left out and nobody is told, since it is what
+// a card links to and no part of what happened. After the placements, so a
+// structure the event builds and a formation it moves are where it put them.
+const resolveEventPlaces = async (containers, world, { lookupContext = null } = {}) => {
+  const naming = normalizeArray(containers).filter(({ event }) => event && typeof event === "object" && event.places !== undefined);
+  if (!naming.length) return;
+  let gazetteer = null;
+  // Only an entry still in the model's words needs the map.
+  if (naming.some(({ event }) => normalizeArray(event.places).some((entry) => typeof entry === "string"))) {
+    try {
+      gazetteer = buildPlacementGazetteer(await (lookupContext ?? lazyLookupContext({ world }))(), world);
+    } catch (error) {
+      console.warn("[event places] the map could not be read; the events link to what their operations name.", error);
+    }
+  }
+  const units = normalizeArray(world?.units);
+  for (const { event, impacts } of naming) {
+    const found = normalizeEventPlaces(findEventPlaces(event.places, gazetteer, { impacts, units }));
+    if (found.length) event.places = found;
+    else delete event.places;
+  }
+};
 
 // Strict/salvage discipline, the same contract clampTimelineDates follows:
 // the FIRST attempt returns corrective errors so the model can fix its own
@@ -5662,6 +6934,10 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   const drop = (path, text) => noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`);
 
+  // Units and structures are written by name; the save's own keys for them
+  // are put in before anything below looks one up (canonicalizeNamedThings).
+  canonicalizeNamedThings(containers, world);
+
   // A transfer or control flip that says its own basis is a claim, a threat or a
   // raid moves no border (runtime/territoryBasis.js). Never an error and never a
   // retry: the intent is unambiguous, so the claim is recorded, the rest is left
@@ -5719,10 +6995,25 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // that cannot be found is said in the receipt, and the operation keeps any
   // coordinates it came with. Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
-  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt });
+  // The map's names, read at most once for everything below that asks.
+  const lookupContext = lazyLookupContext({ world });
+  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt, lookupContext });
+  // A capture the text states and the event's own formation shows, with no
+  // control operation written for it, is finished here. Only on the answer
+  // that is kept: an attempt that can still be sent back is told instead, by
+  // the reluctance guard below.
+  if (!strict && captureGuard && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
+    await completeNarratedCaptures(containers, world, { receipt, lookupContext });
+  }
+  // The places each event says it is about, found on the map as the kind each
+  // was given (eventPlaces.js). What a card links to and where the camera
+  // goes; never an error, and nothing the receipt mentions.
+  if (!resolvedRegionIdsOnly && Array.isArray(candidate?.events)) await resolveEventPlaces(containers, world, { lookupContext });
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
+    const exactGroupError = validateExactApprovedGroupAreas(containers);
+    if (exactGroupError) return exactGroupError;
   }
   // Reluctance guard (strict attempt only): events that NARRATE a capture while
   // the whole payload ships ZERO regionTransfers are the recurring field report
@@ -5747,13 +7038,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const controlEvent = candidate.events.find((event) =>
         CONTROL_CHANGE_LANGUAGE.test(text(event)) && !LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (controlEvent) {
-        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the exact region id or the grounded place wording, fromCode = the current controller) or rewrite the event so that no control changed hands.`;
+        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the region's name as the map spells it, written "region: <name>", or the grounded place wording; fromCode = the current controller) or rewrite the event so that no control changed hands.`;
       }
     }
     if (totalTransfers === 0) {
       const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (legalEvent) {
-        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region, or wholeCountry:true for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
+        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region as "region: <name>", or regionId "country: <name>" for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
       }
     }
   }
@@ -5805,13 +7096,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const unitId = normalizeString(operation.unitId);
       const unitOpName = normalizeString(operation.op) || "unit";
       if (!unitId) {
-        if (strict) return `${operationPath}.unitId must not be blank.`;
-        drop(path, `a ${unitOpName} operation was dropped — it named no unitId, so no formation changed.`);
+        if (strict) return `${operationPath}.unitId must name the unit.`;
+        drop(path, `a ${unitOpName} operation was dropped — it named no unit, so no formation changed.`);
         continue;
       }
       if (!unitIds.has(unitId)) {
-        if (strict) return `${operationPath}.unitId does not identify an existing unit.`;
-        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no unit has that id (it may have been destroyed or never existed).`);
+        if (strict) return `${operationPath}.unitId "${unitId}" does not name one existing unit. Write the unit's name exactly as Current Military Units lists it, with its owner in brackets where two units share a name.`;
+        drop(path, `the ${unitOpName} operation on unit "${unitId}" was dropped — no single unit on the map has that name (it may have been destroyed, or never existed, or two units share the name and no owner was given).`);
         continue; // salvage: drop the op aimed at a unit that no longer exists
       }
       if (operation.op === "remove" || (operation.op === "strength" && operation.strength === 0)) unitIds.delete(unitId);
@@ -5840,7 +7131,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         }
       } else if (op === "remove" || op === "destroy") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
-          if (strict) return `${operationPath} must carry the name (or markerId) of the structure to remove.`;
+          if (strict) return `${operationPath} must carry the name of the structure to remove.`;
           drop(path, "a structure removal was dropped — it named nothing to remove.");
           continue;
         }
@@ -6458,11 +7749,12 @@ const applySimulationResult = async ({
   // visibly neglected; every supplemental event passes the same integrity
   // screen and the same curator. Not a quota: a quiet world may return none.
   //
-  // Not while requests are being saved. It is a second search — a whole request,
-  // and a curator pass after it — to pad a skip that came back thin, and a thin
-  // skip is still a skip: the lanes it neglected are the ones the world director
-  // selects first next turn.
-  const breadthRepair = review ? null : await maybeRepairWorldBreadthAfterCuration({
+  // Not for a time skip (requestBudget.js SKIP_SPENDERS serves no repair). It
+  // is a second search — a whole request, and a curator pass after it — to pad
+  // a skip that came back thin, and a thin skip is still a skip: the lanes it
+  // neglected are the ones the world director selects first next turn.
+  const breadthRepairAllowed = !review && (!requests?.budget || requests.budget.allows("repair"));
+  const breadthRepair = !breadthRepairAllowed ? null : await maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
     bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
@@ -6633,11 +7925,14 @@ const applySimulationResult = async ({
   // Advance every standing order the model did NOT touch across the whole jump,
   // and drift the patrols. This is what keeps a fleet crossing an ocean moving
   // turn after turn, and a squadron visibly working its station, with none of it
-  // having to come back from the model. Units the model DID move are skipped:
-  // they already stepped once per event against that event's own budget, and
-  // advancing them again here would move them twice for the same elapsed time.
-  const movedThisTurn = freshEvents.flatMap((event) =>
-    normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  // having to come back from the model. Units the model DID move already
+  // stepped once per event against that event's own budget, so they advance
+  // only by the days after their last move; a unit that merely took losses or
+  // reinforcements was not moved and advances like any other. Leaving a moved
+  // unit out altogether cost it the rest of the skip: a division ordered
+  // overseas on the third day of a month's skip stood still for the other
+  // twenty-seven and arrived a skip late.
+  const movedThisTurn = lastUnitMoveDates(freshEvents, baseGame.gameDate);
   let worldWithImpacts = enforceUnitVolume(
     advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
@@ -6651,7 +7946,7 @@ const applySimulationResult = async ({
         fromDate: baseGame.gameDate,
         toDate: nextGame.gameDate,
         round: nextGame.round,
-        skipUnitIds: movedThisTurn,
+        movedAt: movedThisTurn,
       },
     ),
     { playerCode: baseGame.country },
@@ -7107,7 +8402,9 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests });
+        // A folded skip did the fold itself, or planned that none was due
+        // (foldedTurnReview): no request of its own then.
+      }, { requests, skipFold: review?.history ?? null });
     } catch (error) {
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
     }
@@ -7204,10 +8501,13 @@ const applySimulationResult = async ({
 
   // Spies report on the world the turn just produced. Awaited so the reports are
   // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // While requests are being saved the reports came with the turn review, in its
-  // one request, and are only filed here; a turn with no review (a resolved
-  // interactive event, a game-master command) waits for the next skip's. Otherwise each
-  // agent makes its own request, as before.
+  // After a time skip the reports came in the skip's own answer
+  // (foldedTurnReview; or with the turn review, when a provider refused that
+  // skip) and are only filed here: no agent makes a request of its own after a
+  // skip any more, where with Save AI requests off each one used to, a request
+  // apiece. A turn with neither (a resolved interactive event, a game-master
+  // command) waits for the next skip's while requests are being saved;
+  // otherwise each agent makes its own request, as before.
   if (review) await fileReviewedAgentReports(review);
   else if (!savingRequests()) await refreshSpyIntercepts();
   // And what the player's agents stole this turn, beside their traffic.
@@ -7890,12 +9190,14 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
   // A canned fallback means the model is not answering; repair calls to the same
   // provider would only fail again after costing their wait.
   if (normalizeString(state?.generation?.source) === "fallback") return none;
-  // While requests are being saved (requestBudget.js) no repair is asked for:
-  // each is a request of its own, to move a storyline the skip left still. Every
-  // issue is settled as skipped instead, which is exactly a failed repair — its
-  // copy-forward is withdrawn below, the storyline stays overdue, and overdue
-  // storylines are what the next skip is told to move first.
-  const savingRequestsNow = Boolean(state?.requests?.saving);
+  // No repair is asked for inside a time skip (requestBudget.js SKIP_SPENDERS):
+  // each is a request of its own, to move a storyline the skip left still, and
+  // a skip is one request in every mode. Every issue is settled as skipped
+  // instead, which is exactly a failed repair — its copy-forward is withdrawn
+  // below, the storyline stays overdue, and overdue storylines are what the next
+  // skip is told to move first. What follows the skip check still runs for a
+  // budget that does serve repairs, which today is none.
+  const noRepairRequests = Boolean(state?.requests?.budget) && !state.requests.budget.allows("repair");
 
   // ONE stop date for detecting the issues, prompting the repair and validating
   // it: the merged one the round is applied at. (Detecting at one date and
@@ -7950,8 +9252,8 @@ const repairSkipStorylineMotion = async ({ context, state, signal } = {}) => {
     // Over its limits the issue is treated exactly like a failed repair: the
     // storyline stays overdue for the main pass. Issues arrive in attention
     // order, so the cap keeps the most urgent ones.
-    const skipReason = savingRequestsNow
-      ? "requests are being saved"
+    const skipReason = noRepairRequests
+      ? "a time skip is one request"
       : motionRepairSkipReason(issue, { budget, failures: motionRepairFailures, campaignId, round });
     if (skipReason) {
       settledIds.add(issueId);
@@ -9292,7 +10594,10 @@ const sanitizeTrackedStatsPatch = (value, statIndexRows = DEFAULT_STAT_INDEX_ROW
   return Object.keys(patch).length ? patch : null;
 };
 
-const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {}) => {
+// `requests`: the time skip this refresh rides on, as for the standard sheet's
+// below: its one request asks the skip's budget first and is counted in what
+// the skip cost.
+const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null } = {}) => {
   const game = normalizeGameData(bundle?.game);
   let world = normalizeWorldState(bundle?.world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);
@@ -9340,6 +10645,12 @@ const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {
     pendingBaselinePolities: pendingBaseline,
   }, { playerCountry: game?.country });
   if (!due.length) return world;
+  if (requests && !requests.budget.take("stats")) {
+    logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
+      countries: due.map((entry) => entry.polity),
+    });
+    return world;
+  }
 
   const systemPrompt = `You are Open Historia's bounded periodic scenario-defined National Stats auditor.
 
@@ -9376,6 +10687,7 @@ For each country include only values that genuinely changed.`;
         signal,
         reasoningEnabled: false,
         taskKey: "countryStatSheet",
+        ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
         ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? { deadline: Date.now() + 90000 } : {}),
       },
     );
@@ -9437,7 +10749,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   if (!parseIsoDate(currentDate)) return world;
   const statSheetDefinition = await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }));
   if (statSheetDefinition.custom) {
-    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition });
+    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests });
   }
   const statIndexDefinition = await loadStatIndexDefinition().catch(() => ({ custom: false, rows: DEFAULT_STAT_INDEX_ROWS }));
   const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
@@ -9954,14 +11266,22 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
       + openQuestions.join("\n")
     : "";
 
+  // The agent's own material: what a time skip that carries the reports itself
+  // puts under the agent's name (buildFoldedAgentReportsBlock). The era is the
+  // skip's own prompt there, and the task line is the block's.
+  const brief = [
+    `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+    orders,
+  ].filter(Boolean).join("\n\n");
   return {
     name,
     variables,
+    disinformation,
+    brief,
     userMessage: [
       `Report what the spy in ${name} intercepted this period.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
-      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
-      orders,
+      brief,
     ].filter(Boolean).join("\n\n"),
   };
 };
@@ -10053,6 +11373,9 @@ const playersAgentIn = (bundle, target) => {
     entry.owner === player && entry.target === target && (entry.status === "active" || entry.status === "turned"));
 };
 
+// A report asked for by itself: the trickle between turns
+// (maybeGatherIntelligence), and refreshSpyIntercepts below. No time skip asks
+// this way: a skip's agents report in the skip's own answer.
 export const gatherIntelligence = async (target, { signal, requestKind } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
@@ -10134,6 +11457,9 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
   }
 };
 
+// Every active spy reports, a request each: after a turn that is not a time
+// skip (a resolved interactive event, a game-master command) while Save AI
+// requests is off (applySimulationResult). Never after a skip.
 export const refreshSpyIntercepts = async () => {
   if (!isActiveFeatureEnabled("espionage")) return;
   let world;
@@ -11571,6 +12897,216 @@ export const advanceActiveInteractive = async (choiceText) => {
   }
 };
 
+// ---- The folded time skip -------------------------------------------------------
+//
+// A skip is ONE request, whatever the settings. Until 2026-10 it was two on
+// most turns while requests were being saved (the skip, and a "turn review"
+// that read its events back and asked for the units they moved, the fronts, the
+// repeats, the Projects board and the agents' reports, runTurnReview), and with
+// saving off it was a request for each of those, and for each agent. The
+// checks existed because the simulator narrated a town falling and wrote no op
+// for it. The answer to that is a prompt that says so, not more requests to
+// catch it: now each event carries every consequence itself
+// (FOLDED_SKIP_CONSEQUENCES), the board among them (projectsDirective.js), and
+// the agents' reports ride at the end of the same answer, with the history
+// document's fold after them when one is due (prepareSkipHistoryFold). That is
+// also what lets a skip be shown event by event as it is written: an event that
+// arrives is finished, map and all.
+//
+// What can still make a skip more than one request (requestBudget.js
+// SKIP_SPENDERS), never past the cap of three:
+//   - function calling, with Save AI requests off and the lookup functions on:
+//     a round of questions is a request, and a skip may ask two;
+//   - an answer that could not be used at all is asked for once more;
+//   - a provider that refuses the folded request (below);
+//   - the history fold, only when the skip could not carry it: the player
+//     sends that pass as a batch, or its answers have failed until the pile is
+//     twice its limit (compactHistoryIfNeeded);
+//   - the automatic Stats refresh, which a player switches on, on the skips
+//     where it falls due.
+//
+// What the review's parts became:
+//   units, territory               the event's own unitOps, regionControlOps
+//                                  and regionTransfers;
+//   repeats and filler             the rule against writing them, and the
+//                                  native gates that never needed a model
+//                                  (a word-for-word repeat, the integrity
+//                                  screen);
+//   the Projects board             impacts.projectOps, lifted off the events
+//                                  and applied by the board's own machinery
+//                                  (foldedTurnReview);
+//   the agents' reports            the answer's agentReports;
+//   folding old history            the answer's history, a fenced job of its
+//                                  own in the prompt.
+//
+// The folded contract is larger than the one it replaces, and a provider can
+// refuse a function declaration for its size alone (geminiSchema.js). So a
+// folded request that a provider refuses outright is asked again the old way,
+// with the review after it as ONE request, and the rest of the session's skips
+// are asked that way from the start. A player loses nothing but a request.
+let foldedSkipRefused = false;
+
+// What a folded skip carries besides its events, gathered once before its first
+// request: the doubted board entries a fresh agent can now settle, the agents
+// whose reports ride on it, each with the brief its own request would have
+// carried, and the history fold when one is due. Nothing here costs a request.
+const prepareFoldedSkip = async ({ bundle, originDate, variables }) => {
+  const world = normalizeWorldState(bundle.world);
+  const playerCountry = normalizeString(bundle.game?.country);
+  // The skip keeps the board exactly when it is shown one: an empty board has
+  // no directive (projectsDirective.js), and then nothing asks for board ops.
+  const boardShown = Boolean(buildJumpProjectsDirective(variables?.projectsSummary, { folded: true }));
+  const board = boardShown ? normalizeArray(bundle.world?.projects) : [];
+  const espionage = isActiveFeatureEnabled("espionage");
+  const filed = board.length || espionage
+    ? normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})))
+    : {};
+  const doubted = board.length
+    ? doubtedAwaitingFreshSource(normalizeSpies(bundle.world?.spies), board, { playerPolity: playerCountry, intercepts: filed })
+    : [];
+  const agents = espionage
+    ? agentsReportingWithSkip({
+      agents: activeSpies(world, playerCountry),
+      filed,
+      round: (Number(bundle.game?.round) || 1) + 1,
+      originDate: normalizeString(originDate),
+    })
+    : [];
+  const agentJobs = [];
+  for (const [index, spy] of agents.entries()) {
+    try {
+      // No template variables: the skip's own prompt is the agent's context.
+      const prepared = await prepareSpyReport(bundle, spy, { sharedVariables: {} });
+      agentJobs.push({ key: `agent_${index + 1}`, spy, name: prepared.name, disinformation: prepared.disinformation, brief: prepared.brief });
+    } catch (error) {
+      // One agent's brief failing costs that agent this skip's report.
+      console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
+    }
+  }
+  // The fold of the history document, when one is due (prepareSkipHistoryFold).
+  // A fold that cannot be prepared is one the skip does not carry: the pass
+  // after the skip then decides, as it does for any skip that is not folded.
+  let history = { separate: true };
+  try {
+    history = await prepareSkipHistoryFold(bundle);
+  } catch (error) {
+    console.warn("[ai] the history fold could not be prepared for this skip; it is left to the pass after it.", error?.message || error);
+  }
+  return {
+    board: boardShown,
+    boardDoubts: doubted.length ? describeDoubtedForPrompt(doubted) : "",
+    agentJobs,
+    history,
+  };
+};
+
+// The review a folded skip needs no request for (see "The folded time skip"):
+// the same record runTurnReview returns, filled from the skip's own answer, so
+// everything downstream reads it as it always read a review.
+//
+// The board's ops are LIFTED OFF the events here and handed to the board's own
+// machinery (reviewedProjectOps and boardPassCarriers, in applySimulationResult), which
+// applies them once, in date order, after espionage has had its say, and judges
+// a major event that rests only on a board entry by whether the board really
+// moved. Left on the events they would be applied a first time with the rest of
+// the impacts. Each op names its event by position in the list the board pass
+// is told it was "shown": the candidates, then the events the integrity screen
+// kept off the timeline, which is the numbering remapBoardOps expects.
+//
+// Every other part is deliberately absent. An absent part is each director's
+// ordinary "no analysis": the events stand as the simulator wrote them.
+const foldedTurnReview = ({ context, merged, state }) => {
+  const { bundle } = context;
+  const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [] };
+  // The history fold (compactHistoryIfNeeded reads this as `skipFold`). Nothing
+  // due before the skip means nothing is folded after it either. A fold this
+  // skip did not carry (`separate`) is the pass after it's own business, so the
+  // record says nothing about it.
+  const fold = state.foldedPrep?.history ?? null;
+  if (!fold?.separate) review.history = { due: false };
+  const rawEvents = normalizeArray(merged.events);
+  const rawHidden = normalizeArray(state.hiddenEvents);
+  const eventOps = rawEvents.map(boardOpsOf);
+  const hiddenOps = rawHidden.map(boardOpsOf);
+  merged.events = rawEvents.map(withoutBoardOps);
+  state.hiddenEvents = rawHidden.map(withoutBoardOps);
+  // A canned turn carries nothing of the model's: the board is not looked at,
+  // and no history is folded (or asked for: the model is not answering).
+  if (normalizeString(state.generation?.source) === "fallback") return review;
+
+  if (fold && !fold.separate) {
+    review.history = {
+      due: true,
+      resume: fold.resume,
+      baseRevision: fold.baseRevision,
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText }),
+    };
+  }
+
+  const priorEvents = normalizeEvents(bundle.events);
+  // The candidates as reviewCandidateEvents builds them, each still knowing
+  // which written event it came from.
+  const shaped = merged.events.map((entry, index) =>
+    normalizeGeneratedEvent({ ...entry, source: entry?.source || state.generation?.source || "ai" }, index));
+  const written = new Map();
+  shaped.forEach((event, index) => { if (event) written.set(event, eventOps[index]); });
+  const candidates = dedupeGeneratedEvents(priorEvents, shaped.filter(Boolean));
+  const shapedHidden = state.hiddenEvents.map((entry, index) => normalizeGeneratedEvent(entry, index));
+  shapedHidden.forEach((event, index) => { if (event) written.set(event, hiddenOps[index]); });
+  const shown = [...candidates, ...shapedHidden.filter(Boolean)];
+
+  if (state.foldedPrep?.board) {
+    const lifted = liftBoardOps(shown, (event) => written.get(event));
+    const salvaged = salvageBySchema(
+      normalizeGameplayPayload("projects", { projectOps: lifted }),
+      (candidate) => validateGameplayPayload("projects", candidate),
+    );
+    if (salvaged.valid) {
+      review.parts.board = salvaged.value;
+      review.boardShownEvents = shown;
+      if (salvaged.removed.length) {
+        logDebugEvent("turn", `Folded skip: ${salvaged.removed.length} malformed board op(s) left out.`, salvaged.removed.map(describeSchemaRemoval), { verbose: true });
+      }
+    } else {
+      logDebugEvent("turn", `Folded skip: the board ops were rejected (${salvaged.error}); the board does not move this turn.`, undefined, { problem: true });
+    }
+  }
+
+  const jobs = normalizeArray(state.foldedPrep?.agentJobs);
+  // Each report to the agent it is for (foldedSkip.js assignAgentReports).
+  const assigned = assignAgentReports(jobs, state.foldedAgentAnswer, { sameName: (left, right) => regionKey(left) === regionKey(right) });
+  if (assigned.length) {
+    const round = (Number(bundle.game?.round) || 1) + 1;
+    const stopDate = normalizeString(merged.stopDate) || context.targetDate;
+    // The world the agents report from is the one this skip wrote.
+    const agentBundle = {
+      ...bundle,
+      events: normalizeEvents([...priorEvents, ...candidates]),
+      game: { ...bundle.game, gameDate: stopDate, round },
+    };
+    for (const { job, report } of assigned) {
+      const salvaged = salvageBySchema(
+        normalizeGameplayPayload("spyIntercept", report),
+        (candidate) => validateGameplayPayload("spyIntercept", candidate),
+      );
+      if (!salvaged.valid) {
+        logDebugEvent("turn", `Folded skip: the report from the agent in ${job.name} was rejected (${salvaged.error}); that agent reports next skip.`, undefined, { problem: true });
+        continue;
+      }
+      review.parts[job.key] = salvaged.value;
+      review.agentReports.push({ key: job.key, spy: job.spy, bundle: agentBundle });
+    }
+  }
+  logDebugEvent("turn", "Folded skip: its events carried their own consequences; no review request was made.", {
+    boardOps: normalizeArray(review.parts.board?.projectOps).length,
+    boardKept: Boolean(review.parts.board),
+    agentReports: review.agentReports.length,
+    agentsAsked: jobs.length,
+    history: !review.history ? "left to the pass after the skip" : !review.history.due ? "not due" : review.history.ok ? "folded" : `waits (${review.history.reason})`,
+  }, { verbose: true });
+  return review;
+};
+
 // Generate the jump one segment at a time (jumpSegments.js decides how many).
 // A single-call jump is exactly the old behaviour: one request, worded and
 // validated as it always was, falling back on its own when it fails.
@@ -11635,6 +13171,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // moves on when the skip lands — and again after a rollback, because the skip
   // that heard them no longer happened. Empty when nobody touched the world.
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
+
+  // Whether this skip is the folded one (see "The folded time skip" above):
+  // every skip is, with Save AI requests on or off, unless a provider has
+  // refused the folded request this session. Decided once, when the skip starts,
+  // and kept through a held segment's retry: the segments already in hand were
+  // written under it.
+  if (state.folded === undefined) state.folded = !foldedSkipRefused;
+  if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables });
 
   // Starts at 0 on a fresh jump, and at the failed segment on a retry.
   let segmentIndex = state.nextSegment;
@@ -11715,10 +13259,39 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       let segmentDraft = null;
       const segmentComplaints = [];
 
-      const { generation: segmentGeneration, payload, removed: removedFromSegment } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+      // A folded skip's own additions (see "The folded time skip" above). The
+      // agents report once, at the end of the last segment, when every event
+      // they have to agree with is written.
+      const agentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
+      // So does the history fold, when one is due and this skip carries it
+      // (prepareSkipHistoryFold): last of all, as a job of its own.
+      const historyJob = state.folded && isFinalSegment ? buildSkipHistoryJob(state.foldedPrep?.history?.brief) : "";
+      const foldedVariables = {
+        foldedSkip: true,
+        foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
+        foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, bundle.game?.country),
+        foldedHistoryJob: historyJob,
+      };
+      // Every provider response this segment causes, so a contract the provider
+      // would not take can be told from an answer that was simply no good.
+      const spend = jumpTaskOptions(state.requests, "jump");
+      const statuses = [];
+
+      const askSegment = (folded) => runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+        // Function calling, when the player has it on (lookupFunctionsEnabled):
+        // the only thing that makes a skip more than one request, and bounded
+        // by the skip's budget (runJsonTask).
         lookups: buildTaskLookups(segmentBundle),
         // The skip itself always runs; asking again is what the budget weighs.
-        ...jumpTaskOptions(state.requests, "jump"),
+        ...spend,
+        // One request in every mode: a flaw is cut out or repaired in place,
+        // never sent back to be redone (requestBudget.js).
+        salvage: true,
+        onRequest: (status) => {
+          statuses.push(Number(status));
+          spend.onRequest?.(status);
+        },
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0, history: Boolean(historyJob) }) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
@@ -11856,8 +13429,59 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           onAccepted: (draft) => { segmentDraft = draft; },
           onRejected: (complaint) => { segmentComplaints.push(complaint); },
         }),
-        variables: segmentVariables,
+        variables: folded ? { ...segmentVariables, ...foldedVariables } : segmentVariables,
       });
+
+      let answer = null;
+      if (state.folded) {
+        let refused = false;
+        let refusal = null;
+        try {
+          answer = await askSegment(true);
+          refused = answer.generation?.source === "fallback" && providerRefusedContract(statuses);
+        } catch (error) {
+          // A request too large for every model the player has is the same
+          // case: the folded one is the larger of the two.
+          const tooBig = error?.providerFailure?.kind === "tooBig";
+          if (signal?.aborted || error?.name === "AbortError" || !(tooBig || providerRefusedContract(statuses))) throw error;
+          refused = true;
+          refusal = error;
+        }
+        if (refused) {
+          // Asked again the way a skip always was, the checks a request of their
+          // own after it (finishTimelineJump). Nothing of the refused attempt
+          // is kept: it never produced an answer.
+          const reason = normalizeString(refusal?.message) || normalizeString(answer?.generation?.fallbackReason) || "the provider refused the request";
+          console.warn(`[ai] the folded time skip was refused (${reason}) — asking again with its checks as a request of their own.`);
+          logDebugEvent("warn", "[turn] The folded time skip was refused; asked again with its checks as a request of their own.", {
+            reason,
+            statuses: [...statuses],
+            segmentIndex,
+          });
+          state.folded = false;
+          segmentDraft = null;
+          segmentComplaints.length = 0;
+          statuses.length = 0;
+          answer = await askSegment(false);
+          // It was the contract: the same skip went through without it. The
+          // rest of the session's skips start the old way.
+          if (answer.generation?.source !== "fallback") foldedSkipRefused = true;
+        }
+      } else {
+        answer = await askSegment(false);
+      }
+      const { generation: segmentGeneration, payload, removed: removedFromSegment } = answer;
+      // The agents' reports leave the payload here (foldedTurnReview files
+      // them); nothing between this and the write reads the field.
+      if (payload && typeof payload === "object" && AGENT_REPORTS_FIELD in payload) {
+        if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
+        delete payload[AGENT_REPORTS_FIELD];
+      }
+      // And the history fold, the same way (judged in foldedTurnReview).
+      if (payload && typeof payload === "object" && HISTORY_FIELD in payload) {
+        if (state.folded && historyJob && segmentGeneration?.source !== "fallback") state.foldedHistoryAnswer = payload[HISTORY_FIELD];
+        delete payload[HISTORY_FIELD];
+      }
 
       // Only now is the answer taken, so only now does its draft count.
       if (segmentGeneration?.source !== "fallback") {
@@ -11969,15 +13593,23 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // ---- What a time skip spends ---------------------------------------------------
 //
 // Every request a skip makes is asked of the skip's budget first and counted on
-// the way back (requestBudget.js). While requests are being saved the budget is
-// real — one request where it can be, never more than the cap — and the checks
-// after the skip go out together as the turn review below. With saving switched
-// off the budget grants everything, and the skip runs exactly as it always did.
+// the way back (requestBudget.js). The budget is real in every mode: ONE
+// request, the skip itself; more only for what SKIP_SPENDERS names, function
+// calling first among it; never past the cap. Save AI requests decides whether
+// the model may look things up at all (lookupFunctionsEnabled), not how many
+// requests a skip's checks are: there are none of those any more.
+//
+// Each segment's own request is reserved before anything else can ask, so a
+// round of function calling or a retry in one segment never costs a later
+// segment its skip.
 const createJumpRequests = ({ segments = 1 } = {}) => {
   const saving = savingRequests();
+  const pieces = Math.max(1, Math.round(Number(segments) || 1));
+  const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces }), only: SKIP_SPENDERS });
+  budget.reserve("jump", pieces);
   return {
     saving,
-    budget: createJumpBudget({ cap: jumpRequestCap({ segments }), unlimited: !saving }),
+    budget,
     used: 0,
     refused: 0,
   };
@@ -11999,9 +13631,13 @@ const reportJumpRequests = (requests) => {
     requestLedger.noteJump({ used: requests.used, refused: requests.refused });
   } catch { /* a count is never worth a turn */ }
   const skipped = requests.budget.skipped;
+  // What a skip never spends a request on (requestBudget.js SKIP_SPENDERS), and
+  // would have been asked for here before a skip was one request.
+  const denied = [...new Set(requests.budget.denied ?? [])];
   logDebugEvent("turn", `This time skip used ${requests.used} request${requests.used === 1 ? "" : "s"}`
     + `${requests.refused ? ` (and was refused ${requests.refused} time${requests.refused === 1 ? "" : "s"} by a rate limit)` : ""}`
-    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}.`, {
+    + `${skipped.length ? `; left out to stay inside ${requests.budget.cap}: ${skipped.join(", ")}` : ""}`
+    + `${denied.length ? `; not asked, because a skip makes no request for it: ${denied.join(", ")}` : ""}.`, {
     saving: requests.saving,
     spends: requests.budget.log,
   });
@@ -12011,8 +13647,17 @@ const reportJumpRequests = (requests) => {
 //
 // The checks a skip gets after it is written — units, territory, timeline, the
 // Projects board, the agents' reports — as ONE request instead of one each
-// (turnReview.js says how several jobs share a prompt safely). Only while requests
-// are being saved; otherwise each check makes its own request, as before.
+// (turnReview.js says how several jobs share a prompt safely).
+//
+// No longer what a skip normally does. A skip is folded, in every mode: its
+// events carry their own consequences and nothing is asked after it (see "The
+// folded time skip"). This is what is left for the one case where that cannot
+// be: a provider that refused the folded request, whose skip was asked again
+// the way it always was and is checked here, in one request. Every check that
+// has something to look at rides on it: the five switches that turned them off
+// one by one are gone (2026-10), since a check left off only ever meant a map
+// that did not match the story, and so is the mode in which each was a request
+// of its own.
 //
 // Nothing here decides what a check DOES. Each job is built from the input its
 // own native director would have sent (buildUnitDirectorInput and the rest), its
@@ -12026,8 +13671,8 @@ const reportJumpRequests = (requests) => {
 //   board              an event concerns an entry, or the calendar is due (boardPassReasons);
 //   agents             a report has gone AGENT_REPORT_EVERY_ROUNDS rounds unrefreshed.
 // No reason from any of them means no request: the skip cost one. When there IS
-// a reason, every enabled check with something to look at rides along — it is
-// the same request either way.
+// a reason, every check with something to look at rides along — it is the same
+// request either way.
 const UNIT_DIRECTOR_INSTRUCTION =
   "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
@@ -12085,10 +13730,6 @@ const curatorUnavailable = (candidates) => ({
   underrepresentedDomains: [],
 });
 
-// An agent's report rides along on any review; by itself it asks for one only
-// when it has gone this many rounds without being refreshed.
-const AGENT_REPORT_EVERY_ROUNDS = 3;
-
 const unitDirectorVariables = (input, game) => ({
   unitDirectorCandidates: JSON.stringify(input.candidates, null, 2),
   unitDirectorUnits: JSON.stringify(input.units, null, 2),
@@ -12137,7 +13778,6 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  const wants = (section) => requestSettings.reviewSection(section);
   const round = (Number(bundle.game?.round) || 1) + 1;
   const stopDate = normalizeString(merged.stopDate) || context.targetDate;
   const playerCountry = normalizeString(bundle.game?.country);
@@ -12152,7 +13792,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   };
 
   // --- units ---
-  const unitInput = wants("units") ? buildUnitDirectorInput({ events: merged.events, world: bundle.world }) : null;
+  const unitInput = buildUnitDirectorInput({ events: merged.events, world: bundle.world });
   if (unitInput) {
     reasons.push(`${unitInput.candidates.length} military event(s) may move units`);
     await addJob({ key: "units", taskKey: "unitDirector", title: "move the units", instruction: UNIT_DIRECTOR_INSTRUCTION },
@@ -12160,9 +13800,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // --- territory ---
-  const territoryInput = wants("territory")
-    ? await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) })
-    : null;
+  const territoryInput = await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) });
   if (territoryInput) {
     reasons.push(`${territoryInput.candidates.length} event(s) may change who holds land`);
     await addJob({ key: "territory", taskKey: "territoryDirector", title: "occupied and disputed land", instruction: TERRITORY_DIRECTOR_INSTRUCTION },
@@ -12171,7 +13809,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
 
   // --- timeline ---
   const priorEvents = normalizeEvents(bundle.events);
-  const curatorInput = wants("timeline") ? buildCuratorInput({ events: candidates, priorEvents, mode }) : null;
+  const curatorInput = buildCuratorInput({ events: candidates, priorEvents, mode });
   const worthJudging = curatorInput ? candidatesWorthJudging({ events: candidates, priorEvents, mode }) : [];
   if (worthJudging.length) reasons.push(`${worthJudging.length} event(s) may repeat the record or be filler`);
 
@@ -12180,7 +13818,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   const segmentHidden = normalizeArray(state.hiddenEvents)
     .map((entry, index) => normalizeGeneratedEvent(entry, index))
     .filter(Boolean);
-  const boardHasWork = wants("board") && board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
+  const boardHasWork = board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
   let pendingDoubts = [];
   if (boardHasWork) {
     const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
@@ -12201,7 +13839,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // --- agents ---
-  const agents = wants("spies") && isActiveFeatureEnabled("espionage")
+  const agents = isActiveFeatureEnabled("espionage")
     ? activeSpies(normalizeWorldState(bundle.world), playerCountry)
     : [];
   if (agents.length) {
@@ -12212,17 +13850,16 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     //   - its report is AGENT_REPORT_EVERY_ROUNDS rounds old, and this is one of
     //     the rounds reports are collected on.
     // Every other skip it simply rides along when something else asks.
+    // The calendar is agentReports.js's, which a folded skip's agents keep to
+    // as well (agentsReportingWithSkip).
     const filed = normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})));
-    const originDate = normalizeString(bundle.game?.gameDate);
-    const collectionRound = round % AGENT_REPORT_EVERY_ROUNDS === 0;
-    const justPlaced = agents.filter((spy) => !filed?.[spy.target]
-      && normalizeString(spy.deployedAt) && originDate && compareGameDates(spy.deployedAt, originDate) >= 0);
-    const overdue = collectionRound
-      ? agents.filter((spy) => {
-        const last = Number(filed?.[spy.target]?.round);
-        return !Number.isFinite(last) || last > round || round - 1 - last >= AGENT_REPORT_EVERY_ROUNDS;
-      })
-      : [];
+    const { justPlaced, overdue } = agentsDueToReport({
+      agents,
+      filed,
+      round,
+      originDate: normalizeString(bundle.game?.gameDate),
+      collectionRounds: true,
+    });
     if (justPlaced.length) reasons.push(`${justPlaced.length} newly placed agent(s) have not reported yet`);
     else if (overdue.length) reasons.push(`${overdue.length} agent report(s) are ${AGENT_REPORT_EVERY_ROUNDS}+ rounds old`);
   }
@@ -12388,12 +14025,28 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
 
-  // While requests are being saved, every check below is answered by ONE request
-  // made here (runTurnReview) — or by none, when nothing needs checking. Each
-  // director then runs exactly as it always has, with its part of that answer in
-  // place of the request it would have made. `review` is null when saving is off,
-  // and each check makes its own request as before.
-  const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+  // The skip was ONE request and its events carried their own consequences
+  // (see "The folded time skip"): the review is read off the skip's own answer,
+  // with no request. Each director below then runs exactly as it always has, on
+  // a review that holds no part for it, which is its ordinary "nothing to add".
+  // Only a skip whose folded request the provider refused still asks for a
+  // review here, as one request (runTurnReview). There is always a review
+  // record: no check after a skip is a request of its own any more.
+  const folded = Boolean(state.folded);
+  if (!folded) {
+    // Not this skip's to write: the board is moved by its own pass, and an op
+    // left on an event would be applied a second time by the event itself.
+    const before = [...normalizeArray(merged.events), ...normalizeArray(state.hiddenEvents)];
+    merged.events = normalizeArray(merged.events).map(withoutBoardOps);
+    state.hiddenEvents = normalizeArray(state.hiddenEvents).map(withoutBoardOps);
+    const after = [...merged.events, ...state.hiddenEvents];
+    if (before.some((event, index) => event !== after[index])) {
+      noteReceipt(state.receipt, "dropped", "impacts.projectOps is not part of this answer: the Projects board is moved by its own pass after the events. The ops you wrote there were left out.");
+    }
+  }
+  const review = folded
+    ? foldedTurnReview({ context, merged, state })
+    : await runTurnReview({ context, merged, signal, state });
 
   // The surviving military events then make the persistent order of battle
   // move: the unit director proposes ops for existing units, native rules keep
@@ -12407,20 +14060,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       events: merged.events,
       game: bundle.game,
       world: bundle.world,
-      analyzeBatch: review
-        ? async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } })
-        : async (input) => {
-          const answer = await runJsonTask("unitDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: unitDirectorUnavailable,
-            signal,
-            userMessage: UNIT_DIRECTOR_INSTRUCTION,
-            variables: unitDirectorVariables(input, bundle.game),
-            ...jumpTaskOptions(state.requests, "review"),
-          });
-          await placeDirectorOrders(answer?.payload, bundle.world, merged.events);
-          return answer;
-        },
+      // Never a request of the director's own: the review's part, or none.
+      analyzeBatch: async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } }),
     });
   } catch (error) {
     if (signal?.aborted) throw error;
@@ -12440,21 +14081,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     territoryEvents = await directGeneratedTerritoryOps({
       events: directedEvents,
       world: bundle.world,
-      // The places the events name, with who holds each (lookupTools.js
-      // placesNamedIn), so the director can fill in fromCode without asking.
-      // Not needed when the review already answered: the director never asks.
-      findPlaces: review ? null : placeReaderFor(bundle),
-      analyzeBatch: review
-        ? async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } })
-        : async (input) =>
-          runJsonTask("territoryDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: territoryDirectorUnavailable,
-            signal,
-            userMessage: TERRITORY_DIRECTOR_INSTRUCTION,
-            variables: await territoryDirectorVariables(input, bundle.world),
-            ...jumpTaskOptions(state.requests, "review"),
-          }),
+      // No places to look up here: the director never asks (the review, when
+      // there was one, was handed them where it was built, runTurnReview).
+      findPlaces: null,
+      analyzeBatch: async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }),
     });
     const containers = territoryEvents.map((event, index) => ({
       event,
@@ -12499,8 +14129,10 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // The board runs inside applySimulationResult so that it sees the espionage
   // events too. All this side does is hold the turn when it fails, because this
   // is where the arguments a retry needs are held.
-  // `review` carries the turn review's answers (null when requests are not being
-  // saved) and `requests` the skip's budget, for everything the apply still asks.
+  // `review` carries what the skip's own answer gave for the board, the agents
+  // and the history (or the turn review's answers, for a skip a provider
+  // refused folded), and `requests` the skip's budget, for the little the apply
+  // may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests };
   applyArgs.phases = state.phases;
   state.phases?.enter("applying");
@@ -12940,6 +14572,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     "unitOps",
     "markerOps",
     "projectOps",
+    "groupOps",
   ]) {
     if (normalizeArray(impacts[field]).length > 0) return true;
   }

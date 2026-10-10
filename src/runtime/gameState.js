@@ -1,11 +1,13 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { applyGroupOps, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
 import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventPlaces } from "./eventPlaces.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
@@ -138,7 +140,8 @@ export const WORLD_DEFAULTS = {
   // incoming world, so a field declared only here never survives a round trip.
   idlePulseTick: 0,
   // The round the Projects board was last checked against a turn's events (the
-  // board job of the turn review, or the board's own request). 0 = never. It is
+  // time skip's own board ops, the turn review's board job, or the board's own
+  // request). 0 = never. It is
   // what lets a skip decide, without asking anyone, whether the calendar is due
   // another look (projects.js boardPassReasons). Listed in the normalizeWorldState
   // return too, for the reason given above.
@@ -174,6 +177,13 @@ export const WORLD_DEFAULTS = {
   // bakes in again. A region disputed anew leaves the list. See
   // settleRegionClaims.
   settledRegionClaims: [],
+  // Groups: actors that are not countries — a terrorist organisation, a cartel,
+  // a zombie outbreak — keyed by exact name, each with a description (what the
+  // AI is told it is) and a colour (runtime/groups.js). A group owns no land;
+  // groupAreas says which regions it CONTROLS (region id -> group name, one
+  // group per region), drawn outlined and tinted over the countries' colours.
+  groups: {},
+  groupAreas: {},
   regionOwnershipOverrides: {},
   // Legal sovereignty where it differs from the polity administering a region
   // (an occupation). Sparse: normal territory has no row. Written by legal
@@ -975,6 +985,11 @@ const normalizePendingUnitOrderEntry = (entry, index = 0) => {
     note: normalizeOptionalString(entry.note),
     issuedAt: normalizeOptionalString(entry.issuedAt),
     issuedRound: numberOr(entry.issuedRound, 0),
+    // The part of the way that is over water, which paces a redeployment
+    // (unitMotion.js kmPerDay). Absent on an order nobody worked it out for.
+    ...(entry.seaShare !== null && entry.seaShare !== undefined && Number.isFinite(Number(entry.seaShare))
+      ? { seaShare: Math.max(0, Math.min(1, Number(entry.seaShare))) }
+      : {}),
   };
 };
 
@@ -1004,6 +1019,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // delete every patrol the instant it was created. It ends by expiry
     // (untilRound, in advanceStandingOrders) or when its unit goes away.
     if (order.kind === "patrol") return true;
+    // A unit still on its way keeps its order until it arrives: a step that stops
+    // inside the radius but short of the destination is not an arrival. Dropping
+    // it there left a division 59 km short of its destination reading "moving" with
+    // nothing to move it. The radius is for a unit already standing near.
+    if (unit.status === "moving") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
@@ -2345,6 +2365,34 @@ const describeUnitOpRejection = (entry) => {
   return `unknown op "${op}"`;
 };
 
+// Says once that a unit op was thrown away, and why.
+//
+// normalizeEvents runs over the same raw answer many times before it is
+// applied: every ledger validator normalizes the events it is handed, and the
+// later stages work on copies of them. Each pass said the same drop again, so
+// one fleet with no coordinates was eighteen warnings in a player's log, which
+// reads as eighteen lost units. A drop is remembered by the op and the event it
+// rode on (its date and title: an event's id, and an op's place in its list,
+// change between passes), so the same op written again in a later turn's event
+// is a new drop and is said again.
+const REPORTED_UNIT_OP_DROPS_LIMIT = 256;
+const reportedUnitOpDrops = new Set();
+const reportUnitOpDrop = (entry, index, event) => {
+  let signature = null;
+  try {
+    signature = JSON.stringify([event?.date ?? "", event?.title ?? "", entry]);
+  } catch {
+    // Not serializable: said every time rather than never.
+  }
+  if (signature !== null) {
+    if (reportedUnitOpDrops.has(signature)) return;
+    // Bounded: past the limit the memory starts again, and a drop may repeat.
+    if (reportedUnitOpDrops.size >= REPORTED_UNIT_OP_DROPS_LIMIT) reportedUnitOpDrops.clear();
+    reportedUnitOpDrops.add(signature);
+  }
+  console.warn(`[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`, entry);
+};
+
 const normalizeUnitOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -2369,11 +2417,15 @@ const normalizeUnitOp = (entry) => {
     const toLat = finiteOrNull(entry.toLat ?? entry.lat);
     if (toLng === null || toLat === null || (toLng === 0 && toLat === 0)) return null;
     const posture = normalizeOptionalString(entry.posture).toLowerCase();
+    // The part of the way that is over water (unitMotion.js seaShareOf), when
+    // the pass that placed the move worked it out.
+    const seaShare = entry.seaShare === null || entry.seaShare === undefined ? null : finiteOrNull(entry.seaShare);
     return {
       op,
       unitId,
       toLng,
       toLat,
+      ...(seaShare !== null ? { seaShare: Math.max(0, Math.min(1, seaShare)) } : {}),
       regionId: normalizeOptionalString(entry.regionId),
       // Re-posturing on the move is how "this force is now massing rather than
       // in transit" reaches the map without a second op.
@@ -2565,12 +2617,17 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         // an order (the same doctrine buildMilitaryFeasibilityText already states).
         if (unit.type === "garrison") return unit;
 
+        const posture = op.posture || unit.posture;
+        // A redeployment or an advance, each at its own pace (unitMotion.js).
         const budget =
           elapsedDays === null || elapsedDays === undefined
             ? Infinity
-            : maxTravelKm(unit.type, gameDate, elapsedDays);
+            : maxTravelKm(unit.type, gameDate, elapsedDays, {
+              posture,
+              seaShare: op.seaShare ?? null,
+              remainingKm: haversineKm(unit.lat, unit.lng, op.toLat, op.toLng),
+            });
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
-        const posture = op.posture || unit.posture;
 
         if (step.arrived) {
           dropOrder(unit.id);
@@ -2601,6 +2658,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               note: op.note,
               issuedAt: gameDate,
               issuedRound: round,
+              seaShare: op.seaShare ?? null,
             }),
           );
         }
@@ -2671,7 +2729,7 @@ export const applyUnitOps = (units, ops, context = {}) =>
 // order repositions deterministically around its station.
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [] } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -2679,10 +2737,14 @@ export const advanceStandingOrders = (
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
-  // Units the caller already moved this turn (an event's own unit ops). Advancing
-  // them again here would move them twice for the same elapsed time — their step
-  // was taken per-event, against that event's own budget.
+  // Units the caller wants left alone entirely.
   const skip = new Set(normalizeArray(skipUnitIds));
+  // Units an event MOVED this period (lastUnitMoveDates), with the date of their
+  // last move: they already stepped once per event against that event's own
+  // budget, so they are credited only the days after it. Skipping them outright
+  // froze them for the rest of the jump, and a unit that only took losses or
+  // reinforcements was skipped too.
+  const lastMoved = movedAt instanceof Map ? movedAt : new Map(Object.entries(movedAt || {}));
   const expired = new Set();
   // Formations that marched in under posture "patrol" and arrived this turn:
   // they start working a station where they stand, as a unit that gets there
@@ -2701,6 +2763,11 @@ export const advanceStandingOrders = (
       return { ...unit, orderId: "", posture: "", status: "idle", updatedAt: stamp };
     }
 
+    // The days left after this unit's last move, or the whole period. Moved on
+    // its last day (or on a date that does not parse): nothing left to credit.
+    const unitElapsed = lastMoved.has(unit.id) ? (daysBetweenDates(lastMoved.get(unit.id), toDate) ?? 0) : elapsed;
+    if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
+
     if (order.kind === "patrol") {
       const point = patrolPoint(
         { lng: order.toLng, lat: order.toLat },
@@ -2714,7 +2781,11 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
-      maxTravelKm(unit.type, toDate || fromDate, elapsed),
+      maxTravelKm(unit.type, toDate || fromDate, unitElapsed, {
+        posture: unit.posture,
+        seaShare: order.seaShare ?? null,
+        remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
+      }),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
@@ -2748,6 +2819,27 @@ export const advanceStandingOrders = (
     units: nextUnits,
     pendingUnitOrders: pruneSatisfiedUnitOrders(nextUnits, kept),
   };
+};
+
+// The units a period's events MOVED, each with the date of its last move, for
+// advanceStandingOrders' movedAt. Only a move op changes where a unit is (and a
+// spawn puts one somewhere, so a unit raised mid-period is credited from then):
+// a strength change or a removal does not, and counting them froze a fleet that
+// only took attrition for the whole jump. An event with no date of its own
+// counts as `fallbackDate` (the period's start).
+export const lastUnitMoveDates = (events, fallbackDate = "") => {
+  const moved = new Map();
+  for (const event of normalizeArray(events)) {
+    const date = normalizeOptionalString(event?.date) || normalizeOptionalString(fallbackDate);
+    for (const op of normalizeArray(event?.impacts?.unitOps)) {
+      if (op?.op !== "move" && op?.op !== "spawn") continue;
+      const unitId = normalizeOptionalString(op.unitId || op.unit?.id);
+      if (!unitId) continue;
+      const previous = moved.get(unitId);
+      if (previous === undefined || compareGameDates(date, previous) > 0) moved.set(unitId, date);
+    }
+  }
+  return moved;
 };
 
 // Repair units that claim to be moving when nothing is moving them. This is a
@@ -2879,11 +2971,14 @@ const normalizeCreatedChat = (entry, index) => {
   };
 };
 
-const normalizeEventImpacts = (value) => {
+// `event`: the entry these impacts ride on, for the one thing said about them
+// here (reportUnitOpDrop).
+const normalizeEventImpacts = (value, event = null) => {
   if (!value || typeof value !== "object") {
     return {
       actionIds: [],
       createdChats: [],
+      groupOps: [],
       markerOps: [],
       polityChanges: [],
       projectOps: [],
@@ -2899,6 +2994,9 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    // Groups the event creates, changes or erases, and the regions they take or
+    // lose (runtime/groups.js).
+    groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
@@ -2915,15 +3013,11 @@ const normalizeEventImpacts = (value) => {
     // and it used to vanish into .filter(Boolean) without a word — leaving no way
     // to tell "the model never emitted one" from "it emitted one we rejected".
     // Region transfers have logged their drops for a while; units now match.
+    // Once per op, however many times its event is read (reportUnitOpDrop).
     unitOps: normalizeArray(value.unitOps)
       .map((entry, index) => {
         const normalized = normalizeUnitOp(entry);
-        if (!normalized) {
-          console.warn(
-            `[ai] unitOps[${index}] dropped — ${describeUnitOpRejection(entry)}:`,
-            entry,
-          );
-        }
+        if (!normalized) reportUnitOpDrop(entry, index, event);
         return normalized;
       })
       .filter(Boolean),
@@ -2973,12 +3067,16 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
+  // The places the event said it is about, as the engine found them on the
+  // map (runtime/eventPlaces.js): what its card links to.
+  const places = normalizeEventPlaces(entry.places);
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
     description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    ...(places.length ? { places } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
-    impacts: normalizeEventImpacts(entry.impacts),
+    impacts: normalizeEventImpacts(entry.impacts, entry),
     importance: normalizeOptionalString(entry.importance) || "minor",
     kind: normalizeRenamedKind(entry.kind) || "world",
     // Category tags for the timeline's filter chips (runtime/eventTags.js).
@@ -3429,6 +3527,9 @@ export const normalizeWorldState = (world) => {
 
   // Settled disputes: unique region ids, none of them disputed again — a live
   // claimant list is the region's state and wins.
+  const groups = normalizeGroups(nextWorld.groups);
+  const groupAreas = normalizeGroupAreas(nextWorld.groupAreas, groups);
+
   const settledRegionClaims = [...new Set(
     normalizeArray(nextWorld.settledRegionClaims).map((regionId) => normalizeOptionalString(regionId)),
   )].filter((regionId) => regionId && !Object.prototype.hasOwnProperty.call(regionClaimants, regionId));
@@ -3549,6 +3650,8 @@ export const normalizeWorldState = (world) => {
     polityOverrides,
     regionClaimants,
     settledRegionClaims,
+    groups,
+    groupAreas,
     regionOwnershipOverrides,
     regionSovereigntyOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
@@ -4194,7 +4297,13 @@ const applyPolityAndTerritoryImpacts = ({
     const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
     const previousSovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]) || controller || fromCode;
 
-    if (!controller || samePolity(controller, previousSovereign) || samePolity(controller, toCode)) {
+    // The power handing the region over is no third party to its own treaty.
+    // An occupier that cedes what it holds gives up the holding with the
+    // title: seen in a 45-skip test (2026-10-09), a reunification treaty by
+    // which the United States handed four occupied North Korean regions to
+    // South Korea changed their sovereign and left the United States in
+    // control of all four, so the map never showed the country reunited.
+    if (!controller || samePolity(controller, previousSovereign) || samePolity(controller, toCode) || samePolity(controller, fromCode)) {
       world.regionOwnershipOverrides[regionId] = toCode;
     }
     writeRegionSovereign(world, regionId, toCode);
@@ -4493,6 +4602,14 @@ export const applyEventImpactsToWorld = ({
       // The polity is keyed by its new name now: this event's unit and structure
       // ops, and every later event, must resolve either name to the new key.
       resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+    }
+
+    // Groups after the land has moved, so a group can take what the same event
+    // just changed hands.
+    if (event.impacts.groupOps?.length) {
+      const applied = applyGroupOps(nextWorld, event.impacts.groupOps);
+      nextWorld.groups = applied.groups;
+      nextWorld.groupAreas = applied.groupAreas;
     }
 
     if (event.impacts.unitOps?.length) {

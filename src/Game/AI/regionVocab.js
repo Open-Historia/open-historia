@@ -13,7 +13,7 @@
 // TIERED so the model gets names where it actually needs them, without "every name
 // at once":
 //
-//   Section 1 (FULL `name (id)` lists): only the powers currently IN PLAY — the
+//   Section 1 (FULL lists of region NAMES): only the powers currently IN PLAY — the
 //     player, anyone already re-owned via an override, scenario-defined actors, and
 //     the player's active chat partners. These are the likely belligerents, so the
 //     model can emit a resolvable transfer on the FIRST attempt.
@@ -28,6 +28,12 @@
 // on the region row, never an identity: the model is only ever shown, and only ever
 // asked for, "Spain".
 //
+// A region is shown by its NAME alone, for the same reason. The lists used to
+// read `name (id)`, and a model shown "Hamhung (4441)" wrote exactly that back
+// as the region: it matched nothing and a treaty's four transfers were dropped
+// (a 45-skip test, 2026-10-09). The map's key for a region is the save's
+// business; what the model writes is "region: Hamhung" (nameRefs.js).
+//
 // A region's owner is `regionOwnershipOverrides[id] ?? region.country` (the base
 // country from the catalog), so ownership is non-empty on stock maps, not just on
 // re-ownership scenarios. The catalog `name` is the exact in-game name the resolver
@@ -40,6 +46,7 @@
 // canonicaliser, which is plain data and safe to load anywhere.
 
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { baseCountryOf, splitTerritories } from "./namedAreas.js";
 
 const norm = (value) => String(value ?? "").trim();
 const lower = (value) => norm(value).toLowerCase();
@@ -59,8 +66,10 @@ export const regionOwnerName = (region, overrides) => {
   return norm(region?.country) || toCountryName(norm(region?.countryCode));
 };
 
-// Group the catalog by current owner. Returns Map(lowerKey -> {label, regions}).
-const groupByOwner = (catalog, overrides) => {
+// Group the catalog by current owner. Returns Map(lowerKey -> {label, regions,
+// territories, total}). `polityNames`: the polities the game knows, by lower-case
+// name, which are never anyone's territory (namedAreas.js splitTerritories).
+const groupByOwner = (catalog, overrides, polityNames) => {
   const groups = new Map();
   for (const region of catalog) {
     const owner = regionOwnerName(region, overrides);
@@ -71,15 +80,38 @@ const groupByOwner = (catalog, overrides) => {
       group = { label: owner, regions: [] };
       groups.set(key, group);
     }
-    group.regions.push({ name: norm(region.name) || norm(region.id), id: norm(region.id) });
+    group.regions.push({
+      name: norm(region.name) || norm(region.id),
+      id: norm(region.id),
+      base: baseCountryOf(region, toCountryName),
+    });
+  }
+  // What each power holds beyond its own country (namedAreas.js): Greenland
+  // under Denmark, Puerto Rico under the United States. Shown by name and size
+  // and never region by region, because the name is what a model writes for
+  // it: "country: Greenland" is all eighteen of its regions. A 45-skip test
+  // (2026-10-09) lost Puerto Rico's independence to the cap below: the United
+  // States holds 285 regions, the first 120 by the alphabet were listed, and
+  // "Puerto Rico" was not among them.
+  for (const [key, group] of groups) {
+    const { home, territories } = splitTerritories(group.regions, {
+      ownerKey: key,
+      isPolity: (name) => groups.has(name) || Boolean(norm(polityNames?.[name])),
+      fold: lower,
+    });
+    group.regions = home;
+    group.territories = territories;
+    group.total = home.length + territories.reduce((sum, territory) => sum + territory.regions.length, 0);
   }
   return groups;
 };
 
 export const FOCUS_INTRO =
-  "Regions of the powers currently in play — each region as `name (id)`. To move any "
-  + "of these territories in a regionTransfer, copy a region's name or id EXACTLY "
-  + "(never invent or translate a region name):";
+  "Regions of the powers currently in play, each by its name as the map spells it. To "
+  + "move any of these territories, copy the region's name EXACTLY and write it as "
+  + "\"region: <name>\" (never invent or translate a region name, and never write an id). "
+  + "A territory or dependency a power holds is given after its regions by its own name "
+  + "and size, and is written \"country: <its name>\", which means all of it:";
 export const ROSTER_INTRO =
   "All other powers, by full country name. Every owner field (fromCode, toCode, "
   + "ownerCode) takes the power's FULL NAME exactly as written here - \"Spain\", never "
@@ -95,6 +127,8 @@ export const ROSTER_INTRO =
 //     override owners, defined actors, chat partners) — the theatre in play.
 //   options.polityNames: { [code|label]: displayName } for nicer headers.
 //   options.ownerCap / focusTotalCap / rosterCap: prompt-budget bounds.
+//   options.regionIds: true adds each region's own key after its name; only
+//     for a caller that is not a model's prompt. Names alone are the default.
 export const buildRegionOwnershipText = (regionCatalog, overrides, options = {}) => {
   const catalog = Array.isArray(regionCatalog) ? regionCatalog : [];
   if (catalog.length === 0) {
@@ -102,12 +136,19 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   }
   // A power in play gets its regions in full: a model told to copy names
   // exactly cannot annex a region it was never shown, and the top powers of a
-  // turn are what the turn moves. 120 per power covers every Ukraine-sized
-  // holding on the built-in world; 480 in all is about ten kilobytes.
-  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : 120;
+  // turn are what the turn moves. A power that is listed is listed WHOLE.
+  // There used to be a limit of 120 regions a power, taken by the alphabet:
+  // the United States holds 285 on the built-in world, its list stopped at
+  // "Houston", and a model asked to free Puerto Rico, which it was never
+  // shown, handed over the British Virgin Islands (a 45-skip test,
+  // 2026-10-09). A caller may still pass `ownerCap`. What bounds the prompt is
+  // `focusTotalCap`: once that many regions are listed, the powers still
+  // waiting go to the roster by name and size.
+  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : Infinity;
   const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 480;
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
+  const withIds = options.regionIds === true;
 
   const focus = (Array.isArray(options.focusCodes) ? options.focusCodes : [])
     .map(lower)
@@ -117,7 +158,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
     if (!focusRank.has(code)) focusRank.set(code, index);
   });
 
-  const groups = groupByOwner(catalog, overrides);
+  const groups = groupByOwner(catalog, overrides, polityNames);
   if (groups.size === 0) {
     return "No region ownership could be determined from the current map.";
   }
@@ -128,8 +169,12 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
     return displayName && lower(displayName) !== key ? `${label} (${displayName})` : label;
   };
   const regionWord = (n) => `${n} region${n === 1 ? "" : "s"}`;
+  // "; territories: Greenland (18 regions), Faroe Islands (4 regions)", or "".
+  const territoriesOf = (group) => (group.territories.length
+    ? `; territories: ${group.territories.map((territory) => `${territory.name} (${regionWord(territory.regions.length)})`).join(", ")}`
+    : "");
 
-  // Section 1 — focus powers, full name(id) lists, in priority order, bounded.
+  // Section 1 — focus powers, full lists of region names, in priority order, bounded.
   const focusEntries = [...groups.entries()]
     .filter(([key]) => focusRank.has(key))
     .sort((a, b) => focusRank.get(a[0]) - focusRank.get(b[0]));
@@ -139,10 +184,10 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   for (const [key, group] of focusEntries) {
     if (emitted >= focusTotalCap) break; // a focus power we cannot fit falls through to the roster
     const shown = group.regions.slice(0, ownerCap);
-    const list = shown.map((r) => (r.id ? `${r.name} (${r.id})` : r.name)).join(", ");
+    const list = shown.map((r) => (withIds && r.id ? `${r.name} (${r.id})` : r.name)).join(", ");
     const moreInGroup = group.regions.length - shown.length;
     const suffix = moreInGroup > 0 ? `, (+${moreInGroup} more)` : "";
-    focusLines.push(`- ${headerLabel(key, group.label)} [${regionWord(group.regions.length)}]: ${list}${suffix}`);
+    focusLines.push(`- ${headerLabel(key, group.label)} [${regionWord(group.total)}]: ${list}${suffix}${territoriesOf(group)}`);
     focusListed.add(key);
     emitted += shown.length;
   }
@@ -152,12 +197,12 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   const rosterEntries = [...groups.entries()]
     .filter(([key]) => !focusListed.has(key))
     .sort((a, b) => {
-      if (b[1].regions.length !== a[1].regions.length) return b[1].regions.length - a[1].regions.length;
+      if (b[1].total !== a[1].total) return b[1].total - a[1].total;
       return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
     });
   const rosterShown = rosterEntries.slice(0, rosterCap);
   const rosterLines = rosterShown.map(([key, group]) =>
-    `- ${headerLabel(key, group.label)} — ${regionWord(group.regions.length)}`);
+    `- ${headerLabel(key, group.label)} — ${regionWord(group.total)}${territoriesOf(group)}`);
   const rosterOmitted = rosterEntries.length - rosterShown.length;
 
   const out = [];

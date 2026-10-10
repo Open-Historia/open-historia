@@ -15,8 +15,8 @@ change are the same object.
 
 After the skip, the game checks the turn's wording against the map: a place an event names in
 plain words — a city, an alias, a region — is found on the scenario's actual geography, captured
-towns change hands, and contested ones are striped. With **Save AI requests** on this is part of
-the one after-skip check. Ground handed to a country that does not exist yet founds it.
+towns change hands, and contested ones are striped. The game does this itself, at no
+request. Ground handed to a country that does not exist yet founds it.
 
 A scenario can also set a **tempo** for the map — at most so many regions changing hands per 30
 days. A skip that moves more than that has the rest held back, and the next skip is told the
@@ -45,6 +45,15 @@ recognised or dropped, that is a diplomatic outcome you have to argue for.
 Scenario authors can also mark disputes directly when drawing a map. World-level claims override
 whatever the scenario's geometry says, so a campaign can develop new disputes over time without
 the underlying map being edited. A dispute that ends stays ended on the map.
+
+## Groups
+
+Not every force that holds ground is a country. A **group** — an insurgency, a cartel, a militia,
+a zombie outbreak — controls an area of regions that stay their countries': no border moves. The
+map outlines the group's whole area and tints it in the group's colour, and a region's card says
+**Group control** with the group's name and what it is. The AI founds, spreads, pushes back and
+erases groups as events call for it, and a town a government takes back from one is released
+from its area. A scenario's author sets them up in the [map editor](/wiki/editor/).
 
 ## Playing the difference
 

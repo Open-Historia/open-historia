@@ -58,10 +58,10 @@ model, small jobs on a cheap one.
 
 ## Costs
 
-A time skip is **one request** where it can be, two when there is something to check afterwards,
-and never more than three — that is what **Save AI requests** (on by default) guarantees. Turn it
-off and every check after a skip makes its own request, the model may look things up, and a busy
-skip can use twenty or more. Diplomacy, the advisor and **Background AI** (countries writing to
+A time skip is **one request**, with **Save AI requests** on or off: its events carry their own
+changes, and nothing is asked after it. Turn Save AI requests off and, with AI lookup functions
+on, the model may look things up before it answers — two rounds at most, so a skip never uses
+more than three. Diplomacy, the advisor and **Background AI** (countries writing to
 you unprompted, forces repositioning, extra agent reports — capped at 30 a day by default) cost
 extra on top. Settings → AI → **AI requests** shows today's count and what your last skip used.
 

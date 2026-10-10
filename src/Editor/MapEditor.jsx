@@ -17,6 +17,7 @@ import BottomBar from "./BottomBar.jsx";
 import TypeManager from "./TypeManager.jsx";
 import RegionsPanel from "./RegionsPanel.jsx";
 import PolitiesPanel from "./PolitiesPanel.jsx";
+import GroupsPanel from "./GroupsPanel.jsx";
 import TopologyPanel from "./TopologyPanel.jsx";
 import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
@@ -55,6 +56,7 @@ import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed } from "./exportPreset.js";
+import { normalizeGroups } from "../runtime/groups.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
@@ -484,6 +486,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // every registered country, with regions or not. Display names
     // change here without re-owning every region.
     polities: d.polities,
+    // The starting units and the groups: both were missing here, so a document's
+    // units vanished on reopening it.
+    units: d.units,
+    groups: d.groups,
     // Without this the marker never persists, so a document migrates on every open,
     // forever — and, far worse, a document saved after being migrated still reads
     // as legacy to everything downstream.
@@ -668,6 +674,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         flags: doc.flags || {},
         tags: doc.tags || {},
         polities: doc.polities || {},
+        units: Array.isArray(doc.units) ? doc.units : [],
+        groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -771,6 +779,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (initialMap.polities && typeof initialMap.polities === "object") {
       base.polities = structuredClone(initialMap.polities);
     }
+    base.groups = normalizeGroups(initialMap.groups);
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
@@ -820,8 +829,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       d.mergeColors(polityColors);
     }
-    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {});
-    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
+    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.groupAreas || null);
+    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.groupAreas || null);
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
@@ -863,6 +872,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.polities, d.regionCount, regionEpoch]);
 
+  // Each group's tint colour, for the map (OlMap/olStyle.js).
+  const groupColors = useMemo(
+    () => Object.fromEntries(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
+    [d.groups],
+  );
+  const groupCount = useMemo(
+    () => new Set([...Object.keys(d.groups || {}), ...Object.keys(api?.listGroupUsage?.() || {})]).size,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, d.groups, regionEpoch],
+  );
+
   const polityChoices = useMemo(() => {
     const keys = new Set(Object.keys(d.polities || {}));
     for (const row of api?.listPolityUsage?.() || []) keys.add(row.key);
@@ -896,6 +916,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         paintOwner={paintOwner}
         paintOnlyOwner={paintOnlyOwner}
         units={d.units}
+        groupColors={groupColors}
         featureSelectionIds={featureSelection}
         onFeatureSelectionChange={setFeatureSelection}
         features={d.features}
@@ -1220,6 +1241,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           onClose={() => setOpenPanel(null)}
         />
       )}
+      {openPanel === "groups" && (
+        <GroupsPanel
+          api={api}
+          groups={d.groups}
+          setGroups={d.setGroups}
+          selection={d.selection}
+          regionEpoch={regionEpoch}
+          onClose={() => setOpenPanel(null)}
+        />
+      )}
       {openPanel === "topology" && (
         <TopologyPanel
           api={api}
@@ -1353,6 +1384,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         upsertPolity={d.upsertPolity}
         regionEpoch={regionEpoch}
         onOpenPolities={() => setOpenPanel("polities")}
+        groups={d.groups}
+        onOpenGroups={() => setOpenPanel("groups")}
         onCopyToClipboard={(ids) => copySelectionToClipboard(ids)}
       />
 
@@ -1392,6 +1425,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <BottomBar
         counts={d.counts}
         polityCount={polityCount}
+        groupCount={groupCount}
         clipboardCount={clipboardCount}
         suggestionCount={review.active ? review.pendingCount : null}
         basemap={d.basemap}

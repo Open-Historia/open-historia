@@ -103,10 +103,10 @@ test("list_powers: exact names, counts by current control, the player flagged", 
   assert.deepEqual(run("list_powers", { query: "russ" }).powers.map((power) => power.name), ["Russian Federation"]);
 });
 
-test("list_regions: one power's regions with ids, paged", () => {
+test("list_regions: one power's regions by name, paged", () => {
   const all = run("list_regions", { owner: "Ukraine" });
   assert.equal(all.total, 3);
-  assert.deepEqual(all.regions.map((region) => region.id), ["ukr-kharkiv", "ukr-kn", "ukr-ks"]);
+  assert.deepEqual(all.regions.map((region) => region.name), ["Kharkiv", "Kremenchuk North", "Kremenchuk South"]);
   assert.equal(all.next, undefined);
   const page = run("list_regions", { owner: "Ukraine", limit: 2 });
   assert.equal(page.regions.length, 2);
@@ -126,23 +126,23 @@ test("owner names are exact: Russia is not the Russian Federation", () => {
 
 test("find_region: exact, with an administrative suffix, a transliteration off, or ambiguous", () => {
   const exact = run("find_region", { name: "Kharkiv" });
-  assert.equal(exact.bestMatch.id, "ukr-kharkiv");
+  assert.equal(exact.bestMatch.name, "Kharkiv");
   assert.equal(exact.bestMatch.rule, "exact");
   assert.equal(exact.matches[0].confidence, 100);
 
   const suffixed = run("find_region", { name: "Kharkiv Oblast" });
-  assert.equal(suffixed.bestMatch.id, "ukr-kharkiv");
+  assert.equal(suffixed.bestMatch.name, "Kharkiv");
   assert.equal(suffixed.bestMatch.rule, "affix");
 
   const spelled = run("find_region", { name: "Zaporizhzhya", owner: "Russian Federation" });
   assert.equal(spelled.owner, "Russian Federation");
-  assert.equal(spelled.bestMatch.id, "ukr-zap");
+  assert.equal(spelled.bestMatch.name, "Zaporizhzhia");
   assert.equal(spelled.bestMatch.rule, "fuzzy");
   assert.equal(spelled.matches[0].owner, "Russian Federation");
 
   const ambiguous = run("find_region", { name: "Kremenchuk" });
   assert.equal(ambiguous.bestMatch, undefined);
-  assert.deepEqual(ambiguous.matches.map((match) => match.id).sort(), ["ukr-kn", "ukr-ks"]);
+  assert.deepEqual(ambiguous.matches.map((match) => match.name).sort(), ["Kremenchuk North", "Kremenchuk South"]);
 
   const nothing = run("find_region", { name: "Atlantis" });
   assert.deepEqual(nothing.matches, []);
@@ -156,19 +156,19 @@ test("region_info: controller, sovereign, claimants, cities inside, neighbours w
   assert.equal(kharkiv.owner, "Ukraine");
   assert.equal(kharkiv.sovereign, "Ukraine");
   assert.deepEqual(kharkiv.cities.map((city) => city.name), ["Kharkiv"]);
-  assert.deepEqual(kharkiv.neighbours.map((region) => [region.id, region.owner]).sort(), [["rus-belgorod", "Russian Federation"]]);
+  assert.deepEqual(kharkiv.neighbours.map((region) => [region.name, region.owner]).sort(), [["Belgorod", "Russian Federation"]]);
 
   const zap = run("region_info", { regionId: "ukr-zap" });
   assert.equal(zap.owner, "Russian Federation");
   assert.equal(zap.sovereign, "Ukraine");
   assert.deepEqual(zap.claimants, ["Ukraine"]);
 
-  assert.match(run("region_info", { regionId: "nope" }).error, /No region with id/);
+  assert.match(run("region_info", { regionId: "nope" }).error, /No region is called/);
 });
 
 test("find_city: the region that contains the city, by name or by a former name", () => {
   const belgorod = run("find_city", { name: "Belgorod" });
-  assert.deepEqual(belgorod.matches, [{ city: "Belgorod", population: 390000, regionId: "rus-belgorod", regionName: "Belgorod", owner: "Russian Federation" }]);
+  assert.deepEqual(belgorod.matches, [{ city: "Belgorod", population: 390000, region: "Belgorod", owner: "Russian Federation" }]);
   assert.equal(run("find_city", { name: "Samar" }).matches[0].city, "Novomoskovsk");
   assert.match(run("find_city", { name: "Nowhere" }).hint, /No city/);
 });
@@ -178,7 +178,7 @@ test("power_info: holdings, wars, claims each way, units, description, ratings",
   assert.equal(russia.regions, 3);
   assert.deepEqual(russia.wars.map((war) => war.id), ["w1"]);
   assert.ok(russia.wars[0].participants.includes("Ukraine"));
-  assert.deepEqual(russia.claimsAgainstIt.map((entry) => entry.id), ["ukr-zap"]);
+  assert.deepEqual(russia.claimsAgainstIt.map((entry) => entry.name), ["Zaporizhzhia"]);
   assert.deepEqual(russia.claimsAsserted, []);
   assert.equal(russia.units, 1);
 
@@ -187,7 +187,7 @@ test("power_info: holdings, wars, claims each way, units, description, ratings",
   assert.deepEqual(ukraine.tags, ["defensive"]);
   assert.equal(ukraine.reputation, 62);
   assert.equal(ukraine.intelligence, 4);
-  assert.deepEqual(ukraine.claimsAsserted.map((entry) => entry.id), ["ukr-zap"]);
+  assert.deepEqual(ukraine.claimsAsserted.map((entry) => entry.name), ["Zaporizhzhia"]);
   assert.equal(ukraine.relations.length, 1);
 });
 
@@ -217,10 +217,10 @@ test("list_units and contested_regions", () => {
   assert.equal(run("list_units", {}).count, 1);
   assert.equal(run("list_units", { owner: "Ukraine" }).count, 0);
   assert.deepEqual(run("list_units", { owner: "Russian Federation" }).units[0], {
-    id: "u1", name: "3rd Army", type: "army", owner: "Russian Federation", strength: 80, posture: "attack", regionId: "rus-belgorod", lng: 36.6, lat: 50.6,
+    name: "3rd Army", type: "army", owner: "Russian Federation", strength: 80, posture: "attack", region: "Belgorod", lng: 36.6, lat: 50.6,
   });
   const contested = run("contested_regions", {});
-  assert.deepEqual(contested.regions, [{ id: "ukr-zap", name: "Zaporizhzhia", owner: "Russian Federation", sovereign: "Ukraine", claimants: ["Ukraine"] }]);
+  assert.deepEqual(contested.regions, [{ name: "Zaporizhzhia", owner: "Russian Federation", sovereign: "Ukraine", claimants: ["Ukraine"] }]);
 });
 
 test("an unknown function is answered with the list of real ones", () => {
@@ -249,8 +249,8 @@ test("declared adjacencies beat bounding boxes, and count in both directions", (
     ],
     world: { regionOwnershipOverrides: { a: "Ukraine", b: "Ukraine", c: "Ukraine" } },
   });
-  assert.deepEqual(executeLookup(ctx, "region_info", { regionId: "a" }).neighbours.map((r) => r.id), ["b"]);
-  assert.deepEqual(executeLookup(ctx, "region_info", { regionId: "b" }).neighbours.map((r) => r.id), ["a"]);
+  assert.deepEqual(executeLookup(ctx, "region_info", { regionId: "a" }).neighbours.map((r) => r.name), ["Beta"]);
+  assert.deepEqual(executeLookup(ctx, "region_info", { regionId: "b" }).neighbours.map((r) => r.name), ["Alpha"]);
   assert.deepEqual(executeLookup(ctx, "region_info", { regionId: "c" }).neighbours, []);
 });
 
@@ -261,9 +261,9 @@ test("a city with no containing polygon is placed by the nearest centroid, marke
     cities: [{ name: "Near Alpha", coordinates: [10.4, 9.8] }, { name: "Far Away", coordinates: [40, 40] }],
   });
   const near = executeLookup(ctx, "find_city", { name: "Near Alpha" }).matches[0];
-  assert.equal(near.regionId, "a");
+  assert.equal(near.region, "Alpha");
   assert.equal(near.approximate, true);
-  assert.equal(executeLookup(ctx, "find_city", { name: "Far Away" }).matches[0].regionId, null);
+  assert.equal(executeLookup(ctx, "find_city", { name: "Far Away" }).matches[0].region, null);
 });
 
 test("list_projects: the board by owner and status, with what completion moves on the map", () => {
@@ -302,13 +302,13 @@ test("region_history: every recorded change of hands, oldest first", () => {
   assert.deepEqual(zap.changes, [{ date: "2014-03-01", event: "Russian Federation moves on Zaporizhzhia", change: "transfer from Ukraine to Russian Federation" }]);
   assert.equal(zap.sovereign, "Ukraine");
   assert.match(run("region_history", { regionId: "ukr-kharkiv" }).hint, /No recorded change/);
-  assert.match(run("region_history", { regionId: "nope" }).error, /No region with id/);
+  assert.match(run("region_history", { regionId: "nope" }).error, /No region is called/);
 });
 
 test("path_between: neighbouring chains, with whose land is crossed", () => {
   const one = run("path_between", { fromRegionId: "ukr-kharkiv", toRegionId: "rus-belgorod" });
   assert.equal(one.steps, 1);
-  assert.deepEqual(one.path.map((entry) => entry.id), ["ukr-kharkiv", "rus-belgorod"]);
+  assert.deepEqual(one.path.map((entry) => entry.name), ["Kharkiv", "Belgorod"]);
   assert.equal(run("path_between", { fromRegionId: "ukr-kn", toRegionId: "ukr-ks" }).steps, 1);
   assert.equal(run("path_between", { fromRegionId: "ukr-kn", toRegionId: "ukr-kn" }).steps, 0);
   assert.match(run("path_between", { fromRegionId: "ukr-kharkiv", toRegionId: "rus-moscow" }).error, /No chain/);
@@ -326,7 +326,7 @@ test("spy_network: agents abroad and foreign agents at home", () => {
 
 test("list_cities: placed in regions, largest first, by owner", () => {
   const russia = run("list_cities", { owner: "Russian Federation" });
-  assert.deepEqual(russia.cities.map((city) => [city.name, city.regionId]), [["Belgorod", "rus-belgorod"], ["Novomoskovsk", "rus-moscow"]]);
+  assert.deepEqual(russia.cities.map((city) => [city.name, city.region]), [["Belgorod", "Belgorod"], ["Novomoskovsk", "Moscow"]]);
   assert.deepEqual(run("list_cities", { owner: "Ukraine" }).cities.map((city) => city.name), ["Kharkiv"]);
   assert.equal(run("list_cities", { limit: 1 }).cities.length, 1);
   assert.equal(run("list_cities", { capitalsOnly: true }).count, 0);
@@ -335,21 +335,104 @@ test("list_cities: placed in regions, largest first, by owner", () => {
 test("border_between: where two powers' regions touch, both sides named", () => {
   const front = run("border_between", { a: "Ukraine", b: "Russian Federation" });
   assert.equal(front.count, 1);
-  assert.deepEqual(front.pairs[0], { Ukraine: { id: "ukr-kharkiv", name: "Kharkiv" }, "Russian Federation": { id: "rus-belgorod", name: "Belgorod" } });
-  assert.equal(run("border_between", { a: "Russian Federation", b: "Ukraine" }).pairs[0]["Russian Federation"].id, "rus-belgorod");
+  assert.deepEqual(front.pairs[0], { Ukraine: "Kharkiv", "Russian Federation": "Belgorod" });
+  assert.equal(run("border_between", { a: "Russian Federation", b: "Ukraine" }).pairs[0]["Russian Federation"], "Belgorod");
   assert.match(run("border_between", { a: "Ukraine", b: "Ukraine" }).error, /two different/);
   assert.match(run("border_between", { a: "Ukraine", b: "Russia" }).error, /not a power/);
 });
 
 test("map_around: the neighbourhood of a region grouped by owner, with sovereigns where they differ", () => {
   const around = run("map_around", { regionId: "ukr-kharkiv" });
-  assert.equal(around.centre.id, "ukr-kharkiv");
+  assert.equal(around.centre.name, "Kharkiv");
   assert.deepEqual(Object.keys(around.byOwner).sort(), ["Russian Federation", "Ukraine"]);
-  assert.deepEqual(around.byOwner.Ukraine.map((entry) => [entry.id, entry.steps]), [["ukr-kharkiv", 0]]);
-  assert.deepEqual(around.byOwner["Russian Federation"].map((entry) => [entry.id, entry.steps]), [["rus-belgorod", 1]]);
+  assert.deepEqual(around.byOwner.Ukraine.map((entry) => [entry.name, entry.steps]), [["Kharkiv", 0]]);
+  assert.deepEqual(around.byOwner["Russian Federation"].map((entry) => [entry.name, entry.steps]), [["Belgorod", 1]]);
   const wider = run("map_around", { regionId: "ukr-kn", steps: 2 });
   assert.equal(wider.regions, 2);
   const occupied = run("map_around", { regionId: "ukr-zap" });
   assert.equal(occupied.byOwner["Russian Federation"][0].sovereign, "Ukraine");
   assert.match(run("map_around", { regionId: "nope" }).error, /No region/);
+});
+
+test("a region is asked for by its name, however it is written; the map's own key is still read", () => {
+  const byName = run("region_info", { region: "Kharkiv" });
+  assert.equal(byName.name, "Kharkiv");
+  assert.equal("id" in byName, false, "no answer carries the map's key for a region");
+  assert.equal(run("region_info", { region: "region: Kharkiv" }).name, "Kharkiv");
+  assert.equal(run("region_info", { region: "Kharkiv (Ukraine)" }).name, "Kharkiv");
+  assert.equal(run("region_info", { region: "kharkiv oblast" }).name, "Kharkiv", "a suffix or a letter off, when one region fits");
+  assert.equal(run("region_info", { regionId: "ukr-kharkiv" }).name, "Kharkiv");
+  assert.equal(run("map_around", { region: "Kharkiv" }).centre.name, "Kharkiv");
+  assert.equal(run("path_between", { fromRegion: "Kharkiv", toRegion: "Belgorod" }).steps, 1);
+  assert.match(run("region_history", { region: "Zaporizhzhia" }).name, /Zaporizhzhia/);
+  assert.match(run("region_info", { region: "Atlantis" }).error, /No region is called "Atlantis"/);
+  assert.match(run("region_info", {}).error, /Name the region/);
+});
+
+test("two regions of one name are told apart by their owner, never guessed", () => {
+  const ctx = buildLookupContext({
+    regions: [
+      { id: "us-ga", name: "Georgia", owner: "United States" },
+      { id: "ge-1", name: "Georgia", owner: "Georgia" },
+    ],
+    world: {},
+  });
+  assert.match(executeLookup(ctx, "region_info", { region: "Georgia" }).error, /2 regions are called "Georgia", held by United States, Georgia\. Say which, as "Georgia \(<owner>\)"/);
+  assert.equal(executeLookup(ctx, "region_info", { region: "Georgia (United States)" }).owner, "United States");
+  assert.equal(executeLookup(ctx, "region_info", { region: "region: Georgia (Georgia)" }).owner, "Georgia");
+});
+
+test("list_regions with a group: its whole area with each region's owner, paged; map_around names the group", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      groups: { "Kharkiv Partisans": { description: "Irregulars." } },
+      groupAreas: { "ukr-kharkiv": "Kharkiv Partisans", "rus-belgorod": "Kharkiv Partisans" },
+    },
+    player: "Ukraine",
+  });
+  const area = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans" });
+  assert.equal(area.group, "Kharkiv Partisans");
+  assert.equal(area.total, 2);
+  assert.deepEqual(area.regions, [
+    { name: "Kharkiv", owner: "Ukraine" },
+    { name: "Belgorod", owner: "Russian Federation" },
+  ]);
+  const page = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", limit: 1 });
+  assert.equal(page.next, 1);
+  assert.deepEqual(executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", offset: 1 }).regions.map((region) => region.name), ["Belgorod"]);
+  assert.match(executeLookup(ctx, "list_regions", { group: "Kharkov Partisans" }).error, /No group named/);
+  assert.match(executeLookup(ctx, "list_regions", {}).error, /required/);
+  // owner wins when both are given.
+  assert.equal(executeLookup(ctx, "list_regions", { owner: "Ukraine", group: "Kharkiv Partisans" }).owner, "Ukraine");
+
+  const around = executeLookup(ctx, "map_around", { regionId: "ukr-kharkiv" });
+  assert.equal(around.byOwner.Ukraine[0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal(around.byOwner["Russian Federation"][0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal("controlledByGroup" in executeLookup(ctx, "map_around", { regionId: "ukr-zap" }).byOwner["Russian Federation"][0], false);
+});
+// A territory by its own name (src/Game/AI/namedAreas.js): Greenland is no
+// power and no region of the built-in map, only the regions that belong to it.
+test("list_regions names a power's territories beside its regions", () => {
+  const context = buildLookupContext({
+    regions: [
+      { id: "50", name: "Copenhagen", country: "Denmark", countryCode: "DNK", geometry: square(12, 55) },
+      { id: "4709", name: "Nuuk", country: "Denmark", countryCode: "GRL", geometry: square(-52, 64) },
+      { id: "4710", name: "Sermersooq", country: "Denmark", countryCode: "GRL", geometry: square(-40, 66) },
+    ],
+    world: {},
+  });
+  const out = executeLookup(context, "list_regions", { owner: "Denmark" });
+  assert.deepEqual(out.territories, [{ name: "Greenland", regions: 2 }]);
+  assert.deepEqual(out.regions, [{ name: "Copenhagen" }, { name: "Nuuk", territory: "Greenland" }, { name: "Sermersooq", territory: "Greenland" }]);
+  assert.match(out.note, /country: <its name>/);
+  assert.deepEqual(context.areaNamed("Greenland").rows.map((row) => row.name), ["Nuuk", "Sermersooq"]);
+  assert.equal(context.areaNamed("Atlantis"), null);
+});
+
+test("list_regions says nothing of territories for a power that has none", () => {
+  const out = run("list_regions", { owner: "Ukraine" });
+  assert.equal("territories" in out, false);
+  assert.equal("note" in out, false);
 });

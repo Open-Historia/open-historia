@@ -385,3 +385,33 @@ test("gemini: a signed function call keeps its thoughtSignature on the rebuilt p
     { functionCall: { name: "find_region", args: { name: "Kharkiv" } } },
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// Gemini: an answer asked for as JSON text (a watched time skip, main.jsx
+// callGemini). This API streams text and never a function call's arguments, so
+// the text is where the events are read from as they are written.
+
+test("gemini: text parts are reported as they grow, so a JSON answer can be read while it is written", () => {
+  const seen = [];
+  const state = createGeminiStreamState();
+  for (const frame of [
+    { candidates: [{ content: { parts: [{ text: '{"events":[{"title":"A' }] } }] },
+    { candidates: [{ content: { parts: [{ text: ' treaty"}' }] } }] },
+    { candidates: [{ content: { parts: [{ text: '],"stopDate":"2016-02-01"}' }] }, finishReason: "STOP" }] },
+  ]) applyGeminiFrame(state, frame, (progress) => seen.push(progress));
+  assert.deepEqual(seen.map((progress) => progress.name), ["", "", ""]);
+  assert.equal(seen[0].json, '{"events":[{"title":"A');
+  assert.equal(seen[2].json, '{"events":[{"title":"A treaty"}],"stopDate":"2016-02-01"}');
+  assert.equal(finishGeminiStream(state).candidates[0].content.parts[0].text, seen[2].json);
+});
+
+test("gemini: a thought summary is not part of the answer", () => {
+  const seen = [];
+  const state = createGeminiStreamState();
+  applyGeminiFrame(state, { candidates: [{ content: { parts: [
+    { text: "Weighing the fronts first.", thought: true },
+    { text: '{"events":[]}' },
+  ] } }] }, (progress) => seen.push(progress.json));
+  assert.deepEqual(seen, ['{"events":[]}']);
+  assert.equal(finishGeminiStream(state).candidates[0].content.parts[0].text, '{"events":[]}');
+});

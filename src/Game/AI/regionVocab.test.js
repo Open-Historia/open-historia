@@ -69,18 +69,27 @@ test("B2 counts are correct per owner", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["Germany"] });
   assert.match(text, /- Germany \[3 regions\]/);
 });
-test("B3 regions render as `name (id)`", () => {
+test("B3 regions render by name, and no id is shown", () => {
+  // A model shown "Hamhung (4441)" wrote it back as the region and lost four
+  // transfers to it (a 45-skip test, 2026-10-09): the list is names alone.
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["France"] });
-  assert.match(text, /Bourgogne \(FRA\.1_1\)/);
+  assert.match(text, /- France \[2 regions\]: Bourgogne, Bretagne/);
+  assert.equal(text.includes("FRA.1_1"), false);
+  assert.equal(/\(FRA\./.test(text), false);
+  assert.match(text, /write it as "region: <name>"/);
+});
+test("B3b a caller that is no model's prompt may still ask for the ids", () => {
+  const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["France"], regionIds: true });
+  assert.match(text, /Bourgogne/);
   assert.match(text, /Bretagne \(FRA\.2_1\)/);
 });
 test("B4 a region appears exactly once", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["France", "Germany"] });
-  assert.equal(text.split("Bayern (DEU.1_1)").length - 1, 1);
+  assert.equal(text.split("Bayern").length - 1, 1);
 });
 test("B5 an override moves a region into the new owner's group and updates counts", () => {
   const text = buildRegionOwnershipText(CATALOG, { "DEU.1_1": "FRA" }, { focusCodes: ["France", "Germany"] });
-  assert.match(sections(text).focus, /- France \[3 regions\]:[\s\S]*Bayern \(DEU\.1_1\)/);
+  assert.match(sections(text).focus, /- France \[3 regions\]:[^\n]*Bayern/);
   assert.match(sections(text).focus, /- Germany \[2 regions\]:/);
 });
 test("B6 multiple overrides all apply", () => {
@@ -101,7 +110,7 @@ test("B8 deterministic — same input twice yields identical output", () => {
 
 test("C1 focus codes get full region lists", () => {
   const { focus } = sections(buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["France"] }));
-  assert.match(focus, /Bourgogne \(FRA\.1_1\)/);
+  assert.match(focus, /- France \[2 regions\]: Bourgogne, Bretagne/);
 });
 test("C2 focus order is preserved", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["Germany", "France"] });
@@ -131,7 +140,7 @@ test("C7 no focus set → no FOCUS_INTRO, roster only", () => {
 });
 test("C8 ownerCap truncates a focus group with a visible (+N more)", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["Germany"], ownerCap: 1 });
-  assert.match(text, /- Germany \[3 regions\]: Bayern \(DEU\.1_1\), \(\+2 more\)/);
+  assert.match(text, /- Germany \[3 regions\]: Bayern, \(\+2 more\)/);
 });
 test("C9 focusTotalCap drops an unfittable focus power down into the roster", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["France", "Germany"], focusTotalCap: 2, ownerCap: 40 });
@@ -239,12 +248,12 @@ test("E4 singular '1 region' vs plural in the focus section", () => {
 });
 test("E5 diacritics in region names are preserved verbatim", () => {
   const text = buildRegionOwnershipText(CATALOG, {}, { focusCodes: ["Germany"] });
-  assert.match(text, /Ostpreußen \(DEU\.2_1\)/);
+  assert.match(text, /Ostpreußen/);
 });
 test("E6 a region with an empty name falls back to its id", () => {
   const cat = [{ id: "FRA.9_1", name: "", countryCode: "FRA" }];
   const text = buildRegionOwnershipText(cat, {}, { focusCodes: ["France"] });
-  assert.match(text, /FRA\.9_1 \(FRA\.9_1\)/);
+  assert.match(text, /- France \[1 region\]: FRA\.9_1$/m);
 });
 
 // ---- Group F: bounds / safety / robustness ---------------------------------
@@ -309,7 +318,7 @@ test("F9 duplicate region ids under different owners are each grouped", () => {
 });
 test("F10 override to a brand-new owner code creates that group", () => {
   const text = buildRegionOwnershipText(CATALOG, { "FRA.1_1": "SOV" }, { focusCodes: ["SOV"] });
-  assert.match(text, /- SOV \[1 region\]: Bourgogne \(FRA\.1_1\)/);
+  assert.match(text, /- SOV \[1 region\]: Bourgogne/);
 });
 test("F11 same content, different call → structurally identical (no hidden state)", () => {
   const opts = { focusCodes: ["France"], polityNames: { fra: "France" } };
@@ -329,4 +338,76 @@ test("with the region lists behind lookups, the vocabulary is powers and counts 
   assert.equal(text.includes(ROSTER_INTRO), true);
   assert.match(text, /- France — \d+ regions?/);
   assert.equal(/Bourgogne/.test(text), false, "no region names");
+});
+// ---- Territories: named, with a size, never region by region ---------------------------------------------
+//
+// A 45-skip test (2026-10-09): the United States holds 285 regions of the
+// built-in map, the list showed the first 120 by the alphabet, and "Puerto
+// Rico" was not among them, so its independence moved "British Virgin
+// Islands". A territory is now said by its own name after the power's regions,
+// whatever the cap cuts, and "country: <its name>" is all of it.
+const WITH_TERRITORIES = [
+  { id: "1", name: "Atlanta", country: "United States", countryCode: "USA" },
+  { id: "2", name: "Boston", country: "United States", countryCode: "USA" },
+  { id: "3", name: "Chicago", country: "United States", countryCode: "USA" },
+  { id: "760", name: "Puerto Rico", country: "United States", countryCode: "PRI" },
+  { id: "614", name: "Guam", country: "United States", countryCode: "GUM" },
+  { id: "50", name: "Copenhagen", country: "Denmark", countryCode: "DNK" },
+  { id: "4709", name: "Nuuk", country: "Denmark", countryCode: "GRL" },
+  { id: "4710", name: "Sermersooq", country: "Denmark", countryCode: "GRL" },
+  { id: "60", name: "Kerch", country: "Russia", countryCode: "UKR" },
+  { id: "70", name: "Moscow", country: "Russia", countryCode: "RUS" },
+  { id: "61", name: "Kyiv", country: "Ukraine", countryCode: "UKR" },
+];
+
+test("T1 a power's territories follow its regions, by name and size", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["United States", "Denmark"] });
+  assert.match(text, /^- United States \[5 regions\]: Atlanta, Boston, Chicago; territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+  assert.match(text, /^- Denmark \[3 regions\]: Copenhagen; territories: Greenland \(2 regions\)$/m);
+  assert.equal(/Nuuk|Sermersooq/.test(text), false, "a territory's regions are not listed");
+  assert.ok(FOCUS_INTRO.includes("\"country: <its name>\""), "the intro says how a territory is written");
+});
+
+test("T2 a territory is shown however short the cap cuts the list", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["United States"], ownerCap: 1 });
+  assert.match(text, /^- United States \[5 regions\]: Atlanta, \(\+2 more\); territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+});
+
+test("T3 the roster names a power's territories too", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: [] });
+  assert.match(text, /^- Denmark — 3 regions; territories: Greenland \(2 regions\)$/m);
+  assert.match(text, /^- United States — 5 regions; territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+});
+
+test("T4 land of a country that is on the map is listed by its regions, not as a territory", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["Russia"] });
+  assert.match(text, /^- Russia \[2 regions\]: Kerch, Moscow$/m);
+});
+
+test("T5 a country the game keeps a record of is nobody's territory, land or no land", () => {
+  // Ukraine conquered whole: its record stays, and so do its regions' names.
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, { 61: "Russia" }, { focusCodes: ["Russia"], polityNames: { ukraine: "Ukraine" } });
+  assert.match(text, /^- Russia \[3 regions\]: Kerch, Moscow, Kyiv$/m);
+  // With no record of it, it is an area like any other.
+  const forgotten = buildRegionOwnershipText(WITH_TERRITORIES, { 61: "Russia" }, { focusCodes: ["Russia"] });
+  assert.match(forgotten, /^- Russia \[3 regions\]: Moscow; territories: Ukraine \(2 regions\)$/m);
+});
+
+test("T6 a power the map names differently from its regions' country has no territory of itself", () => {
+  const catalog = [
+    { id: "80", name: "Brno", country: "Czech Republic", countryCode: "CZE" },
+    { id: "81", name: "Ostrava", country: "Czech Republic", countryCode: "CZE" },
+  ];
+  const text = buildRegionOwnershipText(catalog, {}, { focusCodes: ["Czech Republic"] });
+  assert.match(text, /^- Czech Republic \[2 regions\]: Brno, Ostrava$/m);
+});
+
+test("a power that is listed is listed whole: no limit of 120 regions a power", () => {
+  // The United States holds 285 regions on the built-in world. Its list used to
+  // stop at the 120th by the alphabet, and a region past it could not be named.
+  const big = Array.from({ length: 285 }, (_, index) => ({ id: `USA.${index}`, name: `Region ${String(index).padStart(3, "0")}`, countryCode: "USA" }));
+  const text = buildRegionOwnershipText(big, {}, { focusCodes: ["United States"] });
+  assert.match(text, /Region 000/);
+  assert.match(text, /Region 284/);
+  assert.equal(text.includes("more)"), false, "nothing is left out of a listed power");
 });

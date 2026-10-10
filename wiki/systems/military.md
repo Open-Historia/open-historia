@@ -7,8 +7,8 @@ the engine carries the movement out over however many turns it takes.
 Write it as an order. *"Reinforce the eastern border with two armoured divisions"*,
 *"Launch an offensive toward Kharkiv"*, *"Withdraw the fleet to home ports"*. The time skip
 resolves it, and after the skip the game moves units to match what the events say — armies
-advance, retreat and take losses where the events say they did. (With **Save AI requests** on,
-that is part of the one after-skip check; it can be turned off in Settings → AI.)
+advance, retreat and take losses where the events say they did. (The skip's own events
+carry those moves; nothing is asked afterwards.)
 
 The model owns movement; you own intent. A place an order or event names — "toward Kyiv", "the
 Suwałki gap" — is read as an objective and found on the actual map, and new units and structures
@@ -78,26 +78,22 @@ order**, and the engine advances it every turn at the unit's pace until it arriv
 same point every time you replay that turn, never at random). The map draws a heading line to a
 destination and a ring around a patrol station, and counters glide between positions.
 
-Sustained travel runs at a post-1945 baseline, scaled by era:
+Travel is paced by what it is. A move is a **redeployment** unless the formation's posture is
+assaulting, and a redeployment goes by rail, road and ship; an **advance** against an enemy is
+much slower. Kilometres a day, by era:
 
-| Type | km/day |
-|---|---|
-| Garrison | 0 — it does not travel |
-| Artillery | 35 |
-| Infantry | 40 |
-| Armor | 90 |
-| Naval | 600 |
-| Air | 2000 |
+| | Before 1500 | 1500 – 1849 | 1850 – 1944 | 1945 onward |
+|---|---|---|---|---|
+| Redeployed over land (infantry) | 25 | 28 | 300 | 500 |
+| Redeployed by sea | 110 | 170 | 400 | 650 |
+| Advancing, infantry | 18 | 20 | 20 | 30 |
+| Advancing, armour or cavalry | 30 | 35 | 35 | 50 |
+| Fleet | 130 | 200 | 480 | 750 |
+| Air wing | 700 | 1000 | 1500 | 5000 |
 
-| Period | Factor |
-|---|---|
-| Before 1500 | ×0.35 |
-| 1500 – 1849 | ×0.5 |
-| 1850 – 1944 | ×0.75 |
-| 1945 onward | ×1.0 |
-
-So infantry in 1200 AD cover about 14 km a day. A march across a continent is a campaign, not a
-turn.
+A garrison does not travel. A redeployment that crosses water is paced by how much of its way
+lies over the sea, so a division ordered from Texas to Korea in 2016 arrives in about three
+weeks. Before the railways a march across a continent is still a campaign, not a turn.
 
 A single order is also held to a **movement leash** — how far one order may relocate a unit before
 it has to become a multi-turn campaign instead of a teleport:

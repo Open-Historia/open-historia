@@ -38,7 +38,7 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
-import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
 import { endpointIsLocal } from "../AI/localEndpoint.js";
 import {
@@ -1114,14 +1114,10 @@ const ReasoningSection = () => {
 // The request budget (AI/requestBudget.js): what today has cost, and the
 // switches that decide what a time skip and an idle minute may spend. Its own
 // storage and its own change event, so it sits outside mapSettings.
-const REVIEW_SECTION_LABELS = {
-    units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
-    territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
-    timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
-    board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
-    spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],
-};
-
+//
+// No switch for each check after a skip any more (units, occupied land,
+// repeats, the Projects board, the agents' reports): they are part of the
+// skip's own request now, and always on (gameplay.js, "The folded time skip").
 const useRequestDay = () => {
     const [day, setDay] = useState(() => requestDay());
     useEffect(() => {
@@ -1143,14 +1139,14 @@ const RequestBudgetSection = () => {
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
-    const [sections, setSections] = useState(() => Object.fromEntries(REVIEW_SECTIONS.map((section) => [section, requestSettings.reviewSection(section)])));
 
     const apply = (message, write) => {
         write();
         logDebugEvent("setting", message);
         announceRequestBudgetChange();
     };
-    const cost = describeJumpCost({ saveRequests: saving });
+    // The most a skip is when function calling may add to it (Save AI requests off).
+    const lookupCap = describeJumpCost({ lookups: true }).max;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1188,10 +1184,12 @@ const RequestBudgetSection = () => {
                 apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
             }}
             />
+            {/* One sentence group per state, each a single string, so a language
+                pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
                 {saving
-                    ? <>On (default): a time skip is one request, two when there is something to check afterwards, and never more than <span data-no-translate>{cost.max}</span>. The model is handed the names it needs instead of looking them up, a small mistake in its answer is cut out rather than asked for again, and the checks below go out together.</>
-                    : <>Off: the most thorough turns, for a key with no daily limit. Every check after a skip makes its own request, the model may look things up (up to three extra requests per task), and a flawed answer is sent back to be redone. A busy skip can use twenty requests or more.</>}
+                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh."
+                    : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
             </div>
 
             <div style={fieldGroupStyle}>
@@ -1220,13 +1218,14 @@ const RequestBudgetSection = () => {
                 apply(`Background AI turned ${next ? "on" : "off"}.`, () => requestSettings.setBackgroundAi(next));
             }}
             />
-            <div style={settingsHelper}>
+            {/* The section ends on whichever of these two is last. */}
+            <div style={{ ...settingsHelper, ...(background ? null : { marginBottom: 0 }) }}>
                 {background
                     ? <>On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.</>
                     : <>Off: the game only calls the model when you do something.</>}
             </div>
             {background && (
-                <div style={fieldGroupStyle}>
+                <div style={{ ...fieldGroupStyle, marginBottom: 0 }}>
                     <label style={labelStyle} htmlFor="ai-background-daily-cap">Background requests a day, at most</label>
                     <input
                     id="ai-background-daily-cap"
@@ -1243,27 +1242,6 @@ const RequestBudgetSection = () => {
                     <div style={helperStyle}>It also stops by itself once less than a tenth of your day is left.</div>
                 </div>
             )}
-
-            <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", fontWeight: 800, margin: "0.4rem 0 0.2rem" }}>Checks after a time skip</div>
-            <div style={{ ...helperStyle, marginBottom: "0.7rem" }}>
-                {saving
-                    ? "All of these share ONE request, and only when the skip gave them something to look at. Turning one off never saves a request unless it was the only one with work to do; it does make that request smaller."
-                    : "With Save AI requests off, each of these is its own request after every skip and these switches are not used."}
-            </div>
-            {REVIEW_SECTIONS.map((section, index) => (
-                <React.Fragment key={section}>
-                    <Toggle
-                    label={REVIEW_SECTION_LABELS[section][0]}
-                    enabled={sections[section]}
-                    onToggle={() => {
-                        const next = !sections[section];
-                        setSections((current) => ({ ...current, [section]: next }));
-                        apply(`After-skip check "${REVIEW_SECTION_LABELS[section][0]}" turned ${next ? "on" : "off"}.`, () => requestSettings.setReviewSection(section, next));
-                    }}
-                    />
-                    <div style={{ ...settingsHelper, ...(index === REVIEW_SECTIONS.length - 1 ? { marginBottom: 0 } : {}) }}>{REVIEW_SECTION_LABELS[section][1]}</div>
-                </React.Fragment>
-            ))}
         </SettingsSection>
     );
 };
@@ -2099,11 +2077,11 @@ const SettingsWorkspace = ({
                     </div>
                     <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
-                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
+                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
-                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way, and Gemini arrives all at once regardless.
+                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
                     </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
