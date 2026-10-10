@@ -212,8 +212,8 @@ failing. See <a href="/wiki/time/">time and turns</a>.</p>
 <h3 id="a-held-projects-board">A held Projects board</h3>
 <p>The turn&#39;s events can succeed while the <strong>Projects &amp; Operations</strong> update fails. When that happens
 the turn is held the same way: <em>&quot;Your events are ready, but the Projects &amp; Operations board did
-not update, so nothing has been saved yet.&quot;</em> (With <strong>Save AI requests</strong> on, the board is one of
-the checks that share the after-skip request.)</p>
+not update, so nothing has been saved yet.&quot;</em> (A skip&#39;s events now carry the board&#39;s changes themselves,
+so this is rare.)</p>
 <p><strong>Retry the board</strong> and it finishes the turn, keeping the events that already came back. You do
 not re-run the whole simulation to fix a board that was the only thing to fail. Discard it and
 the turn runs again from the start.</p>
@@ -238,7 +238,7 @@ AI shows which entries are Spent and when each comes back.</p>
 <h2 id="rate-limits">Rate limits</h2>
 <p>Symptoms: turns fail intermittently, or stall on long jumps while short ones work.</p>
 <p>Free tiers have per-minute limits that a long jump can exceed, and a daily allowance that a busy
-session can. Options: leave <strong>Save AI requests</strong> on (a skip then costs one to three requests),
+session can. Options: leave <strong>Save AI requests</strong> on (a skip is then one request),
 use the smaller/faster model in the family (limits are usually more generous), add a
 <a href="/wiki/ai-setup/#backup-models">backup model</a>, or move to a paid tier.</p>
 <p>A rate limit is not the same as a Spent allowance. By default the game hands the call straight to

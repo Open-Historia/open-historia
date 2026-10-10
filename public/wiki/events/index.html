@@ -144,8 +144,9 @@ territory has to ship the border change with it.</p>
 reading before the turn has finished (Gemini delivers everything at once, so there it all arrives
 together). When you open the history for a fresh turn, the map rolls back to how it looked
 <em>before</em> the jump. Each time you press <strong>Next event</strong>, that event&#39;s changes are applied on top —
-the border moves, the unit appears, the flag changes — and the camera flies to whatever the event
-concerns.</p>
+the border moves, the unit appears, the flag changes — and the camera flies to where the event
+happened: the places it names as places and the things it changed. An event that names no place
+leaves the camera where it is.</p>
 <p><strong>Skip to end</strong> fast-forwards the remaining events and snaps the map to the final state.</p>
 <p>You can leave the reveal at any point, and a reload resumes it where you left off. Until the
 reveal reaches an event, nothing else shows it to you either — not the advisor, not a leader
@@ -157,7 +158,8 @@ kept, the rest never happens, and the date becomes that event&#39;s. See
 <p>Each card has the event&#39;s date, its title and a description that says what happened — who,
 where, with what — in a paragraph or two rather than a fixed word count. Below it are <strong>chips</strong>
 for the countries, regions, formations and structures the event is about; click one and the map
-flies there. A document that reached you through the event is shown on its card, a click away.</p>
+flies there. A chip comes from a place the event itself names as a place, or from something it
+changed on the map — never from a word in its text that happens to match a place name. A document that reached you through the event is shown on its card, a click away.</p>
 <p>If the camera movement is distracting, <strong>Settings → Map → Disable camera movement during
 events</strong> turns it off and leaves you in control.</p>
 <h2 id="reading-a-turn-well">Reading a turn well</h2>
@@ -184,10 +186,9 @@ military events, then all the diplomacy.</p>
 <p>The categories are fixed. The model cannot invent a seventh, and anything it returns that is not
 one of the six is dropped. Older events without tags are always shown.</p>
 <h2 id="events-kept-off-the-timeline">Events kept off the timeline</h2>
-<p>After a skip, a check takes repeats and filler off the timeline — events that restate the
-record, or report a meeting with no outcome. Events with hard consequences (territory, units,
-structures, chats, renames, war records) always stay. With <strong>Save AI requests</strong> on this check
-shares the one after-skip request; it can be turned off in Settings → AI.</p>
+<p>After a skip, the game takes repeats off the timeline — events that restate the record word
+for word. Events with hard consequences (territory, units, structures, chats, renames, war
+records) always stay. This costs no request and has no switch.</p>
 <p class="beta-note"><b>On beta you see what was kept off, and why.</b> While the skip is
 written, a card that will not make the timeline is greyed as it arrives, with the reason, and is
 left out of the map staging. When the turn lands they are folded under its cards — "N events kept

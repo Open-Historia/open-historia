@@ -279,7 +279,7 @@ time, which is when a Gemini key&#39;s day begins) and what your last time skip 
 </thead>
 <tbody><tr>
 <td><strong>Save AI requests</strong></td>
-<td><strong>On by default.</strong> A time skip is one request, two when there is something to check afterwards, and never more than three. Off gives the most thorough turns, for a key with no daily limit: every check after a skip makes its own request, the model may look things up, and a flawed answer is sent back to be redone — a busy skip can use twenty requests or more.</td>
+<td><strong>On by default.</strong> A time skip is one request either way: each event arrives already carrying what it changed, and your agents&#39; reports come back in the same answer. On, the model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again; a skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where the automatic Stats refresh falls due. Off is for a key with no daily limit: with AI lookup functions on, the model may look things up before it answers — two rounds at most, so a skip never uses more than three — and outside a skip a flawed answer is sent back to be redone.</td>
 </tr>
 <tr>
 <td><strong>Requests a day your key allows</strong></td>
@@ -295,7 +295,7 @@ time, which is when a Gemini key&#39;s day begins) and what your last time skip 
 </tr>
 <tr>
 <td><strong>Checks after a time skip</strong></td>
-<td>Five switches — move units to match the events, mark occupied and disputed land, take repeats and filler off the timeline, keep the Projects board in step, collect your agents&#39; reports. With Save AI requests on they share one request; turning one off makes it smaller, and saves the request only if it was the only one with work to do.</td>
+<td>Gone. Each event of a skip now carries its own consequences — the units it moved, the land it took, the Projects board, your agents&#39; reports — inside the skip&#39;s one request, so there is nothing left to switch on or off.</td>
 </tr>
 </tbody></table></div>
 <p class="beta-note"><b>On beta there is a sixth check</b>, <b>Put new structures on the map</b>:
@@ -317,7 +317,7 @@ bases, shipyards, data centres and ground stations appear where the events built
 </tr>
 <tr>
 <td><strong>AI lookup functions</strong></td>
-<td>On by default, but only used while Save AI requests is off. The model can call functions — exact power and region names, a region&#39;s neighbours, the war ledger, a chat — in up to three extra requests per task. Needs a provider that supports function calling.</td>
+<td>On by default, but only used while Save AI requests is off. The model can call functions — exact power and region names, a region&#39;s neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Needs a provider that supports function calling.</td>
 </tr>
 <tr>
 <td><strong>Show time skip events as they are written</strong></td>

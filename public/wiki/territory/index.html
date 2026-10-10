@@ -121,7 +121,7 @@
     <h1>Territory: Control and Claims</h1>
     <p class="tagline">Who holds the ground and who says it should be theirs — two separate things, drawn differently on the map.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#control">Control</a></li><li class="d2"><a href="#claims-and-disputes">Claims and disputes</a></li><li class="d2"><a href="#playing-the-difference">Playing the difference</a></li><li class="d2"><a href="#regions-and-owners">Regions and owners</a></li><li class="d2"><a href="#what-territory-does-for-you">What territory does for you</a></li><li class="d2"><a href="#landless-countries">Landless countries</a></li><li class="d2"><a href="#the-sovereignty-layer">The sovereignty layer</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#control">Control</a></li><li class="d2"><a href="#claims-and-disputes">Claims and disputes</a></li><li class="d2"><a href="#groups">Groups</a></li><li class="d2"><a href="#playing-the-difference">Playing the difference</a></li><li class="d2"><a href="#regions-and-owners">Regions and owners</a></li><li class="d2"><a href="#what-territory-does-for-you">What territory does for you</a></li><li class="d2"><a href="#landless-countries">Landless countries</a></li><li class="d2"><a href="#the-sovereignty-layer">The sovereignty layer</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
     <p>The map is divided into <strong>regions</strong>. Every region has someone who administers it, and possibly
 other countries who say it should be theirs. Those are two different things, and the map draws
 them differently.</p>
@@ -135,8 +135,8 @@ describe territory changing hands without actually changing it — the narration
 change are the same object.</p>
 <p>After the skip, the game checks the turn&#39;s wording against the map: a place an event names in
 plain words — a city, an alias, a region — is found on the scenario&#39;s actual geography, captured
-towns change hands, and contested ones are striped. With <strong>Save AI requests</strong> on this is part of
-the one after-skip check. Ground handed to a country that does not exist yet founds it.</p>
+towns change hands, and contested ones are striped. The game does this itself, at no
+request. Ground handed to a country that does not exist yet founds it.</p>
 <p>A scenario can also set a <strong>tempo</strong> for the map — at most so many regions changing hands per 30
 days. A skip that moves more than that has the rest held back, and the next skip is told the
 front moves this far and to carry the rest on.</p>
@@ -156,6 +156,13 @@ recognised or dropped, that is a diplomatic outcome you have to argue for.</p>
 <p>Scenario authors can also mark disputes directly when drawing a map. World-level claims override
 whatever the scenario&#39;s geometry says, so a campaign can develop new disputes over time without
 the underlying map being edited. A dispute that ends stays ended on the map.</p>
+<h2 id="groups">Groups</h2>
+<p>Not every force that holds ground is a country. A <strong>group</strong> — an insurgency, a cartel, a militia,
+a zombie outbreak — controls an area of regions that stay their countries&#39;: no border moves. The
+map outlines the group&#39;s whole area and tints it in the group&#39;s colour, and a region&#39;s card says
+<strong>Group control</strong> with the group&#39;s name and what it is. The AI founds, spreads, pushes back and
+erases groups as events call for it, and a town a government takes back from one is released
+from its area. A scenario&#39;s author sets them up in the <a href="/wiki/editor/">map editor</a>.</p>
 <h2 id="playing-the-difference">Playing the difference</h2>
 <p>The gap between control and claim is most of what makes borders interesting.</p>
 <ul>
