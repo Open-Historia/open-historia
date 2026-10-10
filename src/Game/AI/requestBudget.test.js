@@ -228,14 +228,18 @@ test("a skip spends at most its cap, in the order it is asked", () => {
     assert.deepEqual(budget.log.map((entry) => entry.granted), [true, true, true, false, false]);
 });
 
-test("an unlimited budget is never refused, and still keeps its log", () => {
+test("no budget is without a cap", () => {
+    // Asking for one changes nothing.
     const budget = createJumpBudget({ unlimited: true, only: SKIP_SPENDERS });
-    for (let request = 0; request < 12; request += 1) assert.equal(budget.take("jump"), true);
-    assert.equal(budget.take("repair"), true, "and serves anyone");
-    assert.equal(budget.spent, 13);
-    assert.equal(budget.remaining, Infinity);
-    assert.equal(budget.free, Infinity);
-    assert.deepEqual(budget.skipped, []);
+    assert.equal("unlimited" in budget, false);
+    for (let request = 0; request < 3; request += 1) assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("jump"), false, "the cap holds");
+    assert.equal(budget.take("repair"), false, "and so does the list");
+    assert.equal(budget.spent, 3);
+    assert.equal(budget.remaining, 0);
+    assert.equal(budget.free, 0);
+    assert.deepEqual(budget.skipped, ["jump"]);
+    assert.deepEqual(budget.denied, ["repair"]);
 });
 
 // ---------------------------------------------------------------------------

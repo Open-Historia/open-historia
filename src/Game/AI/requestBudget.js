@@ -296,8 +296,10 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
 // `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
-// skip); null serves anyone.
-export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, only = null } = {}) => {
+// skip); null serves anyone. There is no budget without a cap: nothing in the
+// game asks for one, and a skip that could spend without limit is the thing the
+// cap is there to prevent.
+export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null } = {}) => {
     const spends = [];
     // Requests kept for a spender that asks later (reserve below).
     const reservations = new Map();
@@ -306,17 +308,15 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
     const spent = () => spends.filter((entry) => entry.granted).length;
     const reserved = () => [...reservations.values()].reduce((sum, value) => sum + value, 0);
     // Is this something the budget spends on at all, whatever is left of it?
-    const allows = (spender) => unlimited || !served || served.has(spenderBase(spender));
+    const allows = (spender) => !served || served.has(spenderBase(spender));
     return {
         cap: limit,
-        unlimited,
         only: served ? [...served] : null,
         allows,
         // Keep requests for a spender that asks later: a skip keeps one for
         // each of its segments (gameplay.js createJumpRequests). What asks
         // earlier cannot spend them, and the total cap never increases.
         reserve: (spender, count = 1) => {
-            if (unlimited) return 0;
             const key = String(spender || "other");
             const wanted = Math.max(0, Math.round(Number(count) || 0));
             if (!wanted) return reservations.get(key) || 0;
@@ -335,11 +335,9 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
                 return false;
             }
             const ownReservation = reservations.get(key) || 0;
-            const granted = unlimited || (
-                ownReservation > 0
-                    ? spent() < limit
-                    : spent() < Math.max(0, limit - reserved())
-            );
+            const granted = ownReservation > 0
+                ? spent() < limit
+                : spent() < Math.max(0, limit - reserved());
             if (granted && ownReservation > 0) {
                 if (ownReservation === 1) reservations.delete(key);
                 else reservations.set(key, ownReservation - 1);
@@ -348,11 +346,11 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false, on
             return granted;
         },
         get spent() { return spent(); },
-        get remaining() { return unlimited ? Infinity : Math.max(0, limit - spent()); },
-        get reserved() { return unlimited ? 0 : reserved(); },
+        get remaining() { return Math.max(0, limit - spent()); },
+        get reserved() { return reserved(); },
         // What anyone without a reservation could still take: the rounds of
         // function calling a task may ask (gameplay.js runJsonTask).
-        get free() { return unlimited ? Infinity : Math.max(0, limit - spent() - reserved()); },
+        get free() { return Math.max(0, limit - spent() - reserved()); },
         // Put off to stay inside the cap; and never asked, because a skip does
         // not spend on it.
         get skipped() { return spends.filter((entry) => !entry.granted && !entry.denied).map((entry) => entry.spender); },

@@ -2938,7 +2938,7 @@ const runJsonTask = async (taskKey, {
       // round of questions is a whole request, so this attempt may ask only as
       // many as the budget has free once every segment has kept its own (two
       // for an ordinary skip, which makes three requests the most a skip is).
-      const lookupRounds = budget && !budget.unlimited && Array.isArray(lookups?.tools) && lookups.tools.length
+      const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
         ? budget.free
         : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
