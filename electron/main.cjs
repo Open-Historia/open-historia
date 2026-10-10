@@ -13,28 +13,31 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem } = require("
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
+const { runLaunchUpdate } = require("./launchUpdate.cjs");
+const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
+const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
+const { createLayeredUpdater } = require("./layeredUpdate.cjs");
+const { createPayloadUpdater } = require("./payloadUpdate.cjs");
+const payloadBoot = require("./payloadBoot.cjs");
+const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 
 // Which build this is. scripts/stamp-channel.mjs writes electron/channel.json for
 // the beta build (`npm run dist:win:beta` and the beta release workflow); the
 // stable build ships no such file, reads "stable", and every branch below is the
 // behaviour it has always had. OH_CHANNEL overrides it for `npm run electron`,
-// which is the only way to exercise the beta paths unpackaged.
-const CHANNEL = (() => {
-  if (process.env.OH_CHANNEL) return String(process.env.OH_CHANNEL);
-  try {
-    const stamp = fs.readFileSync(path.join(__dirname, "channel.json"), "utf8");
-    return String(JSON.parse(stamp).channel || "stable");
-  } catch {
-    return "stable"; // no stamp: the stable build, or a dev run
-  }
-})();
+// which is the only way to exercise the beta paths unpackaged. Read in
+// electron/channel.cjs, with the beta's name (BETA_APP_NAME): the bootstrap
+// needs both before this file runs, and the two must agree.
+const CHANNEL = readChannel(__dirname);
 const IS_BETA = CHANNEL === "beta";
-// One name for the beta: its Chromium profile, its save library, its window title
-// and the Start Menu shortcut the installer creates. It has to match `productName`
-// in electron-builder.beta.yml, because that is the name the player sees, and
-// nothing derives one from the other.
-const BETA_APP_NAME = "Open Historia Beta";
+// The multiplayer build (`npm run dist:win:multiplayer`) is a third application,
+// the same way: its own profile, saves, settings and map folder, beside the
+// official app and the beta, never over them. Its name is in
+// electron/channel.cjs with the beta's, for the same reason.
+const IS_MULTIPLAYER = CHANNEL === "multiplayer";
+const APP_NAME = IS_BETA ? BETA_APP_NAME : IS_MULTIPLAYER ? MULTIPLAYER_APP_NAME : "Open Historia";
 
 // Electron derives userData — the Chromium profile, and with it the single-instance
 // lock — from the app name, which for both builds would otherwise be package.json's
@@ -44,7 +47,7 @@ const BETA_APP_NAME = "Open Historia Beta";
 // has to happen HERE, before anything reads a path: the installer's productName
 // does NOT reach Electron (it only names the exe, the install folder and the
 // shortcut).
-if (IS_BETA) app.setName(BETA_APP_NAME);
+if (IS_BETA || IS_MULTIPLAYER) app.setName(APP_NAME);
 
 // Where a beta build looks for ITS updates. server.js defaults the desktop track to
 // .../desktop-stable/latest.json, so without this override a tester would be offered
@@ -62,6 +65,14 @@ if (IS_BETA) app.setName(BETA_APP_NAME);
 const BETA_UPDATE_MANIFEST =
   "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/latest.json";
 
+// Where the stable app's update screen sends a player who wants the beta: the
+// Windows installer itself, and elsewhere the release page, which lists the
+// builds for each system. The beta installs beside the stable app, as its own
+// application with its own saves (see above), so trying it risks nothing.
+const BETA_DOWNLOAD_URL = process.platform === "win32"
+  ? "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe"
+  : "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta";
+
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
 // full stop, so nothing may be written next to the code (see server/dataDir.js).
@@ -74,8 +85,9 @@ const BETA_UPDATE_MANIFEST =
 // testing the beta a way to quietly damage a real campaign.
 const USER_ROOT = app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
-// The world map is the exception, and it is the safe one to share: ~170MB of
-// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches,
+// The world map is the exception, and it is the safe one to share: ~35MB of
+// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches
+// (so a change to those pins has to reach every branch in the same release),
 // and written through a temp file and a rename. Pointing the beta at the stable
 // app's copy saves a tester that download; with no stable install the fetcher just
 // creates the folder, and a later stable install finds the map already there.
@@ -86,9 +98,12 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
   : path.join(USER_ROOT, "public", "assets");
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
-// "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
-// every file exactly where DATA_DIR and ASSETS_DIR already expect it — no
-// changes to the fetcher, and one place that decides the layout.
+// "server/data/stock/..."). The server reads them from these two folders, and
+// the fetcher inherits both variables and writes "public/assets/..." into
+// ASSETS_DIR and "server/data/..." into DATA_DIR (assetTarget() below is the
+// same rule, for the setup check). Resolving them against USER_ROOT instead
+// sent a packaged beta's download into its own folder while its server read
+// the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
 
@@ -160,10 +175,17 @@ process.on("unhandledRejection", (reason) => {
 // the update banner can compare it against the published one. Deliberately routed
 // this way rather than through a preload: attaching a preload to the game window is
 // what broke the app last time, and this adds nothing to how the window is created.
+//
+// The multiplayer build has no feed of its own to compare against, and the
+// official one would offer it the stable installer "as an update": a way out of
+// multiplayer, not a newer copy of it. So it never reads a build id, and the
+// banner never shows.
 try {
-  process.env.OH_DESKTOP_BUILD = String(
-    JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
-  );
+  if (!IS_MULTIPLAYER) {
+    process.env.OH_DESKTOP_BUILD = String(
+      JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
+    );
+  }
 } catch {
   /* dev build: unstamped, so no update is ever offered */
 }
@@ -186,7 +208,9 @@ try {
 // (CSC_IDENTITY_AUTO_DISCOVERY: false) because there is no Developer ID
 // certificate yet. Attempting it there produces an error and nothing else, so mac
 // keeps the manual download until there is a certificate to sign with.
-const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
+//
+// Nor does the multiplayer build update itself: it has no feed (see above).
+const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin" && !IS_MULTIPLAYER;
 
 // What the banner polls. One object, replaced rather than mutated, so a read is
 // always internally consistent.
@@ -198,7 +222,10 @@ const setUpdateState = (patch) => {
   if (patch.state === "error") logMain("warn", "updater.failed", updateState.error);
 };
 
-const setupAutoUpdater = () => {
+// The installer's updater: the whole app again, about 140 MB, run in place. It
+// is what replaces the Electron runtime, and what an update falls back to when
+// it cannot be made of chunks (setupAutoUpdater, below).
+const setupInstallerUpdater = () => {
   // A dev run has no app-update.yml inside it, so electron-updater would only
   // ever error; an unpackaged app also cannot be replaced by an installer.
   if (!AUTO_UPDATE_SUPPORTED || !app.isPackaged) return null;
@@ -219,12 +246,88 @@ const setupAutoUpdater = () => {
     warn: (message) => logMain("warn", "updater", message),
     error: (message) => logMain("error", "updater", message),
   };
-  // The banner decides when to download — a player on a metered connection
-  // should not have ~100MB pulled out from under them by opening the game.
+  // Nothing downloads on its own. Opening the game downloads and installs a
+  // waiting update with a progress bar and a button to open the game now
+  // (electron/launchUpdate.cjs, from boot()); one found while the game is open
+  // waits for the banner's button — ~100MB is not pulled out from under a player
+  // mid-session on a metered connection.
   autoUpdater.autoDownload = false;
+  // Every installer is published under one fixed name on a rolling release, so
+  // the "old" block map electron-updater fetches for a differential download is
+  // the new one: it concludes nothing changed, assembles the old installer
+  // again, fails the checksum and only then downloads in full. Go straight to
+  // the full download.
+  autoUpdater.disableDifferentialDownload = true;
   // If they download but never press Restart, it installs on the next quit
   // instead of being thrown away.
   autoUpdater.autoInstallOnAppQuit = true;
+  return autoUpdater;
+};
+
+// An update made of the chunks that changed (electron/payloadUpdate.cjs). A
+// release publishes the app's own files (everything inside app.asar) cut into
+// chunks, each a file of its own on a release beside the installers', with a
+// manifest per system. The app fetches the chunks it cannot make from the
+// files it already has, puts the newer set together in the player's data
+// folder, and the next start runs from it (electron/bootstrap.cjs). Typically
+// a few megabytes where the installer is about 140, and it works where the
+// installer cannot run in place at all (macOS, unsigned).
+const PAYLOAD_FEED = `https://github.com/Open-Historia/open-historia/releases/download/${IS_BETA ? "desktop-beta-chunks" : "desktop-stable-chunks"}/`;
+const PAYLOAD_PLATFORM = { win32: "win", darwin: "mac", linux: "linux" }[process.platform] || "";
+// OH_PAYLOAD_FEED points a packaged build at a release served from this
+// machine, for testing an update end to end. From this machine only: the feed
+// is where the app's code comes from.
+const payloadFeed = () => {
+  const override = String(process.env.OH_PAYLOAD_FEED || "");
+  if (/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//.test(override)) return override.endsWith("/") ? override : `${override}/`;
+  return PAYLOAD_FEED;
+};
+const setupPayloadUpdater = () => {
+  const build = String(process.env.OH_DESKTOP_BUILD || "");
+  // An unstamped build is nobody's release: nothing published is its update.
+  // Nor is anything the multiplayer build's: the official app's chunks would
+  // put the official game in its place.
+  if (!app.isPackaged || !PAYLOAD_PLATFORM || !build || IS_MULTIPLAYER) return null;
+  return createPayloadUpdater({
+    feed: payloadFeed(),
+    manifestName: `payload-${PAYLOAD_PLATFORM}.json`,
+    payloadDir: path.join(USER_ROOT, payloadBoot.PAYLOAD_FOLDER),
+    // The files that are running: app.asar, or the set an earlier update made.
+    currentRoot: APP_ROOT,
+    currentBuild: build,
+    shell: payloadBoot.shellOf(),
+    log: (level, message) => logMain(level, "updater.chunks", message),
+  });
+};
+
+// The version of the files that are running, which after an update made of
+// chunks is newer than the installed ones electron-updater compares against.
+const runningVersion = () => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(APP_ROOT, "package.json"), "utf8")).version || "");
+  } catch {
+    return "";
+  }
+};
+
+// The one updater everything else drives: chunks first, the installer behind
+// them (electron/layeredUpdate.cjs has the rules). It has electron-updater's
+// shape, so the launch screen and the banner's routes drive either.
+const setupAutoUpdater = () => {
+  const installer = setupInstallerUpdater();
+  const payload = setupPayloadUpdater();
+  if (!installer && !payload) return null;
+  const autoUpdater = createLayeredUpdater({
+    installer,
+    payload,
+    runningVersion: runningVersion(),
+    // Nothing to install: the files are in place, and a new start runs them.
+    relaunch: () => {
+      app.relaunch();
+      app.exit(0);
+    },
+    log: (level, message) => logMain(level, "updater", message),
+  });
   autoUpdater.on("checking-for-update", () => setUpdateState({ state: "checking", error: "" }));
   autoUpdater.on("update-available", (info) => setUpdateState({ state: "available", percent: 0, version: String(info?.version || ""), error: "" }));
   autoUpdater.on("update-not-available", () => setUpdateState({ state: "none", percent: 0 }));
@@ -240,9 +343,11 @@ const setupAutoUpdater = () => {
 // Published on globalThis for server.js, which is imported into THIS process and
 // serves /api/app-update/{status,download,restart} straight off it. Called from
 // boot() before the server starts, so the routes are never live without it.
+// Returns the updater (null where the app cannot update itself) for the launch
+// check in boot().
 const installAutoUpdater = () => {
   const autoUpdater = setupAutoUpdater();
-  if (!autoUpdater) return;
+  if (!autoUpdater) return null;
   globalThis.__ohAutoUpdate = {
     status: () => updateState,
     download: () => {
@@ -287,6 +392,7 @@ const installAutoUpdater = () => {
     // quitAndInstall tears the process down immediately.
     restart: () => { setTimeout(() => autoUpdater.quitAndInstall(true, true), 400); },
   };
+  return autoUpdater;
 };
 
 const APP_ROOT = path.join(__dirname, "..");
@@ -298,7 +404,71 @@ const MANIFEST = path.join(APP_ROOT, "scripts", "map-assets.json");
 let mainWindow = null;
 let setupWindow = null;
 
+// --- a shared game's engine window ------------------------------------------
+
+// A host runs its shared game in a hidden window of its own
+// (src/multiplayer/host/engineMain.js, on engine.html): the game's engine lives
+// there, and the host's ordinary window plays it like any other player, so the
+// host's screen shows only what the host's government may know. Unthrottled,
+// because it keeps time for every player while nobody looks at it.
+//
+// Reachable from the page the same way the updater is: server.js runs in THIS
+// process and serves /api/multiplayer/engine/{open,close} straight off the handle
+// published below, with no preload on either window.
+let engineWindow = null;
+
+const closeEngineWindow = () => {
+  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
+  engineWindow = null;
+};
+
+const installSharedGameEngine = () => {
+  globalThis.__ohSharedGameEngine = {
+    status: () => ({ open: Boolean(engineWindow && !engineWindow.isDestroyed()) }),
+    open: async () => {
+      if (engineWindow && !engineWindow.isDestroyed()) return { open: true };
+      const port = process.env.PORT || 3000;
+      const origin = `http://localhost:${port}`;
+      engineWindow = new BrowserWindow({
+        show: false,
+        width: 640,
+        height: 480,
+        title: "Open Historia — shared game",
+        webPreferences: { backgroundThrottling: false, spellcheck: false },
+      });
+      // It never goes anywhere, and never opens anything.
+      engineWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      engineWindow.webContents.on("will-navigate", (event, targetUrl) => {
+        if (!targetUrl.startsWith(`${origin}/engine.html`)) event.preventDefault();
+      });
+      engineWindow.webContents.on("render-process-gone", (_event, details) => {
+        logMain("warn", "engine.gone", String(details?.reason || "unknown"));
+        closeEngineWindow();
+      });
+      engineWindow.on("closed", () => {
+        engineWindow = null;
+      });
+      await engineWindow.loadURL(`${origin}/engine.html`);
+      return { open: true };
+    },
+    close: () => {
+      closeEngineWindow();
+      return { open: false };
+    },
+  };
+};
+
 // --- map data ---------------------------------------------------------------
+
+// Where a manifest path lives on disk: the rule scripts/fetch-map-assets.mjs
+// applies with the OH_ASSETS_DIR / OH_DATA_DIR set above, so the setup check
+// looks where the download writes and the server reads.
+const assetTarget = (assetPath) => {
+  const rel = String(assetPath).replace(/\\/g, "/");
+  if (rel.startsWith("public/assets/")) return path.join(ASSETS_DIR, rel.slice("public/assets/".length));
+  if (rel.startsWith("server/data/")) return path.join(DATA_DIR, rel.slice("server/data/".length));
+  return path.join(USER_ROOT, rel);
+};
 
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
@@ -320,7 +490,7 @@ const relocateLegacyStockMap = () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
     const stock = (manifest.assets ?? []).find((asset) => asset.path === "server/data/stock/regions.geojson");
     if (!stock) return;
-    const target = path.join(USER_ROOT, stock.path);
+    const target = assetTarget(stock.path);
     const legacy = path.join(USER_ROOT, "server", "data", "scenarios", "default", "regions.geojson");
     if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
     // A file of another size is a map the player put there, not ours to move.
@@ -332,6 +502,73 @@ const relocateLegacyStockMap = () => {
   }
 };
 
+// A file's SHA-256, read a megabyte at a time: a map archive runs to 100 MB,
+// and this is the main process.
+const sha256OfFile = (file) => {
+  const hash = crypto.createHash("sha256");
+  const chunk = Buffer.allocUnsafe(1 << 20);
+  const fd = fs.openSync(file, "r");
+  try {
+    for (;;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read <= 0) break;
+      hash.update(chunk.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+
+// Until this build the fetcher resolved every manifest path against USER_ROOT,
+// so a packaged beta that has been through the setup download holds the whole
+// map under its OWN public/assets, where its server never looked. With the
+// check, the download and the server now agreed on the shared folder, that
+// install would be sent through the same 230 MB a second time. Each such file
+// is moved to where it is read instead, BEFORE the manifest is checked, as the
+// stock map is above.
+//
+// Only a file that is the published one, byte for byte: the folder it goes to
+// is the stable app's too, the setup check trusts a file's size, and a file of
+// the right length with other contents would be both apps' map from then on. A
+// file already in the shared folder at the right size stays, and so does ours.
+// Returns the release names of the files it moved.
+const relocateOwnFolderMap = () => {
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
+  } catch {
+    return [];
+  }
+  const moved = [];
+  for (const asset of manifest.assets ?? []) {
+    try {
+      const target = assetTarget(asset.path);
+      const own = path.join(USER_ROOT, String(asset.path));
+      // One folder: the stable build, a dev run, and what the beta keeps for itself.
+      if (path.resolve(own) === path.resolve(target)) continue;
+      if (fs.statSync(own).size !== asset.bytes) continue;
+      let inPlace = false;
+      try {
+        inPlace = fs.statSync(target).size === asset.bytes;
+      } catch {
+        inPlace = false;
+      }
+      if (inPlace || sha256OfFile(own) !== asset.sha256) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.renameSync(own, target);
+      moved.push(asset.asset);
+    } catch {
+      // Best effort, a file at a time: nothing of ours there, or it could not
+      // be moved, and the fetcher downloads it.
+    }
+  }
+  if (moved.length) {
+    logMain("info", "map.relocated", `Moved ${moved.length} map file(s) this app had downloaded into its own folder to the folder its server reads.`, { assets: moved });
+  }
+  return moved;
+};
+
 const missingAssets = () => {
   let manifest;
   try {
@@ -341,10 +578,26 @@ const missingAssets = () => {
   }
   return (manifest.assets ?? []).filter((asset) => {
     try {
-      return fs.statSync(path.join(USER_ROOT, asset.path)).size !== asset.bytes;
+      return fs.statSync(assetTarget(asset.path)).size !== asset.bytes;
     } catch {
       return true;
     }
+  });
+};
+
+// The fetcher reports a file it could not get only on stderr ("[warn] could not
+// download ..."), and a packaged app shows no console, so each line goes to the
+// Desktop log a player sends with a report.
+const logFetcherStderr = (child, event) => {
+  let pending = "";
+  child.stderr.on("data", (chunk) => {
+    pending += chunk.toString();
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) logMain("warn", event, line.trim());
+  });
+  child.stderr.on("end", () => {
+    if (pending.trim()) logMain("warn", event, pending.trim());
   });
 };
 
@@ -358,6 +611,7 @@ const downloadMapData = (onProgress) =>
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    logFetcherStderr(child, "map.download");
     let buffer = "";
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -390,7 +644,7 @@ const verifyMapData = () => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  logFetcherStderr(child, "map.verify");
   child.on("error", () => {});
 };
 
@@ -399,13 +653,44 @@ const verifyMapData = () => {
 const createSetupWindow = () =>
   new BrowserWindow({
     width: 560,
-    height: 320,
+    // Tall enough for the update screen with both of its offers (open the game
+    // now, download the beta) without scrolling.
+    height: 470,
     resizable: false,
     // No menu bar, no dev chrome — this is a setup dialog, not a browser.
     autoHideMenuBar: true,
     backgroundColor: "#131315",
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
+  });
+
+// After a download that left files missing, the setup window offers "Try
+// again" or "Continue without the map"; resolves with "retry" or "continue".
+// Closing the window instead quits the app, as it always has.
+const waitForSetupChoice = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:choice", (_event, choice) => resolve(choice === "retry" ? "retry" : "continue"));
+  });
+
+// The fetcher keeps printing progress after a player closes the setup window
+// (which quits the app), and a destroyed window throws on every send.
+const sendToSetup = (channel, payload) => {
+  if (setupWindow && !setupWindow.isDestroyed()) setupWindow.webContents.send(channel, payload);
+};
+
+// One setup window for everything shown before the game: an update installing at
+// launch, then the map download if one is needed.
+const openSetupWindow = async () => {
+  if (setupWindow) return;
+  setupWindow = createSetupWindow();
+  await setupWindow.loadFile(path.join(__dirname, "setup.html"));
+  setupWindow.show();
+};
+
+// "Open the game now" while an update downloads at launch.
+const waitForUpdateLater = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:update-later", () => resolve());
   });
 
 // Electron builds NO context menu on its own — a right-click just does
@@ -476,7 +761,7 @@ const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => 
   const reason = String(details?.reason || "unknown");
   if (reason === "clean-exit" || isQuitting || !win || win.isDestroyed()) return false;
   logMain("error", "window.pageGone", `The game's page stopped (${reason}).`, { reason, exitCode: details?.exitCode });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const { message, detail } = pageGoneWording(reason, name);
   dialog
     .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
@@ -499,7 +784,7 @@ const createMainWindow = () => {
     autoHideMenuBar: true,
     backgroundColor: "#131315",
     show: false,
-    title: IS_BETA ? BETA_APP_NAME : "Open Historia",
+    title: APP_NAME,
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },
@@ -541,7 +826,16 @@ const createMainWindow = () => {
   });
   attachEditingContextMenu(win);
   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    win.show();
+    // The game's window is up. When these files are a set an update put
+    // together, that is what says they start (electron/bootstrap.cjs counts a
+    // start that never gets here, and gives the set up after two).
+    globalThis.__ohPayload?.confirm?.();
+  });
+  // A shared game's hidden engine window would otherwise keep the app running
+  // with nothing on screen.
+  win.on("closed", closeEngineWindow);
   return win;
 };
 
@@ -612,12 +906,16 @@ const findFreePort = async (start, attempts = 20) => {
   throw new Error(`No free port found in ${start}-${start + attempts - 1}.`);
 };
 
+// The port this launch asked for, before the search moved on from a taken one.
+let requestedPort = 3000;
+
 // Starting the server is importing it: server.js calls app.listen() at module
 // scope. It reads OH_DATA_DIR / OH_ASSETS_DIR / PORT, all set before the import.
 const startServer = async () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(ASSETS_DIR, { recursive: true });
   const requested = Number(process.env.PORT) || 3000;
+  requestedPort = requested;
   const port = await findFreePort(requested);
   if (port !== requested) {
     console.log(`Port ${requested} is in use — starting Open Historia on ${port} instead.`);
@@ -629,13 +927,37 @@ const startServer = async () => {
 };
 
 const boot = async () => {
-  installAutoUpdater();
+  // Which copy of the app's files this start runs: the installed ones, or a
+  // set an update put together (electron/bootstrap.cjs decided, and says why).
+  const files = globalThis.__ohPayload;
+  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`);
+  const updater = installAutoUpdater();
+  // Opening the game installs a waiting update before anything else starts
+  // (electron/launchUpdate.cjs); the banner is for one found while it is open.
+  // Nothing here may stop the game opening: any failure opens it as before.
+  const launchUpdate = await runLaunchUpdate({
+    updater,
+    fs,
+    recordFile: path.join(USER_ROOT, "launch-update.json"),
+    showWindow: openSetupWindow,
+    // The stable app's update screen also offers the beta (setup.html); the
+    // beta has nothing newer to offer.
+    send: (payload) => sendToSetup("setup:update", { ...payload, betaOffer: !IS_BETA }),
+    waitForLater: waitForUpdateLater,
+    log: logMain,
+  }).catch((error) => {
+    logMain("warn", "updater.launchFailed", String(error?.message || error));
+    return { installing: false };
+  });
+  ipcMain.removeHandler("setup:update-later");
+  // Quitting into the installer, which reopens the game on the new version.
+  if (launchUpdate.installing) return;
+  installSharedGameEngine();
   relocateLegacyStockMap();
-  const pending = missingAssets();
-  if (pending.length) {
-    setupWindow = createSetupWindow();
-    await setupWindow.loadFile(path.join(__dirname, "setup.html"));
-    setupWindow.show();
+  relocateOwnFolderMap();
+  let pending = missingAssets();
+  while (pending.length) {
+    await openSetupWindow();
     const totalBytes = pending.reduce((sum, asset) => sum + asset.bytes, 0);
     let doneBytes = 0;
     let currentAsset = "";
@@ -644,19 +966,41 @@ const boot = async () => {
         if (currentAsset) doneBytes += pending.find((a) => a.asset === currentAsset)?.bytes ?? 0;
         currentAsset = asset;
       }
-      setupWindow?.webContents.send("setup:progress", {
+      sendToSetup("setup:progress", {
         asset,
         received: doneBytes + received,
         total: totalBytes,
         assetTotal: total,
       });
     });
-    setupWindow?.webContents.send("setup:done");
+    // The fetcher always exits 0 (it must never block a launch or an update),
+    // so whether the download worked is read off the disk. A player who hit a
+    // network blip used to be sent into a blank world with no word about it.
+    pending = missingAssets();
+    if (!pending.length) {
+      sendToSetup("setup:done");
+      break;
+    }
+    logMain("warn", "map.incomplete", `${pending.length} map file(s) still missing after the download.`, {
+      assets: pending.map((asset) => asset.asset),
+    });
+    sendToSetup("setup:failed", { missing: pending.length });
+    if ((await waitForSetupChoice()) !== "retry") {
+      sendToSetup("setup:done");
+      break;
+    }
   }
 
   await startServer();
   mainWindow = createMainWindow();
   const port = process.env.PORT || 3000;
+  // Not awaited: these are other origins than the one about to load, and
+  // deleting gigabytes must not hold the window up.
+  clearOtherPortsCaches(mainWindow.webContents.session, { port: Number(port), requested: requestedPort })
+    .then((cleared) => {
+      if (cleared.failed) logMain("warn", "cache.otherPorts", `${cleared.failed} of ${cleared.origins} other ports' caches could not be cleared.`);
+    })
+    .catch(() => {});
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
@@ -671,7 +1015,7 @@ const boot = async () => {
 const reportFatalBootError = (error) => {
   const message = String((error && error.message) || error || "Unknown error");
   logMain("error", "main.bootFailed", message, { code: error && error.code });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
   dialog.showErrorBox(
     `${name} could not start`,
@@ -703,4 +1047,8 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
   });
   ipcMain.handle("setup:cancel", () => app.quit());
+  // "Download the beta" on the update screen: in the player's own browser, so
+  // the download is where they can see it. Nothing about this launch changes:
+  // the update goes on installing.
+  ipcMain.handle("setup:open-beta", () => shell.openExternal(BETA_DOWNLOAD_URL));
 }

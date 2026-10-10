@@ -3,14 +3,19 @@
 // Browse + install + publish basemaps shared through the community hub. Mirrors
 // the scenario hub (src/Game/GameUI/communityHub.jsx): each community basemap is
 // a GitHub issue labeled "basemap" (via the basemap.yml issue form) whose body
-// carries the raw basemap image as an attachment — GitHub renders that image as
-// the card cover for free, and install reads the same image back. A content hash
-// in the body lets a scenario reference an existing community basemap instead of
-// re-embedding it. Publishing is the token-less flow scenarios use: the app hands
-// the author the real image file and opens a prefilled issue form to drag it into.
+// carries the raw basemap image as an attachment. The hub checks that file and
+// puts a checked copy in its releases (hubFiles.js): the copy is the card's
+// picture and what install reads back, never the attachment itself. A content
+// hash in the body lets a scenario reference an existing community basemap
+// instead of re-embedding it. Publishing is the token-less flow scenarios use:
+// the app hands the author the real image file and opens a prefilled issue form
+// to drag it into.
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
-import { unzipBundle, zipBundle } from "./bundleZip.js";
+import { looksLikeZip, unzipBundle, zipBundle } from "./bundleZip.js";
+import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
+import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./hubFiles.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -18,29 +23,21 @@ import { saveBlobToDisk } from "./saveFile.js";
 const utf8ToBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
 const base64ToUtf8 = (b64) => decodeURIComponent(escape(atob(b64)));
 
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_BASEMAPS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=basemap&per_page=100`;
-// Scenario posts are scanned too: one shipped as a .zip carries a custom basemap,
-// which we surface in the basemap browser so a basemap shared via a scenario is
-// usable on its own without a second upload.
-const HUB_API_SCENARIOS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
+// Basemap posts are the hub's issues labelled "basemap". Scenario posts are
+// scanned too: one shipped as a .zip carries a custom basemap, which we surface
+// in the basemap browser so a basemap shared via a scenario is usable on its
+// own without a second upload. Both lists are hubIssues.js's, cached and shared
+// with the other hub screens.
 const SCENARIO_ZIP_PATTERN =
   /https:\/\/github\.com\/(?:[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.zip|user-attachments\/files\/[^\s)<>"']+\.zip)/i;
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
 // A non-image data file linked in an issue body: an old .basemap.json bundle or a
 // new vector's .geojson attachment. Inline images (the new image payload/cover)
 // are NOT matched here — they live in coverImageUrl instead.
 const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|geojson|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.(?:json|geojson))/i;
-const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const HASH_PATTERN = /Basemap-Hash:\s*([a-f0-9]{16,64})/i;
 const KIND_PATTERN = /Basemap-Kind:\s*(image|vector)/i;
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-let cache = { at: 0, posts: null };
 
 // ---- data URL <-> bytes ---------------------------------------------------
 const MIME_TO_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg" };
@@ -64,13 +61,6 @@ const base64ToBytes = (b64) => {
   return bytes;
 };
 
-const bytesToBase64 = (bytes) => {
-  let bin = "";
-  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  for (let i = 0; i < arr.length; i += 1) bin += String.fromCharCode(arr[i]);
-  return btoa(bin);
-};
-
 const dataUrlToBytes = (dataUrl) => {
   const { mime, b64 } = dataUrlParts(dataUrl);
   return { bytes: base64ToBytes(b64), mime };
@@ -80,9 +70,11 @@ const bytesToDataUrl = (bytes, mime) => `data:${mime || "image/png"};base64,${by
 
 // ---- hub fetch through the CORS proxy -------------------------------------
 // The proxy passes the upstream content type through, so JSON/geojson come back
-// as text and images as bytes; callers pick the accessor they need.
+// as text and images as bytes; callers pick the accessor they need. `url` is
+// the file as its post names it; what is fetched is its checked copy in the
+// hub's releases, and with no copy the fetch fails (hubFiles.js).
 const fetchHubResponse = async (url) => {
-  const r = await fetch(`/api/hub/file?url=${encodeURIComponent(url)}`);
+  const r = await fetchHubFile(url);
   if (!r.ok) {
     const p = await r.json().catch(() => ({}));
     throw new Error(p.error || `Download failed (HTTP ${r.status}).`);
@@ -90,18 +82,19 @@ const fetchHubResponse = async (url) => {
   return r;
 };
 
-const fetchHubText = async (url) => (await fetchHubResponse(url)).text();
+// The copy says what kind of image it is by its bytes: the post's address
+// cannot (an .svg's copy is a PNG the hub drew of it) and neither can the
+// response (GitHub serves a release file as application/octet-stream).
 const fetchHubImage = async (url) => {
   const r = await fetchHubResponse(url);
-  const buf = await r.arrayBuffer();
+  const bytes = new Uint8Array(await r.arrayBuffer());
   const ctype = (r.headers.get("content-type") || "").split(";")[0].trim();
-  const mime = ctype.startsWith("image/") ? ctype : extToMime(url.split(".").pop());
-  return bytesToDataUrl(new Uint8Array(buf), mime);
+  const mime = imageTypeOfBytes(bytes) || (ctype.startsWith("image/") ? ctype : extToMime(url.split(".").pop()));
+  return bytesToDataUrl(bytes, mime);
 };
 
 const parseBasemapPost = (issue) => {
   const body = String(issue.body ?? "");
-  const coverMatch = body.match(COVER_IMAGE_PATTERN);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Basemap\]\s*/i, "").trim() || `Basemap #${issue.number}`,
@@ -113,8 +106,10 @@ const parseBasemapPost = (issue) => {
     upvotes: issue.reactions?.["+1"] ?? 0,
     // A non-image data file (old .basemap.json bundle, or a new vector .geojson).
     bundleUrl: body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null,
-    // The attached image: card cover AND, for new image basemaps, the payload.
-    coverImageUrl: coverMatch ? coverMatch[1] ?? coverMatch[2] ?? null : null,
+    // The attached image, as the post names it: for new image basemaps, the
+    // payload. Only an image GitHub hosts (hubIssues.js firstHubImage). What a
+    // card shows of it is its checked copy (pictureUrl, fetchCommunityBasemaps).
+    coverImageUrl: firstHubImage(body),
     contentHash: body.match(HASH_PATTERN)?.[1]?.toLowerCase() ?? null,
     kind: body.match(KIND_PATTERN)?.[1]?.toLowerCase() ?? "image",
   };
@@ -155,31 +150,19 @@ export const basemapPostInstallable = (post) =>
   Boolean(post?.fromScenario || post?.bundleUrl || (post?.kind === "image" && post?.coverImageUrl));
 
 export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
-  if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
-  const headers = { Accept: "application/vnd.github+json" };
   // Dedicated basemap posts, plus scenario posts (scanned so their basemaps show up
-  // here too). The scenarios call is best-effort — a failure just hides those.
-  const [bmRes, scRes] = await Promise.all([
-    fetch(HUB_API_BASEMAPS, { headers }),
-    fetch(HUB_API_SCENARIOS, { headers }).catch(() => null),
+  // here too), and the index both lists are made of: one read for the three,
+  // since callers asking together share it.
+  const [bmIssues, scIssues, hubIndex] = await Promise.all([
+    fetchHubIssues("basemap", { force }),
+    fetchHubScenarioIssues({ force }),
+    fetchHubIndex({ force }),
   ]);
-  if (!bmRes.ok) {
-    throw new Error(
-      bmRes.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the basemap hub (HTTP ${bmRes.status}).`,
-    );
-  }
-  const bmIssues = await bmRes.json();
-  const dedicated = (Array.isArray(bmIssues) ? bmIssues : []).filter((i) => !i.pull_request).map(parseBasemapPost);
-  let fromScenarios = [];
-  if (scRes && scRes.ok) {
-    const scIssues = await scRes.json().catch(() => []);
-    fromScenarios = (Array.isArray(scIssues) ? scIssues : [])
-      .filter((i) => !i.pull_request)
-      .map(parseScenarioAsBasemap)
-      .filter(Boolean);
-  }
+  // What a post offers has to be among the hub's checked files, or there is
+  // nothing to download: its image or data file, a scenario's .zip.
+  const released = (post) => Boolean(releaseCopyOf(hubIndex, post.fromScenario ? post.scenarioZipUrl : payloadRefUrl(post)));
+  const dedicated = bmIssues.map(parseBasemapPost).filter(released);
+  const fromScenarios = scIssues.map(parseScenarioAsBasemap).filter(Boolean).filter(released);
   // A basemap that also exists as a dedicated post is shown once (prefer the
   // dedicated post — real cover image, cheaper install). Scenario-carried basemaps
   // without a hash can't be deduped, so they always appear.
@@ -190,8 +173,9 @@ export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
     if (s.contentHash) seen.add(s.contentHash);
     posts.push(s);
   }
-  cache = { at: Date.now(), posts };
-  return posts;
+  // pictureUrl is what a card shows: the checked copy of the post's image, or
+  // null (a vector, a scenario's basemap: the card's placeholder).
+  return posts.map((post) => ({ ...post, pictureUrl: releaseCopyOf(hubIndex, post.coverImageUrl) }));
 };
 
 // Dedup lookup — reads the issue list only (no downloads), matching the content
@@ -207,6 +191,84 @@ export const findCommunityBasemapByHash = async (hash) => {
   } catch {
     return null;
   }
+};
+
+// A post's data file, read back into { meta, kind, payload }. Shared by install
+// and by a scenario's communityRef (resolveScenarioBundleBackground), which
+// point at the same file. Told apart by its bytes, not its name:
+//   - a .zip: a vector basemap published zipped, because GitHub's issue
+//     attachments reject .geojson outright ("File type .geojson not
+//     supported") — the same trick scenario bundles already rely on;
+//   - an old .basemap.json bundle, or a vector .geojson file (posts made before
+//     GitHub started rejecting the extension, or linked from a release).
+const readBasemapDataFile = async (url) => {
+  const bytes = new Uint8Array(await (await fetchHubResponse(url)).arrayBuffer());
+  if (looksLikeZip(bytes)) {
+    const zip = await unzipBundle(bytes);
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n))
+      ?? zip.names().find((n) => /\.geojson$/i.test(n));
+    if (vectorName) {
+      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
+      return { meta: {}, kind: "vector", payload: { geojson } };
+    }
+    const imageName = zip.names().find((n) => /\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
+    if (imageName) {
+      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
+      return { meta: {}, kind: "image", payload: { dataUrl } };
+    }
+    throw new Error("That .zip has no basemap inside it.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("That basemap file isn't valid JSON.");
+  }
+  if (parsed && parsed.payload) {
+    // Old bundle: { basemap:{…}, payload:{ dataUrl | geojson } }.
+    const kind = parsed.basemap?.kind === "vector" ? "vector" : "image";
+    return { meta: parsed.basemap ?? {}, kind, payload: parsed.payload ?? {} };
+  }
+  if (parsed && (parsed.type === "FeatureCollection" || Array.isArray(parsed.features))) {
+    return { meta: {}, kind: "vector", payload: { geojson: parsed } };
+  }
+  throw new Error("That basemap file is missing its data.");
+};
+
+// A scenario zip's basemap as the scenario itself carries it: the
+// backgroundData asset of its scenario.json, embedded or lifted out as a file
+// of the zip (assets/background.json; bundleFiles.js). That is how a scenario
+// exported from the library travels, and how one made outside the game does:
+// only the Publish button also lays the picture beside it as basemap.<ext>.
+// The menu looked for that file alone, so such a post was listed as carrying a
+// basemap and then answered "That scenario has no basemap inside it."
+// `zip` is an unzipBundle() handle. null when the scenario has none.
+export const readScenarioZipBackground = async (zip) => {
+  const names = zip.names();
+  const name = names.find((n) => /(^|\/)scenario\.json$/i.test(n)) ?? names.find((n) => /^[^/]+\.json$/i.test(n));
+  if (!name) return null;
+  let bundle;
+  try {
+    bundle = await restoreBundleFiles(JSON.parse(await zip.text(name)), zip);
+  } catch {
+    return null;
+  }
+  const asset = bundle?.assets?.backgroundData;
+  if (asset?.mode !== "embedded" || asset.data == null) return null;
+  let payload = asset.data;
+  if (typeof payload === "string") {
+    // A bundle written before JSON assets stopped being base64'd.
+    try {
+      payload = JSON.parse(base64ToUtf8(payload));
+    } catch {
+      return null;
+    }
+  }
+  if (!payload || typeof payload !== "object") return null;
+  const vector = bundle?.data?.world?.background?.kind === "vector";
+  if (payload.geojson && (vector || !payload.dataUrl)) return { kind: "vector", payload: { geojson: payload.geojson } };
+  if (typeof payload.dataUrl === "string" && payload.dataUrl.startsWith("data:image/")) return { kind: "image", payload: { dataUrl: payload.dataUrl } };
+  return null;
 };
 
 // Resolve a post to its payload: { kind, dataUrl } | { kind:"vector", geojson }.
@@ -227,50 +289,15 @@ const loadBasemapPayload = async (post) => {
       const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
       return { meta: {}, kind: "vector", payload: { geojson } };
     }
+    // Not laid beside the scenario: read it out of the scenario itself.
+    const carried = await readScenarioZipBackground(zip);
+    if (carried) return { meta: {}, ...carried };
     throw new Error("That scenario has no basemap inside it.");
   }
   // An image the post links as a file (e.g. an .svg GitHub attaches rather than
   // rendering inline) is the image payload, not a data file.
   const imageFileUrl = post.bundleUrl && IMAGE_EXT_PATTERN.test(post.bundleUrl) ? post.bundleUrl : null;
-  // A vector basemap published as a .zip. GitHub's issue attachments reject
-  // .geojson outright ("File type .geojson not supported"), so a vector is shared
-  // zipped — the same trick scenario bundles already rely on.
-  if (post.bundleUrl && !imageFileUrl && /\.zip(\?|#|$)/i.test(post.bundleUrl)) {
-    const r = await fetchHubResponse(post.bundleUrl);
-    const zip = await unzipBundle(await r.arrayBuffer());
-    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n))
-      ?? zip.names().find((n) => /\.geojson$/i.test(n));
-    if (vectorName) {
-      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
-      return { meta: {}, kind: "vector", payload: { geojson } };
-    }
-    const imageName = zip.names().find((n) => /\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
-      return { meta: {}, kind: "image", payload: { dataUrl } };
-    }
-    throw new Error("That .zip has no basemap inside it.");
-  }
-  // Old .basemap.json bundle, or a vector .geojson file (posts made before GitHub
-  // started rejecting the extension, or linked from a release rather than attached).
-  if (post.bundleUrl && !imageFileUrl) {
-    const text = await fetchHubText(post.bundleUrl);
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("That basemap file isn't valid JSON.");
-    }
-    if (parsed && parsed.payload) {
-      // Old bundle: { basemap:{…}, payload:{ dataUrl | geojson } }.
-      const kind = parsed.basemap?.kind === "vector" ? "vector" : "image";
-      return { meta: parsed.basemap ?? {}, kind, payload: parsed.payload ?? {} };
-    }
-    if (parsed && (parsed.type === "FeatureCollection" || Array.isArray(parsed.features))) {
-      return { meta: {}, kind: "vector", payload: { geojson: parsed } };
-    }
-    throw new Error("That basemap file is missing its data.");
-  }
+  if (post.bundleUrl && !imageFileUrl) return readBasemapDataFile(post.bundleUrl);
   // New image basemap: the attached cover image (or an image file link) is the payload.
   const imageUrl = post.coverImageUrl || imageFileUrl;
   if (post.kind !== "vector" && imageUrl) {
@@ -445,39 +472,66 @@ export const dedupeScenarioBundleBackground = async (bundle) => {
 
 // On import: turn a community reference back into an embedded background by
 // fetching the referenced basemap, so the server import writes it normally.
+//
+// A reference that cannot be fetched (offline, a 403 or 502, a moved file) is
+// KEPT, with the reason beside it, rather than deleted: the import still goes
+// ahead, the stores write no background for it, an Update keeps the basemap
+// the scenario already had, and the caller can tell the player why
+// (unresolvedBundleBackground).
 export const resolveScenarioBundleBackground = async (bundle) => {
   const asset = bundle?.assets?.backgroundData;
   if (!asset || asset.mode !== "communityRef" || !asset.url) return bundle;
   try {
-    let payload = null;
-    // Drive the fetch by how it was referenced, not by kind: an old .basemap.json
-    // bundle has kind "image" yet must be parsed as JSON, not fetched as an image.
-    const viaImage = asset.via ? asset.via === "image" : asset.kind === "image";
-    if (viaImage) {
-      payload = { dataUrl: await fetchHubImage(asset.url) };
-    } else {
-      // A referenced data file: old .basemap.json bundle or a raw .geojson.
-      const text = await fetchHubText(asset.url);
-      const parsed = JSON.parse(text);
-      if (parsed?.payload) payload = parsed.payload;
-      else if (parsed?.type === "FeatureCollection" || Array.isArray(parsed?.features)) payload = { geojson: parsed };
-    }
-    if (payload && (payload.dataUrl || payload.geojson)) {
-      bundle.assets.backgroundData = {
-        mode: "embedded",
-        data: utf8ToBase64(JSON.stringify(payload)),
-        fileName: "background.json",
-        contentType: "application/json",
-      };
-    } else {
-      delete bundle.assets.backgroundData;
-    }
-  } catch {
-    // Couldn't resolve the reference — import without the background rather than
-    // failing the whole scenario import.
-    delete bundle.assets.backgroundData;
+    const payload = await fetchReferencedBasemap(asset);
+    bundle.assets.backgroundData = {
+      mode: "embedded",
+      data: utf8ToBase64(JSON.stringify(payload)),
+      fileName: "background.json",
+      contentType: "application/json",
+    };
+  } catch (error) {
+    // Import without the background rather than failing the whole scenario.
+    bundle.assets.backgroundData = { ...asset, missingReason: basemapFailureReason(error) };
   }
   return bundle;
+};
+
+// The basemap a community reference points at, as background.json holds it
+// ({ dataUrl } for an image, { geojson } for a vector map). Throws, with a
+// reason the player can read, when it cannot be had. Import resolves a
+// bundle's reference with it, and opening a scenario whose basemap could not
+// be downloaded then tries it again (missingBasemap.js).
+export const fetchReferencedBasemap = async (asset) => {
+  let payload = null;
+  // Drive the fetch by how it was referenced, not by kind: an old .basemap.json
+  // bundle has kind "image" yet must be parsed as JSON, not fetched as an image.
+  const viaImage = asset?.via ? asset.via === "image" : asset?.kind === "image";
+  if (viaImage) {
+    payload = { dataUrl: await fetchHubImage(asset.url) };
+  } else {
+    // A referenced data file: old .basemap.json bundle, a raw .geojson, or a
+    // vector published as a .zip — read exactly the way install reads it.
+    ({ payload } = await readBasemapDataFile(asset.url));
+  }
+  if (payload && (payload.dataUrl || payload.geojson)) return payload;
+  throw new Error("The shared basemap has no image or map in it.");
+};
+
+// A failure as a whole sentence, full stop and all, so the messages that
+// quote it read it as a sentence of its own and a language pack that has the
+// sentence translates it.
+export const basemapFailureReason = (error) => {
+  const reason = String(error?.message || "").trim() || "The download failed.";
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
+};
+
+// Why a bundle's community basemap is still only a reference after
+// resolveScenarioBundleBackground, or null when there is nothing missing: one
+// whole sentence, with its full stop.
+export const unresolvedBundleBackground = (bundle) => {
+  const asset = bundle?.assets?.backgroundData;
+  if (asset?.mode !== "communityRef") return null;
+  return basemapFailureReason({ message: asset.missingReason || "The shared basemap could not be found." });
 };
 
 // ---- Scenario zip bundle (image travels as a real file, not base64) -------

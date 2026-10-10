@@ -29,6 +29,12 @@
 // object partialArgs fragments build. Purely an observer: what it does or throws
 // can never change the envelope returned here.
 //
+// And an `onReceived` hook, for the line under a skip's spinner that says what
+// the open request is doing (requestActivity.js). It hears once per network
+// chunk how many characters of reasoning and how many of the answer (text, or
+// the arguments of a tool call) that chunk carried: zeros for a keep-alive or
+// half a frame. An observer like the other, and as harmless.
+//
 // Separate from main.jsx (which pulls in the whole browser runtime and so cannot
 // be unit-tested) for the same reason as jsonSalvage.js, providerErrors.js and
 // geminiSchema.js. Its one import, streamedEvents.js, imports nothing, so this
@@ -56,38 +62,102 @@ const observe = (hook, payload) => {
 // is still arriving, and a keep-alive comment or half a frame answers it just as
 // well as a token does. Wrapped like the onChunk callbacks, since a throwing UI
 // callback must never cost the player a turn.
-async function readSSE(response, onFrame, onActivity) {
+//
+// `onChunkRead` fires once per network chunk too, but after its frames have
+// been applied: it is how a reader reports what the chunk carried.
+//
+// Resolves with whether the stream said it was over, with the `[DONE]` line
+// OpenAI-style servers end on (see streamEndedEarly below).
+async function readSSE(response, onFrame, onActivity, onChunkRead) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let done = false;
+    const readLine = (line) => {
+        if (!line.startsWith("data:")) return;
+        const data = line.slice(5).trim();
+        if (!data) return;
+        if (data === "[DONE]") {
+            done = true;
+            return;
+        }
+        let chunk;
+        try { chunk = JSON.parse(data); } catch { return; }
+        onFrame(chunk);
+    };
     try {
         for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const { done: ended, value } = await reader.read();
+            if (ended) break;
             if (onActivity) {
                 try { onActivity(); } catch { /* a watchdog callback must not break the stream */ }
             }
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split(/\r?\n/);
             buffer = lines.pop() ?? "";
-            for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-                const data = line.slice(5).trim();
-                if (!data || data === "[DONE]") continue;
-                let chunk;
-                try { chunk = JSON.parse(data); } catch { continue; }
-                onFrame(chunk);
-            }
+            lines.forEach(readLine);
+            if (onChunkRead) onChunkRead();
         }
+        // A last line the server never ended with a newline. It used to be
+        // dropped; it can be the frame that carries the finish reason, or the
+        // [DONE] itself, and without it a whole answer would read as cut off.
+        // Half a frame still fails to parse and is skipped, as before.
+        buffer += decoder.decode();
+        if (buffer) readLine(buffer);
     } finally {
         try { reader.releaseLock(); } catch { /* stream already closed */ }
     }
+    return { done };
 }
+
+// A stream that just stops is not one that finished. Every provider says when
+// an answer is over — a finish reason on the last frame, Anthropic's
+// message_stop, the [DONE] line — or says why it is not (an error frame). One
+// with none of those is, as a rule, a connection that closed early: a proxy
+// that gave up, a server that went down, a relay's upstream ending without a
+// word. The envelope was rebuilt and handed back as if whole all the same, so
+// half a tool call failed to parse downstream and the task asked for it again.
+// Each finish* below marks such an envelope `closedEarly`, and main.jsx decides
+// by what the call wanted (toolResponsePayload.js unmarkedEndVerdict). A
+// structured answer that is not all there fails the call, as the transport
+// failure it is (failIfClosedEarly). A reply in words is kept and the log says
+// how its stream ended (keepProseClosedEarly): words have no shape to be held
+// to, and some gateways end every stream this way.
+const streamEndedEarly = (state, finished) => !finished && !state.done && !state.streamError;
+
+// What each network chunk carried, told to `onReceived` (see the top of this
+// file). The frame reducers keep two running counts on the stream state,
+// characters of reasoning and of the answer; this reports how far each moved
+// since the chunk before.
+const receivedReporter = (state, onReceived) => {
+    if (typeof onReceived !== "function") return undefined;
+    let reasoning = 0;
+    let answer = 0;
+    return () => {
+        const report = { reasoningChars: state.reasoningChars - reasoning, answerChars: state.answerChars - answer };
+        reasoning = state.reasoningChars;
+        answer = state.answerChars;
+        observe(onReceived, report);
+    };
+};
+
+// How much a function call's arguments weigh when they arrive as a value rather
+// than as text (Gemini): their length written out, which is what the other two
+// providers would have streamed.
+const writtenLength = (value) => {
+    if (typeof value === "string") return value.length;
+    try { return JSON.stringify(value ?? null).length; } catch { return 0; }
+};
 
 // ---------------------------------------------------------------------------
 // OpenAI-style chat completions
 
 export const createOpenAIStreamState = () => ({
+    // The answer's id and the model that wrote it, as the first chunk to name
+    // them does. A whole body carries both, so the envelope rebuilt here does
+    // too: they are how a KoboldCpp server is known for one (koboldCpp.js).
+    id: "",
+    model: "",
     content: "",
     reasoning: "",
     // One entry per tool call, in stream order. A jump makes one call; a task
@@ -95,9 +165,33 @@ export const createOpenAIStreamState = () => ({
     // each arriving under its own `index` in the tool_calls deltas.
     toolCalls: [],
     finishReason: null,
+    // The [DONE] line was read (set by the reader, which sees it; no frame does).
+    done: false,
     streamError: null,
     usage: null,
+    // How much has arrived so far, for onReceived: characters of reasoning, and
+    // of the answer (content and tool-call arguments together).
+    reasoningChars: 0,
+    answerChars: 0,
+    // The content so far ends inside a <think> block (see endsInsideThink).
+    thinkingInline: false,
 });
+
+// Qwen and DeepSeek write their reasoning into the content, between <think>
+// tags, on every server that does not split it out into a field of its own
+// (main.jsx stripThinking takes it back out of the answer). It is reasoning all
+// the same, and is counted as such. Read from the new piece and just enough of
+// what came before it to catch a tag split across two frames, so a long answer
+// is not searched again from the top on every delta.
+const THINK_OPEN = "<think>";
+const THINK_CLOSE = "</think>";
+const endsInsideThink = (state, added) => {
+    const tail = state.content.slice(-(added.length + THINK_CLOSE.length)).toLowerCase();
+    const opened = tail.lastIndexOf(THINK_OPEN);
+    const closed = tail.lastIndexOf(THINK_CLOSE);
+    if (opened !== -1 || closed !== -1) state.thinkingInline = opened > closed;
+    return state.thinkingInline;
+};
 
 export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // A gateway that ignored stream:true, or one that is overloaded, puts its
@@ -109,19 +203,28 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // when asked (stream_options.include_usage); most local gateways send it
     // unprompted. Kept whenever it appears — see usageStats.js.
     if (chunk?.usage && typeof chunk.usage === "object") state.usage = chunk.usage;
+    if (!state.id && typeof chunk?.id === "string") state.id = chunk.id;
+    if (!state.model && typeof chunk?.model === "string") state.model = chunk.model;
     const choice = chunk?.choices?.[0];
     if (!choice) return state;
     const delta = choice.delta ?? choice.message ?? {};
     if (typeof delta.content === "string") {
         state.content += delta.content;
-        // The lower rungs of the ladder (structuredMode.js) put the payload in
-        // content, not a tool call, so a watcher has to hear that too.
-        if (delta.content) observe(onToolProgress, { name: "", json: state.content });
+        if (delta.content) {
+            // The lower rungs of the ladder (structuredMode.js) put the payload in
+            // content, not a tool call, so a watcher has to hear that too.
+            observe(onToolProgress, { name: "", json: state.content });
+            if (endsInsideThink(state, delta.content)) state.reasoningChars += delta.content.length;
+            else state.answerChars += delta.content.length;
+        }
     }
     // Thinking-mode models (Qwen3, DeepSeek-R1) stream their chain of thought in a
     // separate reasoning field; keep it so an all-reasoning delta isn't lost (#540).
-    if (typeof delta.reasoning === "string") state.reasoning += delta.reasoning;
-    else if (typeof delta.reasoning_content === "string") state.reasoning += delta.reasoning_content;
+    const reasoningDelta = typeof delta.reasoning === "string"
+        ? delta.reasoning
+        : (typeof delta.reasoning_content === "string" ? delta.reasoning_content : "");
+    state.reasoning += reasoningDelta;
+    state.reasoningChars += reasoningDelta.length;
     for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
         if (!call || typeof call !== "object") continue;
         // Deltas name their call by index. A gateway that sends none is taken
@@ -137,6 +240,7 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
         if (call.function?.name) entry.name = call.function.name;
         if (typeof call.function?.arguments === "string" && call.function.arguments) {
             entry.arguments += call.function.arguments;
+            state.answerChars += call.function.arguments.length;
             observe(onToolProgress, { name: entry.name, json: entry.arguments });
         }
     }
@@ -146,6 +250,8 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
 
 export function finishOpenAIStream(state) {
     return {
+        ...(state.id ? { id: state.id } : {}),
+        ...(state.model ? { model: state.model } : {}),
         choices: [{
             finish_reason: state.finishReason,
             message: {
@@ -162,12 +268,14 @@ export function finishOpenAIStream(state) {
         }],
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
+        ...(streamEndedEarly(state, state.finishReason) ? { closedEarly: true } : {}),
     };
 }
 
-export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress) {
+export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createOpenAIStreamState();
-    await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity);
+    const { done } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishOpenAIStream(state);
 }
 
@@ -180,11 +288,18 @@ export const createAnthropicStreamState = () => ({
     // then calls the tool is three blocks whose deltas arrive under one stream.
     blocks: new Map(),
     stopReason: null,
+    // message_stop was read: the message is over, whatever its stop reason.
+    stopped: false,
+    // A [DONE] line was read (a proxy's; Anthropic sends none).
+    done: false,
     streamError: null,
     // Anthropic splits the accounting across two events: message_start carries
     // the input side (including the cache_read figure that proves a prefix cache
     // hit), message_delta the output side. Merged rather than replaced.
     usage: null,
+    // How much has arrived so far, for onReceived (as on the OpenAI state).
+    reasoningChars: 0,
+    answerChars: 0,
 });
 
 const blockAt = (state, index) => {
@@ -215,23 +330,44 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         // tool_use blocks name the tool up front; the arguments follow as deltas.
         if (typeof chunk.content_block?.name === "string") block.name = chunk.content_block.name;
         if (typeof chunk.content_block?.id === "string") block.id = chunk.content_block.id;
-        if (typeof chunk.content_block?.text === "string") block.text += chunk.content_block.text;
+        if (typeof chunk.content_block?.text === "string") {
+            block.text += chunk.content_block.text;
+            state.answerChars += chunk.content_block.text.length;
+        }
+        // Normally {} here, with the real arguments following as deltas — and
+        // the whole input when the call takes none (list_powers({})), which
+        // then gets no delta at all.
+        if (chunk.content_block?.input && typeof chunk.content_block.input === "object") block.input = chunk.content_block.input;
+        return state;
+    }
+
+    // The block is whole: a tool call with no argument deltas was not cut off.
+    if (type === "content_block_stop") {
+        blockAt(state, chunk.index).closed = true;
         return state;
     }
 
     if (type === "content_block_delta") {
         const block = blockAt(state, chunk.index);
         const delta = chunk.delta ?? {};
-        if (delta.type === "text_delta" && typeof delta.text === "string") block.text += delta.text;
+        if (delta.type === "text_delta" && typeof delta.text === "string") {
+            block.text += delta.text;
+            state.answerChars += delta.text.length;
+        }
         // The tool's arguments, streamed as PARTIAL JSON — never valid on its own
         // until the block closes. Concatenated verbatim and parsed once at the end.
         else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
             block.json += delta.partial_json;
+            state.answerChars += delta.partial_json.length;
             observe(onToolProgress, { name: block.name, json: block.json });
         }
         // Extended thinking. Deliberately not accumulated into text: extractAnthropicText
         // has always filtered thinking out, and a chain of thought must never be
-        // handed back as if it were the answer.
+        // handed back as if it were the answer. Counted, so the progress row can
+        // say the model is thinking.
+        else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+            state.reasoningChars += delta.thinking.length;
+        }
         return state;
     }
 
@@ -241,6 +377,8 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         // than replacing it, or the input and cache figures would be lost.
         if (chunk.usage) state.usage = { ...state.usage, ...chunk.usage };
     }
+
+    if (type === "message_stop") state.stopped = true;
 
     return state;
 }
@@ -255,6 +393,11 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
 // back (see jsonSalvage.js). The raw fragment comes back on partialToolJson for
 // the diagnostics log only — never as content, where a salvage pass could find a
 // balanced fragment inside it and apply half a turn.
+//
+// A call that takes no arguments streams no JSON at all. Once its block has
+// closed (or the message stopped to use a tool) it is whole, and goes out with
+// the input its start event carried, {} — it used to vanish, which lost a
+// lookup like list_powers({}) and wasted the request.
 export function finishAnthropicStream(state) {
     const content = [];
     let partialToolJson = "";
@@ -264,7 +407,9 @@ export function finishAnthropicStream(state) {
         if (block.type === "tool_use") {
             let input = null;
             try {
-                input = block.json ? JSON.parse(block.json) : null;
+                input = block.json
+                    ? JSON.parse(block.json)
+                    : (block.closed || state.stopReason === "tool_use" ? (block.input ?? {}) : null);
             } catch {
                 input = null;
             }
@@ -284,12 +429,14 @@ export function finishAnthropicStream(state) {
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
+        ...(streamEndedEarly(state, state.stopReason || state.stopped) ? { closedEarly: true } : {}),
     };
 }
 
-export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress) {
+export async function readAnthropicStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createAnthropicStreamState();
-    await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity);
+    const { done } = await readSSE(response, (chunk) => applyAnthropicFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishAnthropicStream(state);
 }
 
@@ -306,8 +453,11 @@ export async function readAnthropicStreamedResponse(response, onActivity, onTool
 // Gemini sends a function call two ways, and both land here.
 //
 // Whole, in one part, with `args` already an object. Nothing to reassemble, and
-// it is all the Gemini Developer API ever sends, so a Gemini skip's events
-// arrive together; callGemini says why.
+// it is all the Gemini Developer API ever sends for a function call, so a skip
+// asked for that way has its events arrive together. That is why callGemini
+// asks for a watched skip as JSON TEXT instead, which this API does stream:
+// the text parts below grow frame by frame and the watcher reads events out
+// of them (streamedEvents.js pushJson).
 //
 // Or as `partialArgs` fragments, when the request asked for them. That field is
 // Vertex-only and the game does not ask, but the reader is kept because it costs
@@ -328,12 +478,17 @@ export const createGeminiStreamState = () => ({
     // run at once and their fragments arrive interleaved.
     partial: new Map(),
     finishReason: null,
+    // A [DONE] line was read (a proxy's; Gemini sends none).
+    done: false,
     streamError: null,
     // Gemini repeats usageMetadata on frames as the answer grows, each one
     // cumulative, so the last is the total. Kept unconditionally rather than
     // only on the final frame, since a stream cut short still reports what it
     // had spent.
     usage: null,
+    // How much has arrived so far, for onReceived (as on the OpenAI state).
+    reasoningChars: 0,
+    answerChars: 0,
 });
 
 // Writes one part's fragments in, returning the paths it touched.
@@ -379,6 +534,7 @@ const applyGeminiFunctionCall = (state, part, onToolProgress) => {
     // The whole call in one part: pushed verbatim, exactly as it always was.
     if (!pending && !fragments.length && call.willContinue !== true) {
         state.calls.push(withThoughtSignature(part, call));
+        state.answerChars += writtenLength(call.args ?? {});
         return;
     }
 
@@ -389,6 +545,7 @@ const applyGeminiFunctionCall = (state, part, onToolProgress) => {
     if (part?.thoughtSignature || part?.thought_signature) entry.part = part;
 
     const touched = applyPartialArgs(entry, fragments);
+    for (const fragment of fragments) state.answerChars += writtenLength(partialArgValue(fragment) ?? "");
     if (touched.length) observe(onToolProgress, { name: entry.name, args: entry.args, paths: touched });
     // A final part that repeats the arguments whole is the authority on them.
     if (call.args && typeof call.args === "object") entry.args = call.args;
@@ -417,7 +574,21 @@ export function applyGeminiFrame(state, chunk, onToolProgress) {
     for (const part of candidate.content?.parts ?? []) {
         // NOT trimmed: the parts are joined verbatim and only trimmed once at the
         // end, or a chunk boundary that falls on a space runs two words together.
-        if (typeof part?.text === "string") state.text += part.text;
+        // A thought summary (a part marked `thought`, sent only when the request
+        // asks for them) is not part of the answer, and inside an answer asked
+        // for as JSON it would leave text no parser can read. It is counted as
+        // the reasoning it is, for the line under a skip's spinner.
+        if (typeof part?.text === "string" && part.thought === true) {
+            state.reasoningChars += part.text.length;
+        } else if (typeof part?.text === "string") {
+            state.text += part.text;
+            state.answerChars += part.text.length;
+            // An answer asked for as JSON text (callGemini, a time skip whose
+            // events are being watched) grows here rather than in a function
+            // call, so a watcher hears it the way it hears the OpenAI-style
+            // content above.
+            if (part.text) observe(onToolProgress, { name: "", json: state.text });
+        }
         if (part?.functionCall) applyGeminiFunctionCall(state, part, onToolProgress);
     }
     if (candidate.finishReason) state.finishReason = candidate.finishReason;
@@ -450,11 +621,13 @@ export function finishGeminiStream(state) {
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(partialToolJson ? { partialToolJson } : {}),
         ...(state.usage ? { usageMetadata: state.usage } : {}),
+        ...(streamEndedEarly(state, state.finishReason) ? { closedEarly: true } : {}),
     };
 }
 
-export async function readGeminiStreamedResponse(response, onActivity, onToolProgress) {
+export async function readGeminiStreamedResponse(response, onActivity, onToolProgress, onReceived) {
     const state = createGeminiStreamState();
-    await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity);
+    const { done } = await readSSE(response, (chunk) => applyGeminiFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.done = done;
     return finishGeminiStream(state);
 }

@@ -25,8 +25,10 @@ test("Scenario Politics makes institution authoring guided instead of one raw fo
   assert.match(source, /Visual identity/);
   assert.match(source, /Manage institutions/);
   assert.match(source, /data-institution-authoring-manager="true"/);
-  assert.match(source, /Search scenario polities/);
-  assert.match(source, /Only canonical polities in this scenario can be added/);
+  // Members are suggested from the scenario's polities, and a name not among
+  // them is kept as written and flagged, never refused (institutionAuthoring.js).
+  assert.match(source, /<PolityMultiPicker allowUnlisted label="Type a polity name"/);
+  assert.match(source, /unmatchedInstitutionMembers\(memberNames, world\)/);
   assert.match(source, /Advanced bulk edit member list/);
   assert.match(source, /Advanced details/);
 });

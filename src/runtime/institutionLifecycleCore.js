@@ -8,6 +8,7 @@
 
 import {
   INSTITUTION_KINDS,
+  INSTITUTION_LIFECYCLE_DECISIONS,
   applyInstitutionMembershipResolution,
   applyInstitutionStatusResolution,
   canonicalInstitutionIdentity,
@@ -21,6 +22,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
+import { addGameDays, compareGameDatesNewestFirst, diffGameDays, isGameDate } from "./gameDates.js";
 import { stableAsciiId } from "./stableId.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -61,6 +63,45 @@ const canonicalPolity = (value, world = {}) => {
 const samePolity = (a, b) => lower(a) === lower(b);
 const memberByPolity = (institution, polity) => list(institution?.members).find((member) => samePolity(member?.polity, polity)) || null;
 const caseMap = (institution) => institution?.lifecycleCases && typeof institution.lifecycleCases === "object" ? institution.lifecycleCases : {};
+
+// A polity already in an institution may still rise in it. An observer is an
+// entry in `members` like any other, and both an invitation and an application
+// used to refuse anyone found there ("already represented"), so an observer
+// could never be invited to full membership, nor ask for it (issue 849). The
+// standings below full membership, lowest first; a status asked for must rank
+// above the one held.
+const STANDING_RANK = Object.freeze({ observer: 1, candidate: 2, participant: 3, associate: 4, member: 5 });
+export const institutionStandingRank = (status) => STANDING_RANK[lower(status)] ?? 0;
+
+// Where a polity stands when accession to `requestedStatus` is opened for it:
+//   "new"        not represented: an ordinary accession
+//   "rise"       represented at a lower status: the same procedure, whose
+//                outcome changes that entry's status and adds no second one
+//   "held"       it holds that status already, or a higher one
+//   "suspended"  a suspended member comes back by reinstatement, its own motion
+export const institutionAccessionStanding = (institution, polity, requestedStatus = "member") => {
+  const current = memberByPolity(institution, polity);
+  if (!current) return "new";
+  const held = lower(current.status || "member");
+  if (held === "suspended") return "suspended";
+  return institutionStandingRank(requestedStatus) > institutionStandingRank(held) ? "rise" : "held";
+};
+
+// The governments a member may invite to `requestedStatus`, among `polities`:
+// everyone not represented, and everyone represented below it. Each with the
+// status it holds now ("" for none), for the picker to show beside its name.
+export const institutionInvitablePolities = (institution, polities = [], requestedStatus = "member") => list(polities)
+  .map((polity) => ({ polity: clean(polity), standing: institutionAccessionStanding(institution, polity, requestedStatus) }))
+  .filter((entry) => entry.polity && (entry.standing === "new" || entry.standing === "rise"))
+  .map((entry) => ({ polity: entry.polity, status: entry.standing === "rise" ? lower(memberByPolity(institution, entry.polity)?.status || "member") : "" }));
+
+// One wording for both refusals of a suspended member, which is also the
+// sentence its suspension was announced with, so every language pack has it.
+const suspendedError = (polity, name) => new Error(`${polity} is suspended from ${name}.`);
+
+// Whether a government represented in an institution may ask to rise in it:
+// it is there, below full membership, and not suspended.
+export const institutionMayRequestMembership = (institution, polity) => institutionAccessionStanding(institution, polity, "member") === "rise";
 
 // Keep lifecycle planning pure: these mirror the deterministic governance
 // eligibility/rule selection without importing the commit-bearing governance
@@ -132,6 +173,9 @@ const lifecycleEventTitle = (action, subject, name) => {
   if (action === "suspended") return `${subject} Is Suspended from ${name}`;
   if (action === "reinstated") return `${subject} Returns to ${name}`;
   if (action === "rejected") return `${subject} Declines ${name}`;
+  if (action === "invitation-lapsed") return `Invitation for ${subject} to Join ${name} Lapses`;
+  if (action === "application-lapsed") return `Application by ${subject} to Join ${name} Lapses`;
+  if (action === "motion-lapsed") return `Pending Motion in ${name} Lapses`;
   return `${subject} ${action} ${name}`;
 };
 
@@ -145,6 +189,9 @@ const lifecycleEventDescription = (action, { founder, polity, name, reason }) =>
   if (action === "suspended") return `${polity} is suspended from ${name}${reason ? `: ${reason}` : "."}`;
   if (action === "reinstated") return `${polity} returns to ${name}${reason ? `: ${reason}` : "."}`;
   if (action === "rejected") return `${polity} declines ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "invitation-lapsed") return `The invitation for ${polity} to join ${name} lapsed without an answer.`;
+  if (action === "application-lapsed") return `The application by ${polity} to join ${name} lapsed without a decision.`;
+  if (action === "motion-lapsed") return `A pending motion in ${name} lapsed without a decision.`;
   return `${polity} ${String(action).toLocaleLowerCase()} ${name}${reason ? `: ${reason}` : "."}`;
 };
 
@@ -152,8 +199,11 @@ const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "
   const subject = polity || institution?.name || "Institution";
   const title = lifecycleEventTitle(action, subject, institution.name);
   const description = lifecycleEventDescription(action, { founder: actor || polity || "A founding government", polity, name: institution.name, reason });
+  // Dated, so a second join, departure or refusal by the same polity is its own
+  // event: the save's event list already holds the first, and an id seen there
+  // is dropped as a duplicate.
   return {
-    id: `institution-lifecycle-${slug(institution?.id || institution?.name)}-${slug(action)}-${slug(polity || date || "institution")}`,
+    id: `institution-lifecycle-${slug(institution?.id || institution?.name)}-${slug(action)}-${slug(polity || "institution")}${clean(date) ? `-${slug(date)}` : ""}`,
     date: clean(date),
     title: title.slice(0, 240),
     description: description.slice(0, 2400),
@@ -223,6 +273,14 @@ const createLifecycleProposal = (institution, lifecycleCase, world, date, { op, 
   }, id, world);
   institution.proposals = { ...(institution.proposals || {}), [proposal.id]: proposal };
   return proposal;
+};
+
+// A case that closes without a decision takes its ballot off the agenda, so a
+// later vote cannot act on a case that is no longer there.
+const withdrawLifecycleProposal = (institution, proposalId, date) => {
+  const proposal = institution.proposals?.[clean(proposalId)];
+  if (!proposal || !["draft", "debate", "amendment", "formalized", "voting"].includes(lower(proposal.status))) return;
+  institution.proposals = { ...institution.proposals, [proposal.id]: { ...proposal, status: "withdrawn", lastUpdatedDate: clean(date) || proposal.lastUpdatedDate || "" } };
 };
 
 const foundingChat = ({ institution, invitees, founder, playerCountry, caseIds, date }) => {
@@ -454,7 +512,7 @@ export const buildInstitutionLifecycleDecisionContext = (world = {}, {
     "- Consider the actor's PWv2 government, ideology, goals, fears, domestic pressure, leader disposition and current perceptions supplied elsewhere in this same request.",
     "- Consider geographic/political scope, obligations, current members, rivalries and the institution's stated threat model. A regional identity can make observer/partnership status more plausible than full accession.",
     "- If the actor itself is explicitly the institution's stated adversary/threat, full accession is ordinarily incompatible unless current canonical context clearly describes a transformation or negotiated change; do not accept just because an invitation exists.",
-    "- Put membership decisions in the top-level lifecycleResponsesJson field as JSON array text. Each object must use the exact acting government and exact case id: {actorName, caseId, decision, reason?, terms?}. Valid decisions: accept, reject, seek-observer, request-terms, delay. Use [] if nobody decides now. Never act for the human player.",
+    `- Put membership decisions in the top-level lifecycleResponsesJson field as JSON array text. Each object must use the exact acting government and exact case id: {actorName, caseId, decision, reason?, terms?}. Valid decisions: ${INSTITUTION_LIFECYCLE_DECISIONS.join(", ")}. Use [] if nobody decides now. Never act for the human player.`,
     playerCountry ? `Human-controlled polity: ${playerCountry}.` : "",
   ].filter(Boolean).join("\n");
   return { text: text.slice(0, 7000), institution, cases };
@@ -491,7 +549,7 @@ export const institutionLifecycleCasesForPolity = (world = {}, polityInput = "",
       rows.push({ institution, case: entry });
     }
   }
-  return rows.sort((a, b) => clean(b.case.updatedDate || b.case.createdDate).localeCompare(clean(a.case.updatedDate || a.case.createdDate)));
+  return rows.sort((a, b) => compareGameDatesNewestFirst(clean(a.case.updatedDate || a.case.createdDate), clean(b.case.updatedDate || b.case.createdDate)));
 };
 
 export const institutionPortfolioForPolity = (world = {}, polityInput = "", { viewerPolity = "", includePrivate = false } = {}) => {
@@ -514,7 +572,35 @@ export const institutionPortfolioForPolity = (world = {}, polityInput = "", { vi
     if (!member && !history.length && !cases.length) continue;
     rows.push({ institution, member, history, cases });
   }
-  return rows.sort((a, b) => clean(a.institution.name).localeCompare(clean(b.institution.name)));
+  // Current memberships first, so a list cut short never hides the United
+  // Nations behind a membership that ended decades ago.
+  return rows.sort((a, b) => Number(Boolean(b.member)) - Number(Boolean(a.member))
+    || clean(a.institution.name).localeCompare(clean(b.institution.name)));
+};
+
+// What the Institutions tab asks before a membership button acts, naming what
+// the charter makes of it: a unilateral withdrawal is immediate, and getting
+// back in takes an accession request and a vote. "" when there is nothing to
+// ask: the charter forbids it (the command says so) or the action is minor.
+export const institutionLifecycleConfirmText = (institution = {}, type = "", polity = "") => {
+  const name = clean(institution?.name || institution?.id);
+  const kind = lower(type);
+  if (kind === "withdraw") {
+    const rule = institution?.charter?.lifecycle?.withdrawal || {};
+    const mode = lower(rule.mode || "unilateral");
+    if (mode === "not-permitted") return "";
+    if (mode === "approval") return `Ask to withdraw from ${name}? The members will vote on it, and you stay a member until they agree.`;
+    const days = mode === "notice" ? Math.max(0, Math.trunc(Number(rule.noticeDays) || 0)) : 0;
+    if (days === 1) return `Withdraw from ${name}? You will leave after one day's notice, and rejoining means applying for membership again.`;
+    if (days > 1) return `Withdraw from ${name}? You will leave after ${days} days' notice, and rejoining means applying for membership again.`;
+    return `Withdraw from ${name}? You will leave immediately, and rejoining means applying for membership again.`;
+  }
+  // A charter that forbids dissolution or expulsion holds no vote on it: the
+  // command refuses and says why, so there is nothing to ask.
+  const forbidden = (rule) => lower(institution?.charter?.lifecycle?.[rule]?.mode) === "not-permitted";
+  if (kind === "dissolve") return forbidden("dissolution") ? "" : `Propose dissolving ${name}? The members will vote on it.`;
+  if (kind === "expel" && clean(polity) && !forbidden("expulsion")) return `Propose expelling ${clean(polity)} from ${name}? The members will vote on it.`;
+  return "";
 };
 
 export const applyInstitutionLifecycleCommandCore = ({
@@ -622,8 +708,12 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     const authority = lifecycleAuthority({ actor: applicant, player, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
-    if (memberByPolity(baseInstitution, applicant)) throw new Error(`${applicant} is already represented in ${baseInstitution.name}.`);
     const requestedStatus = ["member", "observer", "associate", "participant"].includes(lower(command.requestedStatus)) ? lower(command.requestedStatus) : "member";
+    // An observer may apply for full membership; nobody applies for what it
+    // holds already, or for less, and a suspended member is reinstated instead.
+    const standing = institutionAccessionStanding(baseInstitution, applicant, requestedStatus);
+    if (standing === "held") throw new Error(`${applicant} is already represented in ${baseInstitution.name}.`);
+    if (standing === "suspended") throw suspendedError(applicant, baseInstitution.name);
     const accessionMode = lower(baseInstitution.charter?.lifecycle?.accession?.mode || "approval");
     if (accessionMode === "not-permitted") throw new Error(`${baseInstitution.name} charter does not permit accession applications.`);
     const allowed = new Set(list(baseInstitution.charter?.lifecycle?.accession?.allowedStatuses));
@@ -683,12 +773,20 @@ export const applyInstitutionLifecycleCommandCore = ({
     const inviterMember = memberByPolity(baseInstitution, inviter);
     if (!inviterMember || lower(inviterMember.status) === "suspended") throw new Error(`${inviter} is not an active participant in ${baseInstitution.name}.`);
     if (lower(baseInstitution.charter?.lifecycle?.accession?.mode) === "not-permitted") throw new Error(`${baseInstitution.name} charter does not permit accession invitations.`);
-    if (memberByPolity(baseInstitution, target)) throw new Error(`${target} is already represented in ${baseInstitution.name}.`);
+    // An observer may be invited to full membership (issue 849): the same
+    // accession the charter prescribes, ending in a change of its status.
+    // Still refused: the status it holds already or a lower one (a full member
+    // is invited to nothing), and a suspended member, whose way back is
+    // reinstatement.
+    const invitedStatus = lower(command.requestedStatus) || "member";
+    const standing = institutionAccessionStanding(baseInstitution, target, invitedStatus);
+    if (standing === "held") throw new Error(`${target} is already represented in ${baseInstitution.name}.`);
+    if (standing === "suspended") throw suspendedError(target, baseInstitution.name);
     const caseId = lifecycleCaseId(baseInstitution.id, "invitation", target, date);
     const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
       const lifecycleCase = setCase(institution, {
         id: caseId, kind: "invitation", status: "pending", polity: target, initiatedBy: inviter,
-        requestedStatus: lower(command.requestedStatus) || "member", createdDate: date, updatedDate: date,
+        requestedStatus: invitedStatus, createdDate: date, updatedDate: date,
         reason: clean(command.reason), terms: clean(command.terms),
       }, localWorld);
       upsertHistory(institution, { action: "invited", polity: target, actor: inviter, date: clean(date), status: lifecycleCase.requestedStatus, sourceCaseId: lifecycleCase.id, reason: clean(command.reason) });
@@ -720,7 +818,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     if (!actor || !caseId) throw new Error("Lifecycle response requires actorPolity and caseId.");
     const authority = lifecycleAuthority({ actor, player, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
-    if (!["accept", "reject", "seek-observer", "request-terms", "delay"].includes(decision)) throw new Error(`Unsupported lifecycle decision ${decision || "<blank>"}.`);
+    if (!INSTITUTION_LIFECYCLE_DECISIONS.includes(decision)) throw new Error(`Unsupported lifecycle decision ${decision || "<blank>"}.`);
     const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
       const current = caseMap(institution)[caseId];
       if (!current || !caseIsOpen(current)) return { error: `Lifecycle case ${caseId} is not open.` };
@@ -738,6 +836,12 @@ export const applyInstitutionLifecycleCommandCore = ({
         return { lifecycleCase, resolutionAction: decision };
       }
       const requestedStatus = decision === "seek-observer" ? "observer" : (current.requestedStatus || "member");
+      // An answer cannot settle for what its government already holds: an
+      // observer invited to full membership that would rather stay an observer
+      // declines.
+      if (institutionAccessionStanding(institution, actor, requestedStatus) === "held") {
+        return { error: `${actor} is already represented in ${institution.name}.` };
+      }
       const provisional = lower(institution.status) === "provisional" && current.kind === "founding-invitation";
       const accessionMode = lower(institution.charter?.lifecycle?.accession?.mode || "approval");
       if (!provisional && accessionMode === "not-permitted") return { error: `${institution.name} charter does not permit accession.` };
@@ -841,9 +945,8 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     const noticeDays = mode === "notice" ? Number(baseInstitution.charter?.lifecycle?.withdrawal?.noticeDays || 0) : 0;
     if (noticeDays > 0) {
-      const effective = new Date(`${clean(date)}T00:00:00Z`);
-      if (!Number.isNaN(effective.getTime())) effective.setUTCDate(effective.getUTCDate() + noticeDays);
-      const effectiveDate = Number.isNaN(effective.getTime()) ? clean(date) : effective.toISOString().slice(0, 10);
+      // Game dates, BC included (runtime/gameDates.js).
+      const effectiveDate = addGameDays(clean(date), noticeDays) || clean(date);
       const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
         const lifecycleCase = setCase(institution, { id: lifecycleCaseId(institution.id, "withdrawal", polity, date), kind: "withdrawal", status: "pending", polity, initiatedBy: polity, requestedStatus: member.status, createdDate: date, updatedDate: date, effectiveDate, reason: clean(command.reason) }, localWorld);
         return { lifecycleCase };
@@ -856,6 +959,28 @@ export const applyInstitutionLifecycleCommandCore = ({
     world = membership.world;
     events = dedupeEvents(events, [lifecycleEvent({ institution: membership.institution, action: "left", polity, actor: polity, date, reason: clean(command.reason), playerCountry: player })]);
     return { world, chats, events, institution: membership.institution, action: "withdrawn" };
+  }
+
+  // The government that opened a case may take it back while it is still open:
+  // an application nobody answers, an invitation it no longer means. Its ballot,
+  // if one is open, is withdrawn with it.
+  if (type === "retract") {
+    const actor = canonicalPolity(command.initiatedBy || command.actorPolity || player, world);
+    const caseId = clean(command.caseId);
+    if (!actor || !caseId) throw new Error("Retracting a lifecycle case requires the initiating polity and caseId.");
+    const authority = lifecycleAuthority({ actor, player, authority: command.authority });
+    if (!authority.allowed) throw new Error(authority.reason);
+    const result = mutateInstitution(world, baseInstitution.id, (institution) => {
+      const current = caseMap(institution)[caseId];
+      if (!current || !caseIsOpen(current)) return { error: `Lifecycle case ${caseId} is not open.` };
+      if (!samePolity(current.initiatedBy, actor)) return { error: `Only ${current.initiatedBy || "the initiating government"} may retract lifecycle case ${caseId}.` };
+      const lifecycleCase = { ...current, status: "withdrawn", resolvedDate: clean(date), updatedDate: clean(date), reason: clean(command.reason) || current.reason || "" };
+      institution.lifecycleCases = { ...caseMap(institution), [caseId]: lifecycleCase };
+      withdrawLifecycleProposal(institution, current.proposalId, date);
+      return { lifecycleCase };
+    });
+    if (result.error) throw new Error(result.error);
+    return { world: result.world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, action: "retracted" };
   }
 
   if (["expel", "suspend", "reinstate", "dissolve"].includes(type)) {
@@ -1041,24 +1166,72 @@ export const applyInstitutionLifecycleChatBatchCore = ({
   return { world: nextWorld, chats: nextChats, events: nextEvents, applied, rejected };
 };
 
+// A notice period is over once the game has reached its effective date. A date
+// that is not a game date never falls due.
+const noticeHasRun = (effectiveDate, date) => {
+  const days = diffGameDays(effectiveDate, date);
+  return days !== null && days >= 0;
+};
+
+// An open case with no movement for this long lapses: an invitation nobody
+// answers, an application or motion whose ballot never finishes. Without it
+// such a case blocks a fresh application and sits in every prompt that lists
+// pending institution business.
+export const INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS = 365;
+
+const lastCaseActivity = (institution, entry) => [
+  entry?.updatedDate,
+  entry?.createdDate,
+  institution?.proposals?.[clean(entry?.proposalId)]?.lastUpdatedDate,
+].filter(isGameDate).reduce((latest, candidate) => (!latest || diffGameDays(latest, candidate) > 0 ? candidate : latest), "");
+
+const caseHasLapsed = (institution, entry, date) => {
+  // A notice withdrawal is not waiting on anyone: its own date settles it.
+  if (entry.kind === "withdrawal" && entry.effectiveDate) return false;
+  const days = diffGameDays(lastCaseActivity(institution, entry), date);
+  return days !== null && days >= INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS;
+};
+
+const lapsedAction = (kind) => (["invitation", "founding-invitation"].includes(kind) ? "invitation-lapsed"
+  : kind === "application" ? "application-lapsed"
+    : "motion-lapsed");
+
 export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date = "", playerCountry = "" } = {}) => {
   let world = clone(worldInput || {});
-  const institutions = normalizeInstitutions(world.institutions, world);
+  world = { ...world, institutions: normalizeInstitutions(world.institutions, world) };
+  const player = canonicalPolity(playerCountry, world);
   const applied = [];
-  for (const institution of Object.values(institutions.byId)) {
-    for (const lifecycleCase of institutionPendingLifecycleCases(institution)) {
-      if (lifecycleCase.kind !== "withdrawal" || !lifecycleCase.effectiveDate || clean(lifecycleCase.effectiveDate) > clean(date)) continue;
-      const result = applyInstitutionMembershipResolution({ world: { ...world, institutions }, institutionId: institution.id, op: "leave", polity: lifecycleCase.polity, date: lifecycleCase.effectiveDate, note: lifecycleCase.reason || "Withdrawal notice became effective." });
+  const events = [];
+  for (const institutionId of Object.keys(world.institutions.byId)) {
+    const due = institutionPendingLifecycleCases(world.institutions.byId[institutionId])
+      .filter((entry) => entry.kind === "withdrawal" && entry.effectiveDate && noticeHasRun(entry.effectiveDate, date));
+    for (const lifecycleCase of due) {
+      // Each withdrawal starts from the world the one before it left, so two
+      // notices falling due in one skip both take effect.
+      const result = applyInstitutionMembershipResolution({ world, institutionId, op: "leave", polity: lifecycleCase.polity, date: lifecycleCase.effectiveDate, note: lifecycleCase.reason || "Withdrawal notice became effective." });
       if (result.error) continue;
-      world = result.world;
-      const refreshed = resolveInstitutionRecord(world, institution.id);
+      const refreshed = result.world.institutions.byId[institutionId];
       const cases = { ...(refreshed.lifecycleCases || {}) };
       cases[lifecycleCase.id] = { ...lifecycleCase, status: "resolved", resolvedDate: lifecycleCase.effectiveDate, updatedDate: lifecycleCase.effectiveDate };
-      const nextInstitutions = normalizeInstitutions(world.institutions, world);
-      nextInstitutions.byId[institution.id] = normalizeInstitutionRecord({ ...refreshed, lifecycleCases: cases }, institution.id, world);
-      world = { ...world, institutions: nextInstitutions };
-      applied.push({ institutionId: institution.id, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
+      const institutions = { ...result.world.institutions, byId: { ...result.world.institutions.byId } };
+      institutions.byId[institutionId] = normalizeInstitutionRecord({ ...refreshed, lifecycleCases: cases }, institutionId, result.world);
+      world = { ...result.world, institutions };
+      applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
+      events.push(lifecycleEvent({ institution: institutions.byId[institutionId], action: "left", polity: lifecycleCase.polity, actor: lifecycleCase.polity, date: lifecycleCase.effectiveDate, reason: lifecycleCase.reason, playerCountry: player }));
     }
+    const current = world.institutions.byId[institutionId];
+    const lapsed = institutionPendingLifecycleCases(current).filter((entry) => caseHasLapsed(current, entry, date));
+    if (!lapsed.length) continue;
+    const institution = clone(current);
+    for (const lifecycleCase of lapsed) {
+      institution.lifecycleCases = { ...caseMap(institution), [lifecycleCase.id]: { ...lifecycleCase, status: "expired", resolvedDate: clean(date), updatedDate: clean(date) } };
+      withdrawLifecycleProposal(institution, lifecycleCase.proposalId, date);
+      applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "expired" });
+      events.push(lifecycleEvent({ institution, action: lapsedAction(lifecycleCase.kind), polity: lifecycleCase.polity, actor: lifecycleCase.initiatedBy, date, playerCountry: player }));
+    }
+    const institutions = { ...world.institutions, byId: { ...world.institutions.byId } };
+    institutions.byId[institutionId] = normalizeInstitutionRecord(institution, institutionId, world);
+    world = { ...world, institutions };
   }
-  return { world, applied, playerCountry };
+  return { world, applied, events, playerCountry };
 };

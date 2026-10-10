@@ -150,3 +150,28 @@ test("an event the player's focus spares survives a filler verdict", async () =>
   const spared = await curate(analysis, "jump", (event) => event.id === "c0");
   assert.equal(spared.some((event) => event.id === "c0"), true, "it answers an order or a due milestone, so the filler gates may not take it");
 });
+
+// The exact-duplicate guard compared two events with everything but a-z and
+// 0-9 taken out. A game played in Russian or Chinese has neither in most of
+// its events, so any two of them on one date compared equal and the later one
+// was removed as a word-for-word repeat.
+test("events in another script are exact duplicates only when they say the same thing", async () => {
+  const prior = [
+    { id: "p0", date: "2014-03-26", title: "Путин начал инспекцию военных баз", description: "Президент начал серию визитов в армейские гарнизоны." },
+    { id: "p1", date: "2014-03-26", title: "中国宣布新的五年计划", description: "国务院公布了下一个五年计划的主要目标。" },
+    { id: "p2", date: "2014-03-26", title: "Оборонный бюджет 2014 года", description: "Правительство внесло проект бюджета." },
+    { id: "p3", date: "2014-03-26", title: "Budget of 2014 passes", description: "Parliament passes the budget." },
+  ];
+  const sameDay = [
+    { id: "ru-new", date: "2014-03-26", title: "Создание десяти стратегических проектов", description: "Правительство утвердило десять ключевых проектов.", impacts: {} },
+    { id: "ru-repeat", date: "2014-03-26", title: "Путин начал инспекцию военных баз!", description: "президент начал серию визитов в армейские гарнизоны", impacts: {} },
+    { id: "zh-new", date: "2014-03-26", title: "中国宣布新的五年规划", description: "国务院公布了下一个五年计划的主要目标。", impacts: {} },
+    { id: "zh-repeat", date: "2014-03-26", title: "中国宣布新的五年计划", description: "国务院公布了下一个五年计划的主要目标", impacts: {} },
+    // An a-z0-9 key leaves "2014" of this one, as it does of p2.
+    { id: "ru-year", date: "2014-03-26", title: "Парад 2014 года в Севастополе", description: "Флот прошёл парадом.", impacts: {} },
+    { id: "en-repeat", date: "2014-03-26", title: "Budget of 2014 passes.", description: "Parliament passes the budget", impacts: {} },
+    { id: "symbols", date: "2014-03-26", title: "—", description: "…", impacts: {} },
+  ];
+  const kept = await curateGeneratedEvents({ events: sameDay, priorEvents: prior, game: {}, world: {}, actions: [], mode: "jump", analyzeBatch: null });
+  assert.deepEqual(kept.map((event) => event.id), ["ru-new", "zh-new", "ru-year", "symbols"]);
+});

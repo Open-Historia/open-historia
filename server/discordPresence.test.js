@@ -19,6 +19,7 @@ import {
   OP_HANDSHAKE,
   PRESENCE_BUTTON,
   PRESENCE_IMAGE,
+  PRESENCE_STALE_MS,
   RETRY_MS,
   activityFor,
   createDiscordPresence,
@@ -200,6 +201,87 @@ test("never faster than Discord takes updates: the latest waits its turn", async
     clock.advance(MIN_UPDATE_MS);
     await discord.until(() => discord.activities.length === 2, "the held update");
     assert.equal(discord.activities[1].activity.state, "Modern Day · 3 January 2016", "only the latest");
+  } finally {
+    presence.stop();
+    await discord.close();
+  }
+});
+
+test("the elapsed timer starts again with each new game, not with each new date", async () => {
+  const discord = await fakeDiscord();
+  const clock = manualClock();
+  const presence = createDiscordPresence({ applicationId: "123", enabled: true, paths: () => [discord.path], ...clock });
+  const shown = async (count, what) => {
+    await discord.until(() => discord.activities.length === count, what);
+    return discord.activities[count - 1].activity;
+  };
+  try {
+    presence.update({ scene: "menu" });
+    const menuStart = (await shown(1, "the menu")).timestamps.start;
+    assert.equal(menuStart, clock.now());
+
+    clock.advance(2 * 60000);
+    presence.update(game);
+    const gameStart = (await shown(2, "the game")).timestamps.start;
+    assert.equal(gameStart, clock.now(), "opening a game starts the timer, not the menu before it");
+
+    clock.advance(2 * 60000);
+    presence.update({ ...game, date: "2 January 2016" });
+    assert.equal((await shown(3, "the next day")).timestamps.start, gameStart, "a time skip is the same game");
+
+    clock.advance(2 * 60000);
+    presence.update({ ...game, player: "Germany" });
+    assert.equal((await shown(4, "another country")).timestamps.start, clock.now());
+  } finally {
+    presence.stop();
+    await discord.close();
+  }
+});
+
+test("the page going quiet takes the activity down; its next report puts it back", async () => {
+  const discord = await fakeDiscord();
+  const clock = manualClock();
+  const presence = createDiscordPresence({ applicationId: "123", enabled: true, paths: () => [discord.path], ...clock });
+  try {
+    presence.update(game);
+    await discord.until(() => discord.activities.length === 1, "the first activity");
+
+    // Reports a minute apart keep it up.
+    for (let minute = 0; minute < 5; minute += 1) {
+      clock.advance(60000);
+      presence.update(game);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(discord.activities.length, 1, "nothing changed, so nothing was sent");
+
+    clock.advance(PRESENCE_STALE_MS);
+    await discord.until(() => discord.activities.length === 2, "the activity cleared");
+    assert.equal(discord.activities[1].activity, null);
+    assert.ok(presence.connected, "Discord stays connected for the next report");
+
+    clock.advance(MIN_UPDATE_MS);
+    presence.update(game);
+    await discord.until(() => discord.activities.length === 3, "the activity back");
+    assert.equal(discord.activities[2].activity.details, "Playing as France");
+    assert.equal(discord.activities[2].activity.timestamps.start, clock.now(), "a fresh timer");
+  } finally {
+    presence.stop();
+    await discord.close();
+  }
+});
+
+test("the page's goodbye clears the activity at once", async () => {
+  const discord = await fakeDiscord();
+  const clock = manualClock();
+  const presence = createDiscordPresence({ applicationId: "123", enabled: true, paths: () => [discord.path], ...clock });
+  try {
+    presence.update(game);
+    await discord.until(() => discord.activities.length === 1, "the first activity");
+    clock.advance(MIN_UPDATE_MS);
+    presence.update(normalizePresence({ scene: "none" }));
+    await discord.until(() => discord.activities.length === 2, "the activity cleared");
+    assert.equal(discord.activities[1].activity, null);
+    assert.deepEqual(clock.pending(), [], "nothing left to time out");
   } finally {
     presence.stop();
     await discord.close();

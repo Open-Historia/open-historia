@@ -29,29 +29,15 @@
 // That staleness is deliberate — it is what this feature has instead of letting
 // a turned agent fabricate relationships outright (see the ADR).
 
-// THE OFF SWITCH. A scenario may turn the whole system off (the "Puppet states"
-// feature, server/gameFeatures.js), and a game cloned from it may decide for
-// itself. Every read of the ledger passes through visiblePuppetsFor or
-// puppetBriefingFor, so switching both off here is what silences the country
-// panel, the map card, the diplomacy markers, the advisor's prompt and every
-// leader's briefing at once — the same single-resolver argument the ADR makes
-// for visibility, applied to existence.
-//
-// It is PUSHED IN rather than read, because this module is deliberately
-// import-free (see below) and the resolved features live in a module that is
-// not: src/runtime/gameFeatures.js calls this whenever they resolve. Nothing
-// here is erased when the system is off — the rows stay in the save, so a game
-// switched back on finds its arrangements exactly as it left them.
-let systemEnabled = true;
-
-export const setPuppetStatesEnabled = (value) => { systemEnabled = value !== false; };
-
-export const puppetStatesEnabled = () => systemEnabled;
-
 export const PUPPET_KINDS = ["protectorate", "satellite", "client"];
 export const PUPPET_SECRECY_LEVELS = ["open", "covert"];
 export const PUPPET_STATUSES = ["active", "released", "annexed", "revolted"];
 export const MAX_PUPPETS = 64;
+// Below this Loyalty the game opens a hidden coup storyline for the Puppet
+// (AI/nativeDiplomaticDirector.js), and the Workshop warns an author who sets
+// a scenario's starting Loyalty under it (Editor/PuppetFields.jsx). One number,
+// so tuning the game cannot leave the Workshop's warning wrong.
+export const PUPPET_COUP_LOYALTY = 35;
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLocaleLowerCase();
@@ -149,7 +135,6 @@ const viewOf = (row, viewer) => {
 // to stand. Pass the polity's NAME — the same namespace as reputation,
 // intelligence and country tags.
 export const visiblePuppetsFor = (world, viewer) => {
-  if (!systemEnabled) return [];
   const rows = Array.isArray(world?.puppets) ? world.puppets : [];
   return rows.map((row) => viewOf(row, viewer)).filter(Boolean);
 };
@@ -238,10 +223,13 @@ export const puppetSummaryFor = (world, viewer, countryName) => {
   // the save came back and told the player their own overlord was somebody
   // else's arrangement ("Puppet state of Russia").
   if (!world || !name || !String(viewer ?? "").trim()) return null;
-  const rows = visiblePuppetsFor(world, viewer);
+  // Only the standing arrangements. The ledger keeps ended rows ahead of later
+  // ones, so a country released by one Overlord and taken by another would
+  // otherwise be found by its ended row first, and show nothing.
+  const rows = livePuppetsFor(world, viewer);
   const row = rows.find((entry) => entry.puppet === name)
     || rows.find((entry) => entry.overlord === name && entry.role === "puppet");
-  if (!row || row.status !== "active") return null;
+  if (!row) return null;
 
   const label = puppetKindLabel(row.kind);
   const since = row.startedDate ? `Since ${readableDate(row.startedDate)}` : "";
@@ -280,7 +268,6 @@ export const puppetSummaryFor = (world, viewer, countryName) => {
 //             told its own.
 //   learned — other polities' arrangements the viewer has uncovered, with when.
 export const puppetBriefingFor = (world, viewer, { present = [] } = {}) => {
-  if (!systemEnabled) return { own: [], learned: [] };
   const rows = Array.isArray(world?.puppets) ? world.puppets : [];
   const own = [];
   for (const row of rows) {

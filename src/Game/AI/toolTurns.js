@@ -155,6 +155,146 @@ export const appendLookupRound = (history, calls, results) => {
 // How much of a history is lookup traffic, for logs.
 export const lookupRoundCount = (history) => array(history).filter((entry) => callsOf(entry).length > 0).length;
 
+// The lookup rounds of a history as plain text: what the model asked, then what
+// came back. For an endpoint that refused the function declarations mid-
+// conversation (some local servers and gateways take no tools at all), which a
+// history of function calls cannot then be sent to either. The model still
+// reads every answer it asked for.
+export const flattenLookupRounds = (history) => array(history).map((entry) => {
+  const calls = callsOf(entry);
+  const responses = responsesOf(entry);
+  if (entry?.role === "model" && calls.length) {
+    const text = textOf(entry);
+    return { role: "model", parts: [{ text: [text, ...calls.map((call) => `[Looked up ${describeLookupCall(call)}]`)].filter(Boolean).join("\n") }] };
+  }
+  if (responses.length) {
+    return { role: "user", parts: [{ text: responses.map((response) => `[${clean(response.name) || "lookup"} answered: ${serialise(response.response)}]`).join("\n") }] };
+  }
+  return entry;
+});
+
+// ---- Rounds carried to the next attempt -----------------------------------
+
+// A lookup's answer is a fact about the campaign, whoever asked and whichever
+// model reads it. A task that asks again (runJsonTask's retry) or moves to the
+// next Fallback entry used to start from the bare conversation and pay again for
+// rounds already answered. `carry` ({ rounds, at }) keeps them: `rounds` in the
+// stored shape, `at` where in the conversation they were first asked. And
+// `outputOnly`, once the task has asked a lookup it already had the answer to
+// (see "A lookup asked a second time" below).
+export const createLookupCarry = () => ({ rounds: [], at: null, outputOnly: false });
+
+// Keeps one answered round. `baseLength` is the length of the conversation the
+// attempt started from, which is where the rounds go back in.
+export const carryLookupRound = (carry, baseLength, calls, results) => {
+  if (!carry || typeof carry !== "object") return;
+  if (!Number.isInteger(carry.at)) carry.at = Math.max(0, Number(baseLength) || 0);
+  carry.rounds = appendLookupRound(array(carry.rounds), calls, results);
+};
+
+// How many rounds the carry holds: the next attempt's round budget is what is left.
+export const carriedRoundCount = (carry) => lookupRoundCount(carry?.rounds);
+
+// The conversation an attempt starts from, with the carried rounds back where
+// they were asked. As TEXT (flattenLookupRounds), never as function calls:
+// Gemini 3 refuses a function call whose thought signature another model or
+// another request made, and a text turn reads the same on every provider.
+// The conversation only grows at its end between attempts, so the prefix
+// before `at` is the one the rounds followed.
+export const withCarriedRounds = (history, carry) => {
+  const list = array(history);
+  const rounds = array(carry?.rounds);
+  if (!rounds.length) return list;
+  const at = Number.isInteger(carry.at) ? Math.min(Math.max(carry.at, 0), list.length) : list.length;
+  return [...list.slice(0, at), ...flattenLookupRounds(rounds), ...list.slice(at)];
+};
+
+// ---- A lookup asked a second time -------------------------------------------
+
+// A model that cannot settle calls the same lookup with the same arguments
+// again a round later, and again. A player's log has eight tasks doing it in
+// thirteen minutes: list_projects(owner="Russia", status="all") three rounds
+// running, list_powers(query="") three times (in two tasks), region_info(
+// regionId="2476") twice. Every round is a whole request that sends the whole
+// prompt again, and the task that asked for the region twice then ran out of
+// rounds without ever calling the output function. The answer cannot have
+// changed: a lookup reads the campaign, and the campaign does not move while a
+// task runs.
+//
+// So a call this task has already had answered is not answered again. It is
+// told its answer is above and that the output function is due, and from then
+// on the task's requests offer only the output function (the carry's
+// `outputOnly`), so the round cannot be spent a third time, on this attempt or
+// the next. No request is added: the round that repeated was already made.
+
+const sortKeys = (value) => {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortKeys(value[key])]));
+};
+
+// What makes two calls the same call: the function and its arguments, whatever
+// order the model wrote the keys in. Nothing looser: list_regions(owner="X")
+// and list_regions(owner="X", limit=200) may or may not be the same question.
+export const lookupCallKey = (call) => {
+  const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args) ? call.args : {};
+  return `${clean(call?.name)}(${serialise(sortKeys(args))})`;
+};
+
+// Every call the stored rounds hold: a history's, or a carry's `rounds`.
+export const answeredLookupKeys = (rounds) => new Set(array(rounds).flatMap((entry) => callsOf(entry).map(lookupCallKey)));
+
+// What a repeated call is answered with. `outputToolName` is the task's output
+// function; a chat that looks things up (the advisor) has none and answers in text.
+export const repeatedLookupResponse = (outputToolName = "") => ({
+  alreadyAnswered: true,
+  note: "You already called this function with exactly these arguments, and its answer is above in this conversation. "
+    + "It has not changed and is not given again. Do not call any more lookup functions: "
+    + `${clean(outputToolName) ? `call ${clean(outputToolName)} now` : "answer now"} with what you have.`,
+});
+
+// Answers one round's calls. `answeredKeys` holds the calls already answered in
+// this task (answeredLookupKeys); a call found there gets the note above
+// instead of its result. Two identical calls inside ONE round are both run:
+// that is a model being careless in one turn, not one going round in circles.
+// The caller adds this round's calls to `answeredKeys` afterwards.
+//
+// Returns { results, answered, repeated }: `results` for appendLookupRound,
+// `answered` for the log and the telemetry record, and whether any call was a
+// repeat, which is the caller's cue to offer only the output function next.
+// A lookup that throws answers { error }, and one that returns a bare value is
+// wrapped, as before.
+export const answerLookupCalls = async (calls, { execute, answeredKeys = new Set(), outputToolName = "", now = () => Date.now() } = {}) => {
+  const results = [];
+  const answered = [];
+  for (const call of array(calls)) {
+    const startedAt = now();
+    const repeated = answeredKeys.has(lookupCallKey(call));
+    let response;
+    if (repeated) {
+      response = repeatedLookupResponse(outputToolName);
+    } else {
+      try {
+        response = await execute(call.name, call.args);
+      } catch (error) {
+        response = { error: String(error?.message || error) };
+      }
+    }
+    if (response == null || typeof response !== "object" || Array.isArray(response)) response = { result: response ?? null };
+    results.push({ id: call.id, name: call.name, response });
+    answered.push({
+      name: call.name,
+      args: call.args,
+      label: describeLookupCall(call),
+      response: JSON.stringify(response),
+      ms: now() - startedAt,
+      error: typeof response.error === "string" && response.error.length > 0,
+      repeated,
+    });
+  }
+  return { results, answered, repeated: answered.some((entry) => entry.repeated) };
+};
+
 // One line for a call, the way a log reads it: name(key="value", n=3). Long
 // strings are cut so a list of calls stays a list and not a transcript.
 const argValue = (value, max) => {

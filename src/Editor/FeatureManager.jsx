@@ -13,9 +13,13 @@ import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton, inputStyle } from "./editorStyles.js";
 import { TextField, SelectField } from "./fields.jsx";
-import { importAllCities, importMajorCities } from "./citiesImport.js";
+import { estimateJsonBytes, importAllCities, importMajorCities } from "./citiesImport.js";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import { removeRowStep, removeRowsStep } from "./documentUndo.js";
+
+// "All cities…" asks first from this many new cities on.
+const LARGE_CITY_IMPORT = 1000;
 
 const SYMBOLS = [
   { value: "square", label: "Square" },
@@ -45,7 +49,14 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   }, [features, query]);
 
   const update = (id, patch) => setFeatures((list) => list.map((f) => (f.id === id ? { ...f, ...patch } : f)));
-  const remove = (id) => setFeatures((list) => list.filter((f) => f.id !== id));
+  // Deleting is one step on the Workshop's undo stack (OlMap pushStep), so
+  // Ctrl+Z or Undo brings the rows back where they were (documentUndo.js).
+  // The rows go at once: a panel opened before the map handed over its API
+  // still deletes, only without the undo step.
+  const pushUndoStep = (step) => {
+    if (step) api?.pushStep?.(step);
+  };
+  const remove = (id) => pushUndoStep(removeRowStep(features, setFeatures, id));
 
   // Many at once: ticked rows and the map's box-select share one selection, and
   // the bar below tags or deletes everything in it together.
@@ -79,18 +90,54 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   const deleteSelected = () => {
     if (!selectedCount) return;
     if (!window.confirm(`Delete ${selectedCount} selected feature${selectedCount === 1 ? "" : "s"}?`)) return;
-    setFeatures((list) => list.filter((f) => !selectedSet.has(String(f.id))));
+    pushUndoStep(removeRowsStep(features, setFeatures, (f) => selectedSet.has(String(f.id))));
+    setSelection?.([]);
+  };
+  // Every city, base, port and landmark at once. It still asks first, but it is
+  // one undo step now: the autosave writes the empty list two seconds later,
+  // and Ctrl+Z or Undo writes them all back.
+  const deleteAll = () => {
+    const n = features.length;
+    if (!n) return;
+    const question = n === 1
+      ? "Delete the one city or map feature on this map? Undo brings it back."
+      : `Delete all ${n} cities and map features on this map? Undo brings them back.`;
+    if (!window.confirm(question)) return;
+    pushUndoStep(removeRowsStep(features, setFeatures, () => true));
     setSelection?.([]);
   };
 
+  // The city seed, merged like a file import. It says what it added, and says
+  // so when the seed could not be downloaded, rather than adding nothing. The
+  // whole seed is ~70k points, which every save, the scenario and the game then
+  // carry, so that one asks first with the count and a size.
   const doImport = async (mode) => {
     setImporting(true);
-    const cities = mode === "all" ? await importAllCities() : await importMajorCities();
-    setFeatures((list) => {
-      const have = new Set(list.map((f) => `${f.name}|${f.coord?.join(",")}`));
-      return [...list, ...cities.filter((c) => !have.has(`${c.name}|${c.coord?.join(",")}`))];
-    });
-    setImporting(false);
+    setImportNote("");
+    try {
+      const cities = mode === "all" ? await importAllCities() : await importMajorCities();
+      const added = mergeImportedFeatures(features, cities).added;
+      // Only a large addition asks: topping up a map that already holds the
+      // seed adds a handful, which neither weighs anything nor reads as
+      // "so many cities".
+      if (mode === "all" && added >= LARGE_CITY_IMPORT) {
+        const mb = (estimateJsonBytes(cities) * (added / cities.length)) / 1e6;
+        const megabytes = mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
+        const question = `Add ${added.toLocaleString()} cities to this map? That is about ${megabytes} MB more in the map, its saves and the scenario, and so many cities can make the Workshop and the game slow, especially on phones.`;
+        if (!window.confirm(question)) return;
+      }
+      setFeatures((list) => mergeImportedFeatures(list, cities).features);
+      setImportNote(
+        added === 0
+          ? "Every one of those cities is already on this map."
+          : added === 1 ? "Added 1 city." : `Added ${added} cities.`,
+      );
+    } catch (e) {
+      console.warn("[editor] city import failed:", e);
+      setImportNote("Import failed: the city list could not be downloaded. Check the connection and try again.");
+    } finally {
+      setImporting(false);
+    }
   };
 
   // The author's own features from a file — GeoJSON points, a Workshop document,
@@ -116,9 +163,11 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     }
   };
 
+  // Not the bare "Features": that string is the scenario and game editors' tab
+  // of gameplay features, and a language pack has one translation per string.
   return (
     <Panel
-      title="Features"
+      title="Map features"
       icon="pin"
       onClose={onClose}
       width={340}
@@ -126,7 +175,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
           <span style={{ color: "rgba(255,255,255,0.5)" }}>{features.length} features total</span>
           {features.length > 0 && (
-            <button onClick={() => setFeatures([])} style={{ ...pillButton(false), color: "#f87171" }}>
+            <button onClick={deleteAll} style={{ ...pillButton(false), color: "#f87171" }}>
               Delete All
             </button>
           )}
@@ -144,18 +193,20 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
       </div>
       <div style={{ display: "flex", gap: 6 }}>
         <button
-          onClick={() => doImport("all")}
-          disabled={importing}
-          style={{ ...pillButton(true), flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
-        >
-          <Icon name="plus" size={14} /> {importing ? "Importing…" : "Import all cities"}
-        </button>
-        <button
           onClick={() => doImport("major")}
           disabled={importing}
+          title="Capitals and cities of 500,000 people or more"
+          style={{ ...pillButton(true), flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
+        >
+          <Icon name="plus" size={14} /> {importing ? "Importing…" : "Import major cities"}
+        </button>
+        <button
+          onClick={() => doImport("all")}
+          disabled={importing}
+          title="Every city and place in the world list, about 70,000 of them; asks first"
           style={{ ...pillButton(false), display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
         >
-          Major only
+          All cities…
         </button>
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>

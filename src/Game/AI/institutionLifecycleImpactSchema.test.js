@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
+import { CHAT_ACTIONS_SCHEMA, GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
+import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
+import { parseInstitutionLifecycleResponsesJson } from "./institutionLifecycleChatActions.js";
+import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 
 const jumpWith = (ops) => ({
   clearActions: true,
@@ -61,4 +64,21 @@ test("tool description explicitly preserves player sovereignty and political-fit
   assert.match(lifecycle.description, /purpose\/scope\/obligations/i);
   assert.match(lifecycle.description, /Never make a sovereign membership decision for the human player/i);
   assert.deepEqual(lifecycle.items.properties.decision.enum, ["accept", "reject", "seek-observer", "request-terms", "delay"]);
+});
+
+// The schemas spread the canonical vocabularies, so a kind or decision added in
+// one place is offered, parsed and applied everywhere, never rejected by one.
+test("institution chat kinds and lifecycle decisions come from one list each", () => {
+  const lifecycle = GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties.institutionLifecycleOps;
+  assert.deepEqual(lifecycle.items.properties.decision.enum, [...INSTITUTION_LIFECYCLE_DECISIONS]);
+  const chatTypes = CHAT_ACTIONS_SCHEMA.properties.actions.items.properties.type.enum;
+  for (const kind of INSTITUTION_CHAT_ACTION_KINDS) assert.ok(chatTypes.includes(kind), `${kind} is a chat action type`);
+
+  const parsed = parseInstitutionLifecycleResponsesJson(INSTITUTION_LIFECYCLE_DECISIONS.map((decision) => ({
+    actorName: "Republic of Poland", caseId: `case-${decision}`, decision,
+  })));
+  assert.deepEqual(parsed.map((action) => action.decision), [...INSTITUTION_LIFECYCLE_DECISIONS]);
+  for (const decision of INSTITUTION_LIFECYCLE_DECISIONS) {
+    assert.match(CHAT_ACTIONS_SCHEMA.properties.lifecycleResponsesJson.description, new RegExp(decision));
+  }
 });

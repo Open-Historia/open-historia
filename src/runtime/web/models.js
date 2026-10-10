@@ -3,14 +3,20 @@
 // server/libraryStore.js (meta defaults/readers, country canonicalization, seed
 // builders, snapshot detection, asset-key sets). Web build only.
 
-import COUNTRY_NAME_REGISTRY from "./generated/countryNames.js";
+// The committed client copy of server/country-names.json (scripts/
+// generate-country-tables.mjs), the same table the map editor reads.
+import COUNTRY_NAME_REGISTRY from "../generated/countryNames.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
 import {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  normalizeMissingBasemap,
+  pickHubProvenance,
 } from "../../../server/hubProvenance.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
@@ -23,8 +29,7 @@ import {
 } from "./storeConstants.js";
 import { cloneJson } from "./util.js";
 
-// The constants themselves live in storeConstants.js, which imports nothing, so
-// Node tests can load them without a web build; see there.
+// The constants themselves live in storeConstants.js; see there.
 export * from "./storeConstants.js";
 
 // --- Country reference resolution (mirrors server/libraryStore.js) ---
@@ -204,14 +209,18 @@ export const readStoredImageContentType = (value) =>
     : null;
 
 // Hub provenance: the post a scenario was downloaded from (the exact bundle URL
-// imported, and whether it was edited since), the player's own post, and the
-// suggestions reviewed. Shared with the desktop store, so the two never differ.
+// imported, and whether it was edited since), the player's own post, what the
+// player unlinked the scenario from for good, and the suggestions reviewed.
+// Shared with the desktop store, so the two never differ.
 export {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  pickHubProvenance,
 };
 
 export const normalizePlayCount = (raw) => {
@@ -236,12 +245,21 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
+    hubUnlinked: normalizeHubUnlinked(raw?.hubUnlinked),
     id: scenarioId,
+    ...missingBasemapField(raw?.missingBasemap),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
     updatedAt: raw?.updatedAt ?? nowIso(),
   };
+};
+
+// Only there while a community basemap is missing (server/hubProvenance.js);
+// mirrors server/libraryStore.js.
+export const missingBasemapField = (raw) => {
+  const missingBasemap = normalizeMissingBasemap(raw);
+  return missingBasemap ? { missingBasemap } : {};
 };
 
 export const readGameMeta = (gameId, raw = {}) => {
@@ -250,6 +268,10 @@ export const readGameMeta = (gameId, raw = {}) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
   return {
     accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
+    // Server twin: hidden from the library, intact in storage. Read here or the
+    // catalog never shows it, and every later meta write (which starts from
+    // this) would unarchive the game.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? nowIso(),
     description,

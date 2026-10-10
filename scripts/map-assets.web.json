@@ -1,0 +1,12 @@
+{
+  "_comment": "What a WEB build carries: the website and the Android app, which are the same bundle. Each file is an asset of the map-data GitHub Release, pinned by size and sha256, and laid under the build's own assets/ folder at `path`, the stable name the app asks for. scripts/stage-map-assets.mjs downloads and verifies them into map-cache/; `npm run build:web` and `build:site` lay them into dist-web/, and mobile/scripts/stage-www.mjs into the APK's www/. It is the desktop's list (scripts/map-assets.json) cut to what a browser and a phone can hold: the same z8 archives, and the web-sized cut of the world, deep-cleaned like the desktop's (-clean) and with the stock world's owners as country names, built from the seed by scripts/build-default-map.mjs exactly as the desktop's is. Every file must stay under Cloudflare Pages' 25 MiB a file (SITE_FILE_LIMIT_BYTES in the stager; src/runtime/worldFiles.test.js checks it). A browser cannot fetch a release asset itself (GitHub sends no CORS header on the download), which is why the site carries its copy instead of asking for one.",
+  "release": "map-data",
+  "assets": [
+    { "asset": "regions-z8.pmtiles", "path": "assets/regions.pmtiles", "bytes": 21106005, "sha256": "a89941c96f697a38c52e0016f6d9087e4fbb9142401fb9b70177269db2ba57e6" },
+    { "asset": "countries-z8.pmtiles", "path": "assets/countries.pmtiles", "bytes": 12580027, "sha256": "fa7d2ec57173898b231c21ba8ba14b45a72a31855677770aafedaaa04bc289b6" },
+    { "asset": "cities.pmtiles", "path": "assets/cities.pmtiles", "bytes": 1547924, "sha256": "41edf847114a0c1b04c9a11e9501fc97e680a105b2ec618f5caffca3df61e87a" },
+    { "asset": "cities-seed.json", "path": "assets/cities-seed.json", "bytes": 7857627, "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101" },
+    { "asset": "regions-seed-clean.geojson", "path": "assets/regions-seed.geojson", "bytes": 13077300, "sha256": "c26df2ddaedc8ea95013a7d31c78e31ad0dedbb6d3967b16991c42f315fa9849" },
+    { "asset": "default-regions-names-web-clean.geojson", "path": "assets/default-regions.geojson", "bytes": 13128553, "sha256": "8dea021e8a1610ec479d3a4cb6f2de80fff97eb573b847bfd17b6f5a9f4b7e96" }
+  ]
+}

@@ -28,13 +28,15 @@ test("institution manager preserves canonical save and explicit dark select opti
   assert.match(source, /Upload small logo/);
 });
 
-test("institution starting membership is constrained to the canonical scenario polity roster", () => {
+// The manager suggests the scenario's own polities for a member. A name that is
+// not among them is kept as written and flagged beside the list, never refused:
+// a stock-map scenario's roster is not every country its author may name, and a
+// refusal there turned real countries away (institutionAuthoring.js).
+test("institution starting membership is suggested from the scenario's polity roster, and an unlisted name is flagged, not refused", () => {
   assert.match(source, /collectScenarioPoliticalPolities/);
-  assert.match(source, /Search scenario polities for institution membership/);
-  assert.match(source, /role="combobox"/);
-  assert.match(source, /role="listbox"/);
-  assert.match(source, /Only canonical polities in this scenario can be added/);
-  assert.match(source, /Typing text does not create a membership record/);
+  assert.match(source, /<PolityMultiPicker allowUnlisted label="Type a polity name"/);
+  assert.match(source, /unmatchedInstitutionMembers\(memberNames, world\)/);
   assert.match(source, /Advanced bulk edit member list/);
-  assert.match(source, /Unknown names or IDs are rejected/);
+  assert.match(source, /One polity name per line/);
+  assert.doesNotMatch(source, /Unknown names or IDs are rejected/);
 });

@@ -11,7 +11,7 @@
 // inspector. The export writes world.groups and world.groupAreas, which the game
 // outlines and tints and the AI reads, changes and erases (exportPreset.js).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import { inputStyle, labelDim, pillButton } from "./editorStyles.js";
 import {
@@ -24,6 +24,7 @@ import {
   normalizeGroupDescription,
   normalizeGroupName,
 } from "../runtime/groups.js";
+import { groupEraseSteps, groupRenameSteps } from "./documentUndo.js";
 
 const Swatch = ({ color, size = 14 }) => (
   <span
@@ -85,8 +86,14 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
     }
   };
 
+  // A rename or an erase undone from the map's stack can leave the group open
+  // here under a name that no longer exists; go back to the list.
+  useEffect(() => {
+    if (current && !names.includes(current)) setCurrent("");
+  }, [current, names]);
+
   // Renaming re-keys the record and every region in the area, as one step on
-  // the map's undo stack.
+  // the map's undo stack (the record moves back and forth with the regions).
   const rename = () => {
     const to = normalizeGroupName(draftName);
     if (!current || !to || to === current) {
@@ -100,14 +107,9 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
       return;
     }
     const from = current;
-    api?.retagGroup(from, to);
-    setGroups((registry) => {
-      const next = { ...registry };
-      const moved = { ...recordOf(from), ...(registry?.[from] ?? {}), name: to };
-      delete next[from];
-      next[to] = moved;
-      return next;
-    });
+    const steps = groupRenameSteps(setGroups, from, to, recordOf(from));
+    if (api?.retagGroup) api.retagGroup(from, to, steps);
+    else steps.redo();
     setCurrent(to);
     setDraftName(to);
     setNote(`Renamed to ${to}.`);
@@ -115,12 +117,9 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
 
   const erase = () => {
     const name = current;
-    api?.retagGroup(name, null);
-    setGroups((registry) => {
-      const next = { ...registry };
-      delete next[name];
-      return next;
-    });
+    const steps = groupEraseSteps(setGroups, name, groups?.[name] ?? null);
+    if (api?.retagGroup) api.retagGroup(name, null, steps);
+    else steps.redo();
     setCurrent("");
     setDeleteArmed(false);
     setNote(`${name} erased, and its area with it.`);

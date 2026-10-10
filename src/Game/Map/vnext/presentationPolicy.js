@@ -25,6 +25,48 @@ export const V_NEXT_MARKER_SHAPE_LAYER_IDS = Object.freeze([
   "markers-shapes-local",
 ]);
 
+// Physical geography should be part of the political map rather than hidden
+// beneath it. Keep the far/continental wash translucent enough for relief and
+// bathymetry to read, then progressively strengthen ownership color as the
+// player zooms toward province/city detail. One list for the fills (Nations.jsx
+// builds its MapLibre ramp from it) and the conquest flood
+// (ownershipFloodCustomLayer.js), which hands off to the fill seamlessly only
+// while both draw at the same strength.
+export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
+  // World view: terrain remains visible while political ownership is readable.
+  [1.5, 0.46],
+  [2.5, 0.50],
+  [3.75, 0.56],
+
+  // Regional view: political colours become the primary map layer.
+  // This avoids countries fading into the physical basemap during normal play.
+  [5.0, 0.62],
+  [6.5, 0.68],
+  [8.0, 0.72],
+
+  // Close play: maintain strong polity identity while showing terrain detail.
+  [10.0, 0.78],
+  [12.0, 0.82],
+  [14.0, 0.84],
+].map((stop) => Object.freeze(stop)));
+
+// The fill strength at a zoom, as MapLibre's linear interpolate reads the stops
+// (clamped to the end stops outside them), for a layer that draws it by hand.
+export const politicalFillOpacityAtZoom = (zoom) => {
+  const stops = POLITICAL_FILL_OPACITY_STOPS;
+  const z = Number(zoom) || 0;
+  if (z <= stops[0][0]) return stops[0][1];
+  for (let index = 1; index < stops.length; index += 1) {
+    const [z1, a1] = stops[index];
+    const [z0, a0] = stops[index - 1];
+    if (z <= z1) {
+      const t = (z - z0) / Math.max(1e-9, z1 - z0);
+      return a0 + ((a1 - a0) * t);
+    }
+  }
+  return stops.at(-1)[1];
+};
+
 const FAMILY_RULES = [
   {
     family: MARKER_FAMILY.settlement,
@@ -40,7 +82,9 @@ const FAMILY_RULES = [
   },
   {
     family: MARKER_FAMILY.resource,
-    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oilfield|gas field|coalfield|ore field|quarry|well)\b/,
+    // "<x>field" in one word or two: the Workshop's kind is "oil field", and
+    // normalizeText reads the AI's "oil_field" the same way.
+    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oil ?field|gas ?field|coal ?field|ore ?field|quarry|well)\b/,
     glyph: "◆",
     priority: 70,
   },

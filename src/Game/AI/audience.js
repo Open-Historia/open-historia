@@ -69,13 +69,6 @@ export const normalizeAudience = (value) => {
   return clean(value) ? viewerAudience([value]) : SIMULATION_AUDIENCE;
 };
 
-// A stable key for caches and cursors: two audiences with the same identity are
-// shown the same things.
-export const audienceIdentity = (audience) => {
-  if (isSimulationAudience(audience)) return "simulation";
-  return `viewer:${audiencePolities(audience).map(fold).sort().join("|")}`;
-};
-
 /**
  * Does one participant entry refer to `polity`?
  *
@@ -115,9 +108,6 @@ export const audienceSeesChat = (audience, chat, { player = "" } = {}) => {
   return audienceAmong(audience, chat?.countries);
 };
 
-export const filterChatsForAudience = (chats, audience, options) =>
-  (Array.isArray(chats) ? chats : []).filter((chat) => audienceSeesChat(audience, chat, options));
-
 /**
  * May this audience see something carrying a distribution list?
  *
@@ -131,6 +121,24 @@ export const audienceSeesScoped = (audience, visibleTo) => {
   if (!Array.isArray(visibleTo)) return false;
   return audienceAmong(audience, visibleTo);
 };
+
+/**
+ * May this audience read this document (runtime/reports.js)?
+ *
+ * Its holders and the public by the distribution list, as audienceSeesScoped —
+ * and a government whose agents stole a copy (`interceptedBy`) as well: a
+ * stolen paper is on its desk like any other. Which OTHER services stole one
+ * is the narrator's alone; this answers only for the audience asking.
+ */
+export const audienceSeesReport = (audience, report) =>
+  audienceSeesScoped(audience, report?.visibleTo) || audienceAmong(audience, report?.interceptedBy);
+
+// Did this audience come by the document only through its agents? Never for
+// the narrator, which holds everything openly.
+export const audienceStoleReport = (audience, report) =>
+  !isSimulationAudience(audience)
+  && !audienceSeesScoped(audience, report?.visibleTo)
+  && audienceAmong(audience, report?.interceptedBy);
 
 /**
  * What this audience may know about one agent, or null when it may know nothing.

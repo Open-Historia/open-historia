@@ -182,13 +182,19 @@ export const advanceRecurringDate = (date, repeat, notBefore = "") => {
   const floor = parseYmd(notBefore);
   const floorKey = floor ? buildYmd(floor) : "";
 
+  // Weekly is plain arithmetic: the first whole number of weeks that lands
+  // strictly after the floor. (Stepping it through the month loop below would
+  // re-seed each step with the original day and never get ahead of the clock.)
+  if (cadence === "weekly") {
+    const behind = floorKey ? diffGameDays(formatGameDate(start), floorKey) : null;
+    const weeks = behind === null ? 1 : Math.max(1, Math.floor(behind / 7) + 1);
+    return addGameDays(formatGameDate(start), weeks * 7);
+  }
+
   let next = { ...start };
-  // Bounded: a weekly commitment missed for a decade is ~520 rolls, and the cap
-  // keeps a nonsense date (year 0001) from spinning here forever.
+  // Bounded: the cap keeps a nonsense date (year 0001) from spinning here forever.
   for (let guard = 0; guard < 600; guard += 1) {
-    next = cadence === "weekly"
-      ? parseGameDate(addGameDays(formatGameDate(next), 7))
-      : { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
+    next = { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
 
     const candidate = buildYmd(next);
     if (!floorKey || compareGameDates(candidate, floorKey) > 0) return candidate;
@@ -341,8 +347,8 @@ export const filterProjects = (projects, {
 
     if (wantedStatuses.length && !wantedStatuses.includes(asText(project.status))) return false;
 
-    // Tag chips are OR-ed, not AND-ed: picking "military" and "naval" means "show
-    // me either", which is what a player clicking two chips on a short list
+    // Ticked tags are OR-ed, not AND-ed: picking "military" and "naval" means
+    // "show me either", which is what a player ticking two tags in the menu
     // means. AND-ing them mostly produces an empty board.
     if (wantedTags.length) {
       const own = asArray(project.tags).map((tag) => asText(tag).toLowerCase());
@@ -365,7 +371,7 @@ export const filterProjects = (projects, {
 };
 
 // The tag vocabulary actually present on the board, most-used first, so the
-// filter chips reflect this campaign rather than a fixed list. Open-vocabulary
+// Tags menu reflects this campaign rather than a fixed list. Open-vocabulary
 // tags (see countryTags.js) mean there is no other way to know what exists.
 export const collectProjectTags = (projects) => {
   const counts = new Map();
@@ -556,10 +562,12 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
   for (const spy of asArray(spies)) {
     const owner = asText(spy?.owner).toLowerCase();
     if (owner && player && owner !== player) continue;
-    const status = asText(spy?.status) || "active";
     // Suspected while still running, or exposed after having been turned: both
-    // mean what this agent sent may have been written by the other side.
-    if (spy?.suspected === true || status === "turned") compromised.add(asText(spy?.id));
+    // mean what this agent sent may have been written by the other side. A
+    // turned agent nobody suspects yet is NOT here: doubting its reports would
+    // tell the player what their own service has not worked out.
+    const exposedAfterTurning = asText(spy?.status) === "exposed" && Boolean(asText(spy?.turnedAt));
+    if (spy?.suspected === true || exposedAfterTurning) compromised.add(asText(spy?.id));
   }
   if (!compromised.size) return [];
 
@@ -653,6 +661,8 @@ export const describeDoubtedForPrompt = (pending) => {
 //
 // Words are folded the way ownerIdentity folds a polity name (accents dropped,
 // case ignored), then compared as crude stems so "shipyards" meets "shipyard".
+// They are words of any script: folded to a-z0-9, a Board kept in Russian or
+// Chinese had no words at all, so every event missed every entry on it.
 
 // Words that say what KIND of thing an entry is rather than which one, so they
 // can never be the reason an event matches.
@@ -667,7 +677,7 @@ const foldWords = (value) => String(value ?? "")
   .normalize("NFD")
   .replace(/[̀-ͯ]/g, "")
   .toLowerCase()
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .trim()
   .split(" ")
   .filter(Boolean);

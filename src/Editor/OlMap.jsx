@@ -38,13 +38,13 @@ import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
-import RBush from "ol/structs/RBush.js";
-import { BORDER_CLEANUP, findEnclosedGaps, hotspotsOf, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, cracksAmong, findEnclosedGaps, holdsRim, hotspotsOf, indexBoundary, isSliver, leftAloneTally, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import { claimStamper } from "./claimOverrides.js";import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
 import ImageStatic from "ol/source/ImageStatic";
-import { fromLonLat, toLonLat } from "ol/proj";
+import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
+import { boundsFillSquare, normalizeImageBounds } from "../../server/mapProjection.js";
 import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
@@ -52,7 +52,10 @@ import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBound
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
+import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
+import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
+import { resolvePastedIds } from "./regionClipboard.js";
 import {
   unionGeoms,
   translatedClone,
@@ -63,6 +66,8 @@ import {
   enclosedGapsOfUnion,
   overlapGeoms,
   unionAllGeoms,
+  weldRegions,
+  weldedGeometry,
 } from "./geometry.js";
 
 const BASEMAP_BG = {
@@ -461,6 +466,10 @@ const OlMap = ({
   selectionIds,
   activeTool,
   seedKind = "import-world",
+  // Whether this map is a scenario's, saved into it by the Workshop's Save
+  // buttons, or the standalone editor's, which leaves it as an exported file:
+  // where a merge that fails sends the author for the border repair.
+  scenarioMode = false,
   defaultTypeId = "land",
   paintOwner = "",
   paintOnlyOwner = "*",
@@ -509,7 +518,6 @@ const OlMap = ({
   const importPreviewLayerRef = useRef(null);
   const paintPreviewSourceRef = useRef(null);
   const paintPreviewLayerRef = useRef(null);
-  const topologyAnalysisRef = useRef(null);
   const analyzeTopologyRef = useRef(null);
   const borderAssistSourceRef = useRef(null);
   const borderAssistLayerRef = useRef(null);
@@ -555,10 +563,12 @@ const OlMap = ({
   const paintOnlyOwnerRef = useRef(paintOnlyOwner);
   const onSelectionRef = useRef(onSelectionChange);
   const onRegionsChangedRef = useRef(onRegionsChanged);
+  const scenarioModeRef = useRef(scenarioMode);
   const selectionKey = (selectionIds || []).join("|");
 
   typesByIdRef.current = toTypesById(types);
   colorsRef.current = colors || {};
+  scenarioModeRef.current = scenarioMode;
   activeToolRef.current = activeTool;
   defaultTypeIdRef.current = defaultTypeId;
   paintOwnerRef.current = paintOwner;
@@ -574,9 +584,13 @@ const OlMap = ({
     groupOutlineTimerRef.current = window.setTimeout(() => rebuildGroupOutlinesRef.current?.(), 350);
   };
 
-  const notifyRegions = () => {
+  // `loaded`: the regions were replaced because a map was opened, not edited,
+  // so nothing in them is unsaved (MapEditor's onRegionsChanged). A seed that
+  // lands seconds after the Workshop opened used to mark the map dirty and
+  // autosave the whole world as a new document.
+  const notifyRegions = ({ loaded = false } = {}) => {
     const n = regionSourceRef.current?.getFeatures().length ?? 0;
-    onRegionsChangedRef.current?.(n);
+    onRegionsChangedRef.current?.(n, { loaded });
     scheduleGroupOutlines();
   };
 
@@ -786,8 +800,9 @@ const OlMap = ({
     });
     paintPreviewLayer.setZIndex(58);
 
-    // Selection-scoped topology diagnostics. Nothing here participates in save
-    // or export: yellow/red geometry is a preview overlay only.
+    // What the Shared border tool's check finds after an edit (analyzeTopology):
+    // a crack in yellow, an overlap in red. Nothing here participates in save
+    // or export; it is an overlay only.
     const topologySource = new VectorSource({ wrapX: false });
     const topologyLayer = new VectorLayer({
       source: topologySource,
@@ -830,6 +845,8 @@ const OlMap = ({
     borderAssistSourceRef.current = borderAssistSource;
     borderAssistLayerRef.current = borderAssistLayer;
     mapRef.current = map;
+    // "features" is every point marker: cities and map features alike.
+    const toggleableLayers = { regions: regionLayer, labels: labelLayer, features: pointLayer, units: unitLayer, groups: groupOutlineLayer };
     requestAnimationFrame(() => map.updateSize());
     if (typeof window !== "undefined") window.__editorMap = map;
 
@@ -890,14 +907,17 @@ const OlMap = ({
       );
       if (tool === "delete") {
         // Deleting works on units and cities too — a point hit wins over the region under it.
+        // The document removes them and hands back the undo step (documentUndo.js).
         const unitHit = unitAtPixel(evt.pixel);
         if (unitHit) {
-          onUnitRemoveRef.current?.(unitHit.getId());
+          const cmd = onUnitRemoveRef.current?.(unitHit.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         const point = pointAtPixel(evt.pixel);
         if (point) {
-          onFeatureRemoveRef.current?.(point.getId());
+          const cmd = onFeatureRemoveRef.current?.(point.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         deleteFeature(hit);
@@ -958,23 +978,22 @@ const OlMap = ({
           if (f && f !== hit) { neighbor = f; break; }
         }
         if (!neighbor) return;
-        const oldGeom = hit.getGeometry().clone();
-        try {
-          hit.setGeometry(unionGeoms([hit.getGeometry(), neighbor.getGeometry()]));
-        } catch (e) {
-          console.warn("[editor] dissolve failed:", e);
+        const cmd = mergeRegionFeatures(regionSource, [hit, neighbor]);
+        if (!cmd) {
+          // A union fails on borders that cross or nearly coincide, and the
+          // save's border cleanup (repairTopologyEverywhere) is the only thing
+          // that repairs those: a scenario's Save buttons, or the standalone
+          // editor's exports. The Merge button says the same.
+          window.alert(scenarioModeRef.current
+            ? "The border between these two regions could not be removed. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
+            : "The border between these two regions could not be removed. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
         }
-        regionSource.removeFeature(neighbor);
         regionLayer.changed();
         labelLayer.changed();
         onSelectionRef.current?.([hit.getId()]);
         notifyRegions();
-        const mergedGeom = hit.getGeometry().clone();
-        pushCmd({
-          undo: () => { hit.setGeometry(oldGeom.clone()); regionSource.addFeature(neighbor); },
-          redo: () => { hit.setGeometry(mergedGeom.clone()); regionSource.removeFeature(neighbor); },
-        });
+        pushCmd(cmd);
         return;
       }
       const hitId = hit ? hit.getId() : null;
@@ -1112,10 +1131,29 @@ const OlMap = ({
     const onResize = () => map.updateSize();
     window.addEventListener("resize", onResize);
 
+    // Every map load (open, New, generate, import, reseed) starts afresh: the
+    // undo steps held the old map's regions, and a world seed still
+    // downloading for the old map must not land on the new one. A seed checks
+    // on arrival that no load has started since it was asked for.
+    let loadToken = 0;
+    const clearHistory = () => {
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      emitHistory();
+    };
+    const startLoad = () => {
+      clearHistory();
+      loadToken += 1;
+      return loadToken;
+    };
+
     let alive = true;
     if (seedKind === "import-world") {
+      // A map opened or started before the world arrives wins: the seed used
+      // to be added on top of it.
+      const token = loadToken;
       loadSeedFeatures().then((features) => {
-        if (!alive || !regionSourceRef.current) return;
+        if (!alive || !regionSourceRef.current || token !== loadToken) return;
         regionSourceRef.current.addFeatures(features);
         onRegionCount?.(regionSourceRef.current.getFeatures().length);
       });
@@ -1124,7 +1162,6 @@ const OlMap = ({
     }
 
 
-    const nameOf = (f) => String(f?.get("name") || f?.getId?.() || "region");
     const expandExtent = (extent, pad) => [extent[0] - pad, extent[1] - pad, extent[2] + pad, extent[3] + pad];
 
     const pointSegmentDistance = (p, a, b) => {
@@ -1148,36 +1185,29 @@ const OlMap = ({
       return [];
     };
 
-    // A region's boundary segments in an R-tree, so the touch score below can
+    // A region's boundary segments in an index, so the touch score below can
     // ask for the segments near a point instead of walking every segment of
     // the region for every point — a 40,000-vertex sea zone is a neighbour of
-    // every crack on its coast, and used to be walked whole for each one.
+    // every crack on its coast, and used to be walked whole for each one. The
+    // index is typed arrays over the geometry's own coordinates
+    // (topologySweep.js indexBoundary): the R-tree it replaces held 1.1 GB
+    // for the default world's regions.
     const buildBoundaryIndex = (regionGeom) => {
-      const extents = [];
-      const segments = [];
-      for (const ring of geometryRings(regionGeom)) {
-        for (let j = 1; j < ring.length; j += 1) {
-          const a = ring[j - 1];
-          const b = ring[j];
-          extents.push([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
-          segments.push([a, b]);
-        }
-      }
-      const index = new RBush();
-      if (segments.length) index.load(extents, segments);
-      return index;
+      const type = regionGeom?.getType?.();
+      const ends = type === "Polygon" ? regionGeom.getEnds() : type === "MultiPolygon" ? regionGeom.getEndss().flat() : [];
+      return indexBoundary(ends.length ? regionGeom.getFlatCoordinates() : [], ends, regionGeom?.getStride?.() || 2);
     };
 
     // How many of up to 80 points along the gap's ring lie within epsilon of
     // the region's boundary: the neighbour that touches the gap most takes it.
     const boundaryTouchScore = (gapGeom, boundaryIndex, epsilon) => {
       const gapRing = geometryRings(gapGeom)[0] || [];
-      if (!gapRing.length || !boundaryIndex || boundaryIndex.isEmpty()) return 0;
+      if (!gapRing.length || !boundaryIndex || !boundaryIndex.size) return 0;
       const step = Math.max(1, Math.floor(gapRing.length / 80));
       let score = 0;
       for (let i = 0; i < gapRing.length; i += step) {
         const p = gapRing[i];
-        const near = boundaryIndex.getInExtent([p[0] - epsilon, p[1] - epsilon, p[0] + epsilon, p[1] + epsilon]);
+        const near = boundaryIndex.near(p[0], p[1], epsilon);
         for (const [a, b] of near) {
           if (pointSegmentDistance(p, a, b) <= epsilon) {
             score += 1;
@@ -1190,12 +1220,13 @@ const OlMap = ({
 
     const clearTopologyDiagnostics = () => {
       topologySource.clear();
-      topologyAnalysisRef.current = null;
     };
 
-    // The two conservative defect classes, shared by the Topology panel's
-    // selection pass (analyzeTopology) and the save-time sweep over every
-    // region (repairTopologyEverywhere): same rules, same order, same undo.
+    // The two conservative defect classes, enclosed cracks and thin overlaps,
+    // found by the same rules and in the same order for the save-time sweep
+    // over every region, which repairs them (repairTopologyEverywhere), and
+    // for the Shared border tool's check on its two regions, which only marks
+    // them (analyzeTopology).
     const topologyContext = (feats) => {
       const selectedSet = new Set(feats);
       const featureOrder = new globalThis.Map(feats.map((feature, index) => [feature, index]));
@@ -1224,10 +1255,28 @@ const OlMap = ({
     // it touches most (the larger region on ties); a hole touching nothing is
     // dropped. Neighbours come from the spatial index, limited to the pass's
     // regions and sorted by their order so proposals are deterministic.
-    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
+    //
+    // A hole wider than BORDER_CLEANUP.maxWidthInsideOneRegion is filled only
+    // when two or more regions are on its rim: one region all the way round is
+    // a lake or an inlet that region was drawn around, not a crack between
+    // regions (topologySweep.js cracksAmong). `onLeftAlone(hole)` hears of
+    // each one passed over for that.
+    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity, onLeftAlone } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
-      for (const row of holes) {
+      // How many of the pass's regions are on a hole's rim, as far as two.
+      const rimRegionsOf = (row) => {
+        const ring = geometryRings(row.geom)[0] || [];
+        let holders = 0;
+        for (const feature of regionSource.getFeaturesInExtent(row.geom.getExtent())) {
+          if (!selectedSet.has(feature)) continue;
+          const index = boundaryIndexOf(feature);
+          if (holdsRim(ring, ([x, y], reach) => index.near(x, y, reach))) holders += 1;
+          if (holders > 1) break;
+        }
+        return holders;
+      };
+      for (const row of cracksAmong(holes, rimRegionsOf, { maxWidth: width, onLeftAlone })) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
@@ -1252,7 +1301,6 @@ const OlMap = ({
           area: row.area,
           width: row.width,
           targetId: target.getId(),
-          targetName: nameOf(target),
         });
       }
       return items;
@@ -1261,7 +1309,14 @@ const OlMap = ({
     // Narrow overlaps between feats[from, to) and their later-ordered extent
     // neighbours. R2.4: the VectorSource spatial index is asked only for the
     // regions whose extents can actually meet A, never every pair.
-    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, onPair, minWidth = 0, maxPairVertices = Infinity, onSkip } = {}) => {
+    // `onLeftAlone(a, b)` hears of each pair that overlaps narrowly and is not
+    // trimmed, because what it shares is too much of the smaller region.
+    // A pair polygon-clipping refuses to intersect is asked again welded when
+    // there is a `weld` to do it with (the save-time sweep's; what the two
+    // share is then measured on the welded copies, and a trim is still made
+    // from the regions as they are); refused both ways it is passed over,
+    // and `onRefused(a, b)` hears of it.
+    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, minWidth = 0, maxPairVertices = Infinity, onSkip, onLeftAlone, weld = null, onRefused } = {}) => {
       const items = [];
       for (let i = from; i < to; i += 1) {
         const a = feats[i];
@@ -1273,7 +1328,6 @@ const OlMap = ({
           .sort((x, y) => x.index - y.index);
 
         for (const { feature: b } of nearby) {
-          onPair?.();
           // Two regions together heavier than one call can safely be handed
           // (the save-time sweep's BORDER_CLEANUP.maxUnionVertices) are left
           // uncompared, rather than risk the page's memory on them.
@@ -1285,15 +1339,29 @@ const OlMap = ({
           try {
             pieces = overlapGeoms(a.getGeometry(), b.getGeometry(), { maxWidth: width, minWidth });
           } catch (e) {
-            console.warn("[editor] topology overlap analysis failed:", e);
-            continue;
+            try {
+              if (!weld) throw e;
+              pieces = overlapGeoms(weld(a.getGeometry()), weld(b.getGeometry()), { maxWidth: width, minWidth });
+            } catch (again) {
+              console.warn("[editor] topology overlap analysis failed:", again);
+              onRefused?.(a, b);
+              continue;
+            }
           }
           if (!pieces.length) continue;
           const aArea = areaOf(a);
           const bArea = areaOf(b);
+          // A pair that shares more than BORDER_CLEANUP.maxSliverShare of the
+          // smaller region is left as it is: that is not a sliver, and the
+          // trim below would take it out of a region that has little else
+          // (topologySweep.js isSliver).
+          if (!isSliver(pieces[0].shared, Math.min(aArea, bArea))) {
+            onLeftAlone?.(a, b);
+            continue;
+          }
           // Deterministic conservative rule: the larger region keeps the tiny
           // overlap; the smaller one is trimmed to its exact boundary. This is
-          // only proposed for narrow overlap candidates and always previews first.
+          // only done for narrow overlaps.
           const winner = aArea >= bArea ? a : b;
           const loser = winner === a ? b : a;
           for (const row of pieces) {
@@ -1303,10 +1371,6 @@ const OlMap = ({
               geom: row.geom.clone(),
               area: row.area,
               width: row.width,
-              aId: a.getId(),
-              bId: b.getId(),
-              aName: nameOf(a),
-              bName: nameOf(b),
               winnerId: winner.getId(),
               loserId: loser.getId(),
             });
@@ -1316,43 +1380,28 @@ const OlMap = ({
       return items;
     };
 
-    const analyzeTopology = (ids, { maxWidth = 500 } = {}) => {
-      const width = Math.max(1, Number(maxWidth) || 500);
+    // The Shared border tool's check after each of its edits (the interaction
+    // effect below): the enclosed cracks and thin overlaps left between the
+    // given regions, up to maxWidth, marked on the map in yellow and red. It
+    // repairs nothing. The marks stay until the next check, a save or an
+    // import clears them.
+    const analyzeTopology = (ids, { maxWidth = BORDER_CLEANUP.maxWidth } = {}) => {
+      const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const feats = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(Boolean);
       topologySource.clear();
-      if (feats.length < 2) {
-        const empty = { maxWidth: width, gaps: [], overlaps: [], selectionCount: feats.length };
-        topologyAnalysisRef.current = empty;
-        return empty;
-      }
+      if (feats.length < 2) return;
 
       const context = topologyContext(feats);
-      let spatialPairs = 0;
-      // Fully enclosed holes in the selection union are the only gap class R2
-      // auto-fills. Open coastline defects are preview/manual territory for now.
+      // Fully enclosed holes in the regions' union are the only gap class
+      // that is ever filled. Open coastline defects are left to the author.
       const gaps = assignGapTargets(enclosedGapGeoms(feats.map((f) => f.getGeometry()), { maxWidth: width }), width, context);
-      const overlapsFound = findNarrowOverlaps(feats, width, context, { onPair: () => { spatialPairs += 1; } });
+      const overlapsFound = findNarrowOverlaps(feats, width, context);
       for (const item of [...gaps, ...overlapsFound]) {
         const overlay = new Feature({ geometry: item.geom.clone(), kind: item.kind });
         overlay.setId(`topology-${item.id}`);
         topologySource.addFeature(overlay);
       }
-
-      const report = {
-        maxWidth: width,
-        selectionCount: feats.length,
-        spatialPairs,
-        gaps,
-        overlaps: overlapsFound,
-      };
-      topologyAnalysisRef.current = report;
       topologyLayer.changed();
-      return {
-        ...report,
-        // React only needs summaries; keep heavyweight OL geometries private.
-        gaps: gaps.map(({ geom, ...item }) => item),
-        overlaps: overlapsFound.map(({ geom, ...item }) => item),
-      };
     };
 
     analyzeTopologyRef.current = analyzeTopology;
@@ -1367,6 +1416,9 @@ const OlMap = ({
       };
       return { before, remember };
     };
+    // The trim takes ALL of the winner out of the loser, so one call clears
+    // every sliver the two share: the sweep calls it once for a pair of
+    // regions, not once for each sliver between them.
     const trimOverlap = (item, remember) => {
       const winner = regionSource.getFeatureById(item.winnerId);
       const loser = regionSource.getFeatureById(item.loserId);
@@ -1400,11 +1452,16 @@ const OlMap = ({
     // Every crack of one target filled in a single union: the same result as
     // one by one (union is associative) at one sweep over the target instead
     // of one per crack, which is what matters when a large region takes many.
-    // Falls back to one by one if the one call is refused.
-    const fillGaps = (targetId, items, remember) => {
+    // Falls back to one by one if the one call is refused; `onFailed(item)`
+    // hears of each crack that could not be filled even so.
+    const fillGaps = (targetId, items, remember, onFailed) => {
       const target = regionSource.getFeatureById(targetId);
-      if (!target || !items.length) return 0;
-      if (items.length === 1) return fillGap(items[0], remember) ? 1 : 0;
+      const oneByOne = () => items.reduce((filled, item) => {
+        if (target && fillGap(item, remember)) return filled + 1;
+        onFailed?.(item);
+        return filled;
+      }, 0);
+      if (!target || items.length < 2) return oneByOne();
       remember(target);
       try {
         target.setGeometry(unionGeoms([target.getGeometry(), ...items.map((item) => item.geom)]));
@@ -1412,7 +1469,7 @@ const OlMap = ({
         return items.length;
       } catch (e) {
         console.warn("[editor] topology gap repair failed for a batch; filling one by one:", e);
-        return items.reduce((filled, item) => filled + (fillGap(item, remember) ? 1 : 0), 0);
+        return oneByOne();
       }
     };
     const finishTopologyEdit = ({ before }) => {
@@ -1445,28 +1502,39 @@ const OlMap = ({
       return before.size;
     };
 
-    const repairTopology = (ids, { maxWidth = 500 } = {}) => {
-      // Re-analyze at apply-time. The user may have edited a vertex after preview;
-      // stale geometry must never be committed blindly.
-      analyzeTopology(ids, { maxWidth });
-      const report = topologyAnalysisRef.current;
-      if (!report) return { changed: false, gaps: 0, overlaps: 0 };
-
-      const edit = beginTopologyEdit();
-      let overlapRepairs = 0;
-      for (const item of report.overlaps || []) {
-        if (trimOverlap(item, edit.remember)) overlapRepairs += 1;
-      }
-      let gapRepairs = 0;
-      for (const item of report.gaps || []) {
-        if (fillGap(item, edit.remember)) gapRepairs += 1;
-      }
-      const affectedRegions = finishTopologyEdit(edit);
-      if (!affectedRegions) return { changed: false, gaps: 0, overlaps: 0 };
-      return { changed: true, gaps: gapRepairs, overlaps: overlapRepairs, affectedRegions };
+    // What the save-time sweep turns to when polygon-clipping refuses a call:
+    // what to show it in a geometry's place (topologySweep.js says what was
+    // measured). For one of the given regions that is the region with its
+    // near-equal coordinates made equal and its neighbours' corners put into
+    // its edges (geometry.js weldRegions); for a union of some of them, the
+    // union with the same coordinates made equal. All of it is worked out
+    // when first asked for, so a map on which nothing is refused never pays
+    // for it (the default world: about 3 s). What comes back is only ever
+    // shown to polygon-clipping, never put into a region.
+    const welderFor = (regions) => {
+      let tables = null;
+      let ofRegion = null;
+      const ofUnion = new WeakMap();
+      return (geom) => {
+        if (!tables) {
+          const place = new globalThis.Map(regions.map((feature, index) => [feature, index]));
+          const geoms = regions.map((feature) => feature.getGeometry());
+          const welded = weldRegions(geoms, (index, box) => regionSource.getFeaturesInExtent(box).map((feature) => place.get(feature)).filter((at) => at !== undefined));
+          tables = welded.tables;
+          ofRegion = new globalThis.Map(geoms.map((own, index) => [own, welded.geoms[index]]));
+        }
+        const region = ofRegion.get(geom);
+        if (region) return region;
+        let out = ofUnion.get(geom);
+        if (!out) {
+          out = weldedGeometry(geom, tables);
+          ofUnion.set(geom, out);
+        }
+        return out;
+      };
     };
 
-    // Save-time border cleanup (MapEditor.jsx persistScenario): the panel's
+    // Save-time border cleanup (MapEditor.jsx cleanBorders): the repair
     // pass over EVERY region, repeated until a pass finds nothing (at most
     // BORDER_CLEANUP.maxPasses — trimming a sliver can expose a hairline
     // between the winner and a third region), all as ONE undo step. The gap
@@ -1488,6 +1556,22 @@ const OlMap = ({
     // by then is applied (until maxApplyMillis) and the note after the save
     // says so. An error inside a phase ends the search the same way, keeping
     // the repairs already made, rather than throwing the whole cleanup away.
+    //
+    // A call polygon-clipping refuses is not such an error (topologySweep.js
+    // says what was measured). A refused union or intersection is asked again
+    // with the pass's regions welded: coordinate values within a micron of
+    // each other made one, and a corner within a micron of a neighbour's edge
+    // put into that edge, which is what such a map's refusals come from.
+    // What is refused even so is passed over and counted: a part of the map
+    // no union joins to the rest stays a part of its own, a pair is left
+    // uncompared, a crack unfilled, a sliver untrimmed, and the note says how
+    // many of each. Welding only finds: every repair is made from the regions
+    // as they are, so no welded region is written into the map.
+    //
+    // `maxWidth` is the save's choice: the quick clean stops at
+    // BORDER_CLEANUP.quickWidth and the deep one at BORDER_CLEANUP.maxWidth
+    // (MapEditor.jsx asks which). Either reads every region; the width is
+    // what is repaired.
     const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress, stopRequested } = {}) => {
       const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const floor = Math.min(width, BORDER_CLEANUP.minWidth);
@@ -1508,6 +1592,8 @@ const OlMap = ({
         phase: "gaps",
         pass: 1,
         maxPasses: BORDER_CLEANUP.maxPasses,
+        // The width this sweep repairs up to, for the screen's own wording.
+        maxWidth: width,
         regionCount,
         passRegions: regionCount,
         chunkIndex: 0,
@@ -1535,17 +1621,41 @@ const OlMap = ({
       let parts = 1;
       let skippedPairs = 0;
       let repairsLeft = 0;
+      // What the two guards passed over, for the note after the save: holes
+      // one region surrounds and pairs that share too much of the smaller
+      // region, each counted once over all the passes (topologySweep.js
+      // leftAloneTally).
+      const leftAlone = leftAloneTally();
+      // What polygon-clipping refused: whether a gap search had to weld (the
+      // passes after it then start welded), and what welding did not cure,
+      // each counted once over all the passes — the parts no union joined to
+      // the rest, the pairs it could not intersect (by their two ids), and
+      // the cracks and slivers it could not repair (by kind and place, as the
+      // tally above keeps a hole).
+      let welded = false;
+      let partsApart = 0;
+      const pairsFailed = new Set();
+      const repairsFailed = new Set();
+      const repairKey = (item) => `${item.kind}:${item.geom.getExtent().map((value) => Math.round(value)).join(",")}`;
       const outcome = (affectedRegions) => ({
         changed: affectedRegions > 0,
         gaps: totals.gaps,
         overlaps: totals.overlaps,
         affectedRegions,
         regionCount,
+        // The widest crack or sliver this sweep repaired: the quick clean's
+        // limit or the deep one's (topologySweep.js CLEANUP_MODES).
+        maxWidth: width,
         gapsFound: totals.gapsFound,
         overlapsFound: totals.overlapsFound,
         passes,
         parts,
         skippedPairs,
+        ...leftAlone.counts(),
+        welded,
+        partsApart,
+        pairsFailed: pairsFailed.size,
+        repairsFailed: repairsFailed.size,
         stopped,
         error,
         elapsedMs: elapsed(),
@@ -1580,6 +1690,8 @@ const OlMap = ({
           report({ pass: passes, phase: "gaps", passRegions: passFeats.length, chunkIndex: 0, chunkCount: 0, gapsFound: 0, regionsChecked: 0, overlapsFound: 0, repairsDone: 0, repairCount: 0 });
           // Areas change as regions are trimmed, so the context is rebuilt per pass.
           const context = topologyContext(passFeats);
+          // And so is what the pass turns to when a call is refused.
+          const weld = welderFor(passFeats);
 
           // No union here is handed more than BORDER_CLEANUP.maxUnionVertices: a
           // detailed map is read in parts rather than asked for more heap than the
@@ -1604,10 +1716,15 @@ const OlMap = ({
             shouldStop,
             onChunks: (chunkCount) => report({ chunkCount }),
             onChunk: (chunkIndex) => report({ chunkIndex }),
+            weld,
+            welded,
+            onRefused: (e) => console.warn("[editor] border cleanup: polygon-clipping refused a union:", e),
           });
           parts = Math.max(parts, search.parts);
+          welded = welded || Boolean(search.welded);
+          partsApart = Math.max(partsApart, Number(search.apart) || 0);
           const holes = local ? search.holes.filter((hole) => touchesHotspot(hole.geom.getExtent(), hotspots)) : search.holes;
-          const gaps = assignGapTargets(holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices });
+          const gaps = assignGapTargets(holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices, onLeftAlone: leftAlone.hole });
           report({ gapsFound: gaps.length });
           await yieldToBrowser();
 
@@ -1622,6 +1739,9 @@ const OlMap = ({
               minWidth: floor,
               maxPairVertices: BORDER_CLEANUP.maxUnionVertices,
               onSkip: () => { skippedThisPass += 1; },
+              onLeftAlone: (a, b) => leftAlone.pair(a.getId(), b.getId()),
+              weld,
+              onRefused: (a, b) => pairsFailed.add([a.getId(), b.getId()].sort().join("\n")),
             }));
             report({ regionsChecked: to, overlapsFound: overlapsFound.length });
             await yieldToBrowser();
@@ -1630,9 +1750,10 @@ const OlMap = ({
           totals.gapsFound += gaps.length;
           totals.overlapsFound += overlapsFound.length;
 
-          // Overlaps first (the loser trimmed to the winner's boundary), then
-          // the cracks, every crack of one target in one union. Past
-          // maxApplyMillis the rest are left for the next save.
+          // Overlaps first (the loser trimmed to the winner's boundary, every
+          // sliver of one pair in one trim), then the cracks, every crack of
+          // one target in one union. Past maxApplyMillis the rest are left for
+          // the next save.
           const repairCount = overlapsFound.length + gaps.length;
           report({ phase: "apply", repairCount, repairsDone: 0 });
           if (!repairCount) break;
@@ -1643,13 +1764,38 @@ const OlMap = ({
           let gapsFilled = 0;
           let overlapsTrimmed = 0;
           let attempted = 0;
+          // A repair that cannot be made (the trim or the fill is refused) is
+          // counted, by its kind and place: a later pass that meets it again
+          // counts it no second time, and one that makes it takes it back out.
+          const notFailed = (item) => {
+            if (repairsFailed.size) repairsFailed.delete(repairKey(item));
+          };
+          const failed = (item) => repairsFailed.add(repairKey(item));
+          // The slivers of one pair of regions, in the order the pairs were
+          // found. Two regions that disagree along a border share a sliver
+          // wherever their lines cross (the default world's 49,647 lie between
+          // 7,541 pairs), and one trim removes them all: the second trim of a
+          // pair had nothing left to take and cost as much as the first.
+          const byPair = new globalThis.Map();
           for (const item of overlapsFound) {
-            if (attempted % 25 === 0 && overApplyBudget()) break;
-            attempted += 1;
-            if (trimOverlap(item, edit.remember)) {
-              overlapsTrimmed += 1;
-              applied.push(item);
-              changed.add(regionSource.getFeatureById(item.loserId));
+            const pair = `${item.winnerId}\n${item.loserId}`;
+            if (!byPair.has(pair)) byPair.set(pair, []);
+            byPair.get(pair).push(item);
+          }
+          for (const items of byPair.values()) {
+            if (overApplyBudget()) break;
+            attempted += items.length;
+            const [{ winnerId, loserId }] = items;
+            if (trimOverlap(items[0], edit.remember)) {
+              overlapsTrimmed += items.length;
+              applied.push(...items);
+              changed.add(regionSource.getFeatureById(loserId));
+              // If an earlier pass had passed this pair over, it was not left
+              // alone after all.
+              leftAlone.trimmed(winnerId, loserId);
+              items.forEach(notFailed);
+            } else {
+              items.forEach(failed);
             }
           }
           const byTarget = new globalThis.Map();
@@ -1660,7 +1806,8 @@ const OlMap = ({
           for (const [targetId, items] of byTarget) {
             if (overApplyBudget()) break;
             attempted += items.length;
-            const filled = fillGaps(targetId, items, edit.remember);
+            items.forEach(notFailed);
+            const filled = fillGaps(targetId, items, edit.remember, failed);
             if (filled) {
               gapsFilled += filled;
               applied.push(...items);
@@ -1723,18 +1870,26 @@ const OlMap = ({
         }
         map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
       },
+      // `patch.claimants` may be a function of the region's own list, so one
+      // edit over a selection with differing claims keeps each region's rest.
       setRegionAttrs: (ids, patch) => {
         const undos = [];
         for (const id of ids) {
           const f = regionSource.getFeatureById(id);
           if (!f) continue;
           const before = {};
+          let claimants;
           if ("owner" in patch) { before.owner = f.get("owner") || null; f.set("owner", patch.owner || null); }
           if ("typeId" in patch) { before.typeId = f.get("typeId"); f.set("typeId", patch.typeId); }
           if ("name" in patch) { before.name = f.get("name"); f.set("name", patch.name); }
-          if ("claimants" in patch) { before.claimants = f.get("claimants") || null; f.set("claimants", patch.claimants?.length ? patch.claimants : null); }
+          if ("claimants" in patch) {
+            before.claimants = f.get("claimants") || null;
+            claimants = typeof patch.claimants === "function" ? patch.claimants(before.claimants || []) : patch.claimants;
+            claimants = claimants?.length ? claimants : null;
+            f.set("claimants", claimants);
+          }
           if ("group" in patch) { before.group = f.get("group") || null; f.set("group", patch.group || null); }
-          undos.push([f, before]);
+          undos.push([f, before, claimants]);
         }
         regionLayer.changed();
         labelLayer.changed();
@@ -1743,11 +1898,11 @@ const OlMap = ({
           const after = { ...patch };
           pushCmd({
             undo: () => undos.forEach(([f, b]) => Object.keys(b).forEach((k) => f.set(k, b[k]))),
-            redo: () => undos.forEach(([f]) => {
+            redo: () => undos.forEach(([f, , claimants]) => {
               if ("owner" in after) f.set("owner", after.owner || null);
               if ("typeId" in after) f.set("typeId", after.typeId);
               if ("name" in after) f.set("name", after.name);
-              if ("claimants" in after) f.set("claimants", after.claimants?.length ? after.claimants : null);
+              if ("claimants" in after) f.set("claimants", claimants);
               if ("group" in after) f.set("group", after.group || null);
             }),
           });
@@ -1843,32 +1998,18 @@ const OlMap = ({
       mergeRegions: (ids) => {
         const feats = ids.map((id) => regionSource.getFeatureById(id)).filter(Boolean);
         if (feats.length < 2) return;
-        const target = feats[0];
-        const oldGeom = target.getGeometry().clone();
-        const removed = feats.slice(1);
-        let mergedGeom;
-        try {
-          mergedGeom = unionGeoms(feats.map((f) => f.getGeometry()));
-          target.setGeometry(mergedGeom);
-        } catch (e) {
-          console.warn("[editor] merge failed:", e);
+        const cmd = mergeRegionFeatures(regionSource, feats);
+        if (!cmd) {
+          window.alert(scenarioModeRef.current
+            ? "These regions could not be merged. Borders are repaired when the map is saved into its scenario, so save the map and then try again."
+            : "These regions could not be merged. Borders are repaired when the map is exported, so export the map and then try again.");
           return;
         }
-        removed.forEach((f) => regionSource.removeFeature(f));
         regionLayer.changed();
         labelLayer.changed();
-        onSelectionRef.current?.([target.getId()]);
+        onSelectionRef.current?.([feats[0].getId()]);
         notifyRegions();
-        pushCmd({
-          undo: () => {
-            target.setGeometry(oldGeom.clone());
-            removed.forEach((f) => regionSource.addFeature(f));
-          },
-          redo: () => {
-            target.setGeometry(mergedGeom.clone());
-            removed.forEach((f) => regionSource.removeFeature(f));
-          },
-        });
+        pushCmd(cmd);
       },
       copyRegions: (ids) => {
         const res = map.getView().getResolution() || 1;
@@ -1982,13 +2123,14 @@ const OlMap = ({
           }
         }
 
-        const taken = new Set(regionSource.getFeatures().map((f) => String(f.getId())));
+        const ids = resolvePastedIds(
+          pasted.map((f) => f.getId() ?? f.get("id") ?? null),
+          regionSource.getFeatures().map((f) => f.getId()),
+          () => newId(),
+        );
         const added = [];
-        for (const f of pasted) {
-          const wanted = f.getId() != null ? String(f.getId()) : f.get("id") != null ? String(f.get("id")) : null;
-          let id = wanted && !taken.has(wanted) ? wanted : newId();
-          while (taken.has(id)) id = newId();
-          taken.add(id);
+        pasted.forEach((f, index) => {
+          const id = ids[index];
           f.setId(id);
           f.set("id", id);
           if (f.get("typeId") == null) f.set("typeId", defaultTypeIdRef.current || "land");
@@ -1997,7 +2139,7 @@ const OlMap = ({
           f.set("edited", true);
           regionSource.addFeature(f);
           added.push(f);
-        }
+        });
 
         const entries = [...carved.values()];
         const restore = (entry) => {
@@ -2179,19 +2321,25 @@ const OlMap = ({
         return ids;
       },
       // A group renamed (to a name) or erased (to null) across the whole map, as
-      // ONE undo step. Returns how many regions it touched.
-      retagGroup: (from, to = null) => {
+      // ONE undo step. `record` is the document's side ({ redo, undo }:
+      // documentUndo.js), run now and with every undo and redo, so the group's
+      // registry entry follows its regions. Returns how many regions it touched.
+      retagGroup: (from, to = null, record = null) => {
         const key = String(from || "").trim();
         if (!key) return 0;
         const touched = regionSource.getFeatures().filter((f) => String(f.get("group") || "").trim() === key);
-        if (!touched.length) return 0;
+        if (!touched.length && !record) return 0;
         const apply = (value) => {
           touched.forEach((f) => f.set("group", value || null));
           regionLayer.changed();
           notifyRegions();
         };
         apply(to);
-        pushCmd({ undo: () => apply(key), redo: () => apply(to) });
+        record?.redo();
+        pushCmd({
+          undo: () => { apply(key); record?.undo(); },
+          redo: () => { apply(to); record?.redo(); },
+        });
         return touched.length;
       },
       selectOwner: (ownerKey, { zoom = false } = {}) => {
@@ -2221,14 +2369,16 @@ const OlMap = ({
           .map((f) => ({ id: f.getId(), name: String(f.get("name") || "").trim(), typeId: f.get("typeId") || "land" }))
           .sort((a, b) => (a.name || String(a.id)).localeCompare(b.name || String(b.id)));
       },
-      queryRegions: (text, limit = 200) => {
+      // `polities` (the document's records) lets a search find a region by
+      // its owner's display name or aliases, not only by the owner key.
+      queryRegions: (text, limit = 200, { polities } = {}) => {
         const q = (text || "").trim().toLowerCase();
+        const owners = ownersMatchingQuery(polities, q);
         const out = [];
         for (const f of regionSource.getFeatures()) {
           if (q) {
             // `country` is gone from region props — owner IS the country name now.
-            const hay = `${f.getId()} ${f.get("name") || ""} ${f.get("owner") || ""}`.toLowerCase();
-            if (!hay.includes(q)) continue;
+            if (!regionMatchesQuery({ id: f.getId(), name: f.get("name"), owner: f.get("owner") }, q, owners)) continue;
           }
           out.push(summarize(f));
           if (out.length >= limit) break;
@@ -2243,18 +2393,17 @@ const OlMap = ({
         }
         return m;
       },
+      // The Layers panel's toggles. It reads the state back when it opens, so
+      // a layer hidden earlier does not show as on.
       setLayerVisibility: (key, visible) => {
-        if (key === "regions") regionLayer.setVisible(visible);
-        else if (key === "labels") labelLayer.setVisible(visible);
-        else if (key === "features") pointLayer.setVisible(visible);
+        toggleableLayers[key]?.setVisible(visible);
       },
+      getLayerVisibility: (key) => toggleableLayers[key]?.getVisible() ?? true,
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
-      analyzeTopology,
-      repairTopology,
+      // The save-time border cleanup (MapEditor.jsx cleanBorders).
       repairTopologyEverywhere,
-      clearTopologyDiagnostics,
 
       // Province Map Importer preview. Bounds arrive as WGS84 lon/lat and are
       // projected here so the source image can be checked against the live map
@@ -2266,13 +2415,15 @@ const OlMap = ({
         const north = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.north)));
         const south = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.south)));
         if (![west, east, north, south].every(Number.isFinite) || east <= west || north <= south) return false;
-        const sw = fromLonLat([west, south]);
-        const ne = fromLonLat([east, north]);
+        // In lon/lat, not Web Mercator: the importer (provinceRasterWorker.js
+        // mapRing) spaces the image's rows evenly in latitude, so the preview
+        // has to as well or the overlay sits up to twenty degrees off the
+        // provinces it will produce. OpenLayers reprojects it onto the map.
         const layer = importPreviewLayerRef.current;
         layer.setSource(new ImageStatic({
           url,
-          imageExtent: [sw[0], sw[1], ne[0], ne[1]],
-          projection: "EPSG:3857",
+          imageExtent: [west, south, east, north],
+          projection: "EPSG:4326",
         }));
         layer.setOpacity(Math.max(0.05, Math.min(0.95, Number(opacity) || 0.46)));
         layer.setVisible(true);
@@ -2361,9 +2512,7 @@ const OlMap = ({
         }
         onSelectionRef.current?.([]);
         selectedIdsRef.current = new Set();
-        undoStackRef.current = [];
-        redoStackRef.current = [];
-        emitHistory();
+        startLoad();
 
         regionSource.clear();
         savedRegionHashes.clear();
@@ -2436,12 +2585,36 @@ const OlMap = ({
       // Forget what the last save wrote, so the next one carries the whole map.
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
+      // Every region moved by one rule: a change of projection
+      // (MapEditor convertProjection). `moveXY` takes and answers a spot in this
+      // map's own units. It is not an undo step: the cities, the units and the
+      // basemap move with it outside this stack, so the history is cleared.
+      transformRegions: (moveXY) => {
+        const features = regionSource.getFeatures();
+        for (const f of features) {
+          f.getGeometry()?.applyTransform((input, output, stride = 2) => {
+            const out = output ?? input;
+            for (let i = 0; i < input.length; i += stride) {
+              const [x, y] = moveXY(input[i], input[i + 1]);
+              out[i] = x;
+              out[i + 1] = y;
+            }
+            return out;
+          });
+        }
+        clearHistory();
+        regionLayer.changed();
+        labelLayer.changed();
+        notifyRegions();
+        return features.length;
+      },
+      // Reads the whole map before it touches the one on screen, so a map that
+      // cannot be read throws with the current one still there (openDoc).
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
         const fmt = new GeoJSON();
-        regionSource.clear();
-        savedRegionHashes.clear();
+        let feats = [];
         if (fc && Array.isArray(fc.features)) {
-          const feats = fmt.readFeatures(fc, {
+          feats = fmt.readFeatures(fc, {
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857",
           });
@@ -2460,27 +2633,40 @@ const OlMap = ({
             }
             stampClaims(f);
           }
-          regionSource.addFeatures(feats);
         }
+        startLoad();
+        regionSource.clear();
+        savedRegionHashes.clear();
+        if (feats.length) regionSource.addFeatures(feats);
         regionLayer.changed();
         labelLayer.changed();
-        notifyRegions();
+        notifyRegions({ loaded: true });
       },
+      // Both reseeds resolve once the world is on the map, so the Workshop can
+      // wait for it (MapEditor's hydration keeps Save disabled until then): true
+      // when it landed, false when a newer load had replaced it first.
       reseedWorld: () => {
-        loadSeedFeatures().then((feats) => {
+        const token = startLoad();
+        return loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return false;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
+          return true;
         });
       },
       // Seed the modern world, then stamp a scenario's ownership overrides on
       // top — how a scenario WITHOUT custom geometry opens in the editor (its
       // tier-1 map is exactly "stock world + these overrides").
       reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
-        loadSeedFeatures().then((feats) => {
+        const token = startLoad();
+        return loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return false;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           const stampClaims = claimStamper(claimOverrides);
@@ -2492,11 +2678,18 @@ const OlMap = ({
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
+          return true;
         });
       },
       undo: () => doUndo(),
       redo: () => doRedo(),
+      // A document-only step ({ undo, redo }: documentUndo.js), such as the
+      // Features panel's Delete All, joins the region operations on the one
+      // stack, so Ctrl+Z and the toolbar's Undo take it back in turn.
+      pushStep: (step) => {
+        if (step) pushCmd(step);
+      },
       restyle: () => {
         regionLayer.changed();
         labelLayer.changed();
@@ -2525,13 +2718,6 @@ const OlMap = ({
     const source = regionSourceRef.current;
     const layer = regionLayerRef.current;
     if (!map || !source) return;
-
-    // Split the region under a drawn line into two (or more) pieces; the largest
-    // piece keeps the original id/attributes, the rest become new regions.
-    // Split every region the freehand path FULLY crosses, following the exact
-    // cursor path. A region is only cut where the path enters through one border
-    // and exits through another; the path's dangling start/end inside a region is
-    // ignored, so no half-border is ever left partway through a region.
 
     // Lasso: select every region whose interior falls inside the drawn shape.
     const selectWithinPolygon = (poly) => {
@@ -2811,17 +2997,18 @@ const OlMap = ({
         });
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
-    } else if (activeTool === "modify") {
-      // Manual override mode. If the author selected regions first, expose ONLY
-      // those vertices instead of the entire 3,500-region world. Snapping still
+    } else if (activeTool === "modify" && (selectionIds || []).some((id) => source.getFeatureById(id))) {
+      // Manual override mode, on the selected regions only — never the entire
+      // 3,500-region world, whose handles on every border bury the one being
+      // fixed. With nothing selected the tool does nothing and the banner
+      // asks for a selection, as the Shared border tool does. Snapping still
       // sees every region, so a human can deliberately align a corrected border
       // to its neighbour without being buried in unrelated handles.
       const selectedFeatures = (selectionIds || [])
         .map((id) => source.getFeatureById(id))
         .filter(Boolean);
-      const selectedCollection = selectedFeatures.length ? new Collection(selectedFeatures) : null;
       const modify = new Modify({
-        ...(selectedCollection ? { features: selectedCollection } : { source }),
+        features: new Collection(selectedFeatures),
         pixelTolerance: 18,
         style: manualVertexStyle,
       });
@@ -2988,8 +3175,16 @@ const OlMap = ({
         });
       }
     } else if (activeTool === "move") {
+      // A moved region is reshaped as far as the stock tiles know, so it is
+      // marked edited, and the move is one undo step (shapeEdits.js).
       const translate = new Translate({ layers: [layer], hitTolerance: 2 });
-      translate.on("translateend", notifyRegions);
+      const move = trackMove();
+      translate.on("translatestart", (e) => move.start(e.features.getArray(), e.startCoordinate));
+      translate.on("translateend", (e) => {
+        const cmd = move.end(e.features.getArray(), e.coordinate);
+        if (cmd) pushCmd(cmd);
+        notifyRegions();
+      });
       added.push(translate);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the
@@ -3109,7 +3304,7 @@ const OlMap = ({
     }
     // A custom uploaded map (image or vector) replaces the basemap — don't load
     // any ESRI tiles at all while it's active, to save the requests.
-    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector";
+    const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
     const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
     if (esri && !online) {
@@ -3145,6 +3340,14 @@ const OlMap = ({
     if (!map || !customBackground) return undefined;
     const bg = customBackground;
 
+    // A plain sea: what a map away from Mercator has in place of the built-in
+    // tiles, which can only show the real Earth in Mercator. Nothing is drawn;
+    // the effect above has already taken the tiles away.
+    if (bg.kind === "plain") {
+      if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "plain" });
+      return undefined;
+    }
+
     if (bg.kind === "vector" || bg.kind === "raster") {
       bg.layer.setZIndex(5);
       map.addLayer(bg.layer);
@@ -3163,17 +3366,22 @@ const OlMap = ({
       };
     }
 
-    // Plain image: stretch it across the whole world so it fully replaces the
-    // basemap (a fantasy map you draw regions on). No placement frame — it always
-    // covers the entire map; the regions/labels sit above it (z >= 10).
+    // Plain image: it fully replaces the basemap (a fantasy map you draw regions
+    // on); the regions/labels sit above it (z >= 10). It lies on its bounds when
+    // the map states them (a projection's sheet, a freeform shape), and is
+    // stretched across the whole world when it states none, as it always was.
+    const imageBounds = normalizeImageBounds(bg.bounds);
+    const imageExtent = imageBounds && !boundsFillSquare(imageBounds)
+      ? transformExtent([imageBounds.west, imageBounds.south, imageBounds.east, imageBounds.north], "EPSG:4326", "EPSG:3857")
+      : WORLD_EXTENT_3857;
     const imageLayer = new ImageLayer({
-      source: new ImageStatic({ url: bg.url, imageExtent: WORLD_EXTENT_3857, projection: "EPSG:3857" }),
+      source: new ImageStatic({ url: bg.url, imageExtent, projection: "EPSG:3857" }),
     });
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
     // Only fresh uploads write back into the document; a restored (persisted)
     // background is already in the doc/scenario, so don't re-dirty it on open.
-    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl });
+    if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl, ...(imageBounds ? { bounds: imageBounds } : {}) });
     return () => {
       map.removeLayer(imageLayer);
     };

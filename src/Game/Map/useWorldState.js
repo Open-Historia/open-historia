@@ -4,6 +4,8 @@ import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
+import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
+import { mapViewOf } from "../../../server/mapProjection.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -14,6 +16,7 @@ import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
 
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_MARKERS = Object.freeze([]);
+const EMPTY_REGION_TYPES = Object.freeze([]);
 
 let sharedState = null;
 let publishedState = null;
@@ -150,6 +153,9 @@ const deriveMapState = (state) => ({
   background: state?.background ?? null,
   // A string, so an unchanged list keeps its identity: null = any built-in map.
   allowedBasemaps: Array.isArray(state?.allowedBasemaps) ? state.allowedBasemaps.map(String).join(",") : null,
+  // How the scenario lets its map be shown (world.projection: mapViewOf).
+  noGlobe: mapViewOf(state?.projection).noGlobe,
+  noWrap: mapViewOf(state?.projection).noWrap,
   ...(() => {
     const folded = foldOwnerTokens(state);
     return {
@@ -166,6 +172,11 @@ const deriveMapState = (state) => ({
     return { groups, groupAreas: normalizeGroupAreas(state.groupAreas, groups) };
   })(),
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+  // The scenario's region types (runtime/regionTypes.js), whose look the map
+  // draws; a scenario saved before they were exported has none.
+  regionTypes: Array.isArray(state?.regionTypes) && state.regionTypes.length
+    ? normalizeRegionTypes(state.regionTypes)
+    : EMPTY_REGION_TYPES,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
   cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
   labelFont: state?.labelFont ?? "",
@@ -183,12 +194,15 @@ const sameMapState = (prev, next) =>
   prev.basemap === next.basemap &&
   prev.background === next.background &&
   prev.allowedBasemaps === next.allowedBasemaps &&
+  prev.noGlobe === next.noGlobe &&
+  prev.noWrap === next.noWrap &&
   prev.labelFont === next.labelFont &&
   prev.labelHaloColor === next.labelHaloColor &&
   prev.labelTextColor === next.labelTextColor &&
   prev.regionOwnershipOverrides === next.regionOwnershipOverrides &&
   prev.regionClaimants === next.regionClaimants &&
   prev.markers === next.markers &&
+  prev.regionTypes === next.regionTypes &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
   prev.groups === next.groups &&
@@ -217,6 +231,9 @@ const stabilizeMapStateReferences = (prev, next) => {
     markers: areEqualStructured(prev.markers, next.markers)
       ? prev.markers
       : next.markers,
+    regionTypes: areEqualStructured(prev.regionTypes, next.regionTypes)
+      ? prev.regionTypes
+      : next.regionTypes,
     cityRenames: areEqualStructured(prev.cityRenames, next.cityRenames)
       ? prev.cityRenames
       : next.cityRenames,
@@ -357,6 +374,8 @@ export function useWorldBackground() {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
       allowedBasemaps: current?.allowedBasemaps ?? null,
+      noGlobe: Boolean(current?.noGlobe),
+      noWrap: Boolean(current?.noWrap),
     };
   });
 
@@ -367,17 +386,19 @@ export function useWorldBackground() {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
       const allowedBasemaps = data?.allowedBasemaps ?? null;
+      const noGlobe = Boolean(data?.noGlobe);
+      const noWrap = Boolean(data?.noWrap);
 
       setState((prev) => {
         const backgroundSame =
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps) {
+        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
           return prev;
         }
 
-        return { background, basemap, allowedBasemaps };
+        return { background, basemap, allowedBasemaps, noGlobe, noWrap };
       });
     };
 

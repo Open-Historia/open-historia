@@ -8,20 +8,24 @@
 // {id, name, country, countryCode} and nothing else — which is why the spawn gate
 // in gameState.js works off point footprints. Here in the AI layer we CAN reach
 // the tiles, so we do: the same z0 overview tile loadRegionCatalog already fetches
-// and memoizes, decoded once more for its ring vertices.
+// and memoizes, decoded once more for its ring vertices. A world that draws its
+// own regions is measured against its own regions GeoJSON instead, never the
+// stock tile (forcePosture.js selectTerritoryOutlines).
 //
 // z0 geometry is coarse — tens of km. That is fine for advisory prose ("about
 // 90 km from the border") and would not be fine for anything mechanical. Nothing
 // mechanical uses it.
 
 import {
+  JSON_URLS,
   PMTILES_ARCHIVES,
   decodeVectorTile,
   getPmtilesArchive,
+  readJson,
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { tilePointToLngLat } from "../GameUI/eventFocus.js";
-import { createTerritoryIndex } from "./forcePosture.js";
+import { createTerritoryIndex, outlinesFromGeojson, selectTerritoryOutlines } from "./forcePosture.js";
 
 let outlinesPromise = null;
 let outlinesKey = "";
@@ -76,14 +80,34 @@ const loadRegionOutlines = async () => {
   return outlinesPromise;
 };
 
+// The scenario's own regions GeoJSON, as the map already parsed it (shared, not
+// cloned), turned into outlines once per parsed file: a new file after a
+// Workshop save is a new object and gets its own entry.
+const scenarioOutlinesByFile = new WeakMap();
+const loadScenarioOutlines = async () => {
+  const geojson = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null);
+  if (!geojson || typeof geojson !== "object") return new Map();
+  if (!scenarioOutlinesByFile.has(geojson)) scenarioOutlinesByFile.set(geojson, outlinesFromGeojson(geojson));
+  return scenarioOutlinesByFile.get(geojson);
+};
+
 /**
- * Load the region outlines and hand them to createTerritoryIndex.
+ * Load the region outlines the map draws (selectTerritoryOutlines) and hand them
+ * to createTerritoryIndex.
  *
- * Split that way on purpose: everything below is PMTiles plumbing that cannot run
- * without the map binaries, while the geometry that answers "whose territory, how
- * far from whose border" lives in forcePosture.js and is unit-tested there.
- * Returns null when the tiles are unavailable, and buildForcePostureText simply
- * drops the place clauses rather than failing.
+ * Split that way on purpose: everything here is file and PMTiles plumbing that
+ * cannot run without the map binaries, while the geometry that answers "whose
+ * territory, how far from whose border" lives in forcePosture.js and is
+ * unit-tested there. Returns null when the geometry is unavailable, and
+ * buildForcePostureText simply drops the place clauses rather than failing.
  */
 export const buildTerritoryIndex = async (world, { owners = [] } = {}) =>
-  createTerritoryIndex(await loadRegionOutlines(), world, { owners });
+  createTerritoryIndex(
+    await selectTerritoryOutlines({
+      world,
+      scenarioOutlines: await loadScenarioOutlines(),
+      loadStockOutlines: loadRegionOutlines,
+    }),
+    world,
+    { owners },
+  );

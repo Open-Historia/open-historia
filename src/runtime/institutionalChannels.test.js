@@ -6,6 +6,7 @@ import {
   institutionalChannelIdFor,
   materializeInstitutionalChannel,
 } from "./institutionalChannels.js";
+import { applyInstitutionalPlayerMessage } from "./institutionalGovernance.js";
 
 const makeWorld = () => ({
   polityOverrides: {
@@ -212,4 +213,54 @@ test("lifecycle hearing with institutionId is never adopted as the permanent Cou
   assert.equal(result.chats.length, 2);
   assert.ok(result.chats.some((row) => row.id === "institution-invite-council-b-2000-01-02"));
   assert.ok(result.chats.some((row) => row.id === "institution-channel-council"));
+});
+
+const hearingFirst = () => [{
+  id: "institution-accession-council-b-case-1",
+  institutionId: "council",
+  lifecycleInstitutionId: "council",
+  lifecycleCaseIds: ["case-1"],
+  countries: [{ polityKey: "B", code: "B", name: "B Republic" }],
+  messages: history("Accession hearing history."),
+}];
+
+test("the Council is found by thread identity, never as the hearing that shares its institutionId", () => {
+  const { chats } = materializeInstitutionalChannel({
+    world: makeWorld(), chats: hearingFirst(), institutionId: "council", playerCountry: "A",
+  });
+  const withHearingFirst = [
+    chats.find((chat) => chat.lifecycleInstitutionId),
+    chats.find((chat) => !chat.lifecycleInstitutionId),
+  ];
+  assert.equal(findInstitutionalChannel(withHearingFirst, "council")?.id, "institution-channel-council");
+  assert.equal(findInstitutionalChannel(withHearingFirst, "Council")?.id, "institution-channel-council");
+  assert.equal(findInstitutionalChannel(hearingFirst(), "council"), null, "a hearing alone is no Council");
+  assert.equal(findInstitutionalChannel(withHearingFirst, ""), null);
+});
+
+test("the player's Council message comes back with the Council, not an accession hearing listed first", () => {
+  const first = materializeInstitutionalChannel({
+    world: makeWorld(), chats: hearingFirst(), institutionId: "council", playerCountry: "A",
+  });
+  const chats = [
+    first.chats.find((chat) => chat.lifecycleInstitutionId),
+    first.chats.find((chat) => !chat.lifecycleInstitutionId),
+  ];
+  const result = applyInstitutionalPlayerMessage({
+    world: first.world, chats, institutionId: "council", playerCountry: "A", text: "We table the matter.",
+  });
+  assert.equal(result.channel.id, "institution-channel-council");
+  assert.ok(result.channel.messages.some((message) => message.text === "We table the matter."));
+});
+
+test("a Council comment the player makes twice, word for word, is in the transcript twice", () => {
+  const first = materializeInstitutionalChannel({ world: makeWorld(), chats: [], institutionId: "council", playerCountry: "A" });
+  const once = applyInstitutionalPlayerMessage({
+    world: first.world, chats: first.chats, institutionId: "council", playerCountry: "A", text: "Agreed.", date: "2000-01-02",
+  });
+  const twice = applyInstitutionalPlayerMessage({
+    world: once.world, chats: once.chats, institutionId: "council", playerCountry: "A", text: "Agreed.", date: "2000-01-02",
+  });
+  assert.equal(twice.channel.messages.filter((message) => message.text === "Agreed.").length, 2);
+  assert.equal(twice.channel.events.filter((event) => event.kind === "message" && event.text === "Agreed.").length, 2);
 });

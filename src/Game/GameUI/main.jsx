@@ -1,5 +1,5 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
@@ -22,7 +22,7 @@ import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_RIGHT } from "../../runtime/mobileUi
 import { dismissRegionPopup } from "../Selection/Regions.jsx";
 import { dismissUnitPopup } from "../Selection/Units.jsx";
 import { dismissFeaturePopup } from "../Selection/Features.jsx";
-import { openCountryPanel } from "../Selection/CountryPanel.jsx";
+import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "../Selection/CountryPanel.jsx";
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -32,6 +32,9 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
+import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
+import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -194,8 +197,8 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
       height: "4rem", width: "4rem",
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen
-        ? "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.05))"
-        : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
+        ? "rgba(255,255,255,0.085)"
+        : "rgba(35,35,39,0.53)",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
@@ -229,6 +232,12 @@ const Main = ({
   // button) opens it wanting to prime the conversation, rather than opening it
   // blank. Consumed (cleared) once AdvisorPanel has placed it in its input.
   const [pendingAdvisorPrompt, setPendingAdvisorPrompt] = useState("");
+  // The polity a map card's Stats button asked the Country drawer to show.
+  // Consumed (cleared) once the drawer's Stats pane has taken it, so the flag
+  // button still opens the drawer on the player's own country.
+  const [pendingCountryTarget, setPendingCountryTarget] = useState("");
+  // Stable, so the memoized StatsPane still skips this component's re-renders.
+  const consumeCountryTarget = useCallback(() => setPendingCountryTarget(""), []);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
@@ -268,8 +277,16 @@ const Main = ({
     setApiPromptAnsweredFor(id);
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
+  // A guest in a shared game plays on the host's key: nothing to set up.
+  const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
-    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading;
+    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
+    && sharedRole !== "guest";
+  // The game master's tools are not offered in a shared game (see onOpenCheats
+  // below): a panel already open when one begins closes.
+  useEffect(() => {
+    if (sharedRole) setIsCheatsOpen(false);
+  }, [sharedRole]);
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -299,38 +316,52 @@ const Main = ({
   // inbox unprompted. Everything that could break it is guarded inside
   // maybeSendIdleDiplomacy — it skips entirely while a time skip, game-master
   // command, or interactive event stage is in flight, never overlaps itself, and stays
-  // silent on any failure. Hidden tabs don't roll the dice.
+  // silent on any failure. Hidden tabs don't roll the dice, and neither does a
+  // window nobody has touched for ten minutes (runtime/playerActivity.js): each
+  // attempt is a background request, and a window left open while the player
+  // was away spent the day's cap on notes nobody was there to read.
   useEffect(() => {
     // The main menu owns Scenario Workshop / Map Editor as overlays while the
     // previously active campaign may still exist underneath. Idle diplomacy is
     // gameplay activity, not background app activity, so do not let a country
     // message the player while they are browsing/editing outside the campaign.
     if (hasNoGames || mainMenuOpen) return undefined;
+    const activity = createPlayerActivity();
+    const listenerOptions = { capture: true, passive: true };
+    for (const type of PLAYER_ACTIVITY_EVENTS) window.addEventListener(type, activity.note, listenerOptions);
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      // A shared game's world is the host's to move (multiplayer/).
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
+      if (!activity.isPresent()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
     }, 60000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      for (const type of PLAYER_ACTIVITY_EVENTS) window.removeEventListener(type, activity.note, listenerOptions);
+    };
   }, [hasNoGames, mainMenuOpen]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
-  // every twenty minutes per deployed agent. Agents also report after every
-  // time skip (refreshSpyIntercepts, in the jump itself); this is what makes
+  // every twenty minutes per deployed agent. Agents also report with time
+  // skips (agentReports.js: in the skip's own answer, never a request of their
+  // own); this is what makes
   // them tick while the player is simply playing, and it is why there is no
   // Gather button — an agent is a trickle of intelligence, not a thing to farm.
+  // Not in the main menu or the Workshop: each report is an AI request, spent
+  // on a campaign the player has not entered.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
       import("../AI/gameplay.js")
         .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [hasNoGames]);
+  }, [hasNoGames, mainMenuOpen]);
 
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
@@ -339,10 +370,6 @@ const Main = ({
   useEffect(() => {
     if (isCountryOpen) setShouldLoadCountry(true);
   }, [isCountryOpen]);
-
-  useEffect(() => {
-    localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
-  }, [isFullscreenEnabled]);
 
   // The report header names the top of the Fallback list from the moment the
   // game loads; every later change to the list keeps it in step.
@@ -449,10 +476,16 @@ const Main = ({
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
   const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
-  // Publish the live desktop drawer width for fixed workspaces that need to
-  // coexist with it. The value points at --oh-advisor-width rather than
-  // copying pixels, so dragging the Advisor/Country edge updates consumers in
-  // the same frame without a React render. Phones use full-screen sheets.
+  // The diplomacy toasts (chat.jsx) sit left of the open drawer rather than
+  // over the reply the player is reading in it; following the width variable
+  // keeps them there through a drag. Not on a phone, where the drawer is the
+  // whole screen.
+  //
+  // The same value serves the fixed workspaces that need to coexist with the
+  // drawer (the diplomacy workspace in chat.jsx). It points at
+  // --oh-advisor-width rather than copying pixels, so dragging the
+  // Advisor/Country edge updates consumers in the same frame without a React
+  // render.
   const rightDrawerSafeOffset = rightDrawerOpen && !isMobile
     ? `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`
     : "0px";
@@ -460,6 +493,12 @@ const Main = ({
     document.documentElement.style.setProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset);
     return () => document.documentElement.style.removeProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR);
   }, [rightDrawerSafeOffset]);
+  // The country badge opens the drawer; on a phone, where the badge is hidden,
+  // the country name in the date widget does.
+  const toggleCountry = () => {
+    setIsAdvisorOpen(false);
+    setIsCountryOpen((open) => !open);
+  };
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
@@ -507,6 +546,18 @@ const Main = ({
     return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);
   }, [isMobile, activeBottomPanel]);
 
+  useEffect(() => {
+    const openCountryStats = (event) => {
+      const country = String(event?.detail?.country || "").trim();
+      if (!country) return;
+      setIsAdvisorOpen(false);
+      setPendingCountryTarget(country);
+      setIsCountryOpen(true);
+    };
+    window.addEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+    return () => window.removeEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+  }, []);
+
   // An interactive event opens from the card of the event a time skip offered,
   // and from the time panel's note while one is offered or in progress (time.jsx
   // dispatches this).
@@ -531,6 +582,8 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         dockStyle={advisorDockStyle}
         topOffset={TOP_BAR_OFFSET}
+        onToggleCountry={toggleCountry}
+        countryOpen={isCountryOpen}
       />
       <Toolbar
         onOpenAdvisor={openAdvisor}
@@ -541,10 +594,7 @@ const Main = ({
       <Other
         dockStyle={advisorDockStyle}
         active={isCountryOpen}
-        onToggle={() => {
-          setIsAdvisorOpen(false);
-          setIsCountryOpen((open) => !open);
-        }}
+        onToggle={toggleCountry}
       />
       <Search mapRef={mapRef} />
       <ForcesPanel
@@ -584,9 +634,12 @@ const Main = ({
           <LazyCountryPanel
             open={isCountryOpen}
             onClose={() => setIsCountryOpen(false)}
+            requestedTarget={pendingCountryTarget}
+            onConsumeTarget={consumeCountryTarget}
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizeEnd={handleAdvisorResizeEnd}
+            mapRef={mapRef}
           />
         )}
       </Suspense>
@@ -662,7 +715,9 @@ const Main = ({
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
           onOpenEvents={() => setActiveBottomPanel("history")}
-          onOpenCheats={() => {
+          // The game master's tools write the game itself, which in a shared
+          // game is the host's engine's alone: they are not offered there.
+          onOpenCheats={sharedRole ? undefined : () => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);
             setIsSettingsOpen(false);
@@ -692,6 +747,9 @@ const Main = ({
           }}
         />
       </Presence>
+      {/* Same place on screen: the lasting borders note goes first so a
+          passing fallback-switch notice draws over it, not under it. */}
+      <BordersFallbackNotice />
       <FallbackSwitchNotice />
     </>
   );

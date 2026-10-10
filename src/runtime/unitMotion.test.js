@@ -10,13 +10,17 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
+  describeTravelPace,
+  eraOf,
   eraSpeedFactor,
   hashSeed,
   haversineKm,
   kmPerDay,
   maxTravelKm,
   patrolPoint,
+  seaShareOf,
   stepToward,
+  wrapLng,
 } from "./unitMotion.js";
 
 // ---- haversineKm (moved here from gameState.js; keep its assertions) --------
@@ -45,21 +49,85 @@ test("eraSpeedFactor defaults to the modern band when no year parses", () => {
   assert.equal(eraSpeedFactor(null), 1);
 });
 
+test("eraOf reads the four eras off the game's date", () => {
+  assert.equal(eraOf("1200 BCE"), 0);
+  assert.equal(eraOf("-0218-03-01"), 0);
+  assert.equal(eraOf("1499-12-31"), 0);
+  assert.equal(eraOf("1500-01-01"), 1);
+  assert.equal(eraOf("1849-06-01"), 1);
+  assert.equal(eraOf("1850-01-01"), 2);
+  assert.equal(eraOf("1944-06-06"), 2);
+  assert.equal(eraOf("1945-01-01"), 3);
+  assert.equal(eraOf(""), 3);
+});
+
 test("kmPerDay scales with both type and era", () => {
-  assert.equal(kmPerDay("infantry", "2024-01-01"), 40);
-  assert.equal(kmPerDay("infantry", "1400-01-01"), 14); // a real medieval march
-  assert.equal(kmPerDay("naval", "1400-01-01"), 210); // ~4.7 kt, age of sail
+  assert.equal(kmPerDay("infantry", "2024-01-01"), 500); // rail and road
+  assert.equal(kmPerDay("infantry", "1400-01-01"), 25); // a medieval march
+  assert.equal(kmPerDay("naval", "1400-01-01"), 130); // oar and coasting sail
+  assert.equal(kmPerDay("naval", "2024-01-01"), 750);
   assert.equal(kmPerDay("garrison", "2024-01-01"), 0); // garrisons do not travel
 });
 
 test("kmPerDay falls back to the infantry pace for an unknown type", () => {
-  assert.equal(kmPerDay("siege-tower", "2024-01-01"), 40);
+  assert.equal(kmPerDay("siege-tower", "2024-01-01"), 500);
+  assert.equal(kmPerDay("siege-tower", "2024-01-01", { posture: "assaulting" }), 30);
+});
+
+test("an advance against an enemy is far slower than a redeployment", () => {
+  // The same division: carried across a continent, or fighting its way forward.
+  assert.equal(kmPerDay("armor", "2024-01-01", { posture: "transit" }), 500);
+  assert.equal(kmPerDay("armor", "2024-01-01", { posture: "assaulting" }), 50);
+  assert.equal(kmPerDay("infantry", "1942-01-01", { posture: "assaulting" }), 20);
+  assert.equal(kmPerDay("infantry", "1942-01-01", { posture: "withdrawing" }), 300);
+  // A fleet and an air wing are not slowed by the posture of an army.
+  assert.equal(kmPerDay("naval", "2024-01-01", { posture: "assaulting" }), 750);
+});
+
+test("a redeployment is paced by how much of its way is over water", () => {
+  // Before the railway a voyage is several times a march; the days add.
+  assert.equal(kmPerDay("infantry", "1805-01-01", { seaShare: 0 }), 28);
+  assert.equal(kmPerDay("infantry", "1805-01-01", { seaShare: 1 }), 170);
+  assert.equal(kmPerDay("infantry", "1805-01-01", { seaShare: 0.5 }), Math.round(1 / (0.5 / 28 + 0.5 / 170)));
+  // A modern division from Texas to Korea, some 11,200 km and mostly by sea,
+  // is three weeks on the way, not four to eleven months.
+  const days = 11200 / kmPerDay("armor", "2016-01-01", { seaShare: 0.6 });
+  assert.ok(days > 14 && days < 28, `expected about three weeks, got ${days.toFixed(1)} days`);
+  // An order nobody measured: a long journey is taken to be half by sea.
+  assert.equal(kmPerDay("infantry", "1805-01-01", { remainingKm: 400 }), 28);
+  assert.equal(kmPerDay("infantry", "1805-01-01", { remainingKm: 4000 }), kmPerDay("infantry", "1805-01-01", { seaShare: 0.5 }));
+  // Out of range is brought into it.
+  assert.equal(kmPerDay("infantry", "1805-01-01", { seaShare: 7 }), 170);
+});
+
+test("seaShareOf measures the water on the way", () => {
+  // Land west of 10 E, sea east of it; a straight run along the equator.
+  const isLand = ([lng]) => lng < 10;
+  assert.equal(seaShareOf({ lng: 0, lat: 0 }, { lng: 9, lat: 0 }, isLand), 0);
+  assert.equal(seaShareOf({ lng: 11, lat: 0 }, { lng: 30, lat: 0 }, isLand), 1);
+  const half = seaShareOf({ lng: 0, lat: 0 }, { lng: 20, lat: 0 }, isLand);
+  assert.ok(half > 0.4 && half < 0.6, `about half, got ${half}`);
+  // A hop of a few kilometres is not a voyage, and no map means no answer.
+  assert.equal(seaShareOf({ lng: 11, lat: 0 }, { lng: 11.2, lat: 0 }, isLand), 0);
+  assert.equal(seaShareOf({ lng: 0, lat: 0 }, { lng: 20, lat: 0 }, null), null);
+  assert.equal(seaShareOf({ lng: NaN, lat: 0 }, { lng: 20, lat: 0 }, isLand), null);
+});
+
+test("the model is told the paces of the game's own era", () => {
+  const modern = describeTravelPace("2016-01-01");
+  assert.match(modern, /about 500 km a day by rail and road and about 650 by sea/);
+  assert.match(modern, /posture "assaulting"\) covers about 30 km a day on foot and 50 with armour/);
+  assert.match(modern, /HAS ARRIVED only when the days since its order allow it/);
+  const ancient = describeTravelPace("-0218-03-01");
+  assert.match(ancient, /about 25 km a day on the march and about 110 by sea/);
+  assert.doesNotMatch(ancient, /air wing/);
 });
 
 test("maxTravelKm gives the 30-day footprint radius used by the spawn gate", () => {
   // A modern navy reads as globally supported; a medieval army does not.
   assert.ok(maxTravelKm("naval", "2024-01-01", 30) > 15000);
-  assert.equal(maxTravelKm("infantry", "1400-01-01", 30), 420);
+  assert.equal(maxTravelKm("infantry", "1400-01-01", 30), 750);
+  assert.equal(maxTravelKm("infantry", "2024-01-01", 30, { posture: "assaulting" }), 900);
 });
 
 test("maxTravelKm treats a missing or negative span as no budget", () => {
@@ -187,4 +255,14 @@ test("hashSeed is stable and unsigned", () => {
   assert.equal(hashSeed("unit-1|3|0"), hashSeed("unit-1|3|0"));
   assert.ok(hashSeed("unit-1|3|0") >= 0);
   assert.notEqual(hashSeed("a"), hashSeed("b"));
+});
+
+test("wrapLng brings a world-copy longitude back into range", () => {
+  assert.equal(wrapLng(210), -150);
+  assert.equal(wrapLng(-200), 160);
+  assert.equal(wrapLng(179.5), 179.5);
+  assert.equal(wrapLng(180), 180);
+  assert.equal(wrapLng(-180), -180);
+  assert.equal(wrapLng(900), -180);
+  assert.ok(Math.abs(wrapLng(1e300)) <= 180, "a huge value ends");
 });

@@ -1,0 +1,19 @@
+{
+  "name": "open-historia-mp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open Historia's public multiplayer server: WebRTC signaling, the public game listing and TURN credentials.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}

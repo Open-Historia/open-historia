@@ -38,8 +38,11 @@ export const normalizePlayerFocus = (value) => {
 // said about it (the simulator's playerRelated mark, or its name in the words),
 // and what happens inside its territory — the regions and cities it holds and
 // the polities it absorbed, so riots in Lahore are the British Empire's even
-// when the event never names it. Whole words, case and accents folded.
-const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+// when the event never names it. Whole words, case and accents folded, in any
+// script: kept to a-z and 0-9, a name in Cyrillic or Arabic folded to nothing,
+// so a Project named in the player's language never spared its event from the
+// filler filter, and one owned by a polity so named read as the player's own.
+const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
 
 // Shorter names match too much ("Ob", "Uri"); the polity's own names are
 // allowed down to three letters, as the world share counts them.
@@ -130,7 +133,10 @@ export const collectPlayerMaterial = ({
 
   for (const action of asArray(actions)) {
     if (asText(action?.status) !== "planned") continue;
-    items.push({ kind: "order", id: asText(action.id), label: asText(action.text || action.rawInput), overdue: action.overdue === true, required: true });
+    // In a shared game every order names the polity that gave it (ownerCode).
+    const owner = asText(action.ownerCode);
+    const label = asText(action.text || action.rawInput);
+    items.push({ kind: "order", id: asText(action.id), label: owner ? `(${owner}) ${label}` : label, overdue: action.overdue === true, required: true });
   }
 
   for (const project of asArray(projects)) {
@@ -385,7 +391,7 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
   const lines = [
     heading,
     `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — but never more than the ${items.length} thing${items.length === 1 ? "" : "s"} listed below gives reason for. `
-      + `The share is a ceiling on attention, not a quota: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
+      + `The share is a minimum only as far as the items below allow, not a quota to fill: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
     lines.push("", `ORDERS — every one gets an outcome this period (success, partial success, delay or failure), in an event that lists its id in actionIds. One event may answer several orders when they are genuinely the same thing.`);

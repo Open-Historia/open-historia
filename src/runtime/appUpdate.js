@@ -98,3 +98,47 @@ export const describeUpdateFailure = (error) => {
   const clipped = reason.length > 160 ? `${reason.slice(0, 159)}…` : reason;
   return clipped ? `The app could not update itself: ${clipped}.` : "The app could not update itself.";
 };
+
+// Opening the game installs a waiting update; the banner is for one found while
+// the game is open (asked for 2026-09-29). The desktop does it before its window
+// opens (electron/launchUpdate.cjs). The website and the Android app can only do
+// it from the page, so there "opening" is the FIRST check after the page loads,
+// and only while the player can still be on the start screen: a first check
+// that took longer than this answers with the banner instead, so a reload or an
+// installer never lands in the middle of a turn.
+export const LAUNCH_UPDATE_WINDOW_MS = 15 * 1000;
+// Launch attempts per build before that build is left to the banner. A feed that
+// names a build it cannot deliver (a website cache still serving the old bundle
+// after the reload, an APK that is not the build its manifest says) would
+// otherwise reload or download at every launch, for ever.
+export const LAUNCH_UPDATE_ATTEMPT_LIMIT = 2;
+export const LAUNCH_UPDATE_KEY = "oh-launch-update";
+
+// How many launch attempts `build` has had, from the stored record (a JSON
+// string, or anything unreadable = none). A record for another build is none.
+export const launchUpdateAttempts = (stored, build) => {
+  try {
+    const record = JSON.parse(String(stored ?? ""));
+    if (!record || typeof record !== "object" || String(record.build) !== String(build)) return 0;
+    const attempts = Number(record.attempts);
+    return Number.isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : 0;
+  } catch {
+    return 0;
+  }
+};
+
+// The record after one more attempt at `build`.
+export const recordLaunchUpdateAttempt = (stored, build) =>
+  JSON.stringify({ build: String(build), attempts: launchUpdateAttempts(stored, build) + 1 });
+
+// Whether a check's answer should update the game now rather than show the
+// banner: the first check since the page opened, inside the launch window, for
+// a build that has not already failed to take at launch.
+export const shouldUpdateAtLaunch = ({ firstCheck, elapsedMs, build, stored }) =>
+  Boolean(firstCheck)
+  && Number.isFinite(elapsedMs)
+  && elapsedMs >= 0
+  && elapsedMs <= LAUNCH_UPDATE_WINDOW_MS
+  && build != null
+  && String(build) !== ""
+  && launchUpdateAttempts(stored, build) < LAUNCH_UPDATE_ATTEMPT_LIMIT;

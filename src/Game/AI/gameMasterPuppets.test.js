@@ -80,5 +80,7 @@ test("GM preview validation enforces request-level puppet completeness before ac
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(source, /validateGameMasterRequestedPuppetCompleteness\(candidate,\s*\{\s*request\s*\}\)/);
-  assert.match(source, /requestExplicitlyInstallsPuppet\(request\).*puppetStates/s);
+  // No feature stands in front of that check: puppet states are part of every
+  // game, so the Game Master has no "switched off for this game" to answer with.
+  assert.doesNotMatch(source, /puppetStates/);
 });

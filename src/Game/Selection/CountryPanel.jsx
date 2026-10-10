@@ -1,26 +1,56 @@
 /*! Open Historia — country info panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
-import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import Markdown, { MarkdownStyleInjector } from "../GameUI/markdown.jsx";
+import { JSON_URLS, getNationFlags, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
-import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
+import {
+    briefingCacheKey,
+    classifyPolityRegions,
+    createBriefingCache,
+    createEventMatcher,
+    knownPolityNames,
+    resolvePanelPolity,
+    sortEventsNewestFirst,
+} from "../../runtime/countryInfoPanel.js";
+import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
+import { useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
+import { openListenIn } from "../GameUI/ListenInPhone.jsx";
+import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { generateCountryStats } from "../AI/gameplayLazy.js";
+import { createReportRequests } from "./reportRequests.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 
 // Bridge: the region popup's info button opens this panel from outside React.
 let _openPanel = null;
 
+// Advisor Reports by campaign and country, outside the panel: the panel is
+// pointed at one country after another while a report is still being written
+// (reportRequests.js). Keyed by briefingKeyFor below.
+const advisorReports = createReportRequests();
+const reportFromOutcome = (outcome) => (outcome.error
+    ? { error: outcome.error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." }
+    : (outcome.text || "No information available."));
+
 export const openCountryPanel = (country) => {
     _openPanel?.(country);
 };
+
+// The card's Stats button: main.jsx opens the Country drawer on this polity
+// (detail.country). The drawer only followed map clicks while it was open, and
+// on a phone it covers the map, so it could show nothing but the player's own
+// country.
+export const OPEN_COUNTRY_STATS_EVENT = "oh:open-country-stats";
 
 const FILTER_MODES = [
     { id: "all", label: "All" },
@@ -80,122 +110,131 @@ const footerButtonStyle = {
     padding: "0.7rem 0.9rem",
 };
 
-// Does this event involve the country? Impacts are checked by code, prose by name.
-const eventInvolvesCountry = (event, code, name) => {
-    const impacts = event?.impacts ?? {};
-    if ((impacts.polityChanges ?? []).some((change) => change?.code === code)) return true;
-    if ((impacts.regionTransfers ?? []).some((transfer) => transfer?.toCode === code || transfer?.fromCode === code)) return true;
-    if ((impacts.regionControlOps ?? []).some((op) =>
-        [op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode].some((value) => value === code || value === name))) return true;
-    if ((impacts.createdChats ?? []).some((chat) => (chat?.countries ?? []).some((country) => (typeof country === "string"
-        ? country === code || country === name
-        : country?.code === code || country?.name === name)))) return true;
-    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
-    return Boolean(name) && haystack.includes(String(name).toLowerCase());
+// Related Events shows this many more at a time; the region lists start with
+// this many pills and open in place.
+const EVENT_STEP = 30;
+const SOVEREIGN_PILLS = 80;
+const OTHER_PILLS = 40;
+
+// The Advisor Reports this session has paid for, one per polity per round
+// (runtime/countryInfoPanel.js); the ones still being written are in
+// advisorReports, so a second press or a reopened panel waits for the same
+// request.
+const briefings = createBriefingCache();
+if (typeof window !== "undefined") {
+    window.addEventListener("oh:active-game-changed", () => briefings.clear());
+}
+onMemoryPressure(() => briefings.clear());
+
+// Shows a briefing request's answer, unless the panel has moved on to
+// another country or round by the time it arrives: it is then kept for when
+// that country is opened again.
+const showBriefing = (key, request, shownKey, setReport) => {
+    shownKey.current = key;
+    setReport("loading");
+    request
+        .then((text) => ({ text }), (error) => ({ error }))
+        .then((outcome) => {
+            if (shownKey.current !== key) {
+                advisorReports.keep(key, outcome);
+                return;
+            }
+            setReport(reportFromOutcome(outcome));
+        });
 };
+
+const RegionPills = ({ names, limit, expanded, onExpand }) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+    {(expanded ? names : names.slice(0, limit)).map((regionName) => (
+        <span key={regionName} style={pillStyle}>{regionName}</span>
+    ))}
+    {!expanded && names.length > limit && (
+        <button type="button" className="oh-tap" onClick={onExpand} style={{ ...pillStyle, background: "none", cursor: "pointer", fontFamily: "inherit", opacity: 0.6 }}>
+        {`+${names.length - limit} more`}
+        </button>
+    )}
+    </div>
+);
 
 const CountryInfoPanel = () => {
     const isMobile = useIsMobile();
+    // Listen in can be switched off for a game (server/gameFeatures.js).
+    const listenInOn = useActiveFeatures().listenIn?.enabled !== false;
     const [country, setCountry] = useState(null); // { code, name, flagUrl, flagEmoji }
-    const [events, setEvents] = useState([]);
-    const [aliases, setAliases] = useState([]);
-    const [tags, setTags] = useState([]);
-    const [regions, setRegions] = useState([]);
-    const [controlledForeignRegions, setControlledForeignRegions] = useState([]);
-    const [occupiedSovereignRegions, setOccupiedSovereignRegions] = useState([]);
+    // What the panel read for `country` when it opened; null while it reads,
+    // so nothing of the previous country is ever shown under this one's name.
+    const [loaded, setLoaded] = useState(null);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
+    const [eventLimit, setEventLimit] = useState(EVENT_STEP);
+    const [expandedLists, setExpandedLists] = useState({});
     const [report, setReport] = useState(null); // null | "loading" | text | {error}
     const [flagFailed, setFlagFailed] = useState(false);
-    const [worldState, setWorldState] = useState(null);
     const [flagCatalog, setFlagCatalog] = useState({});
-    const [polityKey, setPolityKey] = useState("");
-    const [displayName, setDisplayName] = useState("");
     const [flagPickerOpen, setFlagPickerOpen] = useState(false);
-    const [playerCountry, setPlayerCountry] = useState("");
+    const [worldWrites, setWorldWrites] = useState(0);
+    // The briefing the report box is for; "" until one is shown or asked for.
+    // A report only ever lands on its own country.
+    const shownReportKey = useRef("");
+    useEffect(() => {
+        if (!country) shownReportKey.current = "";
+    }, [country]);
+    // The panel goes with the map on a switch to another save: a report still
+    // being written is then kept for when its campaign and country are open
+    // again, not handed to a panel that is gone.
+    useEffect(() => () => {
+        shownReportKey.current = "";
+    }, []);
+    // The map's world store. During a turn's staged reveal it holds the world
+    // the map is showing, not the saved one the reveal is heading towards, so
+    // the panel never tells the player what the map has not shown yet.
+    const mapState = useWorldState();
 
     _openPanel = (next) => {
-        setCountry(next);
+        // A fresh object, so reopening the same country reads it again.
+        setCountry(next ? { ...next } : null);
+        setLoaded(null);
         setSearch("");
         setFilterIndex(0);
+        setEventLimit(EVENT_STEP);
+        setExpandedLists({});
         setReport(null);
+        shownReportKey.current = "";
         setFlagFailed(false);
         setFlagPickerOpen(false);
-        setPolityKey("");
-        setDisplayName(next?.name || "");
     };
 
     useEffect(() => {
-        if (!country) return;
+        if (!country) return undefined;
         let cancelled = false;
 
         (async () => {
-            try {
-                const [allEvents, world, catalog, baseTags, flags, game] = await Promise.all([
-                    readEventsState({ force: true }).catch(() => []),
-                    readWorldState({ force: true }),
-                    loadRegionCatalog().catch(() => []),
-                    getNationTags().catch(() => ({})),
-                    getNationFlags({ force: true }).catch(() => ({})),
-                    readGameData().catch(() => ({})),
-                ]);
-                if (cancelled) return;
-                setPlayerCountry(game?.country || "");
-
-                const identity = resolvePolityIdentity(
-                    country.polityKey || country.name || country.code,
-                    world,
-                    { allowUnknown: false, requireActive: false, allowCoreMatch: true, allowStockBase: true },
-                );
-                const stableKey = identity.resolved || country.polityKey || country.name || country.code;
-                const polity = world.polityOverrides?.[stableKey];
-                const currentName = polity?.name || country.name || stableKey;
-
-                setWorldState(world);
-                setFlagCatalog(flags || {});
-                setPolityKey(stableKey);
-                setDisplayName(currentName);
-                setEvents((allEvents ?? []).filter((event) => eventInvolvesCountry(event, stableKey, currentName)));
-                setAliases(polity?.aliases ?? []);
-                // The author's starting tags unless the AI has since rewritten them.
-                setTags(resolveCountryTags(baseTags, world, stableKey));
-
-                const ownership = world.regionOwnershipOverrides ?? {};
-                const sovereignty = world.regionSovereigntyOverrides ?? {};
-                const sovereign = [];
-                const controlledForeign = [];
-                const occupiedSovereign = [];
-                const seen = new Set();
-
-                const classify = (regionId, regionName, baseOwner = "") => {
-                    const controller = ownership[regionId] ?? baseOwner;
-                    const legalOwner = sovereignty[regionId] ?? controller;
-                    if (legalOwner === stableKey) sovereign.push(regionName);
-                    if (controller === stableKey && legalOwner && legalOwner !== stableKey) controlledForeign.push(regionName);
-                    if (legalOwner === stableKey && controller && controller !== stableKey) occupiedSovereign.push(regionName);
-                    seen.add(regionId);
-                };
-
-                for (const region of catalog) classify(region.id, region.name, region.countryCode);
-
-                // overrides can reference custom/legacy regions missing from the catalog.
-                // don't make them disappear from the panel just because the lookup is incomplete.
-                const extraIds = new Set([...Object.keys(ownership), ...Object.keys(sovereignty)]);
-                for (const regionId of extraIds) {
-                    if (!seen.has(regionId)) classify(regionId, regionId, "");
-                }
-
-                setRegions([...new Set(sovereign)]);
-                setControlledForeignRegions([...new Set(controlledForeign)]);
-                setOccupiedSovereignRegions([...new Set(occupiedSovereign)]);
-            } catch {
-                if (!cancelled) {
-                    setEvents([]);
-                    setRegions([]);
-                    setControlledForeignRegions([]);
-                    setOccupiedSovereignRegions([]);
-                }
-            }
+            // The map's live world when it has one. Only before the map has
+            // loaded is the saved world read, as the shared read-only view.
+            const snapshot = getWorldStateSnapshot();
+            const [allEvents, savedWorld, drawnCatalog, baseTags, flags, game] = await Promise.all([
+                readEventsState().catch(() => []),
+                snapshot ? null : readWorldStateView().catch(() => null),
+                loadScenarioRegionCatalog().catch(() => []),
+                getNationTags().catch(() => ({})),
+                getNationFlags().catch(() => ({})),
+                readGameData().catch(() => ({})),
+            ]);
+            // The catalog Stats counts territory from: the rendered map's own
+            // regions, and the merged stock catalog only when it draws none.
+            const drawn = Array.isArray(drawnCatalog) && drawnCatalog.length > 0;
+            const catalog = drawn ? drawnCatalog : await loadRegionCatalog().catch(() => []);
+            if (cancelled) return;
+            setFlagCatalog(flags || {});
+            setLoaded({
+                country,
+                allEvents: allEvents ?? [],
+                savedWorld,
+                catalog: catalog ?? [],
+                drawn,
+                baseTags: baseTags || {},
+                game: game || {},
+            });
         })();
 
         return () => {
@@ -203,11 +242,113 @@ const CountryInfoPanel = () => {
         };
     }, [country]);
 
+    // While the panel is open it follows the game: a write the map store does
+    // not republish (tags, aliases) still re-reads the live world, and a new
+    // event log or round is picked up from the cache the write primed.
+    useEffect(() => {
+        if (!country || typeof window === "undefined") return undefined;
+        let cancelled = false;
+        const onWorldUpdated = () => setWorldWrites((count) => count + 1);
+        const onJsonUpdated = (event) => {
+            const url = event?.detail?.url;
+            const read = url === JSON_URLS.events
+                ? readEventsState().then((allEvents) => ({ allEvents: allEvents ?? [] }))
+                : url === JSON_URLS.game
+                    ? readGameData().then((game) => ({ game: game || {} }))
+                    : null;
+            read?.then((patch) => {
+                if (!cancelled) setLoaded((current) => (current?.country === country ? { ...current, ...patch } : current));
+            }).catch(() => {});
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        window.addEventListener("oh:runtime-json-updated", onJsonUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:world-updated", onWorldUpdated);
+            window.removeEventListener("oh:runtime-json-updated", onJsonUpdated);
+        };
+    }, [country]);
+
+    const ready = Boolean(country && loaded?.country === country);
+    const worldState = useMemo(
+        () => (ready ? getWorldStateSnapshot() || loaded.savedWorld || {} : null),
+        // The snapshot is re-read whenever the map store publishes or the world is written.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [ready, loaded, mapState.worldState, worldWrites],
+    );
+    const identity = useMemo(() => (worldState ? resolvePanelPolity(country, worldState) : null), [country, worldState]);
+    const polityKey = identity?.stableKey || "";
+    const displayName = identity?.currentName || country?.name || "";
+    const playerCountry = ready ? loaded.game?.country || "" : "";
+    const aliases = useMemo(() => (Array.isArray(identity?.polity?.aliases) ? identity.polity.aliases : []), [identity]);
+    // The author's starting tags unless the AI has since rewritten them.
+    const tags = useMemo(
+        () => (identity ? resolveCountryTags(loaded.baseTags, worldState, identity.stableKey) : []),
+        [identity, loaded, worldState],
+    );
+    const regionLists = useMemo(
+        () => classifyPolityRegions({
+            catalog: identity ? loaded.catalog : [],
+            world: worldState ?? {},
+            polityKey,
+            includeUncatalogued: Boolean(loaded) && !loaded.drawn,
+        }),
+        [identity, loaded, worldState, polityKey],
+    );
+    const regions = regionLists.sovereign;
+    const controlledForeignRegions = regionLists.controlledForeign;
+    const occupiedSovereignRegions = regionLists.occupiedSovereign;
+    // The log is stored oldest first; the panel leads with what just happened.
+    const events = useMemo(() => {
+        if (!identity) return [];
+        const involves = createEventMatcher({
+            key: identity.stableKey,
+            name: identity.currentName,
+            aliases,
+            knownNames: knownPolityNames(worldState),
+        });
+        return sortEventsNewestFirst(loaded.allEvents.filter(involves));
+    }, [identity, aliases, loaded, worldState]);
+
+    // The campaign, polity, round and prompt languages a briefing answers for.
+    // The prompt names the save's language ("Respond in ...") and callAI adds
+    // the player's UI language (languageDirective), so a change to either asks
+    // afresh.
+    const briefingKeyFor = (game) => briefingCacheKey({
+        gameId: getLibraryState()?.activeGameId ?? "",
+        polity: polityKey || country?.code,
+        date: game?.date,
+        round: game?.round,
+        language: `${getStoredLanguage()}/${worldState?.language || game?.language || "English"}`,
+    });
+    const reportKey = identity ? briefingKeyFor(loaded.game) : "";
+
+    // Reopened in the same round: the briefing already paid for, or the one
+    // still on its way, instead of an empty box and a second request. A report
+    // still being written for this country is joined, and one that came back
+    // while another country was shown is handed over.
+    useEffect(() => {
+        if (!reportKey || shownReportKey.current) return;
+        const pending = advisorReports.pending(reportKey);
+        if (pending) {
+            showBriefing(reportKey, pending, shownReportKey, setReport);
+            return;
+        }
+        const kept = advisorReports.take(reportKey);
+        const cached = briefings.get(reportKey);
+        if (kept || cached !== undefined) {
+            shownReportKey.current = reportKey;
+            setReport(kept ? reportFromOutcome(kept) : cached);
+        }
+    }, [reportKey]);
+
     useEffect(() => {
         if (!country) return;
         let cancelled = false;
         const refresh = () => {
-            getNationFlags({ force: true })
+            // flags.json is invalidated and announced by the asset writer, so
+            // the memoized catalog is already the new one.
+            getNationFlags()
                 .then((flags) => {
                     if (!cancelled) {
                         setFlagCatalog(flags || {});
@@ -258,15 +399,40 @@ const CountryInfoPanel = () => {
         flags: flagCatalog,
     });
 
+    // A briefing on screen makes the button "Regenerate Report": a new request
+    // is then the player's deliberate choice, and replaces the kept one.
+    const hasReport = typeof report === "string" && report !== "loading";
+
     const runAdvisorReport = async () => {
-        if (report === "loading") return;
-        setReport("loading");
-        try {
-            const text = await generateCountryStats({ code: polityKey || country.code, name: displayName || country.name });
-            setReport(text || "No information available.");
-        } catch (error) {
-            setReport({ error: error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." });
-        }
+        if (report === "loading" || !ready) return;
+        const game = await readGameData().catch(() => loaded.game);
+        const key = briefingKeyFor(game);
+        // Joins a report already being written for this country rather than
+        // asking again.
+        const request = advisorReports.request(key, () =>
+            generateCountryStats({ code: polityKey || country.code, name: displayName || country.name })
+                .then((raw) => {
+                    const text = String(raw || "").trim();
+                    if (text) briefings.set(key, text);
+                    return text;
+                }));
+        showBriefing(key, request, shownReportKey, setReport);
+    };
+
+    const openStats = () => {
+        const target = polityKey || country.polityKey || country.name || country.code;
+        if (!target) return;
+        window.dispatchEvent(new CustomEvent(OPEN_COUNTRY_STATS_EVENT, { detail: { country: target } }));
+        setCountry(null);
+    };
+
+    // What people across the country are posting (GameUI/ListenInPhone.jsx).
+    // The panel stays open under the phone.
+    const listenIn = () => {
+        openListenIn({
+            polity: displayName || country.name,
+            polityKey: polityKey || country.polityKey || displayName || country.name,
+        });
     };
 
     const openDiplomacy = () => {
@@ -298,7 +464,7 @@ const CountryInfoPanel = () => {
         <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", padding: "1rem 1.1rem 0.8rem" }}>
         {currentFlag.imageUrl && !flagFailed ? (
             <button type="button" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" }}>
-                <img src={currentFlag.imageUrl} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "cover", boxShadow: "0 0 0 1px rgba(255,255,255,0.15)" }} />
+                <img src={bundledFlagUrl(currentFlag.imageUrl)} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "cover", boxShadow: "0 0 0 1px rgba(255,255,255,0.15)" }} />
             </button>
         ) : (
             <button type="button" onClick={() => setFlagPickerOpen(true)} title="Set flag" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, height: "1.35rem", width: "2.1rem", cursor: "pointer" }} />
@@ -322,7 +488,9 @@ const CountryInfoPanel = () => {
         <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.4rem", minHeight: 0, overflowY: "auto", padding: "0 1.1rem 1rem", scrollbarWidth: "thin" }}>
         <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between" }}>
         <div style={{ fontSize: "1rem", fontWeight: 800 }}>Related Events</div>
-        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem" }}>{filteredEvents.length} shown</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem" }}>
+        {filteredEvents.length > eventLimit ? `${eventLimit} of ${filteredEvents.length} shown` : `${filteredEvents.length} shown`}
+        </div>
         </div>
         <div style={{ display: "flex", gap: "0.45rem" }}>
         <input
@@ -342,13 +510,17 @@ const CountryInfoPanel = () => {
         </button>
         </div>
 
-        {filteredEvents.length === 0 ? (
+        {!ready ? (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.8rem", padding: "0.3rem 0 0.4rem" }}>
+            Loading...
+            </div>
+        ) : filteredEvents.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.8rem", padding: "0.3rem 0 0.4rem" }}>
             No events found for this country.
             </div>
         ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.2rem 0 0.4rem" }}>
-            {filteredEvents.slice(0, 30).map((event) => (
+            {filteredEvents.slice(0, eventLimit).map((event) => (
                 <div key={event.id} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "0.55rem 0.7rem" }}>
                 <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                 <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>{event.title}</span>
@@ -361,6 +533,16 @@ const CountryInfoPanel = () => {
                 )}
                 </div>
             ))}
+            {filteredEvents.length > eventLimit && (
+                <button
+                type="button"
+                className="oh-tap-row"
+                onClick={() => setEventLimit((limit) => limit + EVENT_STEP)}
+                style={{ ...footerButtonStyle, borderRadius: 8, fontSize: "0.78rem", padding: "0.45rem 0.7rem" }}
+                >
+                Show more events
+                </button>
+            )}
             </div>
         )}
 
@@ -441,12 +623,12 @@ const CountryInfoPanel = () => {
         {regions.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.78rem" }}>None</div>
         ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            {regions.slice(0, 80).map((regionName) => (
-                <span key={regionName} style={pillStyle}>{regionName}</span>
-            ))}
-            {regions.length > 80 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{regions.length - 80} more</span>}
-            </div>
+            <RegionPills
+            names={regions}
+            limit={SOVEREIGN_PILLS}
+            expanded={Boolean(expandedLists.sovereign)}
+            onExpand={() => setExpandedLists((current) => ({ ...current, sovereign: true }))}
+            />
         )}
         </div>
         </div>
@@ -458,12 +640,12 @@ const CountryInfoPanel = () => {
             {controlledForeignRegions.length === 0 ? (
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
             ) : (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                {controlledForeignRegions.slice(0, 40).map((regionName) => (
-                    <span key={regionName} style={pillStyle}>{regionName}</span>
-                ))}
-                {controlledForeignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{controlledForeignRegions.length - 40} more</span>}
-                </div>
+                <RegionPills
+                names={controlledForeignRegions}
+                limit={OTHER_PILLS}
+                expanded={Boolean(expandedLists.controlled)}
+                onExpand={() => setExpandedLists((current) => ({ ...current, controlled: true }))}
+                />
             )}
             </div>
             <div>
@@ -471,12 +653,12 @@ const CountryInfoPanel = () => {
             {occupiedSovereignRegions.length === 0 ? (
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
             ) : (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                {occupiedSovereignRegions.slice(0, 40).map((regionName) => (
-                    <span key={regionName} style={pillStyle}>{regionName}</span>
-                ))}
-                {occupiedSovereignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{occupiedSovereignRegions.length - 40} more</span>}
-                </div>
+                <RegionPills
+                names={occupiedSovereignRegions}
+                limit={OTHER_PILLS}
+                expanded={Boolean(expandedLists.occupied)}
+                onExpand={() => setExpandedLists((current) => ({ ...current, occupied: true }))}
+                />
             )}
             </div>
             </div>
@@ -490,20 +672,34 @@ const CountryInfoPanel = () => {
             ) : report?.error ? (
                 <div style={{ color: "#f87171", fontSize: "0.78rem" }}>{report.error}</div>
             ) : (
-                <div className="timeline-markdown" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.79rem", lineHeight: 1.55 }}>
-                <ReactMarkdown>{String(report)}</ReactMarkdown>
-                </div>
+                // The shared renderer (markdown.jsx): a table or a <br> in the
+                // model's report reads as one, not as pipes and a literal tag.
+                <>
+                <MarkdownStyleInjector />
+                <Markdown bare className="timeline-markdown" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.79rem", lineHeight: 1.55 }}>
+                {String(report)}
+                </Markdown>
+                </>
             )}
             </div>
         )}
         </div>
 
         {/* Footer */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
-        <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={footerButtonStyle}>
-        Advisor Report
+        {/* The buttons wrap onto two lines on a narrow phone rather than squeezing their words. */}
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
+        <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
+        {hasReport ? "Regenerate Report" : "Advisor Report"}
         </button>
-        <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
+        <button type="button" className="oh-tap-row" onClick={openStats} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
+        Stats
+        </button>
+        {listenInOn && (
+            <button type="button" className="oh-tap-row" onClick={listenIn} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
+            Listen in
+            </button>
+        )}
+        <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)", flex: "1 1 auto", whiteSpace: "nowrap" }}>
         Open Diplomacy
         </button>
         </div>

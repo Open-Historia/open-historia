@@ -71,3 +71,42 @@ export const resolveCityLayerSource = ({ customCities, collection, readSucceeded
   if (collection === null || collection === undefined) return "loading";
   return readSucceeded ? "custom" : "stock";
 };
+
+// The name a city is drawn with, as the map layers read it.
+export const cityFeatureName = (properties = {}) => {
+  const name = properties?.city ?? properties?.name;
+  return typeof name === "string" ? name : "";
+};
+
+// Adds to `into` (name → translation) every name that `lookup` translates;
+// true when one was added. `lookup` must never queue a name for the AI.
+export const addCityNameTranslations = (into, names, lookup) => {
+  let added = false;
+  for (const name of names) {
+    if (typeof name !== "string" || !name || into.has(name)) continue;
+    const translated = lookup(name);
+    if (typeof translated !== "string" || !translated.trim() || translated === name) continue;
+    into.set(name, translated);
+    added = true;
+  }
+  return added;
+};
+
+// The city label: an AI rename (world.cityRenames, keyed by the lower-cased
+// name) as it was written, else the language pack's name, else the name in the
+// tiles or the scenario's cities.geojson.
+export const cityLabelExpression = (renames, translations = null) => {
+  const baseLabel = ["coalesce", ["get", "city"], ["get", "name"], ""];
+  let label = baseLabel;
+  if (translations?.size) {
+    label = ["match", baseLabel];
+    for (const [name, translated] of translations) label.push(name, translated);
+    label.push(baseLabel);
+  }
+  const pairs = Object.entries(renames || {});
+  if (!pairs.length) return label;
+  const expr = ["match", ["downcase", baseLabel]];
+  for (const [from, to] of pairs) expr.push(from, to);
+  expr.push(label);
+  return expr;
+};

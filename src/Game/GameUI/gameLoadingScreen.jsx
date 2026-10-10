@@ -97,9 +97,8 @@ const DEFAULT_COVER = "/scenario-placeholder.webp";
 const textShadow = "0 2px 14px rgba(0,0,0,0.7)";
 
 // The scenario's cover, full bleed, with the logo turning in the bottom corner
-// and the name and status beside it. The gradient darkens only the bottom, so
-// the picture is the screen and the strip under it stays legible whatever the
-// picture is.
+// and the name and status beside it on a flat dark strip: the picture is the
+// screen, and the strip stays legible whatever the picture is.
 export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryName = "", coverUrl = "", phase = "world" }) => (
   <div
     className="oh-loading-screen"
@@ -120,8 +119,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
     <div
       aria-hidden="true"
       style={{
-        background: "linear-gradient(180deg, rgba(8,8,10,0.22) 0%, rgba(8,8,10,0.08) 40%, rgba(8,8,10,0.86) 100%), "
-          + `url("${String(coverUrl || DEFAULT_COVER).replaceAll('"', "%22")}") center/cover no-repeat, `
+        background: `url("${String(coverUrl || DEFAULT_COVER).replaceAll('"', "%22")}") center/cover no-repeat, `
           + `url("${DEFAULT_COVER}") center/cover no-repeat #0c0c0e`,
         inset: 0,
         position: "absolute",
@@ -130,6 +128,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
     <div
       style={{
         alignItems: "flex-end",
+        background: "rgba(8,8,10,0.8)",
         bottom: 0,
         display: "flex",
         gap: "1.5rem",
@@ -137,7 +136,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
         left: 0,
         // Clear of a phone's home indicator, and of the notch when it is
         // turned sideways (all 0 on a desktop).
-        padding: `1.75rem calc(2rem + ${SAFE_RIGHT}) calc(1.75rem + ${SAFE_BOTTOM}) calc(2rem + ${SAFE_LEFT})`,
+        padding: `1.25rem calc(2rem + ${SAFE_RIGHT}) calc(1.5rem + ${SAFE_BOTTOM}) calc(2rem + ${SAFE_LEFT})`,
         position: "absolute",
         right: 0,
       }}

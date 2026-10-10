@@ -4,6 +4,7 @@ import {
   applyInstitutionLifecycleCommandCore,
   buildInstitutionLifecycleDecisionContext,
   ensureInstitutionLifecycleNegotiationChatCore,
+  institutionLifecycleConfirmText,
   institutionLifecycleConversationState,
   institutionPortfolioForPolity,
 } from "./institutionLifecycleCore.js";
@@ -411,6 +412,50 @@ test("notice withdrawal remains membership until the canonical effective date an
   const due = advanceInstitutionLifecycleCore({ world: early.world, date: "2015-01-31", playerCountry: "Republic of Latvia" });
   assert.equal(due.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), false);
   assert.equal(due.applied.length, 1);
+  assert.equal(early.events.length, 0);
+  assert.equal(due.events.length, 1);
+  assert.equal(due.events[0].title, "Republic of Latvia Leaves Notice Union");
+  assert.equal(due.events[0].date, "2015-01-31");
+  assert.equal(due.events[0].playerRelated, true);
+});
+
+test("two withdrawal notices falling due in one skip both take effect", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, accessionMode: "direct", withdrawalMode: "notice", withdrawalNoticeDays: 10 },
+  });
+  const id = founded.institution.id;
+  let state = founded;
+  for (const polity of ["Republic of Estonia", "Republic of Lithuania", "Republic of Poland"]) {
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: "Republic of Latvia", date: "2014-09-01", command: { type: "apply", institutionId: id, polity, authority: "npc" } });
+  }
+  for (const polity of ["Republic of Estonia", "Republic of Lithuania"]) {
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: "Republic of Latvia", date: "2015-01-01", command: { type: "withdraw", institutionId: id, polity, authority: "npc" } });
+  }
+  const due = advanceInstitutionLifecycleCore({ world: state.world, date: "2015-03-01", playerCountry: "Republic of Latvia" });
+  const institution = due.world.institutions.byId[id];
+  assert.deepEqual(institution.members.map((entry) => entry.polity), ["Republic of Latvia", "Republic of Poland"]);
+  assert.equal(Object.values(institution.lifecycleCases).filter((entry) => entry.kind === "withdrawal" && entry.status === "resolved").length, 2);
+  assert.deepEqual(due.events.map((event) => event.title).sort(), ["Republic of Estonia Leaves Notice Union", "Republic of Lithuania Leaves Notice Union"]);
+  assert.equal(due.events.every((event) => event.date === "2015-01-11" && event.playerRelated === false), true);
+});
+
+test("a withdrawal notice counts its days on the game calendar, BC years included", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "-0300-01-01",
+    command: { type: "found", name: "Ancient League", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "-0218-12-15",
+    command: { type: "withdraw", institutionId: founded.institution.id, polity: "Republic of Latvia", authority: "player" },
+  });
+  assert.equal(notice.lifecycleCase.effectiveDate, "-0217-01-14");
+  const early = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0217-01-13", playerCountry: "Republic of Latvia" });
+  assert.equal(early.applied.length, 0);
+  const due = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0217-01-14", playerCountry: "Republic of Latvia" });
+  assert.equal(due.applied.length, 1);
 });
 
 
@@ -468,6 +513,177 @@ test("a founding negotiation is response-complete after every invitee accepts or
   assert.equal(context.text, "");
 });
 
+test("a BC notice withdrawal takes effect after its notice period, across the year", async () => {
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "-0218-03-01",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "-0218-12-15",
+    command: { type: "withdraw", institutionId: founded.institution.id, polity: "Republic of Latvia", authority: "player" },
+  });
+  assert.equal(notice.lifecycleCase.effectiveDate, "-0217-01-14");
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const early = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0218-12-31", playerCountry: "Republic of Latvia" });
+  assert.equal(early.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), true);
+  const due = advanceInstitutionLifecycleCore({ world: early.world, date: "-0217-01-14", playerCountry: "Republic of Latvia" });
+  assert.equal(due.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), false);
+});
+
+test("a polity that leaves an institution a second time gets a second event", () => {
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Open Union", minimumFoundingMembers: 1, accessionMode: "direct" },
+  });
+  const step = (state, date, command) => applyInstitutionLifecycleCommandCore({
+    world: state.world, chats: state.chats, events: state.events, playerCountry: "Republic of Latvia", date,
+    command: { institutionId: founded.institution.id, authority: "npc", ...command },
+  });
+  const joined = step(founded, "2014-09-01", { type: "apply", polity: "Republic of Estonia" });
+  const left = step(joined, "2015-01-01", { type: "withdraw", polity: "Republic of Estonia" });
+  const rejoined = step(left, "2016-01-01", { type: "apply", polity: "Republic of Estonia" });
+  const leftAgain = step(rejoined, "2017-01-01", { type: "withdraw", polity: "Republic of Estonia" });
+  const titles = leftAgain.events.map((event) => event.title);
+  assert.equal(titles.filter((title) => title === "Republic of Estonia Joins Open Union").length, 2);
+  assert.equal(titles.filter((title) => title === "Republic of Estonia Leaves Open Union").length, 2);
+  assert.equal(new Set(leftAgain.events.map((event) => event.id)).size, leftAgain.events.length);
+});
+
+const foreignApplication = () => {
+  const founded = foundBaltic([]);
+  const institutionId = founded.institution.id;
+  const world = { ...founded.world, institutions: founded.world.institutions };
+  world.institutions.byId[institutionId] = { ...world.institutions.byId[institutionId], members: [{ polity: "Republic of Estonia", status: "member", role: "leader", sinceDate: "2014-08-20" }], leaders: ["Republic of Estonia"] };
+  const application = applyInstitutionLifecycleCommandCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-05",
+    command: { type: "apply", institutionId, requestedStatus: "member", reason: "Riga seeks accession." },
+  });
+  return { institutionId, application };
+};
+
+test("the government that opened a case may retract it, and its ballot is withdrawn with it", () => {
+  const { institutionId, application } = foreignApplication();
+  const caseId = application.lifecycleCase.id;
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-10-01",
+    command: { type: "retract", institutionId, caseId, initiatedBy: "Republic of Estonia", authority: "npc" },
+  }), /Only Republic of Latvia may retract/);
+  const retracted = applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-10-01",
+    command: { type: "retract", institutionId, caseId, authority: "player" },
+  });
+  assert.equal(retracted.action, "retracted");
+  assert.equal(retracted.lifecycleCase.status, "withdrawn");
+  assert.equal(retracted.institution.proposals[application.proposal.id].status, "withdrawn");
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: retracted.world, playerCountry: "Republic of Latvia", date: "2014-10-02",
+    command: { type: "retract", institutionId, caseId, authority: "player" },
+  }), /is not open/);
+  // A retracted application no longer blocks a new one.
+  const again = applyInstitutionLifecycleCommandCore({
+    world: retracted.world, playerCountry: "Republic of Latvia", date: "2014-10-03",
+    command: { type: "apply", institutionId, requestedStatus: "member" },
+  });
+  assert.equal(again.lifecycleCase.status, "pending-approval");
+});
+
+test("retracting a withdrawal notice keeps the membership", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "2015-01-01",
+    command: { type: "withdraw", institutionId: founded.institution.id, authority: "player" },
+  });
+  const retracted = applyInstitutionLifecycleCommandCore({
+    world: notice.world, playerCountry: "Republic of Latvia", date: "2015-01-10",
+    command: { type: "retract", institutionId: founded.institution.id, caseId: notice.lifecycleCase.id, authority: "player" },
+  });
+  const later = advanceInstitutionLifecycleCore({ world: retracted.world, date: "2015-06-01", playerCountry: "Republic of Latvia" });
+  assert.equal(later.applied.length, 0);
+  assert.equal(later.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), true);
+});
+
+test("an open case with no movement for a year lapses, with an event and its ballot withdrawn", async () => {
+  const { advanceInstitutionLifecycleCore, INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS } = await import("./institutionLifecycleCore.js");
+  assert.equal(INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS, 365);
+  const { institutionId, application } = foreignApplication();
+  const invited = applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-12-01",
+    command: { type: "invite", institutionId, initiatedBy: "Republic of Estonia", polity: "Republic of Poland", authority: "npc" },
+  });
+  const early = advanceInstitutionLifecycleCore({ world: invited.world, date: "2015-09-04", playerCountry: "Republic of Latvia" });
+  assert.equal(early.applied.length, 0);
+  const lapsed = advanceInstitutionLifecycleCore({ world: invited.world, date: "2015-09-05", playerCountry: "Republic of Latvia" });
+  assert.deepEqual(lapsed.applied.map((entry) => entry.action), ["expired"]);
+  const institution = lapsed.world.institutions.byId[institutionId];
+  assert.equal(institution.lifecycleCases[application.lifecycleCase.id].status, "expired");
+  assert.equal(institution.proposals[application.proposal.id].status, "withdrawn");
+  assert.equal(institution.lifecycleCases[invited.lifecycleCase.id].status, "pending");
+  assert.equal(lapsed.events.length, 1);
+  assert.equal(lapsed.events[0].title, "Application by Republic of Latvia to Join Baltic Union Lapses");
+  assert.equal(lapsed.events[0].playerRelated, true);
+  const invitationLapsed = advanceInstitutionLifecycleCore({ world: lapsed.world, date: "2015-12-01", playerCountry: "Republic of Latvia" });
+  assert.equal(invitationLapsed.events[0].title, "Invitation for Republic of Poland to Join Baltic Union Lapses");
+  assert.equal(invitationLapsed.events[0].playerRelated, false);
+});
+
+const foundWithWithdrawal = (withdrawalMode, withdrawalNoticeDays = 0) => applyInstitutionLifecycleCommandCore({
+  world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+  command: { type: "found", name: "Baltic Compact", minimumFoundingMembers: 1, withdrawalMode, withdrawalNoticeDays },
+}).institution;
+
+test("the withdrawal question says what the founded charter makes of it", () => {
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("unilateral"), "withdraw"),
+    "Withdraw from Baltic Compact? You will leave immediately, and rejoining means applying for membership again.");
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 180), "withdraw"), /leave after 180 days' notice/);
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 1), "withdraw"), /leave after one day's notice/);
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 0), "withdraw"), /leave immediately/, "no notice period is immediate, as the command treats it");
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("approval"), "withdraw"),
+    "Ask to withdraw from Baltic Compact? The members will vote on it, and you stay a member until they agree.");
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("not-permitted"), "withdraw"), "", "the command refuses, and says so");
+  assert.match(institutionLifecycleConfirmText({ name: "Old League" }, "withdraw"), /leave immediately/, "a charter without rules is unilateral");
+});
+
+test("proposals that only open a vote ask lightly, and minor ones not at all", () => {
+  const institution = foundWithWithdrawal("unilateral");
+  assert.equal(institutionLifecycleConfirmText(institution, "dissolve"), "Propose dissolving Baltic Compact? The members will vote on it.");
+  assert.equal(institutionLifecycleConfirmText(institution, "expel", "Republic of Estonia"),
+    "Propose expelling Republic of Estonia from Baltic Compact? The members will vote on it.");
+  assert.equal(institutionLifecycleConfirmText(institution, "suspend", "Republic of Estonia"), "");
+  assert.equal(institutionLifecycleConfirmText(institution, "reinstate", "Republic of Estonia"), "");
+});
+
+test("a charter that forbids dissolution or expulsion promises no vote on it", () => {
+  const institution = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Baltic Compact", minimumFoundingMembers: 1, dissolutionMode: "not-permitted", expulsionMode: "not-permitted" },
+  }).institution;
+  assert.equal(institutionLifecycleConfirmText(institution, "dissolve"), "", "the command refuses, and says so");
+  assert.equal(institutionLifecycleConfirmText(institution, "expel", "Republic of Estonia"), "");
+});
+
+test("a portfolio lists current memberships before former ones, each by name", () => {
+  const world = {
+    ...baseWorld(),
+    institutions: {
+      schemaVersion: 1,
+      ledgerVersion: 1,
+      byId: {
+        "alpha-pact": { id: "alpha-pact", name: "Alpha Pact", kind: "security_alliance", members: [], membershipHistory: [{ id: "h1", polity: "Republic of Latvia", action: "left", date: "1995-01-01" }] },
+        "beta-league": { id: "beta-league", name: "Beta League", kind: "regional_bloc", members: [], membershipHistory: [{ id: "h2", polity: "Republic of Latvia", action: "expelled", date: "2001-01-01" }] },
+        "zeta-union": { id: "zeta-union", name: "Zeta Union", kind: "regional_bloc", members: [{ polity: "Republic of Latvia", status: "member" }] },
+        "united-nations": { id: "united-nations", name: "United Nations", kind: "universal_organization", members: [{ polity: "Republic of Latvia", status: "member" }] },
+      },
+    },
+  };
+  const rows = institutionPortfolioForPolity(world, "Republic of Latvia");
+  assert.deepEqual(rows.map((row) => row.institution.name), ["United Nations", "Zeta Union", "Alpha Pact", "Beta League"]);
+  assert.deepEqual(rows.map((row) => Boolean(row.member)), [true, true, false, false]);
+});
+
 test("player can withdraw a pending accession application and its ballot is closed as withdrawn", () => {
   const founded = foundBaltic([]);
   const institutionId = founded.institution.id;
@@ -493,4 +709,211 @@ test("player can withdraw a pending accession application and its ballot is clos
     world: cancelled.world, playerCountry: "Republic of Latvia", date: "2014-09-07",
     command: { type: "cancel-application", institutionId, caseId: application.lifecycleCase.id, polity: "Republic of Latvia", authority: "player" },
   }), /no longer pending/i);
+});
+
+// ---- A government already at the table may rise (issue 849) ---------------------------------------
+// An observer is an entry in `members`. The invitation picker left out everyone
+// in `members`, and the engine refused an invitation to, or an application by,
+// anyone found there ("already represented"), so an observer could never be
+// invited to become a member, nor ask to.
+
+// The Baltic Union, active, with Latvia and Estonia as members, Poland as an
+// observer and Lithuania suspended.
+const withObserver = ({ accessionMode = "approval", allowedStatuses = ["member", "observer", "associate"] } = {}) => {
+  const founded = foundBaltic(["Republic of Estonia"]);
+  const active = applyInstitutionLifecycleCommandCore({
+    world: founded.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-08-21",
+    command: { type: "respond", institutionId: founded.institution.id, caseId: founded.caseIds[0], actorPolity: "Republic of Estonia", decision: "accept" },
+  });
+  const world = structuredClone(active.world);
+  const record = world.institutions.byId[founded.institution.id];
+  record.members = [
+    ...record.members,
+    { polity: "Republic of Poland", status: "observer", role: "member", sinceDate: "2014-08-25" },
+    { polity: "Republic of Lithuania", status: "suspended", role: "member", sinceDate: "2014-08-22" },
+  ];
+  record.charter.lifecycle.accession = { ...record.charter.lifecycle.accession, mode: accessionMode, allowedStatuses };
+  return { world, id: founded.institution.id };
+};
+const latvia = (world, date, command) => applyInstitutionLifecycleCommandCore({ world, chats: [], events: [], playerCountry: "Republic of Latvia", date, command });
+const standingOf = (world, id, polity) => world.institutions.byId[id].members.filter((entry) => entry.polity === polity).map((entry) => entry.status);
+
+test("an observer can be invited to full membership, by the procedure the charter prescribes", async () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  assert.equal(invited.action, "invited");
+  assert.equal(invited.lifecycleCase.kind, "invitation");
+  assert.equal(invited.lifecycleCase.requestedStatus, "member");
+  // Nothing has changed yet: an invitation is not membership.
+  assert.deepEqual(standingOf(invited.world, id, "Republic of Poland"), ["observer"]);
+
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: invited.chats, events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "accept" },
+  });
+  assert.equal(accepted.lifecycleCase.status, "pending-approval");
+  assert.equal(accepted.proposal.status, "voting");
+  assert.equal(accepted.proposal.type, "accession");
+  assert.deepEqual(accepted.proposal.voting.eligibleVoters, ["Republic of Estonia", "Republic of Latvia"], "the observer does not vote on its own accession");
+  const [consequence] = accepted.proposal.consequences;
+  assert.deepEqual([consequence.op, consequence.polity, consequence.status], ["join", "Republic of Poland", "member"]);
+  assert.deepEqual(standingOf(accepted.world, id, "Republic of Poland"), ["observer"], "still an observer until the vote passes");
+
+  // The vote passes: governance applies the proposal's consequence.
+  const { applyInstitutionMembershipResolution } = await import("./institutions.js");
+  const resolved = applyInstitutionMembershipResolution({
+    world: accepted.world, institutionId: id, op: consequence.op, polity: consequence.polity, status: consequence.status,
+    role: consequence.role, date: "2014-09-10", sourceProposalId: accepted.proposal.id,
+  });
+  assert.equal(resolved.error || "", "");
+  // Its status changed. There is one entry for it, and it has been there since it came as an observer.
+  assert.deepEqual(standingOf(resolved.world, id, "Republic of Poland"), ["member"]);
+  const poland = resolved.world.institutions.byId[id].members.find((entry) => entry.polity === "Republic of Poland");
+  assert.equal(poland.sinceDate, "2014-08-25");
+  assert.equal(resolved.world.institutions.byId[id].lifecycleCases[invited.lifecycleCase.id].status, "resolved");
+  assert.equal(resolved.world.institutions.byId[id].membershipHistory.at(-1).action, "joined");
+});
+
+test("an observer's own government can apply for full membership", () => {
+  const { world, id } = withObserver();
+  const applied = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity: "Republic of Poland", requestedStatus: "member", reason: "Warsaw seeks a full seat." },
+  });
+  assert.equal(applied.action, "applied");
+  assert.equal(applied.lifecycleCase.status, "pending-approval");
+  assert.equal(applied.proposal.consequences[0].status, "member");
+  assert.ok(applied.createdChat, "the applicant is given its accession hearing");
+  assert.deepEqual(standingOf(applied.world, id, "Republic of Poland"), ["observer"]);
+});
+
+test("under a direct-accession charter the observer's status changes at once, with no second entry", () => {
+  const { world, id } = withObserver({ accessionMode: "direct" });
+  const applied = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity: "Republic of Poland", requestedStatus: "member" },
+  });
+  assert.equal(applied.action, "joined");
+  assert.deepEqual(standingOf(applied.world, id, "Republic of Poland"), ["member"]);
+
+  const invited = latvia(withObserver({ accessionMode: "direct" }).world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "accept" },
+  });
+  assert.equal(accepted.action, "joined");
+  assert.deepEqual(standingOf(accepted.world, id, "Republic of Poland"), ["member"]);
+});
+
+test("an observer may rise to a status between, where the charter has one", () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "associate" });
+  assert.equal(invited.lifecycleCase.requestedStatus, "associate");
+});
+
+test("the status already held, a lower one, and anything offered to a full member are still refused", () => {
+  const { world, id } = withObserver();
+  const invite = (polity, requestedStatus) => () => latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity, requestedStatus });
+  assert.throws(invite("Republic of Poland", "observer"), /Republic of Poland is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "member"), /Republic of Estonia is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "observer"), /Republic of Estonia is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "associate"), /already represented/);
+  const apply = (polity, requestedStatus) => () => applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: polity, date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity, requestedStatus },
+  });
+  assert.throws(apply("Republic of Poland", "observer"), /Republic of Poland is already represented in Baltic Union\./);
+  assert.throws(apply("Republic of Latvia", "member"), /Republic of Latvia is already represented in Baltic Union\./);
+  // An associate does not step down to observer by invitation.
+  const associate = structuredClone(world);
+  associate.institutions.byId[id].members.find((entry) => entry.polity === "Republic of Poland").status = "associate";
+  assert.throws(() => latvia(associate, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "observer" }), /already represented/);
+  assert.equal(latvia(associate, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" }).action, "invited");
+});
+
+test("a suspended member is reinstated, never invited or admitted anew", () => {
+  const { world, id } = withObserver();
+  assert.throws(
+    () => latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Lithuania", requestedStatus: "member" }),
+    /Republic of Lithuania is suspended from Baltic Union\./,
+  );
+  assert.throws(
+    () => applyInstitutionLifecycleCommandCore({ world, chats: [], events: [], playerCountry: "Republic of Lithuania", date: "2014-09-01", command: { type: "apply", institutionId: id, polity: "Republic of Lithuania", requestedStatus: "member" } }),
+    /Republic of Lithuania is suspended from Baltic Union\./,
+  );
+});
+
+test("a charter that closes accession closes it to an observer too, and an observer cannot do the inviting where it could not before", () => {
+  const closed = withObserver({ accessionMode: "not-permitted" });
+  assert.throws(
+    () => latvia(closed.world, "2014-09-01", { type: "invite", institutionId: closed.id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" }),
+    /does not permit accession invitations/,
+  );
+  const memberOnly = withObserver({ allowedStatuses: ["member"] });
+  assert.throws(
+    () => applyInstitutionLifecycleCommandCore({ world: memberOnly.world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01", command: { type: "apply", institutionId: memberOnly.id, polity: "Republic of Poland", requestedStatus: "associate" } }),
+    /does not accept associate applications/,
+  );
+});
+
+test("an observer invited to membership cannot answer by asking for what it already holds", () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "seek-observer" },
+  }), /Republic of Poland is already represented in Baltic Union\./);
+  // Declining keeps it an observer.
+  const declined = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "reject" },
+  });
+  assert.deepEqual(standingOf(declined.world, id, "Republic of Poland"), ["observer"]);
+});
+
+test("a model's lifecycle operations follow the same rule: an AI member may raise an observer, and an AI observer may apply", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const { world, id } = withObserver();
+  const batch = applyInstitutionLifecycleImpactBatchCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-01",
+    ops: [
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Poland", requestedStatus: "member" },
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Poland", requestedStatus: "observer" },
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Lithuania", requestedStatus: "member" },
+    ],
+  });
+  assert.deepEqual(batch.applied.map((entry) => [entry.op.targetPolity, entry.action]), [["Republic of Poland", "invited"]]);
+  assert.deepEqual(batch.rejected.map((entry) => entry.reason), [
+    "Republic of Poland is already represented in Baltic Union.",
+    "Republic of Lithuania is suspended from Baltic Union.",
+  ]);
+  const applied = applyInstitutionLifecycleImpactBatchCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-01",
+    ops: [{ op: "apply", actorPolity: "Republic of Poland", institutionId: id, requestedStatus: "member" }],
+  });
+  assert.deepEqual(applied.applied.map((entry) => entry.action), ["applied"]);
+  assert.equal(applied.applied[0].proposal.consequences[0].status, "member");
+});
+
+test("the invitation picker is given observers, marked with what they hold, and never those who hold the status on offer", async () => {
+  const { institutionAccessionStanding, institutionInvitablePolities, institutionMayRequestMembership, institutionStandingRank } = await import("./institutionLifecycleCore.js");
+  const { world, id } = withObserver();
+  const institution = world.institutions.byId[id];
+  const everyone = ["Republic of Estonia", "Republic of Lithuania", "Republic of Poland", "Russian Federation"];
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "member"), [
+    { polity: "Republic of Poland", status: "observer" },
+    { polity: "Russian Federation", status: "" },
+  ]);
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "observer"), [{ polity: "Russian Federation", status: "" }]);
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "associate").map((entry) => entry.polity), ["Republic of Poland", "Russian Federation"]);
+  assert.equal(institutionAccessionStanding(institution, "Republic of Poland", "member"), "rise");
+  assert.equal(institutionAccessionStanding(institution, "Republic of Poland", "observer"), "held");
+  assert.equal(institutionAccessionStanding(institution, "Republic of Lithuania", "member"), "suspended");
+  assert.equal(institutionAccessionStanding(institution, "Russian Federation", "member"), "new");
+  assert.ok(institutionStandingRank("observer") < institutionStandingRank("associate") && institutionStandingRank("associate") < institutionStandingRank("member"));
+  // Its own "Request membership": an observer has it; a member, a suspended member and an outsider's ordinary application do not come through it.
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Poland"), true);
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Latvia"), false);
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Lithuania"), false);
+  assert.equal(institutionMayRequestMembership(institution, "Russian Federation"), false);
 });

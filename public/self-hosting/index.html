@@ -138,7 +138,7 @@ npm run build</code></pre>
         <li><strong>Newer builds (the beta, and the source on the beta branch):</strong> the server answers only the machine it runs on until you turn on <strong>Settings → Network → "Let other devices connect"</strong>. It takes effect immediately, is remembered, and shows you the exact address to type on the other device. On a headless box, set <code>OH_HOST=0.0.0.0</code> instead (or one interface's address); that overrides the switch.</li>
       </ul>
       <p><strong>The game's API has no password.</strong> While the server is reachable from the network, anyone on it can read, change, and delete your games and scenarios — fine on a home network you control, a bad idea on café, hotel, dorm, or office Wi-Fi. For remote play across the internet, put the machines on a private network with a tool such as Tailscale or ZeroTier rather than forwarding the port on your router.</p>
-      <p>The Android app does not connect to a self-hosted server: it is the browser version packaged as an app, streaming the map from the community content nodes with its games on the phone. A phone plays your self-hosted saves through its browser instead.</p>
+      <p>The Android app does not connect to a self-hosted server: it is the browser version packaged as an app, with the world map inside the app and its games on the phone. A phone plays your self-hosted saves through its browser instead.</p>
     </div>
 
     <h2>Environment Variables</h2>
@@ -230,7 +230,8 @@ WantedBy=multi-user.target</code></pre>
     <a href="/" class="cta">Play Open Historia</a>
 
     <footer>
-      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> · <a href="/sitemap.xml">Sitemap</a></p>
+      <p>Open Historia — free, open-source grand strategy game. <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> · <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> · <a href="/privacy/">Privacy</a> · <a href="/sitemap.xml">Sitemap</a></p>
+  <p class="foot-legal">Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
     </footer>
   </div>
 </body>

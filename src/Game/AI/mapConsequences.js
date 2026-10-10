@@ -16,9 +16,10 @@
 // turn review request (gameplay.js runTurnReview), and how territory marks are
 // resolved (`resolveControl`). Each analyser is called with the Director's input
 // and the events as they stand at that point, since an answer is placed against
-// those events. A Director with no analyser is not run: its
-// setting is off, or it had nothing to look at. A Director that fails costs only
-// its own changes; the events always stand as written.
+// those events. A Director with no analyser is not run: it is not among the
+// checks the caller asked for (the settings that switched each one off are
+// gone). A Director that fails costs only its own changes; the events always
+// stand as written. The player's Cancel is not a failure: it ends the turn.
 
 import { directGeneratedUnitOps, orderRaisesForces } from "./nativeUnitDirector.js";
 import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
@@ -73,6 +74,9 @@ export const applyMapConsequences = async ({
 } = {}) => {
     let current = asArray(events);
     // A cancelled turn stops; any other failure costs only that Director's changes.
+    // Each Director is handed the signal as well: it catches every failure of its
+    // own analysis and carries on with the events as written, and without the
+    // signal it would take the player's Cancel for one of those.
     const failed = (message, error) => {
         if (signal?.aborted) throw error;
         console.warn(message, error);
@@ -81,7 +85,7 @@ export const applyMapConsequences = async ({
 
     if (typeof analyze.units === "function") {
         try {
-            current = await directGeneratedUnitOps({ events: current, game, world, analyzeBatch: asking(analyze.units) });
+            current = await directGeneratedUnitOps({ events: current, game, world, signal, analyzeBatch: asking(analyze.units) });
         } catch (error) {
             failed("[OH unit director] pass failed; the events keep the unit changes they had.", error);
         }
@@ -91,7 +95,7 @@ export const applyMapConsequences = async ({
     // a Scene trades by agreement arrives on the Scene outcome itself.
     if (typeof analyze.territory === "function") {
         try {
-            const marked = await directGeneratedTerritoryOps({ events: current, world, findPlaces, analyzeBatch: asking(analyze.territory) });
+            const marked = await directGeneratedTerritoryOps({ events: current, world, findPlaces, signal, analyzeBatch: asking(analyze.territory) });
             await resolveControl(marked.map((event, index) => ({ event, impacts: event?.impacts, path: `$.events[${index}].impacts` })));
             current = marked;
         } catch (error) {
@@ -102,7 +106,7 @@ export const applyMapConsequences = async ({
     let structureLinks = [];
     if (typeof analyze.structures === "function") {
         try {
-            const built = await directGeneratedStructureOps({ events: current, world, playerCountry, analyzeBatch: asking(analyze.structures) });
+            const built = await directGeneratedStructureOps({ events: current, world, playerCountry, signal, analyzeBatch: asking(analyze.structures) });
             current = built.events;
             structureLinks = asArray(built.links);
         } catch (error) {

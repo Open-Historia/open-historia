@@ -114,6 +114,11 @@ export const createPoliticalWorldV2Checkpoint = ({
     ? Math.trunc(Number(totalModelCallCeiling))
     : POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING,
   totalModelCallCeilingVersion: POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION,
+  // Each time the author allowed more calls past the ceiling.
+  ceilingGrants: [],
+  // Each time finished work was applied to the scenario before the whole run
+  // was done (applyCompletePoliticalWorldV2Work).
+  partialApplications: [],
   stages: { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending" },
   coverage: {
     "political-actor": [],
@@ -122,11 +127,11 @@ export const createPoliticalWorldV2Checkpoint = ({
     "historical-verification": [],
   },
   membership: { resolvedInstitutionIds: [] },
-  verification: { challenges: {} },
+  verification: { challenges: {}, officeholderCollisionRechecks: [] },
   attempts: {},
   // Validation feedback that must survive one-call resumable attempts. This is
   // not canon; it only helps the next bounded provider request correct itself.
-  retryContext: { politicalActor: {}, politicalSystemLocks: {}, governingAlignment: {} },
+  retryContext: { politicalActor: {}, governingAlignment: {}, politicalSystemLocks: {} },
   generationEntriesByPolity: {},
   warnings: [],
   currentTask: null,
@@ -195,15 +200,30 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
     next.totalModelCallCeiling += POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE;
   }
   next.totalModelCallCeilingVersion = POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION;
+  next.ceilingGrants = array(next.ceilingGrants).filter((grant) => grant && typeof grant === "object" && !Array.isArray(grant)).map(clone);
+  next.partialApplications = array(next.partialApplications)
+    .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({
+      at: clean(entry.at),
+      polities: [...new Set(array(entry.polities).map(clean).filter(Boolean))],
+      institutions: entry.institutions === true,
+      depthByPolity: Object.fromEntries(Object.entries(object(entry.depthByPolity))
+        .map(([polity, depth]) => [clean(polity), clean(depth)])
+        .filter(([polity, depth]) => polity && depth)),
+    }));
   next.stages = { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending", ...object(next.stages) };
   next.coverage = Object.fromEntries(Object.entries(object(next.coverage)).map(([type, targets]) => [clean(type), [...new Set(array(targets).map(clean).filter(Boolean))]]).filter(([type]) => type));
   next.membership = { resolvedInstitutionIds: [...new Set(array(next?.membership?.resolvedInstitutionIds).map(clean).filter(Boolean))] };
-  next.verification = { challenges: object(next?.verification?.challenges) };
+  next.verification = {
+    challenges: object(next?.verification?.challenges),
+    // Officeholder collisions already sent back for one focused re-check.
+    officeholderCollisionRechecks: array(next?.verification?.officeholderCollisionRechecks).map(clean).filter(Boolean),
+  };
   next.attempts = object(next.attempts);
   next.retryContext = {
     politicalActor: object(next?.retryContext?.politicalActor),
-    politicalSystemLocks: object(next?.retryContext?.politicalSystemLocks),
     governingAlignment: object(next?.retryContext?.governingAlignment),
+    politicalSystemLocks: object(next?.retryContext?.politicalSystemLocks),
   };
   next.generationEntriesByPolity = object(next.generationEntriesByPolity);
   next.warnings = array(next.warnings).map(clean).filter(Boolean);
@@ -237,6 +257,29 @@ export const recordPoliticalWorldV2ModelCall = (checkpoint, { type = "unknown", 
   checkpoint.modelCallsByType[taskType] = Math.max(0, Math.trunc(Number(checkpoint.modelCallsByType[taskType]) || 0)) + 1;
   checkpoint.modelCallsByStage[taskStage] = Math.max(0, Math.trunc(Number(checkpoint.modelCallsByStage[taskStage]) || 0)) + 1;
   return checkpoint;
+};
+
+// How far one "allow more calls" raises the lifetime ceiling. The ceiling
+// stays a safety net: the author lifts it a bounded step at a time, and every
+// step is recorded in ceilingGrants.
+export const POLITICAL_WORLD_V2_CEILING_GRANT = 25;
+
+export const grantPoliticalWorldV2ModelCalls = (checkpoint, { now = new Date().toISOString() } = {}) => {
+  const next = normalizePoliticalWorldV2Checkpoint(checkpoint);
+  if (!next) throw new Error("Invalid Political World v2 checkpoint");
+  const from = next.totalModelCallCeiling;
+  // Counted from what was actually spent, so a grant always buys exactly the
+  // step and never less when a legacy run was already over its ceiling.
+  const to = Math.max(from, next.modelCalls) + POLITICAL_WORLD_V2_CEILING_GRANT;
+  next.totalModelCallCeiling = to;
+  next.ceilingGrants = [...next.ceilingGrants, { at: now, from, to, amount: to - from }];
+  if (next.pauseReason === "total-model-call-budget") {
+    next.status = "ready";
+    next.pauseReason = "";
+    next.lastError = "";
+  }
+  next.updatedAt = now;
+  return next;
 };
 
 export const setCheckpointQuality = (checkpoint, quality = {}, now = new Date().toISOString()) => {

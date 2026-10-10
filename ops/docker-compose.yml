@@ -1,0 +1,149 @@
+# Open Historia — the public multiplayer server on one VM © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
+#
+#   caddy      TLS on 443 (Let's Encrypt), passing /ws and /api to server-mp
+#   server-mp  signaling and the public listing (../server-mp), reachable only
+#              through caddy
+#   coturn     the TURN relay, on the host's network (it needs a whole range of
+#              relay ports, which Docker's port mapping handles badly)
+#
+# Settings and the TURN secret come from ops/.env: copy .env.example, fill it
+# in, and keep it private (ops/.gitignore keeps it out of git). Nothing secret
+# is written in this file. From this directory:
+#
+#   docker compose up -d --build
+#
+# README.md here walks through the whole deployment.
+
+name: open-historia-mp
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  server-mp:
+    build: ../server-mp
+    image: open-historia-mp-server:local
+    restart: unless-stopped
+    env_file: .env
+    # Fixed here rather than taken from .env: inside its network the server
+    # listens on every interface, and it is only ever reached through caddy,
+    # whose X-Forwarded-For it can therefore trust.
+    # MAX_MEMORY_MB sits under mem_limit, so the server stops taking sockets
+    # before the kernel would stop the server.
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      TRUST_PROXY: "true"
+      MAX_MEMORY_MB: "150"
+    user: node
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    # The three limits together (192 + 128 + 128 MB) leave most of an Always
+    # Free micro VM's 1 GB to the system and Docker.
+    mem_limit: 192m
+    pids_limit: 64
+    # Only the internal network: no published port, and no way out to the
+    # internet (or the cloud's metadata service) from the container.
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      server-mp:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MP_DOMAIN: ${MP_DOMAIN:?set MP_DOMAIN in ops/.env}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The certificates and the ACME account: keep this volume, or every
+      # restart asks Let's Encrypt again (and runs into its rate limits).
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    # Caddy runs as root inside its container; all it keeps is the right to
+    # bind ports 80 and 443.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    networks: [edge, backend]
+    logging: *logging
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/certs:/etc/coturn/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    logging: *logging
+    # coturn reads no environment variables, and a secret on its command line
+    # would show in every process list. So at start-up the secret, the VM's
+    # public/private address pair and the one peer address the relay may reach
+    # (the public one, turnserver.conf "What it may reach") are appended to a
+    # private copy of turnserver.conf in /tmp, a tmpfs readable by coturn's
+    # user alone, and the secret is taken out of the environment before coturn
+    # starts. ($$ is a literal $ to compose, so the shell sees its own
+    # variables.)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        secret="$${TURN_SECRET:-}"
+        if [ "$${#secret}" -lt 32 ]; then
+          echo "coturn: TURN_SECRET in ops/.env is missing or shorter than 32 characters (openssl rand -hex 32)" >&2
+          exit 1
+        fi
+        external="$${TURN_EXTERNAL_IP:-}"
+        public="$${external%%/*}"
+        case "$$public" in
+          *[!0-9.]*|"")
+            echo "coturn: TURN_EXTERNAL_IP in ops/.env must be the VM's public IPv4 address, then /its private one if it has one" >&2
+            exit 1
+            ;;
+        esac
+        umask 077
+        cp /etc/coturn/turnserver.conf /tmp/turnserver.conf
+        printf 'static-auth-secret=%s\n' "$$secret" >> /tmp/turnserver.conf
+        printf 'external-ip=%s\n' "$$external" >> /tmp/turnserver.conf
+        printf 'allowed-peer-ip=%s\n' "$$public" >> /tmp/turnserver.conf
+        unset TURN_SECRET secret
+        exec turnserver -c /tmp/turnserver.conf
+
+networks:
+  # Caddy's way in from the internet (and out, to Let's Encrypt).
+  edge: {}
+  # Caddy and server-mp only, and nothing beyond.
+  backend:
+    internal: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

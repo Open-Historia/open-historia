@@ -304,3 +304,51 @@ test("a power with units still gains none from an event that forms nothing", asy
   });
   assert.deepEqual(directed[0].impacts.unitOps, [], "a fleet that is merely moving does not duplicate itself");
 });
+
+test("the director sees each unit's posture, make-up, cover and standing order", () => {
+  const input = buildUnitDirectorInput({
+    events: [events[1]],
+    world: {
+      units: [{ ...units[0], posture: "holding", composition: "three rifle divisions", covert: true }, units[1]],
+      pendingUnitOrders: [{ unitId: "u1", kind: "patrol", toLat: 50.2, toLng: 10.4, radiusKm: 40, untilRound: 7, targetLabel: "Zenda crossing" }],
+    },
+  });
+  const [first, second] = input.units;
+  assert.equal(first.posture, "holding");
+  assert.equal(first.composition, "three rifle divisions");
+  assert.equal(first.covert, true);
+  assert.deepEqual(first.standingOrder, { kind: "patrol", target: "Zenda crossing", untilRound: 7 });
+  assert.equal(second.standingOrder, undefined);
+  assert.equal(second.covert, undefined);
+  assert.equal(input.omittedUnits, 0);
+});
+
+test("on a crowded map the director is shown the events' own units first, and a count of the rest", () => {
+  const crowd = Array.from({ length: 80 }, (_, index) => ({
+    id: `x${index}`, name: `Garrison ${index}`, type: "infantry", ownerCode: "Syldavia", strength: 100, lng: 20, lat: 45,
+  }));
+  const input = buildUnitDirectorInput({
+    events: [events[1], events[2]],
+    world: { units: [...crowd, ...units] },
+  });
+  assert.equal(input.units.length, 60);
+  assert.equal(input.omittedUnits, 22);
+  assert.deepEqual(input.units.slice(0, 2).map((unit) => unit.id), ["u1", "u2"], "the 1st Army and the corps of Borduria, which the events name, lead");
+});
+
+test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    run([], {
+      signal: controller.signal,
+      analyzeBatch: async () => {
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+        throw controller.signal.reason;
+      },
+    }),
+    (error) => error?.name === "AbortError",
+  );
+  // Any other failure still leaves the events as they were.
+  const { directed } = await run([], { analyzeBatch: async () => { throw new Error("model unavailable"); } });
+  assert.equal(directed, events);
+});

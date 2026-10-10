@@ -14,12 +14,20 @@
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { readNameRef } from "./nameRefs.js";
+import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
+import { isProjectOpen } from "../../runtime/projects.js";
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
+import { livePuppetsFor } from "../../runtime/puppets.js";
+import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
+  audiencePolities,
   audienceSeesChat,
   isSimulationAudience,
   normalizeAudience,
@@ -75,26 +83,29 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "list_powers",
     description:
       "Every power on the map, by its EXACT name (the only spelling any owner field accepts), with how many "
-      + "regions it holds. Call this before naming a power you have not seen spelled in this conversation.",
+      + "regions it holds; a polity that holds none (a government in exile, the polity of a group of the same name) "
+      + "is listed as landless. Call this before naming a power you have not seen spelled in this conversation.",
     schema: object("Optional filter.", { query: text("Optional substring to filter names by (case-insensitive).") }),
   },
   {
     name: "list_regions",
     description:
-      "The regions one power currently holds, as {id, name}. Use the exact power name from list_powers. Paged: "
-      + "pass offset to continue. Copy ids or names EXACTLY into regionTransfers / regionControlOps / regionClaims.",
-    schema: object("Which power.", {
+      "The regions one power currently holds, by name. Use the exact power name from list_powers. Paged: "
+      + "pass offset to continue. Copy the names EXACTLY into regionTransfers / regionControlOps / regionClaims, each as \"region: <name>\". "
+      + "Or pass group instead of owner for every region a group controls, with each region's owner: the names a groupOps entry lists.",
+    schema: object("Which power, or which group.", {
       owner: text("The power's exact name."),
+      group: text("Instead of owner: a group's exact name."),
       offset: integer("First region to return (default 0)."),
       limit: integer("How many to return (default 200, max 300)."),
-    }, ["owner"]),
+    }),
   },
   {
     name: "find_region",
     description:
       "Find map regions by name — exact, with an administrative suffix ('Kharkiv Oblast'), or a transliteration "
-      + "a letter or two off. Returns up to 8 candidates with their ids and current owners; choose one and use "
-      + "its id. Optionally restrict to one power's regions.",
+      + "a letter or two off. Returns up to 8 candidates with their exact names and current owners; choose one and use "
+      + "its name. Optionally restrict to one power's regions.",
     schema: object("What to find.", {
       name: text("The region name as you know it."),
       owner: text("Optional: only regions held by this exact power name."),
@@ -105,7 +116,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     description:
       "One region in full: exact name, controller, legal sovereign, claimants, the group controlling it if any, cities inside it, and its "
       + "neighbouring regions with their owners (who could reach it, whose land it borders).",
-    schema: object("Which region.", { regionId: text("The region id (from list_regions / find_region).") }, ["regionId"]),
+    schema: object("Which region.", { region: text("The region's name (from list_regions / find_region); with its owner in brackets where two powers hold one of that name.") }, ["region"]),
   },
   {
     name: "find_city",
@@ -118,7 +129,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "power_info",
     description:
       "One power's situation: regions held, wars it is in, its relations ledger, claims it asserts and claims "
-      + "against it, reputation, intelligence rating, tags, its authored description, and unit count. "
+      + "against it, who directs it or whom it directs (subordinations), reputation, intelligence rating, tags, its authored description, and unit count. "
       + "Use the exact name from list_powers.",
     schema: object("Which power.", { name: text("The power's exact name.") }, ["name"]),
   },
@@ -139,15 +150,19 @@ export const LOOKUP_TOOLS = Object.freeze([
   },
   {
     name: "chat_history",
-    description: "The diplomatic conversation between the player and one power: the last messages, newest last.",
+    description:
+      "The diplomatic conversation between the player and one power: the last messages, newest last, of the live thread "
+      + "with the latest word. When there are several threads with that power, threads lists them all (id, title, participants, "
+      + "closed or not); pass chatId to read another.",
     schema: object("Which power.", {
       with: text("The other power's exact name."),
       limit: integer("How many messages (default 12, max 40)."),
+      chatId: text("Optional: the id of one thread from threads."),
     }, ["with"]),
   },
   {
     name: "list_units",
-    description: "Military units on the map (id, name, type, owner, strength, posture, region), optionally one power's.",
+    description: "Military units on the map (name, type, owner, strength, posture, where), optionally one power's. An order on a unit names it exactly as listed here.",
     schema: object("Optional filter.", { owner: text("Optional exact power name.") }),
   },
   {
@@ -171,14 +186,14 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "relations_between",
     description:
       "The diplomatic relation between two exact powers: score (-100..100), status, summary, when it last moved; "
-      + "the agreements between them and whether they are at war with each other.",
+      + "the agreements between them, whether they are at war with each other, and whether one directs the other (subordinations).",
     schema: object("The two powers.", { a: text("One power's exact name."), b: text("The other power's exact name.") }, ["a", "b"]),
   },
   {
     name: "storylines",
     description:
       "The world's persistent storylines (the processes already in motion): id, kind, title, status, participants, "
-      + "pressure and momentum, when they started, their current state, drivers and constraints. Continue these rather than restarting them.",
+      + "pressure and momentum, when they started, and their current state. Continue these rather than restarting them.",
     schema: object("Optional filters.", {
       participant: text("Optional exact power name: only storylines it takes part in."),
       status: text("Optional status filter (active, dormant, resolved...)."),
@@ -189,7 +204,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     description:
       "How one region changed hands over the campaign: every recorded transfer, control change and claim, oldest first, "
       + "with the event that carried it; plus who holds it now.",
-    schema: object("Which region.", { regionId: text("The region id (from list_regions / find_region).") }, ["regionId"]),
+    schema: object("Which region.", { region: text("The region's name (from list_regions / find_region); with its owner in brackets where two powers hold one of that name.") }, ["region"]),
   },
   {
     name: "path_between",
@@ -197,10 +212,10 @@ export const LOOKUP_TOOLS = Object.freeze([
       "The shortest chain of neighbouring regions from one region to another, each with its owner: whose land a force "
       + "must cross, whether two powers touch, how far a front is. Adjacency is the map's own.",
     schema: object("Endpoints.", {
-      fromRegionId: text("Start region id."),
-      toRegionId: text("Destination region id."),
+      fromRegion: text("Start region's name."),
+      toRegion: text("Destination region's name."),
       maxSteps: integer("Give up beyond this many steps (default 12, max 40)."),
-    }, ["fromRegionId", "toRegionId"]),
+    }, ["fromRegion", "toRegion"]),
   },
   {
     name: "spy_network",
@@ -213,7 +228,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "border_between",
     description:
       "The frontier between two powers: every pair of neighbouring regions where one power's region touches the "
-      + "other's, with ids and names on both sides. Use it to see where two powers meet before writing an offensive, "
+      + "other's, by name on both sides. Use it to see where two powers meet before writing an offensive, "
       + "a border incident or a cession; an empty result means they share no land border.",
     schema: object("The two powers.", {
       a: text("One power's exact name."),
@@ -225,11 +240,11 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "map_around",
     description:
       "Who owns what around one region: the region itself and every region within a few neighbour steps, each with "
-      + "its owner and sovereign, grouped by owner. A bounded local map — use it instead of asking for whole powers.",
+      + "its owner and sovereign and the group controlling it if any, grouped by owner. A bounded local map — use it instead of asking for whole powers.",
     schema: object("The centre and the radius.", {
-      regionId: text("The centre region id (from find_region / list_regions)."),
+      region: text("The centre region's name (from find_region / list_regions)."),
       steps: integer("How many neighbour steps out (default 1, max 3)."),
-    }, ["regionId"]),
+    }, ["region"]),
   },
   {
     name: "list_cities",
@@ -263,16 +278,67 @@ export const LOOKUP_TOOLS = Object.freeze([
 
 ]);
 
+// The groups (runtime/groups.js): actors that are not countries, each
+// controlling an area of regions that stay their countries'. A list of their
+// own, apart from LOOKUP_TOOLS, for a conversation that asks about them when
+// they come up rather than carrying them in every message: the advisor
+// (main.jsx advisorGroupLookups). The narrator's tasks already read every group
+// in their prompts (gameplay.js buildGroupsContext), and region_info names the
+// group that controls a region. executeLookup answers these for any caller.
+export const GROUP_LOOKUP_TOOLS = Object.freeze([
+  {
+    name: "list_groups",
+    description:
+      "Every group on the map in full: an actor that is not a country (an armed group, a cartel, a militia, a movement, an outbreak), "
+      + "controlling an area of regions that still belong to their countries. Each by its EXACT name, with what it is, its former "
+      + "names, how many regions it controls and in which countries, and every region it controls with the country each belongs to. "
+      + "One call answers everything about the groups.",
+    schema: object("Optional filter.", {
+      country: text("Optional: only groups controlling regions of this country (its exact name)."),
+    }),
+  },
+  {
+    name: "group_info",
+    description:
+      "One group in full, by its exact name or a former name. Only needed when list_groups cut a group's region list short "
+      + "(moreRegions): this lists up to 500 of its regions.",
+    schema: object("Which group.", { name: text("The group's exact name.") }, ["name"]),
+  },
+]);
+export const GROUP_LOOKUP_TOOL_NAMES = Object.freeze(GROUP_LOOKUP_TOOLS.map((tool) => tool.name));
+
+// Groups switched off for a game (server/gameFeatures.js): the same functions,
+// told nothing about groups, and list_regions without its group parameter. The
+// context is built without them too (buildLookupContext `groups`), so no answer
+// names one.
+const WITHOUT_GROUP_MENTIONS = [
+  [" (a government in exile, the polity of a group of the same name)", " (a government in exile)"],
+  [" Or pass group instead of owner for every region a group controls, with each region's owner: the names a groupOps entry lists.", ""],
+  ["Which power, or which group.", "Which power."],
+  [", the group controlling it if any,", ","],
+  [" and the group controlling it if any,", ","],
+];
+const withoutGroupMentions = (value) => WITHOUT_GROUP_MENTIONS.reduce((out, [from, to]) => out.split(from).join(to), value);
+export const LOOKUP_TOOLS_WITHOUT_GROUPS = Object.freeze(LOOKUP_TOOLS.map((tool) => {
+  const { group: _group, ...properties } = tool.schema.properties ?? {};
+  return {
+    ...tool,
+    description: withoutGroupMentions(tool.description),
+    schema: { ...tool.schema, description: withoutGroupMentions(tool.schema.description), properties },
+  };
+}));
+export const lookupToolsFor = ({ groups = true } = {}) => (groups ? LOOKUP_TOOLS : LOOKUP_TOOLS_WITHOUT_GROUPS);
+
 // The instruction that goes with the tools.
 export const LOOKUP_DIRECTIVE = [
   "[Lookup tools]",
   "You have lookup functions beside your output function. They answer from the live campaign and the rendered map, and every name they return is spelled exactly as the map spells it.",
-  "The prompt above carries the powers with their region counts, the last few events, a short view of the chats and the main contested regions. Region names and ids, older events, full conversations, the rest of the contested map, the board and the ledgers are behind the functions.",
+  "The prompt above carries the powers with their region counts, the last few events, a short view of the chats and the main contested regions. Region names, older events, full conversations, the rest of the contested map, the board and the ledgers are behind the functions.",
   "Rules:",
-  "1. Before you write ANY regionTransfers, regionControlOps or regionClaims entry, look the region up (find_region or list_regions) and copy its id and exact name into the entry. Never guess a region name. And the reverse holds: an event that narrates a capture, occupation, liberation or cession MUST carry that entry, with the id you looked up — narration alone never moves the map.",
+  "1. Before you write ANY regionTransfers, regionControlOps or regionClaims entry, look the region up (find_region or list_regions) and copy its exact name into the entry, as \"region: <name>\". Never guess a region name, and never write an id. And the reverse holds: an event that narrates a capture, occupation, liberation or cession MUST carry that entry, with the name you looked up — narration alone never moves the map.",
   "2. Every owner field (fromCode, toCode, ownerCode, claimantCode, actorCode) must be a power's exact name as returned by list_powers or power_info. A short form, a translation or a code names nobody.",
   "3. Who owns what around a place comes from map_around (one region and its surroundings, grouped by owner) and border_between (where two powers' regions touch); region_info for one region's neighbours; find_city when you know the city but not the region. Never ask for a whole power's regions just to see a front.",
-  "4. What is already in motion is on the ledgers: storylines, list_projects, war_ledger, relations_between, spy_network. Continue those rather than restarting them.",
+  "4. What is already in motion is on the ledgers: storylines, list_projects, war_ledger, relations_between, spy_network. Continue those rather than restarting them. A polity's politics (government, factions, goals) is political_actor; an institution's members and open business are list_institutions and institution_info.",
   "5. You have at most THREE lookup rounds, and the first is the one that counts: call every function you will need in the same turn (every region you will name, every power you will check, the front you will move on) rather than one per turn.",
   "6. Then call the output function once with the complete answer. Do not narrate your lookups.",
 ].join("\n");
@@ -348,15 +414,21 @@ const distanceSquared = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
  *   chats     the save's chats
  *   units     [{ id, name, type, ownerCode, strength, posture, regionId, lng, lat }]
  *   player    the player's polity name
- *   audience  who is asking (audience.js). Two of these functions answer from
- *             material a government keeps to itself — chat_history and
- *             spy_network — and they answer only what this audience could know.
- *             Every task that carries lookups today is the narrator, so the
- *             default is the narrator; a surface that speaks AS a polity (a
- *             leader, an envoy) MUST pass a viewer, or it can read the player's
+ *   audience  who is asking (audience.js). Seven of these functions answer from
+ *             material a government keeps to itself — chat_history,
+ *             spy_network, list_projects, political_actor, institution_info and
+ *             the subordinations of power_info and relations_between — and they
+ *             answer only what this audience could know. Every structured task
+ *             that carries lookups today is the narrator, so the default is the
+ *             narrator; a surface that speaks AS a polity (a leader, an envoy,
+ *             the advisor) MUST pass a viewer, or it can read the player's
  *             letters to everyone else through a function call.
+ *   groups    false when groups are switched off for the game
+ *             (server/gameFeatures.js): the world is read without its groups
+ *             and their areas, so no answer names one.
  */
-export const buildLookupContext = ({ regions = [], world = {}, cities = [], events = [], chats = [], units = [], player = "", audience = SIMULATION_AUDIENCE } = {}) => {
+export const buildLookupContext = ({ regions = [], world = {}, cities = [], events = [], chats = [], units = [], player = "", audience = SIMULATION_AUDIENCE, groups = true } = {}) => {
+  if (!groups) world = { ...world, groups: {}, groupAreas: {} };
   const overrides = world?.regionOwnershipOverrides ?? {};
   const sovereignty = world?.regionSovereigntyOverrides ?? {};
   const claimants = world?.regionClaimants ?? {};
@@ -371,6 +443,8 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
       id,
       name: clean(region.name) || id,
       owner: ownerOf(region),
+      // The country it belongs to by geography, whoever holds it (namedAreas.js).
+      base: baseCountryOf(region, toCountryName),
       sovereign: clean(sovereignty[id]) || "",
       aliases: array(region.aliases).map(clean).filter(Boolean),
       geometry: region.geometry ?? null,
@@ -401,6 +475,32 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     for (const alias of array(record?.aliases)) declareOwner(alias, label);
   }
   const resolveOwner = (token) => ownerByFold.get(foldRegionKey(token)) ?? "";
+  // A territory or dependency by its own name (namedAreas.js): the regions that
+  // belong to it by geography, whoever holds them. Built when first asked for.
+  let areaIndex = null;
+  const areaNamed = (token) => {
+    areaIndex ??= buildAreaIndex(rows.map((row) => ({ ...row, country: row.base, countryCode: "" })), { fold: foldRegionKey });
+    const area = findArea(areaIndex, token, { toName: toCountryName, fold: foldRegionKey });
+    return area ? { name: area.name, rows: area.regions.map((region) => byId.get(region.id)).filter(Boolean) } : null;
+  };
+  // What a power holds beyond its own country, as [{ name, rows }]: an area that
+  // is not its own and that no polity of the game is named after.
+  const territoriesOf = (owner) => splitTerritories(ownerRows.get(owner) ?? [], {
+    ownerKey: foldRegionKey(owner),
+    isPolity: (key) => ownerByFold.has(key),
+    fold: foldRegionKey,
+  }).territories.map((territory) => ({ name: territory.name, rows: territory.regions }));
+  // Polities in the present that hold no region of this map: a government in
+  // exile, a landless country from the Countries tab, the polity of a player who
+  // leads a group. Each by the label resolveOwner answers with, so a name
+  // list_powers gives back resolves in every other function.
+  const landless = [];
+  for (const [token, record] of Object.entries(polities)) {
+    const status = clean(record?.status).toLowerCase();
+    if (status && status !== "active") continue;
+    const label = resolveOwner(token);
+    if (label && !ownerRows.has(label) && !landless.includes(label)) landless.push(label);
+  }
 
   // Neighbours: the map author's declared adjacencies when the catalog carries
   // them (either direction counts), else bounding-box adjacency from geometry —
@@ -468,9 +568,10 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     .filter((event) => event && typeof event === "object");
 
   return {
-    rows, byId, ownerRows, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
+    rows, byId, ownerRows, landless, resolveOwner, areaNamed, territoriesOf, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
+    ...(groups ? {} : { groupsOff: true }),
   };
 };
 
@@ -491,11 +592,14 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
 // paragraph. A city answers with the region it stands in. Longest names first,
 // so "South Ossetia" is not also reported as "Ossetia".
 
+// Words of any script: on a map whose regions and cities are named in
+// Cyrillic, Greek or Arabic, every name used to fold to nothing here and none
+// could be found in a text.
 const foldForSearch = (value) => String(value ?? "")
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase()
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .trim();
 
 const MIN_PLACE_NAME_CHARS = 4;
@@ -540,7 +644,6 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
       place: candidate.label,
       kind: candidate.kind,
       ...(row ? {
-        regionId: row.id,
         ...(candidate.kind === "city" || row.name !== candidate.label ? { region: row.name } : {}),
         controller: row.owner || "unowned",
         ...(row.sovereign && row.sovereign !== row.owner ? { lawfulOwner: row.sovereign } : {}),
@@ -559,12 +662,114 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
 // Executor
 // ---------------------------------------------------------------------------
 
-const regionBrief = (row) => ({ id: row.id, name: row.name, owner: row.owner || "unowned" });
+const regionBrief = (row) => ({ name: row.name, owner: row.owner || "unowned" });
 
-const unknownPower = (context, token) => ({
-  error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
-  powers: [...context.ownerRows.keys()].sort().slice(0, 60),
+// The region a lookup was asked about: by its NAME, which is all a result ever
+// gives it (nameRefs.js) — "Kharkiv", "region: Kharkiv", and "Kharkiv
+// (Ukraine)" where two powers hold a region of that name. The map's own key
+// for it is read too, for a caller that has one. { row } or { error }.
+const regionOfRef = (context, written, ownerHint = "") => {
+  const raw = clean(written);
+  if (!raw) return { error: "Name the region." };
+  if (context.byId.has(raw)) return { row: context.byId.get(raw) };
+  const ref = readNameRef(raw);
+  if (ref.bracket && context.byId.has(ref.bracket)) return { row: context.byId.get(ref.bracket) };
+  const key = foldRegionKey(ref.name);
+  const named = context.rows.filter((row) => foldRegionKey(row.name) === key || row.aliases.some((alias) => foldRegionKey(alias) === key));
+  if (named.length === 1) return { row: named[0] };
+  if (named.length > 1) {
+    for (const hint of [ref.bracket, ownerHint].map(clean).filter(Boolean)) {
+      const owner = context.resolveOwner(hint) || hint;
+      const held = named.filter((row) => clean(row.owner).toLowerCase() === clean(owner).toLowerCase());
+      if (held.length === 1) return { row: held[0] };
+    }
+    const holders = [...new Set(named.map((row) => row.owner || "nobody"))];
+    return { error: `${named.length} regions are called "${ref.name}", held by ${holders.join(", ")}. Say which, as "${ref.name} (<owner>)".` };
+  }
+  const near = matchRegionName(ref.name, context.rows, { maxFuzzy: 1 });
+  if (near?.region) return { row: near.region };
+  return { error: `No region is called "${ref.name}". Use find_region or list_regions for the names this map uses.` };
+};
+
+// How many regions a group lists: list_groups gives every group in full, each
+// region list up to LIST_GROUP_REGIONS and all of them together up to
+// LIST_GROUPS_REGION_BUDGET, so a world of great insurgencies still answers in
+// one call of bounded size; group_info lists one group's up to GROUP_INFO_REGIONS.
+const LIST_GROUP_REGIONS = 200;
+const LIST_GROUPS_REGION_BUDGET = 1500;
+const GROUP_INFO_REGIONS = 500;
+
+// One group as both functions answer it.
+const groupInFull = (groupName, group, rows, limit) => ({
+  name: groupName,
+  ...(group.description ? { description: group.description } : {}),
+  ...(group.formerNames?.length ? { formerNames: group.formerNames } : {}),
+  regionsControlled: rows.length,
+  inCountries: countriesOf(rows),
+  regions: rows.slice(0, limit).map(regionBrief),
+  ...(rows.length > limit ? { moreRegions: rows.length - limit } : {}),
 });
+
+// The world's groups and the regions each controls, as rows of this map. An
+// area row this map does not render is left out rather than named by its id.
+const groupsOnMap = (context) => {
+  const groups = normalizeGroups(context.world?.groups);
+  const areas = groupRegions(normalizeGroupAreas(context.world?.groupAreas, groups));
+  const rowsOf = (name) => array(areas[name]).map((id) => context.byId.get(clean(id))).filter(Boolean);
+  return { groups, rowsOf };
+};
+// How many of these regions each country holds, most first.
+const countriesOf = (rows) => {
+  const counts = new Map();
+  for (const row of rows) {
+    const owner = row.owner || "unowned";
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([country, regions]) => ({ country, regions }));
+};
+
+// The power names closest to one the map does not know, best first: a name that
+// contains it or sits inside it ("russia" in "russian federation"), a whole word
+// ahead of a fragment and the nearer length first, then a spelling a letter or
+// two off. Suggestions only: the name asked for still names nobody.
+const DID_YOU_MEAN = 8;
+const powerLabels = (context) => [...context.ownerRows.keys(), ...array(context.landless)];
+const closestPowers = (context, token) => {
+  const key = foldRegionKey(token);
+  if (key.length < 2) return [];
+  const ranked = [];
+  for (const label of powerLabels(context)) {
+    const folded = foldRegionKey(label);
+    const [shorter, longer] = folded.length <= key.length ? [folded, key] : [key, folded];
+    const at = shorter.length >= 3 ? longer.indexOf(shorter) : -1;
+    let rank = -1;
+    if (at >= 0) rank = (at === 0 || longer[at - 1] === " " ? 0 : 500) + (longer.length - shorter.length);
+    else {
+      const max = Math.max(1, Math.floor(key.length / 3));
+      const distance = editDistance(key, folded, max);
+      if (distance <= max) rank = 1000 + distance;
+    }
+    if (rank >= 0) ranked.push({ label, rank });
+  }
+  return ranked
+    .sort((x, y) => x.rank - y.rank || x.label.localeCompare(y.label))
+    .slice(0, DID_YOU_MEAN)
+    .map(({ label }) => label);
+};
+
+const unknownPower = (context, token) => {
+  const didYouMean = closestPowers(context, token);
+  if (didYouMean.length) {
+    return {
+      error: `"${clean(token)}" is not a power on this map. Owner names are exact. The closest exact names are in didYouMean; call list_powers for the rest.`,
+      didYouMean,
+    };
+  }
+  return {
+    error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
+    powers: powerLabels(context).sort().slice(0, 60),
+  };
+};
 
 const stringsIn = (value, depth = 0, out = []) => {
   if (depth > 4 || value == null) return out;
@@ -659,11 +864,9 @@ const projectAsSeenBy = (audience, project, player) => {
   return null;
 };
 
-const OPEN_PROJECT_STATUSES = new Set(["active", "planned", "stalled", "paused", "in-progress", "ongoing"]);
-const projectIsOpen = (project) => {
-  const status = clean(project?.status).toLowerCase();
-  return !status || OPEN_PROJECT_STATUSES.has(status);
-};
+// The board's own rule (runtime/projects.js), case-folded because a lookup world
+// can carry a status as the model wrote it.
+const projectIsOpen = (project) => isProjectOpen({ status: clean(project?.status).toLowerCase() });
 
 const storylineBrief = (storyline) => ({
   id: clean(storyline?.id),
@@ -676,8 +879,6 @@ const storylineBrief = (storyline) => ({
   startedDate: clean(storyline?.startedDate),
   lastUpdatedDate: clean(storyline?.lastUpdatedDate),
   state: clean(storyline?.state).slice(0, 500),
-  ...(array(storyline?.drivers).length ? { drivers: array(storyline.drivers).map(clean) } : {}),
-  ...(array(storyline?.constraints).length ? { constraints: array(storyline.constraints).map(clean) } : {}),
 });
 
 const spyBrief = (spy) => ({
@@ -689,6 +890,72 @@ const spyBrief = (spy) => ({
   ...(spy?.coverStory ? { cover: clean(spy.coverStory).slice(0, 200) } : {}),
   ...(spy?.suspected ? { suspected: true } : {}),
 });
+
+// A thread's latest dated message, as a game day number, or null. Walks back
+// past messages that carry no date (an opener saved without one).
+const messageDate = (message) => clean(message?.gameDate || message?.date || message?.time);
+const lastChatDay = (chat) => {
+  const messages = array(chat?.messages);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const day = gameDateDayNumber(messageDate(messages[i]));
+    if (day !== null) return day;
+  }
+  return null;
+};
+const chatIsClosed = (chat) => (clean(chat?.status).toLowerCase() === "closed" ? 1 : 0);
+const chatThreadBrief = (chat) => {
+  const messages = array(chat?.messages);
+  const dated = [...messages].reverse().map(messageDate).find((date) => gameDateDayNumber(date) !== null);
+  return {
+    id: clean(chat?.id),
+    title: clean(chat?.title),
+    participants: array(chat?.countries).map((country) => clean(country?.name ?? country)).filter(Boolean),
+    ...(chatIsClosed(chat) ? { status: "closed" } : {}),
+    ...(clean(chat?.institutionId) ? { institutionId: clean(chat.institutionId) } : {}),
+    messages: messages.length,
+    ...(dated ? { lastMessageDate: dated } : {}),
+  };
+};
+
+// Who directs whom (world.puppets), as `audience` may know it: the narrator the
+// standing truth, loyalty and who has found out included; a viewer what its
+// governments believe still stands (runtime/puppets.js), a loyalty band only as
+// the overlord and never another's covert arrangement it has not uncovered.
+const subordinationsFor = (context, involves) => {
+  const world = context.world ?? {};
+  if (isSimulationAudience(context.audience)) {
+    return array(world.puppets)
+      .filter((row) => clean(row?.status || "active").toLowerCase() === "active" && involves(row))
+      .map((row) => ({
+        overlord: clean(row.overlord),
+        puppet: clean(row.puppet),
+        kind: clean(row.kind),
+        secrecy: clean(row.secrecy) === "covert" ? "covert" : "open",
+        ...(Number.isFinite(Number(row.loyalty)) ? { loyalty: Number(row.loyalty) } : {}),
+        ...(clean(row.startedDate) ? { since: clean(row.startedDate) } : {}),
+        ...(clean(row.secrecy) === "covert"
+          ? { alsoKnownTo: array(row.knownTo).map((entry) => clean(entry?.polity ?? entry)).filter(Boolean) }
+          : {}),
+      }));
+  }
+  const seen = new Map();
+  for (const viewer of audiencePolities(context.audience)) {
+    for (const row of livePuppetsFor(world, viewer)) {
+      if (!involves(row) || seen.has(row.id || `${row.overlord}|${row.puppet}`)) continue;
+      seen.set(row.id || `${row.overlord}|${row.puppet}`, {
+        overlord: row.overlord,
+        puppet: row.puppet,
+        kind: row.kind,
+        secrecy: row.secrecy,
+        ...(row.startedDate ? { since: row.startedDate } : {}),
+        ...(row.loyaltyBand ? { loyalty: row.loyaltyBand } : {}),
+        ...(row.fromIntelligence ? { fromIntelligence: true, ...(row.asOf ? { asOf: row.asOf } : {}) } : {}),
+      });
+    }
+  }
+  return [...seen.values()];
+};
+const sameName = (left, right) => Boolean(foldRegionKey(left)) && foldRegionKey(left) === foldRegionKey(right);
 
 const agreementBrief = (agreement) => ({
   id: clean(agreement?.id),
@@ -791,20 +1058,54 @@ export const executeLookup = (context, name, args = {}) => {
   switch (name) {
     case "list_powers": {
       const query = foldRegionKey(a.query);
-      const powers = [...context.ownerRows.entries()]
-        .map(([label, rows]) => ({ name: label, regions: rows.length, ...(label === context.player ? { player: true } : {}) }))
+      const groups = normalizeGroups(context.world?.groups);
+      const power = (label, regions, landless) => ({
+        name: label,
+        regions,
+        ...(landless ? { landless: true } : {}),
+        ...(label === context.player ? { player: true } : {}),
+        ...(Object.hasOwn(groups, label) ? { alsoGroup: true } : {}),
+      });
+      const powers = [
+        ...[...context.ownerRows.entries()].map(([label, rows]) => power(label, rows.length, false)),
+        ...array(context.landless).map((label) => power(label, 0, true)),
+      ]
         .filter((power) => !query || foldRegionKey(power.name).includes(query))
         .sort((x, y) => y.regions - x.regions || x.name.localeCompare(y.name));
       return { count: powers.length, powers: powers.slice(0, 250) };
     }
     case "list_regions": {
+      const paged = (rows, brief) => {
+        const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
+        const limit = clampInt(a.limit, 1, 300, 200);
+        const page = rows.slice(offset, offset + limit).map(brief);
+        return { total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      };
+      // A group's area, which crosses countries: each region with its owner, the
+      // ids a groupOps release names.
+      // Groups switched off: list_regions takes no group, and says nothing of one.
+      if (!clean(a.owner) && context.groupsOff) return { error: "owner (a power's exact name) is required." };
+      if (clean(a.group) && !clean(a.owner)) {
+        const { groups, rowsOf } = groupsOnMap(context);
+        const group = findGroupKey(groups, a.group);
+        if (!group) return { error: `No group named "${clean(a.group)}". Names are exact.`, groups: Object.keys(groups) };
+        return { group, ...paged(rowsOf(group), regionBrief) };
+      }
+      if (!clean(a.owner)) return { error: "owner (a power's exact name) or group (a group's exact name) is required." };
       const owner = context.resolveOwner(a.owner);
       if (!owner) return unknownPower(context, a.owner);
-      const rows = context.ownerRows.get(owner) ?? [];
-      const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
-      const limit = clampInt(a.limit, 1, 300, 200);
-      const page = rows.slice(offset, offset + limit).map((row) => ({ id: row.id, name: row.name }));
-      return { owner, total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      // A territory the power holds is named beside its regions, since its name
+      // is what stands for all of it in an operation (namedAreas.js).
+      const territories = context.territoriesOf(owner);
+      const territoryOf = new Map(territories.flatMap((territory) => territory.rows.map((row) => [row.id, territory.name])));
+      return {
+        owner,
+        ...paged(context.ownerRows.get(owner) ?? [], (row) => ({ name: row.name, ...(territoryOf.has(row.id) ? { territory: territoryOf.get(row.id) } : {}) })),
+        ...(territories.length ? {
+          territories: territories.map((territory) => ({ name: territory.name, regions: territory.rows.length })),
+          note: "A territory is written \"country: <its name>\" and means every region of it this power holds.",
+        } : {}),
+      };
     }
     case "find_region": {
       const query = clean(a.name);
@@ -845,8 +1146,8 @@ export const executeLookup = (context, name, args = {}) => {
       };
     }
     case "region_info": {
-      const row = context.byId.get(clean(a.regionId));
-      if (!row) return { error: `No region with id "${clean(a.regionId)}". Use find_region or list_regions to get ids.` };
+      const { row, error: unknownRegion } = regionOfRef(context, a.region ?? a.regionId ?? a.name, a.owner);
+      if (!row) return { error: unknownRegion };
       return {
         ...regionBrief(row),
         sovereign: row.sovereign || row.owner || "unowned",
@@ -870,7 +1171,7 @@ export const executeLookup = (context, name, args = {}) => {
           return {
             city: city.name,
             population: city.population,
-            ...(row ? { regionId: row.id, regionName: row.name, owner: row.owner || "unowned" } : { regionId: null }),
+            ...(row ? { region: row.name, owner: row.owner || "unowned" } : { region: null }),
             ...(placed?.approximate ? { approximate: true, note: "nearest region by centroid; the map carries no polygon for this city" } : {}),
           };
         });
@@ -907,6 +1208,7 @@ export const executeLookup = (context, name, args = {}) => {
         claimsAgainstIt: claimsAgainst.slice(0, 20),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
+        subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)),
       };
     }
     case "recent_events": {
@@ -932,16 +1234,35 @@ export const executeLookup = (context, name, args = {}) => {
       // answered exactly as one that does not exist: saying "you may not read
       // that" would itself tell a government that the player is talking to
       // someone, and to whom.
-      const chat = context.chats.find((entry) =>
-        array(entry?.countries).some((country) => clean(country?.name) === owner)
-        && audienceSeesChat(audience, entry, { player: context.player }));
-      if (!chat) return { with: owner, messages: [], hint: "No conversation with this power yet." };
+      // Every thread with that power, the live ones first and then the latest
+      // word: the save keeps them newest-created first, and a closed thread, an
+      // institution's table or a later multilateral one must not stand in for
+      // the negotiation that matters. chatId reads one of them.
+      const threads = context.chats
+        .map((entry, order) => ({ entry, order, last: lastChatDay(entry) }))
+        .filter(({ entry }) => array(entry?.countries).some((country) => clean(country?.name) === owner)
+          && audienceSeesChat(audience, entry, { player: context.player }))
+        .sort((x, y) => chatIsClosed(x.entry) - chatIsClosed(y.entry)
+          || (y.last ?? -Infinity) - (x.last ?? -Infinity)
+          || x.order - y.order)
+        .map(({ entry }) => entry);
+      if (!threads.length) return { with: owner, messages: [], hint: "No conversation with this power yet." };
+      const wanted = clean(a.chatId);
+      const chat = wanted ? threads.find((entry) => clean(entry?.id) === wanted) : threads[0];
+      const listed = threads.slice(0, 12).map(chatThreadBrief);
+      if (!chat) return { with: owner, threads: listed, messages: [], hint: `No thread "${wanted}" with this power. Use an id from threads.` };
       const messages = array(chat.messages).slice(-limit).map((message) => ({
         from: clean(message?.speaker || message?.role || message?.from),
-        date: clean(message?.gameDate || message?.date),
+        date: clean(message?.gameDate || message?.date || message?.time),
         text: clean(message?.text || message?.content).slice(0, 600),
       }));
-      return { with: owner, title: clean(chat.title), messages };
+      return {
+        with: owner,
+        chatId: clean(chat.id),
+        title: clean(chat.title),
+        messages,
+        ...(threads.length > 1 ? { threads: listed } : {}),
+      };
     }
     case "list_units": {
       let units = context.units;
@@ -953,8 +1274,9 @@ export const executeLookup = (context, name, args = {}) => {
       return {
         count: units.length,
         units: units.slice(0, 120).map((unit) => ({
-          id: clean(unit?.id), name: clean(unit?.name), type: clean(unit?.type), owner: clean(unit?.ownerCode),
-          strength: Number(unit?.strength) || 0, posture: clean(unit?.posture), regionId: clean(unit?.regionId),
+          name: clean(unit?.name), type: clean(unit?.type), owner: clean(unit?.ownerCode),
+          strength: Number(unit?.strength) || 0, posture: clean(unit?.posture),
+          ...(context.byId.get(clean(unit?.regionId)) ? { region: context.byId.get(clean(unit.regionId)).name } : {}),
           ...(Number.isFinite(Number(unit?.lng)) ? { lng: Number(unit.lng), lat: Number(unit.lat) } : {}),
         })),
       };
@@ -1012,6 +1334,8 @@ export const executeLookup = (context, name, args = {}) => {
         agreements: agreements.slice(0, 12).map(agreementBrief),
         wars: wars.map(warBrief),
         atWar: wars.some((war) => clean(war?.status).toLowerCase() !== "ended"),
+        subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
+          || (sameName(row?.overlord, second) && sameName(row?.puppet, first))),
       };
     }
     case "storylines": {
@@ -1028,8 +1352,8 @@ export const executeLookup = (context, name, args = {}) => {
       return { ...(participant ? { participant } : {}), count: list.length, storylines: list.slice(0, 40).map(storylineBrief) };
     }
     case "region_history": {
-      const row = context.byId.get(clean(a.regionId));
-      if (!row) return { error: `No region with id "${clean(a.regionId)}". Use find_region or list_regions to get ids.` };
+      const { row, error: unknownRegion } = regionOfRef(context, a.region ?? a.regionId ?? a.name, a.owner);
+      if (!row) return { error: unknownRegion };
       const keys = new Set([foldRegionKey(row.id), foldRegionKey(row.name), ...row.aliases.map(foldRegionKey)]);
       const matches = (entry) => keys.has(foldRegionKey(entry?.regionId)) || keys.has(foldRegionKey(entry?.regionName));
       const changes = [];
@@ -1048,10 +1372,10 @@ export const executeLookup = (context, name, args = {}) => {
       return { ...regionBrief(row), sovereign: row.sovereign || row.owner || "unowned", changes: changes.slice(-40), ...(changes.length === 0 ? { hint: "No recorded change of hands in this campaign." } : {}) };
     }
     case "path_between": {
-      const from = context.byId.get(clean(a.fromRegionId));
-      const to = context.byId.get(clean(a.toRegionId));
-      if (!from) return { error: `No region with id "${clean(a.fromRegionId)}".` };
-      if (!to) return { error: `No region with id "${clean(a.toRegionId)}".` };
+      const { row: from, error: unknownStart } = regionOfRef(context, a.fromRegion ?? a.fromRegionId ?? a.from);
+      const { row: to, error: unknownEnd } = regionOfRef(context, a.toRegion ?? a.toRegionId ?? a.to);
+      if (!from) return { error: unknownStart };
+      if (!to) return { error: unknownEnd };
       const maxSteps = clampInt(a.maxSteps, 1, 40, 12);
       if (from === to) return { steps: 0, path: [regionBrief(from)] };
       const previous = new Map([[from.id, null]]);
@@ -1120,7 +1444,7 @@ export const executeLookup = (context, name, args = {}) => {
           name: city.name,
           population: city.population,
           ...(city.capital ? { capital: city.capital } : {}),
-          ...(row ? { regionId: row.id, regionName: row.name, owner: row.owner || "unowned" } : { regionId: null }),
+          ...(row ? { region: row.name, owner: row.owner || "unowned" } : { region: null }),
         })),
       };
     }
@@ -1135,7 +1459,7 @@ export const executeLookup = (context, name, args = {}) => {
       for (const row of context.ownerRows.get(first) ?? []) {
         for (const neighbour of context.neighboursOf(row)) {
           if (neighbour.owner !== second) continue;
-          pairs.push({ [first]: { id: row.id, name: row.name }, [second]: { id: neighbour.id, name: neighbour.name } });
+          pairs.push({ [first]: row.name, [second]: neighbour.name });
         }
       }
       return {
@@ -1144,8 +1468,8 @@ export const executeLookup = (context, name, args = {}) => {
       };
     }
     case "map_around": {
-      const centre = context.byId.get(clean(a.regionId));
-      if (!centre) return { error: `No region with id "${clean(a.regionId)}". Use find_region or list_regions to get ids.` };
+      const { row: centre, error: unknownCentre } = regionOfRef(context, a.region ?? a.regionId ?? a.name);
+      if (!centre) return { error: unknownCentre };
       const steps = clampInt(a.steps, 1, 3, 1);
       const distance = new Map([[centre.id, 0]]);
       let frontier = [centre];
@@ -1164,7 +1488,12 @@ export const executeLookup = (context, name, args = {}) => {
       for (const [id, depth] of distance) {
         const row = context.byId.get(id);
         const owner = row.owner || "unowned";
-        (byOwner[owner] ??= []).push({ id: row.id, name: row.name, steps: depth, ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}) });
+        const group = clean(context.world?.groupAreas?.[row.id]);
+        (byOwner[owner] ??= []).push({
+          name: row.name, steps: depth,
+          ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}),
+          ...(group && context.world?.groups?.[group] ? { controlledByGroup: group } : {}),
+        });
       }
       for (const list of Object.values(byOwner)) list.sort((x, y) => x.steps - y.steps || x.name.localeCompare(y.name));
       return { centre: regionBrief(centre), steps, regions: distance.size, byOwner };
@@ -1200,8 +1529,38 @@ export const executeLookup = (context, name, args = {}) => {
         authority: "read-only canonical governance evidence; membership is not consent and this lookup cannot cast votes or decide outcomes",
       };
     }
+    case "list_groups": {
+      const { groups, rowsOf } = groupsOnMap(context);
+      const country = clean(a.country) ? context.resolveOwner(a.country) || clean(a.country) : "";
+      let budget = LIST_GROUPS_REGION_BUDGET;
+      const listed = [];
+      for (const groupName of Object.keys(groups)) {
+        const rows = rowsOf(groupName);
+        if (country && !rows.some((row) => (row.owner || "unowned") === country)) continue;
+        const limit = Math.min(LIST_GROUP_REGIONS, budget);
+        budget -= Math.min(rows.length, limit);
+        listed.push(groupInFull(groupName, groups[groupName], rows, limit));
+      }
+      if (!listed.length) {
+        return { groups: [], note: country ? `No group controls any region of ${country}.` : "There are no groups on the map." };
+      }
+      return {
+        groups: listed,
+        ...(listed.some((group) => group.moreRegions)
+          ? { note: "Some region lists were cut short (moreRegions). group_info lists one group's regions at greater length." }
+          : {}),
+      };
+    }
+    case "group_info": {
+      const { groups, rowsOf } = groupsOnMap(context);
+      const groupName = findGroupKey(groups, a.name);
+      if (!groupName) {
+        return { error: `No group named "${clean(a.name)}". Names are exact.`, groups: Object.keys(groups) };
+      }
+      return groupInFull(groupName, groups[groupName], rowsOf(groupName), GROUP_INFO_REGIONS);
+    }
     default:
-      return { error: `Unknown lookup "${clean(name)}". Available: ${LOOKUP_TOOL_NAMES.join(", ")}.` };
+      return { error: `Unknown lookup "${clean(name)}". Available: ${[...LOOKUP_TOOL_NAMES, ...GROUP_LOOKUP_TOOL_NAMES].join(", ")}.` };
   }
 };
 

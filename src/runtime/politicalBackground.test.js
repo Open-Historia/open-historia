@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { advancePoliticalBackgroundSimulation } from "./politicalBackground.js";
+import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "./politicalBackground.js";
 import { advancePoliticalBackgroundKernel } from "./politicalBackgroundKernel.js";
 import { normalizePoliticalActors } from "./politicalActors.js";
 
@@ -108,4 +108,110 @@ test("no Political Actors means no generation side effect; the clock simply anch
   assert.equal(result.reason, "no-political-actors");
   assert.deepEqual(result.world.politicalActors.byPolity, {});
   assert.equal(result.world.politicalSimulation.lastProcessedDate, "2067-02-01");
+});
+
+test("a disposition whose inputs have run out is cleared and the rest of the background still commits", async () => {
+  const world = {
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        A: { polityKey: "A", behavioralDisposition: { threatPerception: 70, updatedAt: "2014-03-01" } },
+        B: { polityKey: "B", parties: [{ id: "b1", name: "B Party", support: { percent: 40 } }] },
+      },
+    }),
+    politicalSimulation: {},
+    countryStats: { B: { stability: 60, economy: { inflation: 14, unemployment: 5, gdpGrowth: 1 } } },
+    relations: [],
+    wars: [],
+  };
+  const result = await advancePoliticalBackgroundSimulation({
+    world,
+    fromDate: "2014-03-22",
+    toDate: "2014-04-22",
+    round: 2,
+    backgroundAdvance,
+  });
+  assert.equal(result.skipped, false, result.reason);
+  assert.equal(result.world.politicalActors.byPolity.A.behavioralDisposition, undefined);
+  assert.ok(result.world.politicalActors.byPolity.B.politicalPressures.issues.cost_of_living);
+  assert.equal(result.world.politicalSimulation.lastProcessedDate, "2014-04-22");
+  assert.equal(result.dispositionErrors, undefined);
+});
+
+test("one failed disposition op is reported without discarding pressures, responses or the clock", async () => {
+  const world = makeWorld();
+  const result = await advancePoliticalBackgroundSimulation({
+    world,
+    fromDate: "2014-03-22",
+    toDate: "2014-04-22",
+    round: 2,
+    backgroundAdvance: async (payload) => {
+      const computed = advancePoliticalBackgroundKernel(payload);
+      return {
+        ...computed,
+        dispositionOperations: [
+          { op: "set-behavioral-disposition", polityKey: "Nowhere", state: { threatPerception: 50 } },
+          ...computed.dispositionOperations,
+        ],
+      };
+    },
+  });
+  assert.equal(result.skipped, false);
+  assert.equal(result.dispositionErrors.length, 1);
+  assert.match(result.dispositionErrors[0], /Nowhere/);
+  assert.ok(result.world.politicalActors.byPolity.A.politicalPressures.issues.cost_of_living);
+  assert.ok(result.world.politicalActors.byPolity.A.behavioralDisposition);
+  assert.equal(result.world.politicalSimulation.lastProcessedDate, "2014-04-22");
+});
+
+test("the debug log hears about every background skip that is not simply nothing to do", () => {
+  assert.equal(describePoliticalBackgroundResult({ skipped: true, reason: "no-time-advanced" }), null);
+  assert.equal(describePoliticalBackgroundResult({ skipped: true, reason: "no-political-actors" }), null);
+
+  const unavailable = describePoliticalBackgroundResult({ skipped: true, reason: "worker-unavailable", plan: { droppedResponseTicks: 3 } });
+  assert.equal(unavailable.verbose, false);
+  assert.match(unavailable.message, /worker-unavailable/);
+  assert.equal(unavailable.detail.droppedResponseTicks, 3);
+
+  const workerError = describePoliticalBackgroundResult({ skipped: true, reason: "background-worker-error", error: new Error("kernel threw") });
+  assert.deepEqual(workerError.detail.errors, ["kernel threw"]);
+
+  const commit = describePoliticalBackgroundResult({ skipped: true, reason: "response-commit-failed", errors: ["Unknown party: x"] });
+  assert.deepEqual(commit.detail.errors, ["Unknown party: x"]);
+});
+
+test("a committed background run logs verbosely, and outside verbose mode when a disposition op was dropped", () => {
+  assert.equal(describePoliticalBackgroundResult({ skipped: false, plan: {} }), null);
+
+  const moved = describePoliticalBackgroundResult({ skipped: false, pressureChangedPolities: 2, responseChangedEntities: 1, plan: { responseTicks: 1 } });
+  assert.equal(moved.verbose, true);
+  assert.match(moved.message, /2 pressure polity/);
+
+  const dropped = describePoliticalBackgroundResult({ skipped: false, dispositionErrors: ["No Political Actor exists for X."], plan: {} });
+  assert.equal(dropped.verbose, false);
+  assert.deepEqual(dropped.detail.dispositionErrors, ["No Political Actor exists for X."]);
+
+  const capped = describePoliticalBackgroundResult({ skipped: false, plan: { droppedResponseTicks: 12 } });
+  assert.equal(capped.detail.droppedResponseTicks, 12);
+});
+
+test("a committed background run records the ground each actor holds, and the next run feels a loss", async () => {
+  const world = { ...makeWorld(), regionOwnershipOverrides: { r1: "A", r2: "A", r3: "A", r4: "A" } };
+  const first = await advancePoliticalBackgroundSimulation({ world, fromDate: "2014-03-22", toDate: "2014-04-22", round: 2, backgroundAdvance });
+  assert.deepEqual(first.world.politicalSimulation.heldRegions, { A: 4 });
+
+  const shrunk = { ...first.world, regionOwnershipOverrides: { r1: "A", r2: "Elsewhere", r3: "Elsewhere", r4: "Elsewhere" } };
+  let seen;
+  const second = await advancePoliticalBackgroundSimulation({
+    world: shrunk,
+    fromDate: "2014-04-22",
+    toDate: "2014-05-22",
+    round: 3,
+    backgroundAdvance: async (payload) => {
+      seen = payload.signalsByPolity;
+      return advancePoliticalBackgroundKernel(payload);
+    },
+  });
+  assert.ok(seen.A.some((signal) => signal.source.id === "territory:A:lost"));
+  assert.deepEqual(second.world.politicalSimulation.heldRegions, { A: 1 });
+  assert.ok(second.world.politicalActors.byPolity.A.politicalPressures.issues.national_identity);
 });

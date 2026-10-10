@@ -14,7 +14,7 @@ const sectionLabel = {
 };
 
 const card = {
-  background: "linear-gradient(180deg, rgba(255,255,255,0.052), rgba(255,255,255,0.032))",
+  background: "rgba(255,255,255,0.042)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "12px",
 };
@@ -308,7 +308,25 @@ const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => 
   );
 };
 
+// A long list shows its first rows and a toggle for the rest, so a badge
+// counting fourteen never sits over ten rows with no way to the others.
+const moreToggleStyle = {
+  alignSelf: "flex-start",
+  background: "transparent",
+  border: 0,
+  color: "rgba(255,255,255,0.55)",
+  cursor: "pointer",
+  fontSize: "0.6rem",
+  fontWeight: 760,
+  marginTop: "0.1rem",
+  padding: "0.15rem 0",
+};
+
+const INSTITUTIONS_SHOWN = 10;
+const FINDINGS_SHOWN = 4;
+
 const InstitutionPortfolio = ({ rows = [] }) => {
+  const [showAll, setShowAll] = useState(false);
   const items = Array.isArray(rows) ? rows : [];
   if (!items.length) return null;
   const lifecycleLabel = (entry) => {
@@ -329,7 +347,7 @@ const InstitutionPortfolio = ({ rows = [] }) => {
         <Badge>{items.length}</Badge>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.42rem", marginTop: "0.58rem" }}>
-        {items.slice(0, 10).map((entry) => {
+        {(showAll ? items : items.slice(0, INSTITUTIONS_SHOWN)).map((entry) => {
           const institution = entry?.institution || {};
           const pending = (entry?.cases || []).filter((item) => ["pending", "negotiating", "pending-approval"].includes(String(item?.status || "").toLowerCase()));
           const recent = [...(entry?.history || [])].reverse()[0];
@@ -346,14 +364,21 @@ const InstitutionPortfolio = ({ rows = [] }) => {
             </div>
           );
         })}
+        {items.length > INSTITUTIONS_SHOWN && (
+          <button onClick={() => setShowAll((open) => !open)} style={moreToggleStyle} type="button">
+            {showAll ? "Show fewer" : `Show all (${items.length})`}
+          </button>
+        )}
       </div>
     </div>
   );
 };
 
 const IntelligenceAssessment = ({ intelligence }) => {
+  const [showAllFindings, setShowAllFindings] = useState(false);
   if (!intelligence) return null;
-  const findings = Array.isArray(intelligence.findings) ? intelligence.findings.slice(0, 4) : [];
+  const allFindings = Array.isArray(intelligence.findings) ? intelligence.findings : [];
+  const findings = showAllFindings ? allFindings : allFindings.slice(0, FINDINGS_SHOWN);
   return (
     <div style={{ ...card, background: "rgba(255,255,255,0.025)", borderColor: "var(--oh-grey-border)", marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
       <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", justifyContent: "space-between" }}>
@@ -369,6 +394,11 @@ const IntelligenceAssessment = ({ intelligence }) => {
               <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.65rem", lineHeight: 1.43, marginTop: finding.topic ? "0.12rem" : 0 }}>{finding.text}</div>
             </div>
           ))}
+          {allFindings.length > FINDINGS_SHOWN && (
+            <button onClick={() => setShowAllFindings((open) => !open)} style={moreToggleStyle} type="button">
+              {showAllFindings ? "Show fewer" : `Show all findings (${allFindings.length})`}
+            </button>
+          )}
         </div>
       )}
       {(intelligence.source || intelligence.gatheredAt || intelligence.stale) && (

@@ -6,6 +6,15 @@ const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf
 const prompts = fs.readFileSync(new URL("./gameplayPrompts.js", import.meta.url), "utf8");
 const channels = fs.readFileSync(new URL("../../runtime/institutionalChannels.js", import.meta.url), "utf8");
 
+test("world-change validation enforces PWv2 structural political completeness", () => {
+  // Every offending event, from the candidate and the world (and, when the
+  // caller has one, the claim context the candidate was prepared with).
+  assert.match(gameplay, /politicalImpactCompletenessIssues\(candidate,\s*\{\s*world\b[^}]*\}\)/);
+  // A strict attempt is told the exact event; salvage keeps the answer.
+  assert.match(gameplay, /if \(politicalIssues\.length && strict\) return politicalIssues\[0\]\.message;/);
+  assert.match(gameplay, /politicalActorOps before the event can enter the timeline/);
+});
+
 test("world-change validation enforces Political World structural completeness through transient claims", () => {
   assert.match(gameplay, /preparePoliticalClaimContext\(candidate\)/);
   assert.match(

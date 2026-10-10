@@ -9,7 +9,6 @@ import {
   normalizeCanonContext,
   readScenarioCanon,
   scenarioCanonMode,
-  summarizeScenarioCanon,
   updateScenarioCanonContext,
 } from "./scenarioCanon.js";
 
@@ -72,30 +71,6 @@ test("canon context normalization is generic and preserves only enabled unique p
   assert.equal(context.universe.id, "fallout");
   assert.equal(context.universe.type, "fictional");
   assert.deepEqual(enabledReferencePackIds(context), ["wasteland-pack"]);
-});
-
-test("current canon summary reports owning-ledger counts without inventing legacy initialization", () => {
-  const world = materializeScenarioCanon({
-    politicalActors: { byPolity: { Alpha: {}, Beta: {} } },
-    institutions: {
-      schemaVersion: 1,
-      ledgerVersion: 0,
-      byId: {
-        council: { id: "council", name: "Council", foundedDate: "2000-01-01", members: [] },
-      },
-    },
-    agreements: [{ id: "a" }],
-    powerStatus: { byPolity: { Alpha: {} } },
-  }, {
-    canonContext: { universe: { id: "custom", type: "custom" } },
-  });
-
-  const summary = summarizeScenarioCanon(world);
-  assert.equal(summary.mode, "current");
-  assert.equal(summary.politicalActors, 2);
-  assert.equal(summary.institutions, 1);
-  assert.equal(summary.agreements, 1);
-  assert.equal(summary.powerStatus, 1);
 });
 
 test("selected reference packs are inactive when reference authority is none", async () => {

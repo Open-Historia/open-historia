@@ -225,6 +225,8 @@ export const buildSegmentInstruction = ({
 //                       so joining them describes the whole period without asking
 //                       any one call to summarise time it never saw.
 //   diplomaticOutreach  concatenated — every approach made during the round.
+//   ledger records      concatenated — war, relation, agreement, puppet and
+//                       storyline updates alike (see below).
 //   clearActions        the final segment's word, keeping the `!== false` default
 //                       (absent means resolved) the single-call path has always had.
 const asLedgerRecords = (value) => {
@@ -242,7 +244,9 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   // records are bound to that segment's own event ids (gameplay.js
   // validateSegmentLedgers), so they simply concatenate; a record still in its
   // raw line form is split into lines, which the ledger decoders accept too.
-  // Every list here must also be handed on in finishTimelineJump's result.
+  // A family left out here never reaches the apply: every skip, segmented or
+  // not, is built from this merge. Every list here must also be handed on in
+  // finishTimelineJump's result.
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];

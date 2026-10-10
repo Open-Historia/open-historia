@@ -156,7 +156,7 @@ const canonicalClaimPolityKey = (event, polityKey) => {
 // nested semantic schema on every event. Event numbers are bound to the actual
 // event objects BEFORE chronological sorting; the Map therefore remains correct
 // after sorting without persisting claim metadata into timeline events.
-export const preparePoliticalClaimContext = (candidate) => {
+const readPoliticalClaimContext = (candidate) => {
   const byEvent = new Map();
   if (!hasOwn(candidate, "politicalClaims")) {
     return { mode: "legacy", byEvent, legacyEvents: new Set(), error: "", discarded: false };
@@ -230,7 +230,20 @@ export const preparePoliticalClaimContext = (candidate) => {
   return { mode: "structured", byEvent, legacyEvents: new Set(), error: "", discarded: false };
 };
 
+// The context each candidate was last prepared with. A check that is handed
+// only the candidate (politicalImpactCompletenessIssues on salvage) reads the
+// same binding, legacy events included, instead of numbering the events again
+// after they were sorted. Weak: an entry goes with its candidate.
+const PREPARED_CLAIM_CONTEXTS = new WeakMap();
+
+export const preparePoliticalClaimContext = (candidate) => {
+  const context = readPoliticalClaimContext(candidate);
+  if (candidate && typeof candidate === "object") PREPARED_CLAIM_CONTEXTS.set(candidate, context);
+  return context;
+};
+
 export const clearPoliticalClaimBindings = (candidate) => {
+  if (candidate && typeof candidate === "object") PREPARED_CLAIM_CONTEXTS.delete(candidate);
   for (const event of list(candidate?.events)) {
     if (event && typeof event === "object") delete event[POLITICAL_CLAIM_ROWS];
   }
@@ -243,7 +256,24 @@ const declaredPoliticalClaimRows = (claimContext, event) => (
 );
 
 const ELECTION_EVENT_RE = /\b(?:general|parliamentary|presidential|legislative|national|constituent)?\s*elections?\b/i;
-const ELECTION_COMPLETION_CLAIM_RE = /(?:\belections?\b[^.!?;]{0,100}\b(?:is|are|was|were|has been|have been)?\s*(?:held|conducted|concluded|completed|finished|counted)\b|\b(?:holds?|held|conducts?|conducted|convenes?|convened)\b[^.!?;]{0,80}\belections?\b|\belections?\b[^.!?;]{0,90}\b(?:results?|returns?|majority|plurality|seats?|tall(?:y|ies)|count)\b|\b(?:results?|returns?|final tall(?:y|ies)|vote count)\b[^.!?;]{0,90}\b(?:elections?|parliament|presidency|assembly|legislature)\b|\b(?:elected|elects?)\b[^.!?;]{0,70}\b(?:president|prime minister|premier|chancellor|parliament|assembly|legislature)\b)/i;
+// An election counts as held only when the verb or the result is about the
+// election itself, in the same clause: "holds parliamentary elections",
+// "elections held in Poland", "election results", "the election gave the
+// Liberals a majority". A promise to hold one, elections "to be held", a poll,
+// an election law passed by a majority, or police who "hold protesters after
+// an election rally" do not.
+const ELECTION_WORD = "(?:(?:general|parliamentary|presidential|legislative|national|constituent|snap|early|local|regional)\\s+)?elections?";
+const NOT_THE_VOTE = "(?!\\s+(?:law|laws|reform|code|commission|date|campaign|monitors?|observers?|fraud|rules?|bill|rally|rallies|debates?|posters?|manifesto))";
+const NOT_A_PROMISE = "(?<!\\b(?:to|will|would|shall|must|should|may|might|could)\\s)";
+// Up to three words between holding and the election ("holds first free
+// federal elections"), never across a preposition or a clause: police "hold
+// protesters after an election" hold no election.
+const ELECTION_GAP = "(?:\\s+(?!(?:after|before|ahead|during|following|over|at|in|on|near|outside|against|amid|about|for|of|to|with|by|who|which|that|as|and|or)\\b)[\\w'-]+){0,3}?";
+const ELECTION_COMPLETION_RE = new RegExp([
+  `${NOT_A_PROMISE}\\b(?:holds?|held|conducts?|conducted|convenes?|convened)${ELECTION_GAP}\\s+${ELECTION_WORD}\\b${NOT_THE_VOTE}`,
+  `${NOT_A_PROMISE}\\b(?:wins?|won)\\b[^.;!?]{0,50}\\b${ELECTION_WORD}\\b${NOT_THE_VOTE}`,
+  `\\b${ELECTION_WORD}\\b${NOT_THE_VOTE}[^.;!?]{0,60}\\b(?:(?:(?:is|are|was|were)\\s+)?(?<!\\bbe\\s)held|results?|returns?|returned|won\\s+by|produces?|produced|delivers?|delivered|gives?|gave|hands?|handed|elects?|elected|seats?|majority|plurality|victory|landslide)\\b`,
+].join("|"), "i");
 const ELECTION_RESULT_RE = /\b(?:results?|returns?|returned|final tall(?:y|ies)|count(?:ed|ing)?|wins?|won|victory|majority|plurality|seat(?:s)?|governing coalition|coalition government|forms? (?:the )?government|elected (?:president|prime minister|premier|chancellor))\b/i;
 // Political World is polity-level canon. Explicitly subnational/local elections
 // may be important history, but a governor/mayor/provincial result does not by
@@ -252,8 +282,8 @@ const ELECTION_RESULT_RE = /\b(?:results?|returns?|returned|final tall(?:y|ies)|
 const SUBNATIONAL_ELECTION_RE = /\b(?:regional|gubernatorial|governor(?:ship)?|provincial|municipal|local|mayoral|county|district|prefectural|state[- ]level)\b/i;
 const NATIONAL_ELECTION_SCOPE_RE = /\b(?:general elections?|parliamentary elections?|presidential elections?|legislative elections?|federal elections?|constituent assembly elections?|national assembly elections?|elected (?:president|prime minister|premier|chancellor))\b/i;
 const electionNeedsPolityMutation = (text) => (
-  (ELECTION_EVENT_RE.test(text) || /\b(?:elected|elects?)\b/i.test(text))
-  && ELECTION_COMPLETION_CLAIM_RE.test(text)
+  ELECTION_EVENT_RE.test(text)
+  && ELECTION_COMPLETION_RE.test(text)
   && (!SUBNATIONAL_ELECTION_RE.test(text) || NATIONAL_ELECTION_SCOPE_RE.test(text))
 );
 
@@ -263,54 +293,77 @@ const CONSTITUTIONAL_COMPLETION_CLAIM_RE = new RegExp(
   String.raw`(?:\b${CONSTITUTIONAL_TERM}\b[^.!?;]{0,100}\b${CONSTITUTIONAL_COMPLETION}\b|\b${CONSTITUTIONAL_COMPLETION}\b[^.!?;]{0,100}\b${CONSTITUTIONAL_TERM}\b)`,
   "i",
 );
-// Government nouns are not structural changes by themselves. Phrases such as
-// "under the new cabinet mandate" or "the new government reviews..." describe
-// an already-established government and must not demand duplicate mutations. A
-// government completeness requirement begins only when the clause itself says
-// the government/cabinet/administration is being formed, installed or taking office.
-const GOVERNMENT_ENTITY = String.raw`(?:coalition government|governing coalition|government|cabinet|administration)`;
-const GOVERNMENT_ENTITY_NOT_SUBUNIT = String.raw`${GOVERNMENT_ENTITY}\b(?!\s+(?:committee|office|secretariat|meeting|agenda|post|position|minister|member|official|review|working group|task force))`;
-const GOVERNMENT_TRANSITION_AFTER_ENTITY_RE = new RegExp(
-  String.raw`\b${GOVERNMENT_ENTITY_NOT_SUBUNIT}[^.!?;]{0,80}\b(?:(?:is|was|has been|had been)\s+)?(?:formed|established|installed|proclaimed|sworn in|inaugurated|takes? office|took office|assumes? office|assumed office)\b`,
-  "i",
-);
-const GOVERNMENT_TRANSITION_BEFORE_ENTITY_RE = new RegExp(
-  String.raw`\b(?:forms?|formed|forming|establishes?|established|establishing|installs?|installed|installing|swears? in|swore in|swearing in(?: of)?|inaugurates?|inaugurated|inaugurating|inauguration of)\b[^.!?;]{0,80}\b(?:new\s+|interim\s+|provisional\s+|caretaker\s+|transitional\s+|coalition\s+)?${GOVERNMENT_ENTITY_NOT_SUBUNIT}`,
-  "i",
-);
-const governmentTransitionClaim = (text) => (
-  GOVERNMENT_TRANSITION_AFTER_ENTITY_RE.test(text)
-  || GOVERNMENT_TRANSITION_BEFORE_ENTITY_RE.test(text)
-);
-
+// The offices whose holder is a Political Actor's leadership. A former or
+// late holder is a private person: "Former President Carter Dies" changes no
+// government.
+const OFFICE = "(?:president|prime\\s+minister|chancellor|premier|head\\s+of\\s+state|head\\s+of\\s+government|monarch|king|queen|emperor|empress|tsar|czar|kaiser)";
+const SITTING_OFFICE = `(?<!\\bformer\\s)(?<!\\bex-)(?<!\\blate\\s)\\b${OFFICE}\\b`;
+// A word of a name, in any script: "Evika Siliņa" is a name like "Jaan Poska".
+// Where a name may stand, a word ends where its letters do, so "Inès" is not
+// the preposition "in".
+const NAME_WORD = "[\\p{L}\\p{M}\\p{N}_.'-]+";
+const WORD_END = "(?![\\p{L}\\p{M}\\p{N}_])";
+// Up to three words between an office and its verb, for a name ("Prime
+// Minister Jaan Poska resigns"), never across a clause ("who", "after").
+const NAME_GAP = `(?:\\s+(?!(?:who|whom|whose|which|that|after|before|as|and|or|of|with|to|for|in|on|at|over|by)${WORD_END})${NAME_WORD}){0,3}?`;
+// The appointee's name alone: no article, no "new" (a new ambassador is not a
+// name), no sentence break. The title and description are read as one text.
+const APPOINTEE_GAP = `(?:\\s+(?!(?:who|whom|whose|which|that|after|before|as|and|or|of|with|to|for|in|on|at|over|by|the|a|an|new|next)${WORD_END})[\\p{L}\\p{M}\\p{N}_'-]+){1,3}?`;
+// The government itself: not a programme, a body or a post of it ("new
+// government programme", "cabinet committee", "government official"), and not
+// its mandate or its review of something ("under the new cabinet mandate",
+// "the new cabinet reviews..."): those form, install and swear in nothing.
+const NOT_THE_GOVERNMENT_ITSELF = "(?!\\s+(?:program|programme|policy|policies|initiative|plan|scheme|regulations?|rules?|measures?|building|offices?|headquarters|spending|budget|bonds?|report|data|figures|statistics|website|portal|agency|department|ministry|subsid\\w*|contract|funding|grants?|committee|secretariat|meeting|agenda|post|position|minister|member|official(?!ly)|review|mandate|working\\s+group|task\\s+force))";
+const GOVERNMENT_BODY = `(?:government|cabinet|administration)\\b${NOT_THE_GOVERNMENT_ITSELF}`;
+// A government is formed, installed or takes office. Taking office,
+// swearing-in and inauguration need a government or an office holder: a rail
+// link or an ambassador can be inaugurated or sworn in too.
+const GOVERNMENT_RE = new RegExp([
+  `\\bnew\\s+(?:government|cabinet)\\b${NOT_THE_GOVERNMENT_ITSELF}`,
+  "\\b(?:provisional\\s+|interim\\s+|transitional\\s+|national\\s+|coalition\\s+)?(?:government|cabinet|administration)\\s+(?:is\\s+|was\\s+)?(?:formed|established|installed|proclaimed|sworn\\s+in)\\b",
+  `\\b(?:forms?|formed|establishes?|established|installs?|installed)\\s+(?:a\\s+|the\\s+|its\\s+)?(?:(?:new|first|permanent|constitutional|elected|coalition|majority|minority|provisional|interim|transitional)\\s+)*${GOVERNMENT_BODY}`,
+  `(?:${SITTING_OFFICE}|\\b${GOVERNMENT_BODY})${NAME_GAP}\\s+(?:takes?|took|assumes?|assumed)\\s+office\\b`,
+  `(?:${SITTING_OFFICE}|\\b${GOVERNMENT_BODY})${NAME_GAP}\\s+(?:(?:is|was)\\s+)?(?:sworn\\s+in|inaugurated)\\b`,
+  `\\b(?:sworn\\s+in|inaugurated)\\s+as\\s+(?:the\\s+)?(?:new\\s+)?${OFFICE}\\b`,
+].join("|"), "iu");
 const COALITION_RE = /\b(?:coalition|governing alliance|cabinet agreement)\b/i;
+// A military coalition is not a government: "coalition forces enter Baghdad".
+const MILITARY_COALITION_RE = /\b(?:coalition\s+(?:forces|troops|aircraft|air\s*strikes?|airstrikes?|warplanes|jets|navies|naval|ships|soldiers|operations?|military|partners\s+in\s+the\s+war)|(?:military|international|multinational|allied|western|arab|global|anti-[\w-]+|[\w-]+-led)\s+coalition)\b/gi;
+// A coalition changes when the verb is about the coalition itself.
+const COALITION_CHANGE_RE = /\bcoalition\b[^.;!?]{0,60}\b(?:is\s+formed|formed|forms|collapses?|collapsed|breaks?\s+up|broke\s+up|falls?\s+apart|fell\s+apart|splits?)\b|\b(?:forms?|formed|joins?|joined|enters?|entered|leaves?|left|quits?|exits?|exited|withdraws?\s+from|withdrew\s+from|abandons?|abandoned)\s+(?:a\s+|the\s+|its\s+)?(?:[\w-]+\s+){0,3}?coalition\b/i;
 const COALITION_FORMATION_RE = /(?:\b(?:forms?|formed|establishes?|established)\s+(?:a |the )?(?:new )?(?:governing )?coalition\b|\b(?:coalition|governing alliance)\s+(?:is\s+)?(?:formed|established)\b|\b(?:successfully\s+)?concludes?\s+coalition negotiations?\b|\bcoalition negotiations?\s+(?:successfully\s+)?conclude(?:s|d)?\b|\breaches?\s+(?:a\s+)?coalition agreement\b|\bcoalition agreement\s+(?:is\s+)?(?:reached|concluded|signed)\b|\bcoalition government\s+(?:is\s+)?(?:formed|established)\b)/i;
-// Membership/terminal changes must be stated as changes TO the governing
-// coalition itself. A distant verb elsewhere in an event must not combine with
-// a reference such as "coalition naval escorts" to fabricate a cabinet change.
-const COALITION_MEMBERSHIP_CHANGE_RE = /(?:\b(?:joins?|joined|leaves?|left|withdraws?|withdrew)\s+(?:from\s+|the\s+)?(?:governing\s+)?coalition\b|\b(?:governing\s+)?coalition\b[^.!?;]{0,80}\b(?:collapses?|collapsed|dissolves?|dissolved|breaks? up|broke up|falls? apart|fell apart)\b)/i;
 const NONPARTY_GOVERNMENT_RE = /\b(?:provisional|interim|transitional|caretaker|technocratic|non[- ]partisan|partyless|military junta|royal cabinet|royal government|independent cabinet|emergency administration)\b/i;
 const PARTY_CREATION_RE = /(?:\b(?:founds?|founded|forms?|formed|creates?|created|launches?|launched|establishes?|established|organizes?|organized|reorganizes?|reorganized|reconstitutes?|reconstituted)\s+(?:a |the )?(?:new )?(?:political )?(?:party|movement|bloc)\b|\b(?:party|movement|bloc)\s+(?:is\s+)?(?:founded|formed|created|launched|established|reorganized|reconstituted)\b|\b(?:party )?(?:split|merger|merge|merged|breakaway|secession from|renames?|renamed)\b)/i;
-
-const LEADERSHIP_TRANSITION_AFTER_OFFICE_RE = /\b(?:president|prime minister|chancellor|premier|head of state|head of government|monarch|king|queen|emperor|empress)\b[^.!?;]{0,100}\b(?:is\s+|was\s+|has been\s+|had been\s+)?(?:elected|appointed|named|sworn in|takes? office|took office|assumes? office|assumed office|resigns?|resigned|steps? down|stepped down|succeeds?|succeeded|replaces?|replaced|ousts?|ousted|deposed|abdicates?|abdicated|announces?(?: (?:his|her|their))? resignation|submits?(?: (?:his|her|their))? resignation)\b/i;
-// Fatal leadership transitions need tighter grammar than ordinary appointment
-// verbs. Otherwise "the president condemned the mayor who was assassinated"
-// turns the presidency into a phantom vacancy merely because both words occur
-// in the same sentence.
-const LEADERSHIP_FATAL_TRANSITION_AFTER_OFFICE_RE = /\b(?:president|prime minister|chancellor|premier|head of state|head of government|monarch|king|queen|emperor|empress)\b[^.!?;]{0,45}\b(?:dies?|died|passes? away|(?:is|was|has been|had been)\s+(?:assassinated|killed|murdered))\b/i;
-const LEADERSHIP_TRANSITION_BEFORE_OFFICE_RE = /\b(?:elected|appointed|named|sworn in|takes? office|took office|assumes? office|assumed office|resigns?|resigned|steps? down|stepped down|succeeds?|succeeded|replaces?|replaced|ousts?|ousted|deposed|abdicates?|abdicated|announces?(?: (?:his|her|their))? resignation|submits?(?: (?:his|her|their))? resignation|assassination of|murder of|death of)\b[^.!?;]{0,100}\b(?:as\s+|the\s+|of\s+)?(?:president|prime minister|chancellor|premier|head of state|head of government|monarch|king|queen|emperor|empress)\b/i;
-const leadershipTransitionClaim = (text) => (
-  LEADERSHIP_TRANSITION_AFTER_OFFICE_RE.test(text)
-  || LEADERSHIP_FATAL_TRANSITION_AFTER_OFFICE_RE.test(text)
-  || LEADERSHIP_TRANSITION_BEFORE_OFFICE_RE.test(text)
-);
-
-
-// A regime noun is not a regime transition. In particular, "junta positions"
-// and "under the junta" describe an existing actor. Require direct transfer
-// semantics in the same clause before canonical regime/government mutation is
-// mandatory.
-const REGIME_TRANSFER_RE = /(?:\b(?:regime change|overthrows?|overthrown|topples?|toppled|seizes? power|seized power|takes? power|took power|assumes? power|assumed power|restores? (?:the )?monarchy|restored monarchy|abolishes? (?:the )?monarchy|dissolves? parliament)\b|\bcoup\b[^.!?;]{0,100}\b(?:succeeds?|successful|overthrows?|topples?|seizes? power|takes? power|installs?|establishes?)\b|\b(?:revolution|uprising)\b[^.!?;]{0,120}\b(?:overthrows?|topples?|seizes? power|takes? power|installs?|establishes? (?:a |the )?(?:new )?(?:government|regime))\b|\bjunta\b[^.!?;]{0,100}\b(?:seizes? power|takes? power|assumes? power|is installed|forms? (?:a |the )?government)\b|\b(?:installs?|installed|establishes?|established)\b[^.!?;]{0,80}\b(?:military )?junta\b)/i;
+// The office itself changes hands, in one phrase: the holder resigns, dies or
+// is ousted; someone is elected, named or sworn in AS the office; a new holder.
+// "President Names New Ambassador" names no president.
+const LEADERSHIP_CHANGE_RE = new RegExp([
+  `${SITTING_OFFICE}${NAME_GAP}\\s+(?:resigns?|resigned|steps?\\s+down|stepped\\s+down|dies|died|abdicates?|abdicated|(?:is|was|has\\s+been)\\s+(?:ousted|deposed|removed|replaced|succeeded|assassinated|killed|overthrown)|takes?\\s+office|took\\s+office|assumes?\\s+office|(?:(?:is|was)\\s+)?sworn\\s+in)\\b`,
+  `\\b(?:elects?|elected|appoints?|appointed|names?|named|installs?|installed|confirms?|confirmed|becomes?|became|proclaimed|crowned|sworn\\s+in)\\s+(?:(?:a|the|its|their|as)\\s+)*(?:new\\s+|next\\s+|interim\\s+|acting\\s+)?${OFFICE}\\b`,
+  // "Sejm elects Andrzej Duda as president", "names Smith prime minister":
+  // a name between the verb and the office, but not a candidacy.
+  `\\b(?:elects?|elected|appoints?|appointed|names?|named|installs?|installed)${APPOINTEE_GAP}\\s+(?:as\\s+)?(?:the\\s+)?(?:new\\s+|next\\s+|interim\\s+|acting\\s+)?${OFFICE}\\b(?!\\s+(?:candidate|nominee|hopeful|contender|race|campaign))`,
+  `\\b(?:replaces?|replaced|succeeds?|succeeded)\\s+[\\p{L}\\p{M}\\p{N}_\\s.'-]{1,40}?\\s+as\\s+(?:the\\s+)?${OFFICE}\\b`,
+  `\\bnew\\s+${OFFICE}\\b`,
+  `${SITTING_OFFICE}\\s+(?:(?:is|was|has\\s+been)\\s+)?(?:elected|ousted|deposed|overthrown)\\b`,
+  `${SITTING_OFFICE}\\s+(?:is|was|has\\s+been)\\s+(?:named|appointed|installed)\\b`,
+].join("|"), "iu");
+// A regime changes: a coup, an overthrow, power seized, a monarchy restored
+// or abolished. A "digital revolution" or the "restoration" of a cathedral is
+// not one, and neither is a coup that failed.
+const REGIME_CHANGE_RE = new RegExp([
+  "\\bcoup(?:\\s+d['’]\\s*[ée]tat)?\\b(?!\\s+(?:attempts?|plots?|plotters|rumou?rs?|fears?|threats?|allegations?))",
+  "\\bregime\\s+change\\b",
+  "\\boverthrows?\\b|\\boverthrew\\b|\\boverthrown\\b",
+  "\\bseiz(?:es?|ed|ing)\\s+power\\b",
+  "\\brevolution(?:aries|ary\\s+forces)?\\s+(?:topples?|toppled|overthrows?|overthrew|ousts?|ousted|seizes?|seized|triumphs?|triumphed)\\b",
+  "\\b(?:topples?|toppled|ousts?|ousted)\\s+(?:the\\s+)?(?:government|regime|monarchy|dictatorship|junta)\\b",
+  "\\brestor(?:es|ed|ation\\s+of)\\s+(?:the\\s+)?monarchy\\b|\\brestored\\s+monarchy\\b|\\bmonarchy\\s+(?:is\\s+|was\\s+)?restored\\b",
+  "\\babolish(?:es|ed)?\\s+(?:the\\s+)?monarchy\\b",
+  "\\bdissolves?\\s+parliament\\b",
+  "\\bjunta\\s+(?:takes|took|seizes|seized|assumes|assumed)\\s+(?:power|control)\\b",
+].join("|"), "i");
+const FAILED_COUP_RE = /\b(?:fail(?:s|ed)?|foil(?:s|ed)?|thwart(?:s|ed)?|suppress(?:es|ed)?|crush(?:es|ed)?|defeat(?:s|ed)?|botched|abortive|attempted|alleged)\s+(?:(?:a|an|the)\s+)?(?:military\s+)?coup\b|\bcoup\b[^.;!?]{0,40}\b(?:fails?|failed|is\s+foiled|was\s+foiled|is\s+thwarted|was\s+thwarted|collapses?|collapsed)\b/gi;
 
 const POLITY_RENAME_CLAIM_RE = /(?:\b(?:formally|officially|legally|constitutionally)?\s*(?:adopts?|adopted|assumes?|assumed)\s+(?:the\s+)?(?:new\s+)?name\b|\b(?:renames?|renamed)\s+(?:itself|the country|the nation|the state)\b|\b(?:changes?|changed)\s+(?:its|the country'?s|the nation'?s|the state'?s)\s+name\b|\b(?:is|was)\s+renamed\s+(?:as|to)\b)/i;
 const POLITY_RENAME_CONTEXT_RE = /\b(?:country|nation|state|states|republic|kingdom|empire|federation|federal government|central government|constitutional identity|national identity|sovereign identity)\b/i;
@@ -647,7 +700,7 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
     }
   }
 
-  if (governmentTransitionClaim(text)) {
+  if (GOVERNMENT_RE.test(text)) {
     const expected = ["set-government", "form-coalition", "leave-coalition", "replace-leader"];
     if (!anyOp(ops, expected)) {
       return {
@@ -704,7 +757,8 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
   // If the prose says coalition formation actually completed, require a canonical
   // governing-membership write. A plain set-government patch may describe form or
   // ideology, but it must not satisfy a claim that coalition negotiations concluded.
-  if (COALITION_RE.test(text) && COALITION_FORMATION_RE.test(text) && !eventEstablishesGoverningForce(event)) {
+  const coalitionText = text.replace(MILITARY_COALITION_RE, " ");
+  if (COALITION_RE.test(coalitionText) && COALITION_FORMATION_RE.test(coalitionText) && !eventEstablishesGoverningForce(event)) {
     return {
       kind: "coalition-formation",
       expected: ["form-coalition"],
@@ -712,7 +766,7 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
     };
   }
 
-  if (COALITION_RE.test(text) && COALITION_MEMBERSHIP_CHANGE_RE.test(text)) {
+  if (COALITION_RE.test(coalitionText) && COALITION_CHANGE_RE.test(coalitionText)) {
     const expected = ["form-coalition", "leave-coalition", "set-government"];
     if (!anyOp(ops, expected)) {
       return {
@@ -723,7 +777,7 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
     }
   }
 
-  if (leadershipTransitionClaim(text)) {
+  if (LEADERSHIP_CHANGE_RE.test(text)) {
     const expected = ["replace-leader", "set-government", "set-party-leader"];
     if (!anyOp(ops, expected)) {
       return {
@@ -734,7 +788,7 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
     }
   }
 
-  if (REGIME_TRANSFER_RE.test(text)) {
+  if (REGIME_CHANGE_RE.test(text.replace(FAILED_COUP_RE, " "))) {
     const expected = ["set-political-system", "set-government", "replace-leader"];
     if (!anyOp(ops, expected)) {
       return {
@@ -747,7 +801,6 @@ export const politicalImpactCompletenessIssue = (event, { world = null, structur
 
   return null;
 };
-
 
 export const polityImpactCompletenessIssue = (event) => {
   if (!event || typeof event !== "object" || !eventClaimsPolityRename(event)) return null;
@@ -956,6 +1009,9 @@ const repairUnambiguousHeadOfGovernmentDeparture = (event, world) => {
 
 const worldAfterPoliticalOps = (world, event) => {
   if (!world) return null;
+  // Nothing to apply: a scratch world is never written in place, so it is its
+  // own successor and the whole-world copy is saved for the events that need it.
+  if (!politicalOps(event).length) return world;
   const next = cloneWorld(world);
   for (const entry of politicalOps(event)) {
     const outcome = applyPoliticalActorOperation(next, {
@@ -971,18 +1027,26 @@ const worldAfterPoliticalOps = (world, event) => {
   return next;
 };
 
-export const politicalImpactCompletenessFailure = (candidate, { world = null, claimContext = null } = {}) => {
-  const claims = claimContext || preparePoliticalClaimContext(candidate);
+// One walk over a candidate's events, in order, behind every entry point
+// below: the claim ledger read once, the native vacancy repair before each
+// check, and the scratch world carried forward from event to event. A caller
+// that bound the candidate's claims itself hands that context in. Without one,
+// the context the candidate was last prepared with is used (its event numbers
+// stop meaning anything once the events are sorted), and only a candidate
+// never prepared is read here.
+const politicalImpactCompletenessFailures = (candidate, { world = null, claimContext = null } = {}, { firstOnly = false } = {}) => {
+  const claims = claimContext || PREPARED_CLAIM_CONTEXTS.get(candidate) || preparePoliticalClaimContext(candidate);
   if (claims?.error) {
-    return {
+    return [{
       event: null,
       eventIndex: -1,
       claimRows: [],
       issue: { kind: "claim-ledger", expected: [], message: claims.error },
-    };
+    }];
   }
   const structuredClaims = claims?.mode === "structured";
 
+  const failures = [];
   let validationWorld = cloneWorld(world);
   const events = list(candidate?.events);
   for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
@@ -1004,11 +1068,29 @@ export const politicalImpactCompletenessFailure = (candidate, { world = null, cl
       structuredClaims: eventUsesStructuredClaims,
       claimRows,
     });
-    if (issue) return { event, eventIndex, claimRows, issue };
+    if (issue) {
+      failures.push({ event, eventIndex, claimRows, issue });
+      if (firstOnly) break;
+    }
+    // An offending event is kept as written on salvage, so the operations it
+    // does carry still reach the world the later events are checked against.
     validationWorld = worldAfterPoliticalOps(validationWorld, event);
   }
-  return null;
+  return failures;
 };
+
+// The first offending event, with the claim rows it was checked against: what
+// a strict attempt is told and what the bounded claim repair works from.
+export const politicalImpactCompletenessFailure = (candidate, options = {}) => (
+  politicalImpactCompletenessFailures(candidate, options, { firstOnly: true })[0] || null
+);
+
+// Every event's issue, with its index: a strict attempt is told the first,
+// and salvage keeps every offending event and notes each one in the receipt.
+export const politicalImpactCompletenessIssues = (candidate, options = {}) => (
+  politicalImpactCompletenessFailures(candidate, options)
+    .map(({ event, eventIndex, issue }) => ({ ...issue, index: eventIndex, id: clean(event?.id), title: clean(event?.title) }))
+);
 
 export const validatePoliticalImpactCompleteness = (candidate, options = {}) => (
   politicalImpactCompletenessFailure(candidate, options)?.issue?.message || ""

@@ -266,6 +266,123 @@ test("the June 20 -> July 20 fallback payload no longer dies merely because the 
   ]);
 });
 
+// The jump never writes event.agency, so the screen builds it for every event.
+// A player's own domestic event whose title opens with the country used to get
+// the country itself as its non-sovereign principal, which the agency check
+// then refused: the screen dropped the event it had just classified.
+const poland = {
+  polityOverrides: {
+    Poland: { code: "Poland", name: "Poland", status: "active" },
+    Germany: { code: "Germany", name: "Germany", status: "active" },
+  },
+  institutions: { byId: {} },
+  wars: [],
+  storylines: [],
+  projects: [],
+};
+const polandGame = { country: "Poland", gameDate: "2014-06-20" };
+const screenQuietly = (args) => {
+  const { info, warn } = console;
+  console.info = () => {};
+  console.warn = () => {};
+  try {
+    return screenGeneratedWorldEvents({ world: poland, game: polandGame, ...args });
+  } finally {
+    console.info = info;
+    console.warn = warn;
+  }
+};
+
+test("the player's police action keeps its place when the title opens with the country", () => {
+  const screened = screenQuietly({
+    events: [event(
+      "Poland Arrests Smuggling Ring",
+      "Polish police dismantle a cigarette smuggling ring operating near the eastern border.",
+      { playerRelated: true },
+    )],
+  });
+  assert.deepEqual(screened.dropped, []);
+  assert.equal(screened.events.length, 1);
+  assert.equal(screened.events[0].agency.authority, "delegated-routine");
+  assert.equal(screened.events[0].agency.principal, "Poland police");
+  assert.equal(screened.events[0].agency.jurisdictionPolity, "Poland");
+});
+
+test("protests in the player's country keep their place when the title opens with the country", () => {
+  const screened = screenQuietly({
+    events: [event(
+      "Poland Holds Mass Protests Over Court Reform",
+      "Tens of thousands of protesters march in Warsaw against the court reform.",
+      { playerRelated: true },
+    )],
+  });
+  assert.deepEqual(screened.dropped, []);
+  assert.equal(screened.events[0].agency.authority, "endogenous-domestic");
+  assert.equal(screened.events[0].agency.principal, "Poland protests");
+});
+
+test("an event that cites the order it answers stays, bound to that order", () => {
+  const actions = [{ id: "act-1", status: "planned", text: "Crack down on organised crime in the big cities" }];
+  const screened = screenQuietly({
+    actions,
+    events: [event(
+      "Poland Launches Anti-Mafia Operation",
+      "Polish police raid gang hideouts in Warsaw and Krakow, arresting dozens.",
+      { playerRelated: true, impacts: { actionIds: ["act-1"] } },
+    )],
+  });
+  assert.deepEqual(screened.dropped, []);
+  assert.equal(screened.events[0].agency.authority, "player-order");
+  assert.equal(screened.events[0].agency.authorityRef, "act-1");
+  assert.deepEqual(screened.events[0].impacts.actionIds, ["act-1"]);
+});
+
+test("citing an order does not authorize a sovereign act the order never asked for", () => {
+  const actions = [{ id: "act-1", status: "planned", text: "Crack down on organised crime in the big cities" }];
+  const candidate = {
+    events: [event(
+      "Poland Declares War on Germany",
+      "Poland declares war on Germany.",
+      { playerRelated: true, impacts: { actionIds: ["act-1"] } },
+    )],
+  };
+  const binding = bindWorldEventAuthorityRefs(candidate, { world: poland, gameCountry: "Poland", actions, chats: [] });
+  assert.equal(binding.unresolved[0]?.reason, "player-fresh-sovereign-choice-without-authority");
+});
+
+// The jump never writes event.actors: a treaty's signatories come from the
+// agreement record it starts, bound here by event number as in a whole payload.
+test("an agreement start bound by event number names every signatory, and nothing else does", () => {
+  const treaty = () => event(
+    "Ukraine Signs Border Treaty",
+    "Kyiv signs a treaty fixing the border in Minsk.",
+    { kind: "diplomacy" },
+  );
+  const record = (op) => ({ id: "border-treaty", op, type: "other", parties: ["Ukraine", "Russian Federation"], eventIndexes: [0], title: "Border Treaty" });
+  const signatories = (agreementUpdates, extra = {}) => {
+    const candidate = { events: [{ ...treaty(), ...extra }], agreementUpdates };
+    bindWorldEventAuthorityRefs(candidate, opts);
+    assert.equal(candidate.events[0].actors, extra.actors, "derived actors are never stored on the event");
+    return candidate.events[0].agency.sovereignActors.map((row) => row.polity);
+  };
+
+  assert.deepEqual(signatories([]), ["Ukraine"]);
+  assert.deepEqual(signatories([record("start")]), ["Ukraine", "Russian Federation"]);
+  assert.deepEqual(signatories([record("update")]), ["Ukraine"], "only a start names who chose the commitment");
+  assert.deepEqual(signatories([record("start")], { actors: ["Ukraine"] }), ["Ukraine"], "the model's own actors win");
+});
+
+test("a player domestic event with a proper subject keeps that subject as its principal", () => {
+  const screened = screenQuietly({
+    events: [event(
+      "Warsaw Police Launch Anti-Mafia Raids",
+      "Police in Poland raid gang hideouts in Warsaw and Krakow.",
+      { playerRelated: true },
+    )],
+  });
+  assert.equal(screened.events[0].agency.principal, "Warsaw Police");
+});
+
 // Seen in a player's Game (2026-09-30): the advisor queued three orders for one
 // operation and the time skip answered all three with one event. Each order on
 // its own covered too little of the event to match, so it was read as a

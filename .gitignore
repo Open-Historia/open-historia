@@ -14,6 +14,12 @@ dist-web
 # mobile/scripts/stage-map-assets.mjs downloads for it.
 dist-android
 mobile/map-cache
+# The web build's map files (the website and the Android app), fetched and
+# verified by scripts/stage-map-assets.mjs.
+/map-cache
+/public/assets/default-regions.geojson
+# Which map files scripts/fetch-map-assets.mjs has hashed and passed (per install).
+.map-assets-verified.json
 # Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and
 # big enough that a stray `git add -A` commits a whole copy of the website.
 dist-site
@@ -54,7 +60,8 @@ CLAUDE.md
 *.sln
 *.sw?
 
-# Content-node runtime store (hash-named blobs, populated by scripts/populate-node.mjs)
+# Content-node store left in old checkouts by the removed in-repo node stub
+# (hash-named blobs; the node itself is Open-Historia/open-historia-node)
 /node-content/
 
 # Offline root signing PRIVATE key — never commit

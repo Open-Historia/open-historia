@@ -53,7 +53,10 @@ export const answerableDemandOf = (chat) => [...(Array.isArray(chat?.demands) ? 
 // is done", "Control your personnel" — each classified as a fresh demand for the
 // obligation just accepted. One obligation, one card.
 const AGREED = new Set(["accepted", "settled"]);
-const shorn = (value) => norm(value).replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+// A summary's words, in whatever script it is written: cut to a-z and 0-9, a
+// summary in Russian or Chinese had none, and the same obligation worded again
+// in the player's language opened a card every time.
+const shorn = (value) => norm(str(value).normalize("NFKC")).replace(/[^\p{L}\p{M}\p{N} ]+/gu, " ").replace(/\s+/g, " ").trim();
 const restatesAgreed = (summary, demands) => {
   const text = shorn(summary);
   if (!text) return false;

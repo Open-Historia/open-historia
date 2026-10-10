@@ -10,14 +10,19 @@
 //   - accepting makes the map say what the change says, and Undo puts back
 //     what was there — regions, countries, cities, units, features, puppets;
 //   - a change that names a country or group the suggestion adds needs that
-//     addition first.
+//     addition first;
+//   - a list is accepted in that order, ownership rows after every rename, and
+//     a save counts what the map already has as accepted.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { applyMapChange, changeDependencies, changeTargets, mapChangeStatus } from "./suggestionReview.js";
-import { measureGeometry } from "../runtime/scenarioChanges.js";
+import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
+import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
+import { withoutPolities } from "./scenarioPuppets.js";
 
 const square = (x, y, size = 1) => ({ type: "Polygon", coordinates: [[[x, y], [x + size, y], [x + size, y + size], [x, y + size], [x, y]]] });
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -88,7 +93,7 @@ const fakeDocument = (doc) => {
     removePolity: (key) => set((current) => {
       const polities = { ...current.polities };
       delete polities[key];
-      return { polities };
+      return { polities, puppets: withoutPolities(current.puppets, key) };
     }),
     renamePolity: (from, to) => { state.doc = renamePolityInDocument(state.doc, from, to); },
     setColorOverride: keyed("colorOverrides"),
@@ -200,6 +205,114 @@ test("a rename re-keys the country on the map and in the document, and Undo rena
   assert.ok(state.doc.polities.Beta);
 });
 
+test("undoing a rename puts back the country's own colour, flag, tags and record", () => {
+  const { api, state, d, ctx } = setup();
+  d.upsertPolity("Beta", { note: "The old kingdom." });
+  d.setColorOverride("Beta", [9, 9, 9]);
+  d.setFlag("Beta", "data:image/png;base64,OLD");
+  d.setTags("Beta", ["monarchy"]);
+  const before = clone({ polity: state.doc.polities.Beta, color: state.doc.colorOverrides.Beta, flag: state.doc.flags.Beta, tags: state.doc.tags.Beta });
+  const rename = {
+    id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic",
+    record: { name: "Beta Republic", note: "The new republic." }, color: [1, 2, 3], flag: "data:image/png;base64,NEW", tags: ["republic"],
+  };
+  const undo = applyMapChange(rename, ctx);
+  assert.equal(state.doc.polities["Beta Republic"].note, "The new republic.");
+  assert.deepEqual(state.doc.colorOverrides["Beta Republic"], [1, 2, 3]);
+  undo();
+  assert.equal(api.getRegionSummary("r3").owner, "Beta");
+  assert.deepEqual(
+    { polity: state.doc.polities.Beta, color: state.doc.colorOverrides.Beta, flag: state.doc.flags.Beta, tags: state.doc.tags.Beta },
+    before,
+    "the suggestion's values do not stay on the old country",
+  );
+  assert.equal(state.doc.polities["Beta Republic"], undefined);
+  assert.equal(state.doc.colorOverrides["Beta Republic"], undefined);
+  assert.equal(state.doc.flags["Beta Republic"], undefined);
+  assert.equal(state.doc.tags["Beta Republic"], undefined);
+  assert.equal(mapChangeStatus(rename, ctx), "open", "the row is open again, not quietly changed");
+});
+
+test("undoing a country's removal brings its puppet rows back and keeps a puppet accepted since", () => {
+  const { state, d, ctx } = setup();
+  d.setPuppets(() => [
+    { id: "p-beta", overlord: "Alpha", puppet: "Beta", kind: "satellite", secrecy: "open", loyalty: 40, status: "active" },
+  ]);
+  const remove = { id: "polity-remove:Beta", area: "map", kind: "polity-remove", key: "Beta", record: { name: "Beta" } };
+  const undoRemove = applyMapChange(remove, ctx);
+  assert.equal(state.doc.polities.Beta, undefined);
+  assert.deepEqual(state.doc.puppets, [], "the removal takes the rows naming the country");
+  d.upsertPolity("Gamma", { name: "Gamma" });
+  const puppet = { id: "puppet-add:p-gamma", area: "map", kind: "puppet-add", key: "p-gamma", to: { id: "p-gamma", overlord: "Alpha", puppet: "Gamma", kind: "satellite", secrecy: "open", loyalty: 60, status: "active" } };
+  applyMapChange(puppet, ctx);
+  undoRemove();
+  assert.ok(state.doc.polities.Beta);
+  assert.deepEqual(state.doc.puppets.map((row) => row.id).sort(), ["p-beta", "p-gamma"]);
+  assert.equal(mapChangeStatus(puppet, ctx), "applied", "the later puppet change is still on the map");
+});
+
+test("a new set of cities is a conflict when the author's cities changed since, and applied once taken", () => {
+  const { state, d, ctx } = setup();
+  const suggested = [
+    { name: "Newtown", coord: [0.2, 0.2], population: 20000, capital: true },
+    { name: "Farport", coord: [10.5, 10.5], population: 3000, capital: false },
+  ];
+  const replace = { id: "cities-replace", area: "map", kind: "cities-replace", from: 1, to: suggested };
+  assert.equal(mapChangeStatus(replace, ctx), "open", "the author still has the post's one city");
+  d.setFeatures((list) => [...list, { id: "feat2", name: "Added", type: "Coordinate", coord: [5, 5], population: 10, tags: ["city"] }]);
+  assert.equal(mapChangeStatus(replace, ctx), "conflict", "a city added since would be thrown away");
+  const undo = applyMapChange(replace, ctx);
+  assert.equal(mapChangeStatus(replace, ctx), "applied");
+  undo();
+  assert.equal(state.doc.features.length, 2);
+
+  // Back to the built-in cities: the map stops carrying a set of its own.
+  const builtIn = { id: "cities-replace", area: "map", kind: "cities-replace", from: 2, to: null };
+  assert.equal(mapChangeStatus(builtIn, ctx), "open");
+  const undoBuiltIn = applyMapChange(builtIn, ctx);
+  assert.equal(state.doc.metadata.citiesAuthored, false);
+  assert.equal(mapChangeStatus(builtIn, ctx), "applied");
+  undoBuiltIn();
+  assert.equal(state.doc.features.length, 2);
+  assert.equal(state.doc.metadata.citiesAuthored, undefined);
+
+  // The post had the built-in cities: any the author has now are their own.
+  assert.equal(mapChangeStatus({ ...replace, from: null }, ctx), "conflict");
+});
+
+test("a new custom basemap is open, applied or a conflict by what the map has now", () => {
+  const { d, ctx } = setup();
+  const setBackground = (saved) => d.patchMetadata({ customBackground: saved });
+  ctx.setBackground = setBackground;
+  const hashOf = (data) => hashText(canonicalJson(data));
+  const ours = { kind: "image", dataUrl: "data:image/png;base64,T1VSUw==" };
+  const theirs = { dataUrl: "data:image/png;base64,VEhFSVJT" };
+  setBackground(ours);
+  const change = {
+    id: "map:background", area: "map", kind: "background",
+    from: { kind: "image", hash: hashOf({ dataUrl: ours.dataUrl }) },
+    to: { kind: "image", hash: hashOf(theirs), data: theirs },
+  };
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const undo = applyMapChange(change, ctx);
+  assert.equal(mapChangeStatus(change, ctx), "applied");
+  undo();
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  setBackground({ kind: "image", dataUrl: "data:image/png;base64,T1RIRVI=" });
+  assert.equal(mapChangeStatus(change, ctx), "conflict", "the author put another basemap on since");
+  setBackground(null);
+  assert.equal(mapChangeStatus({ ...change, to: null }, ctx), "applied", "no basemap is what the suggestion asks for");
+
+  // A basemap is fingerprinted once, not again on every document edit.
+  let reads = 0;
+  setBackground({ kind: "image", get dataUrl() { reads += 1; return ours.dataUrl; } });
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const afterFirst = reads;
+  d.upsertPolity("Alpha", { note: "An unrelated edit." });
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  assert.equal(reads, afterFirst, "the payload is not read again");
+});
+
 test("cities, units, map features, puppets and groups: applied and taken back", () => {
   const { api, state, ctx } = setup();
   const cityChange = { id: "city-change:x", area: "map", kind: "city-change", name: "Alphaville", from: { name: "Alphaville", coord: [0.5, 0.5], population: 1000, capital: false }, to: { name: "Alphaville", coord: [0.5, 0.5], population: 5000, capital: true } };
@@ -235,4 +348,190 @@ test("cities, units, map features, puppets and groups: applied and taken back", 
   applyMapChange(area, ctx);
   assert.equal(api.getRegionSummary("r1").group, "Raiders");
   assert.equal(mapChangeStatus(area, ctx), "applied");
+});
+
+test("accepting a list: what it needs first, countries before regions, rows batched after the renames", () => {
+  const { api, state, ctx } = setup();
+  const addGamma = { id: "polity-add:Gamma", area: "map", kind: "polity-add", key: "Gamma", record: { name: "Gamma" }, color: null, flag: null, tags: null };
+  const rename = { id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic", record: { name: "Beta Republic" }, color: null, flag: null, tags: null };
+  const toGamma = { id: "region-owner:r3", area: "map", kind: "region-owner", regionId: "r3", from: "Beta", to: "Gamma" };
+  // Written against the old name, accepted in the same list as the rename.
+  const toBeta = { id: "region-owner:r1", area: "map", kind: "region-owner", regionId: "r1", from: "Alpha", to: "Beta" };
+  const toBeta2 = { id: "region-owner:r2", area: "map", kind: "region-owner", regionId: "r2", from: "Alpha", to: "Beta" };
+  const puppet = { id: "puppet-add:p1", area: "map", kind: "puppet-add", key: "p1", to: { id: "p1", overlord: "Gamma", puppet: "Alpha", kind: "satellite", secrecy: "open", loyalty: 50, status: "active" } };
+  const changes = [toBeta, toGamma, puppet, toBeta2, rename, addGamma];
+
+  // A change pulls in what it needs, however it is reached, once.
+  assert.deepEqual(planAccept([puppet, toGamma], ctx, { changes }).map((change) => change.id), ["polity-add:Gamma", "puppet-add:p1", "region-owner:r3"]);
+  assert.deepEqual(planAccept([toGamma], ctx, { changes, accepted: new Set(["polity-add:Gamma"]) }).map((change) => change.id), ["region-owner:r3"]);
+
+  const calls = [];
+  const setRegionAttrs = api.setRegionAttrs;
+  api.setRegionAttrs = (ids, patch) => { calls.push([...ids]); setRegionAttrs(ids, patch); };
+  const result = acceptMapChanges([toBeta, toBeta2, toGamma, rename], ctx, { changes });
+  assert.deepEqual(result.accepted.slice(0, 2), ["polity-rename:Beta", "polity-add:Gamma"], "the rename and the country the rows need go first");
+  assert.deepEqual(new Set(result.accepted), new Set(["polity-rename:Beta", "polity-add:Gamma", "region-owner:r1", "region-owner:r2", "region-owner:r3"]));
+  assert.deepEqual(result.renames, { Beta: "Beta Republic" });
+  assert.equal(api.getRegionSummary("r1").owner, "Beta Republic", "a row written against the old name lands on the new one");
+  assert.equal(api.getRegionSummary("r2").owner, "Beta Republic");
+  assert.equal(api.getRegionSummary("r3").owner, "Gamma");
+  assert.ok(state.doc.polities.Gamma);
+  assert.deepEqual(calls, [["r1", "r2"], ["r3"]], "one map step per country the rows go to");
+  assert.ok(result.accepted.every((id) => result.undoers.has(id)), "everything accepted here can be undone here");
+  const gone = { id: "city-remove:nowhere", area: "map", kind: "city-remove", name: "Nowhere", from: { name: "Nowhere", coord: [50, 50] } };
+  const nothing = acceptMapChanges([gone], ctx, { changes: [gone] });
+  assert.equal(typeof nothing.undoers.get(gone.id), "function", "even a change with nothing to take back");
+
+  // Each row's undo puts back its own owner from before.
+  result.undoers.get("region-owner:r1")();
+  assert.equal(api.getRegionSummary("r1").owner, "Alpha");
+  assert.equal(api.getRegionSummary("r2").owner, "Beta Republic");
+
+  // A rename accepted earlier in the review still applies to a later list.
+  const later = acceptMapChanges([toBeta], ctx, { changes, accepted: new Set(result.accepted.filter((id) => id !== "region-owner:r1")), renames: result.renames });
+  assert.deepEqual(later.accepted, ["region-owner:r1"]);
+  assert.equal(api.getRegionSummary("r1").owner, "Beta Republic");
+});
+
+test("a region cache measures each shape once and finds the same regions as the map's own lookups", () => {
+  const { api, ctx } = setup();
+  api.setRegionAttrs(["r2"], { group: "Raiders" });
+  let exports = 0;
+  const exportRegions = api.exportRegions;
+  api.exportRegions = (ids) => { exports += 1; return exportRegions(ids); };
+  const borders = {
+    id: "borders:r1", area: "map", kind: "borders",
+    regions: [{ id: "r1", op: "reshape", feature: { type: "Feature", geometry: square(0, 0, 2), properties: { id: "r1" } }, fromShape: measureGeometry(square(0, 0)) }],
+  };
+  const cache = createRegionCache();
+  assert.equal(mapChangeStatus(borders, ctx, { cache }), "open");
+  assert.equal(mapChangeStatus(borders, ctx, { cache }), "open");
+  assert.equal(exports, 1, "a document edit does not measure the regions again");
+  const changes = [
+    { id: "polity-change:Alpha", area: "map", kind: "polity-change", key: "Alpha", fields: {} },
+    { id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic" },
+    { id: "group-change:Raiders", area: "map", kind: "group-change", key: "Raiders", from: {}, to: {} },
+    { id: "puppet-add:p1", area: "map", kind: "puppet-add", key: "p1", to: { overlord: "Beta", puppet: "Alpha" } },
+  ];
+  for (const change of changes) {
+    const plain = changeTargets(change, ctx, { changes });
+    const cached = changeTargets(change, ctx, { changes, cache });
+    assert.deepEqual([...cached.regionIds].sort(), [...plain.regionIds].sort(), change.id);
+  }
+  assert.deepEqual([...changeTargets(changes[0], ctx, { changes, cache }).regionIds].sort(), ["r1", "r2"]);
+  const remove = { id: "polity-remove:Beta", area: "map", kind: "polity-remove", key: "Beta" };
+  assert.equal(mapChangeStatus(remove, ctx, { cache }), mapChangeStatus(remove, ctx));
+});
+
+test("a save records what the map already has as accepted and what it lost as rejected", () => {
+  const changes = ["a", "b", "c", "d", "e"].map((id) => ({ id }));
+  const decisions = { accepted: new Set(["c"]), rejected: new Set(["e"]) };
+  const statuses = { a: "applied", b: "missing", c: "applied", d: "conflict", e: "applied" };
+  assert.deepEqual(decisionsFor(changes, decisions, statuses), { accepted: ["c", "a"], rejected: ["e", "b"] }, "the author's own decision stands over the map's");
+  assert.deepEqual(changes.map((change) => decisionOf(change, decisions, statuses)), ["accepted", "rejected", "accepted", null, "rejected"]);
+});
+
+// ---- a suggestion that changes the projection ----------------------------------
+
+// A map with places far enough from the equator for a projection to move them,
+// and MapEditor's convertForReview over the fakes: every region, city, feature
+// and unit moved by the one rule, the picture laid on the bounds it is given.
+const projectionSetup = () => {
+  const { api, state, d } = setup();
+  d.setFeatures((list) => [...list, { id: "feat2", name: "Northport", type: "Coordinate", coord: [20, 60], population: 5000, tags: ["city"] }]);
+  d.setUnits((list) => [...list, { id: "u2", name: "Northern Army", type: "infantry", ownerCode: "Alpha", lng: 20, lat: 60, strength: 100 }]);
+  d.patchMetadata({ customBackground: { kind: "image", dataUrl: "data:image/png;base64,AAAA" } });
+  api.applyRegionPatch({ upsert: [{ type: "Feature", geometry: square(20, 59, 2), properties: { id: "r9", name: "North", owner: "Alpha" } }] });
+  const calls = [];
+  const convertProjection = (from, to, bounds) => {
+    calls.push({ from: normalizeProjection(from).type, to: normalizeProjection(to).type, bounds });
+    const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
+    for (const feature of api.regions.values()) feature.geometry = moveGeojson(feature.geometry, move);
+    d.setFeatures((list) => moveFeatureCoords(list, from, to));
+    d.setUnits((list) => moveUnits(list, from, to));
+    d.patchMetadata({ projection: normalizeProjection(to), customBackground: { ...state.doc.metadata.customBackground, bounds } });
+  };
+  const ctx = { api, d, convertProjection, get doc() { return state.doc; } };
+  return { api, state, d, ctx, calls };
+};
+const FLAT = { type: "equirectangular", globe: false };
+const flatPlace = (lon, lat) => convertDisplayPoint("mercator", FLAT, lon, lat);
+
+test("a change of projection is the Workshop's own conversion, and Undo converts back", () => {
+  const { api, state, ctx, calls } = projectionSetup();
+  const change = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const undo = applyMapChange(change, ctx);
+  assert.deepEqual(calls, [{ from: "mercator", to: "equirectangular", bounds: sheetBounds(FLAT) }]);
+  assert.deepEqual(state.doc.metadata.projection, FLAT);
+  assert.deepEqual(state.doc.units[1].lat, flatPlace(20, 60)[1]);
+  assert.ok(Math.abs(state.doc.units[1].lat - 60) > 5, "the unit moved with the map");
+  assert.equal(mapChangeStatus(change, ctx), "applied");
+  // The two switches count: the same projection with the globe allowed is not what was suggested.
+  assert.equal(mapChangeStatus({ ...change, to: { type: "equirectangular" } }, ctx), "conflict");
+  undo();
+  assert.equal(calls[1].to, "mercator");
+  assert.equal(calls[1].bounds, null, "the picture goes back where it lay");
+  assert.deepEqual(state.doc.metadata.projection, { type: "mercator" });
+  assert.ok(Math.abs(state.doc.units[1].lat - 60) < 1e-4);
+  assert.ok(Math.abs(api.exportRegions(["r9"]).features[0].geometry.coordinates[0][0][1] - 59) < 1e-4);
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  // Without the Workshop's conversion there is nothing to accept it with.
+  assert.equal(applyMapChange(change, { ...ctx, convertProjection: undefined, doc: state.doc }), null);
+});
+
+test("the rest of such a suggestion is read where the new projection puts the map, and accepted after the map is moved", () => {
+  const { api, state, ctx, calls } = projectionSetup();
+  const [lng, lat] = flatPlace(20, 60);
+  const projection = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  // Written for the map in its new projection, as scenarioChanges.js writes them.
+  const unitNow = { id: "u2", name: "Northern Army", type: "infantry", ownerCode: "Alpha", lng, lat, strength: 100 };
+  const unit = { id: "unit-change:u2", area: "map", kind: "unit-change", key: "u2", label: "Northern Army", from: unitNow, to: { ...unitNow, name: "Arctic Army" } };
+  const cityNow = { name: "Northport", coord: [lng, lat], population: 5000, capital: false };
+  const city = { id: "city-change:northport", area: "map", kind: "city-change", name: "Northport", from: cityNow, to: { ...cityNow, population: 9000 } };
+  const movedSquare = moveGeojson(square(20, 59, 2), (x, y) => flatPlace(x, y));
+  const grown = moveGeojson(square(20, 59, 3), (x, y) => flatPlace(x, y));
+  const borders = {
+    id: "borders:r9", area: "map", kind: "borders",
+    regions: [{ id: "r9", name: "North", op: "change", feature: { type: "Feature", geometry: grown, properties: { id: "r9", name: "North", owner: "Alpha" } }, fromShape: measureGeometry(movedSquare), toShape: measureGeometry(grown) }],
+  };
+  const changes = [projection, unit, city, borders];
+
+  // Against the map as it is, still in the old projection, they would read as
+  // the author's own edits; through the suggested projection they are open.
+  assert.equal(mapChangeStatus(unit, ctx), "conflict");
+  const placed = inSuggestedProjection(ctx, changes);
+  const cache = createRegionCache();
+  assert.equal(mapChangeStatus(unit, placed), "open");
+  assert.equal(mapChangeStatus(city, placed), "open");
+  assert.equal(mapChangeStatus(borders, placed, { cache }), "open");
+  assert.deepEqual(state.doc.metadata.projection, undefined, "reading it that way moves nothing");
+  assert.equal(state.doc.units[1].lat, 60);
+
+  // Each needs the map moved first, and a list is accepted in that order.
+  assert.deepEqual(changeDependencies(unit, changes, ctx), ["map:projection"]);
+  assert.deepEqual(changeDependencies(borders, changes, ctx), ["map:projection"]);
+  assert.deepEqual(planAccept([city, unit], ctx, { changes }).map((change) => change.id), ["map:projection", "city-change:northport", "unit-change:u2"]);
+  const result = acceptMapChanges([borders, city, unit], ctx, { changes });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result.accepted, ["map:projection", "borders:r9", "city-change:northport", "unit-change:u2"]);
+  assert.deepEqual(state.doc.metadata.projection, FLAT);
+  // The city and the unit were found where the conversion had put them: edited, not added again.
+  assert.equal(state.doc.units.length, 2);
+  assert.deepEqual(state.doc.units[1], { ...state.doc.units[1], name: "Arctic Army", lng, lat });
+  assert.equal(state.doc.features.filter((feature) => feature.name === "Northport").length, 1);
+  assert.equal(state.doc.features.find((feature) => feature.name === "Northport").population, 9000);
+  assert.deepEqual(measureGeometry(api.exportRegions(["r9"]).features[0].geometry).bbox, measureGeometry(grown).bbox);
+  for (const change of changes) assert.equal(mapChangeStatus(change, inSuggestedProjection(ctx, changes), { cache: createRegionCache() }), "applied", change.id);
+  // Once the map is there, nothing waits on the projection any more.
+  assert.deepEqual(changeDependencies(unit, changes, ctx), []);
+});
+
+test("a suggested basemap is laid on the bounds the suggestion gives", () => {
+  const { state, ctx } = setup();
+  let shown = null;
+  const data = { dataUrl: "data:image/png;base64,BBBB" };
+  const change = { id: "map:background", area: "map", kind: "background", from: null, to: { kind: "image", hash: hashText(canonicalJson(data)), data, bounds: sheetBounds("equirectangular") } };
+  applyMapChange(change, { ...ctx, doc: state.doc, setBackground: (saved) => { shown = saved; } });
+  assert.deepEqual(shown, { kind: "image", dataUrl: data.dataUrl, bounds: sheetBounds("equirectangular") });
 });

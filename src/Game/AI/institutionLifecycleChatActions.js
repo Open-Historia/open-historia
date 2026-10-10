@@ -1,5 +1,6 @@
 /*! Open Historia Continuum — explicit AI responses to live institution lifecycle cases. */
 
+import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -7,14 +8,7 @@ const lower = (value) => clean(value).toLocaleLowerCase().replace(/[\s_]+/g, "-"
 const list = (value) => Array.isArray(value) ? value : [];
 
 export const INSTITUTION_LIFECYCLE_CHAT_ACTION = "institution_lifecycle_response";
-export const INSTITUTION_LIFECYCLE_RESPONSE_DECISIONS = Object.freeze([
-  "accept",
-  "reject",
-  "seek-observer",
-  "request-terms",
-  "delay",
-]);
-const DECISIONS = new Set(INSTITUTION_LIFECYCLE_RESPONSE_DECISIONS);
+const DECISIONS = new Set(INSTITUTION_LIFECYCLE_DECISIONS);
 
 export const normalizeInstitutionLifecycleChatAction = (entry = {}) => {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;

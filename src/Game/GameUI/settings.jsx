@@ -37,7 +37,10 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
+import { useWorldBackground } from "../Map/useWorldState.js";
+import { endpointIsLocal } from "../AI/localEndpoint.js";
+import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import {
     AI_REQUEST_CONTROL_EVENT,
     cancelAllAiRequests,
@@ -45,7 +48,7 @@ import {
 } from "../AI/aiRequestControl.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
-import { playerFocusOf } from "../../../server/gameFeatures.js";
+import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -69,10 +72,9 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 import ScenarioDetailedMapSetting from "../Map/ScenarioDetailedMapSetting.jsx";
-import { useWorldBackground } from "../Map/useWorldState.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
 // maps without opening the editor. Loaded on first use: it brings the editor's
 // file readers with it.
@@ -87,6 +89,7 @@ import {
     fetchDesktopLog,
     formatLogSize,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogLimitBytes,
     getDebugLogSize,
     getLoggingFileEntries,
@@ -94,6 +97,7 @@ import {
     isDebugLogVerbose,
     logDebugEvent,
     logSettingChange,
+    logSettingMessage,
     setDebugLogEnabled,
     setDebugLogVerbose,
     subscribeToDebugLog,
@@ -103,7 +107,7 @@ import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtim
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { allowedBuiltinBasemaps, isAllowedBasemapOverride, isBuiltinBasemapId } from "../../runtime/assets.js";
-import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
+import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
     appUpdateCheckDescription,
@@ -329,35 +333,97 @@ const ChatLanguageSelector = () => {
     );
 };
 
+// The Basemap pick, which replaces a scenario's built-in basemap on this
+// device. A scenario with a map of its own (a picture, a drawn map, the plain
+// sea of a flat sheet) keeps it (World.jsx), so there the pick is switched off
+// and says why. On a real-Earth scenario only the built-in maps its author
+// allows are offered (world.allowedBasemaps, chosen in the Map Editor). What
+// was picked stays stored for the scenarios it applies to. The main menu's
+// Settings are for every game, so there every built-in map is offered.
+const BasemapField = ({ value, forGame, onChange }) => {
+    const { background, allowedBasemaps: allowedKey } = useWorldBackground();
+    const ownMap = forGame && Boolean(background?.kind);
+    const allowed = !forGame || allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
+    const choices = ownMap ? [] : allowedBuiltinBasemaps(allowed);
+    const shown = !ownMap && isAllowedBasemapOverride(value, allowed) ? value : "";
+    const off = choices.length === 0;
+    return (
+        <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
+            <select id="game-basemap-style" value={shown} disabled={off} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1 }}>
+                <option value="" style={{ color: "black" }}>Scenario default</option>
+                {choices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+            </select>
+            <div style={helperStyle}>
+                {ownMap
+                    ? "This scenario uses its own basemap, which cannot be replaced."
+                    : off
+                        ? "This scenario uses its own basemap only."
+                        : forGame
+                            ? "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."
+                            : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own basemap."}
+            </div>
+        </div>
+    );
+};
+
+// The 3D Globe switch, which a scenario can take away: its map may be a flat
+// sheet that is not to be wrapped round a globe (world.projection.globe).
+const GlobeToggle = ({ enabled, onToggle }) => {
+    const { noGlobe } = useWorldBackground();
+    return (
+        <Toggle
+        label="3D Globe"
+        enabled={enabled && !noGlobe}
+        disabled={noGlobe}
+        inactive={noGlobe ? "The 3D globe is disabled for this scenario's map." : ""}
+        onToggle={onToggle}
+        />
+    );
+};
+
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
-const Toggle = ({ label, enabled, onToggle }) => {
+// disabled: the switch shows its state but is held there by something else
+// (the system's reduced-motion setting), so it does not respond.
+// `inactive`: the switch keeps its stored choice and can still be flipped, but
+// something else stops it working for now, which the line under the label says.
+const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) => {
     const touch = useTouchPrimary();
     return (
     <div
     className="oh-tap-row"
-    onClick={touch ? onToggle : undefined}
+    onClick={touch && !disabled ? onToggle : undefined}
     style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: "1rem",
-        ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
+        ...(touch ? { cursor: disabled ? "default" : "pointer", gap: "0.75rem" } : null),
     }}
     >
-    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    {inactive
+        ? (
+            <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.9rem" }}>{label}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)", display: "block", fontSize: "0.72rem", marginTop: "0.1rem" }}>{inactive}</span>
+            </span>
+        )
+        : <span style={{ fontSize: "0.9rem" }}>{label}</span>}
     <button
-    onClick={touch ? undefined : onToggle}
+    onClick={touch || disabled ? undefined : onToggle}
+    disabled={disabled}
     style={{
         width: "3.5rem",
         height: "1.75rem",
         borderRadius: "1rem",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.55 : 1,
         position: "relative",
         transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#55555b",
+        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "#55555b",
         ...(touch ? { flexShrink: 0 } : null),
     }}
     >
@@ -516,6 +582,44 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
+// What each model has said about its context window (contextWindow.js), read
+// from the same storage the AI calls keep it in (main.jsx contextWindows).
+const contextWindowMemory = createContextWindowMemory({
+    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
+    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
+});
+
+// A model's context window: what was learned from its refusals, which keeps a
+// request it cannot fit from being sent to it, and the player's own figure,
+// which beats that. Forget clears either — for a local model whose window was
+// raised, or a provider that raised its limit — and the next request is sent.
+const ContextWindowField = ({ entry }) => {
+    const [, setRevision] = useState(0);
+    if (!entry) return null;
+    const key = contextWindowKey(entry);
+    // Nothing learned from a server on this machine or network is in force
+    // (main.jsx windowIsLearned), so only the player's own figure is shown for it.
+    const known = contextWindowMemory.remembered(key, { trustLearned: !endpointIsLocal(entry.endpoint) });
+    const changed = () => setRevision((value) => value + 1);
+    return (
+        <div>
+        <SettingsInput
+        label="Context window (tokens)"
+        type="number"
+        value={known?.source === "declared" ? String(known.limitTokens) : ""}
+        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
+        placeholder="Not set"
+        helperText={describeRememberedWindow(known)}
+        />
+        {known && (
+            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
+            Forget this window
+            </button>
+        )}
+        </div>
+    );
+};
+
 // How to ask this provider for structured data. "Auto" tries the strongest
 // method and steps down when a gateway ignores it, which is right for almost
 // everyone — but that discovery costs a full generation per rung, and on a slow
@@ -531,7 +635,6 @@ const StructuredModeSelect = ({ onChange, value }) => {
         <div style={fieldGroupStyle}>
         <label style={labelStyle}>How the AI answers</label>
         <select
-        data-no-translate
         value={mode}
         onChange={(event) => onChange(event.target.value)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -704,12 +807,17 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
             label="API endpoint"
             value={connection.endpoint}
             onChange={set("endpoint")}
-            placeholder={connection.provider === "openai-compatible" ? "http://localhost:11434/v1" : "https://my-proxy.example/v1"}
+            // On a phone localhost is the phone itself, so the example is a LAN address.
+            placeholder={connection.provider === "openai-compatible" ? (import.meta.env.VITE_OH_NATIVE ? "http://192.168.1.20:11434/v1" : "http://localhost:11434/v1") : "https://my-proxy.example/v1"}
             // A server on the player's own machine works from the website too, but only
             // if it allows this origin — otherwise the browser silently drops the reply.
             // Say so up front here rather than letting it surface as "Failed to fetch".
+            // The Android app has no such limit (native HTTP, runtime/native/http.js),
+            // but reaches the server over the network and without streaming.
             helperText={connection.provider === "openai-compatible"
-                ? (import.meta.env.VITE_OH_WEB
+                ? (import.meta.env.VITE_OH_NATIVE
+                    ? "Base URL that exposes /chat/completions and /models. A server on your network (Ollama, LM Studio) works directly. Use the computer's network address, such as http://192.168.1.20:11434/v1, not localhost, which on a phone means the phone itself. The server has to listen on that address: start Ollama with OLLAMA_HOST=0.0.0.0. Its replies arrive whole rather than word by word."
+                    : import.meta.env.VITE_OH_WEB
                     ? "Base URL that exposes /chat/completions and /models. A server on your own machine (Ollama, LM Studio) also has to allow this site: start Ollama with OLLAMA_ORIGINS set to this site's address, or use the desktop app."
                     : "Base URL that exposes /chat/completions and /models.")
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
@@ -790,6 +898,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
+        <ContextWindowField entry={entry.resolved} />
         </details>
         </div>
     );
@@ -1062,15 +1171,11 @@ const ReasoningSection = () => {
 // The request budget (AI/requestBudget.js): what today has cost, and the
 // switches that decide what a time skip and an idle minute may spend. Its own
 // storage and its own change event, so it sits outside mapSettings.
-const REVIEW_SECTION_LABELS = {
-    units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
-    territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
-    structures: ["Put new structures on the map", "Bases, shipyards, data centres and ground stations appear where the events built them."],
-    timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
-    board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
-    spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],
-};
-
+//
+// No switch for each check after a skip any more (units, occupied land,
+// structures, repeats, the Projects board, the agents' reports): they are part
+// of the skip's own request now, and always on (gameplay.js, "The folded time
+// skip").
 const useRequestDay = () => {
     const [day, setDay] = useState(() => requestDay());
     useEffect(() => {
@@ -1086,15 +1191,36 @@ const useRequestDay = () => {
     return day;
 };
 
+// Whether requests are being saved, following the switch in AI requests.
+const useSavingRequests = () => {
+    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    useEffect(() => {
+        const refresh = () => setSaving(requestSettings.saveRequests());
+        window.addEventListener("ai:request-budget", refresh);
+        return () => window.removeEventListener("ai:request-budget", refresh);
+    }, []);
+    return saving;
+};
+
+// Task keys the request count holds that are not per-task models
+// (AI_TASK_ROUTING): the translator's requests, and a call that named no task.
+const OTHER_REQUEST_TASKS = [
+    { key: "translation", label: "Translation" },
+    { key: "other", label: "Other" },
+    { key: "direct", label: "Other" },
+];
+const REQUEST_TASK_LABELS = Object.fromEntries([...AI_TASK_ROUTING, ...OTHER_REQUEST_TASKS].map(({ key, label }) => [key, label]));
+
 const RequestBudgetSection = () => {
     const day = useRequestDay();
+    const touch = useTouchPrimary();
+    const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
     const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
     const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
-    const [sections, setSections] = useState(() => Object.fromEntries(REVIEW_SECTIONS.map((section) => [section, requestSettings.reviewSection(section)])));
 
     useEffect(() => {
         const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
@@ -1118,7 +1244,8 @@ const RequestBudgetSection = () => {
             ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
             : "Player pressed Cancel all AI requests, but none were active.");
     };
-    const cost = describeJumpCost({ saveRequests: saving });
+    // The most a skip is when function calling may add to it (Save AI requests off).
+    const lookupCap = describeJumpCost({ lookups: true }).max;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1143,8 +1270,23 @@ const RequestBudgetSection = () => {
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
                     {day.background > 0 ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
+                    {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
                 </div>
+                {tasks.length > 0 && (
+                    <details style={{ marginTop: "0.4rem" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", ...(touch ? TOUCH_SUMMARY : null) }}>Used today, by task</summary>
+                        <div style={{ display: "grid", gap: "0.15rem", marginTop: "0.3rem" }}>
+                            {tasks.map((row) => (
+                                <div key={row.label} style={{ color: "rgba(255,255,255,0.72)", display: "flex", fontSize: "0.72rem", gap: "0.5rem", justifyContent: "space-between" }}>
+                                    {/* A task this table does not name is shown as it was counted. */}
+                                    <span data-no-translate={row.named ? undefined : true} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                                    <span data-no-translate>{row.count}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
             </div>
 
             <div style={{ border: "1px solid rgba(248,113,113,0.18)", borderRadius: "10px", background: "rgba(239,68,68,0.055)", marginBottom: "0.95rem", padding: "0.7rem 0.75rem" }}>
@@ -1182,10 +1324,12 @@ const RequestBudgetSection = () => {
                 apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
             }}
             />
+            {/* One sentence group per state, each a single string, so a language
+                pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
                 {saving
-                    ? <>On (default): a time skip is one request, two when there is something to check afterwards, and never more than <span data-no-translate>{cost.max}</span>. The model is handed the names it needs instead of looking them up, a small mistake in its answer is cut out rather than asked for again, and the checks below go out together.</>
-                    : <>Off: the most thorough turns, for a key with no daily limit. Every check after a skip makes its own request, the model may look things up (up to three extra requests per task), and a flawed answer is sent back to be redone. A busy skip can use twenty requests or more.</>}
+                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
+                    : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
             </div>
 
             <div style={fieldGroupStyle}>
@@ -1214,13 +1358,14 @@ const RequestBudgetSection = () => {
                 apply(`Background AI turned ${next ? "on" : "off"}.`, () => requestSettings.setBackgroundAi(next));
             }}
             />
-            <div style={settingsHelper}>
+            {/* The section ends on whichever of these two is last. */}
+            <div style={{ ...settingsHelper, ...(background ? null : { marginBottom: 0 }) }}>
                 {background
                     ? <>On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.</>
                     : <>Off: the game only calls the model when you do something.</>}
             </div>
             {background && (
-                <div style={fieldGroupStyle}>
+                <div style={{ ...fieldGroupStyle, marginBottom: 0 }}>
                     <label style={labelStyle} htmlFor="ai-background-daily-cap">Background requests a day, at most</label>
                     <input
                     id="ai-background-daily-cap"
@@ -1237,27 +1382,6 @@ const RequestBudgetSection = () => {
                     <div style={helperStyle}>It also stops by itself once less than a tenth of your day is left.</div>
                 </div>
             )}
-
-            <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", fontWeight: 800, margin: "0.4rem 0 0.2rem" }}>Checks after a time skip</div>
-            <div style={{ ...helperStyle, marginBottom: "0.7rem" }}>
-                {saving
-                    ? "All of these share ONE request, and only when the skip gave them something to look at. Turning one off never saves a request unless it was the only one with work to do; it does make that request smaller."
-                    : "With Save AI requests off, each of these is its own request after every skip and these switches are not used."}
-            </div>
-            {REVIEW_SECTIONS.map((section, index) => (
-                <React.Fragment key={section}>
-                    <Toggle
-                    label={REVIEW_SECTION_LABELS[section][0]}
-                    enabled={sections[section]}
-                    onToggle={() => {
-                        const next = !sections[section];
-                        setSections((current) => ({ ...current, [section]: next }));
-                        apply(`After-skip check "${REVIEW_SECTION_LABELS[section][0]}" turned ${next ? "on" : "off"}.`, () => requestSettings.setReviewSection(section, next));
-                    }}
-                    />
-                    <div style={{ ...settingsHelper, ...(index === REVIEW_SECTIONS.length - 1 ? { marginBottom: 0 } : {}) }}>{REVIEW_SECTION_LABELS[section][1]}</div>
-                </React.Fragment>
-            ))}
         </SettingsSection>
     );
 };
@@ -1321,7 +1445,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
         cursor: "pointer",
         fontSize: "1.5rem",
         fontWeight: 800,
-        background: "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
+        background: "rgba(35,35,39,0.53)",
         opacity: hidden ? 0 : 1,
         pointerEvents: hidden ? "none" : "auto",
         transition: "opacity 180ms ease 40ms",
@@ -1371,26 +1495,39 @@ const NetworkSharing = () => {
         );
     }
 
-    const toggle = async () => {
-        if (busy || state.lockedByEnv) return;
+    // One switch's change: the server answers with the whole network state.
+    const change = async (body, label, key) => {
+        if (busy) return;
         setBusy(true);
         setError("");
-        const next = !state.lanEnabled;
         try {
             const response = await fetch("/api/server/network", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ lanEnabled: next }),
+                body: JSON.stringify(body),
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data?.error || "Could not change this.");
             setState(data);
-            logSettingChange("Let other devices connect", Boolean(data?.lanEnabled));
+            logSettingChange(label, Boolean(data?.[key]));
         } catch (nextError) {
             setError(nextError.message);
         } finally {
             setBusy(false);
         }
+    };
+
+    const toggle = () => {
+        if (state.lockedByEnv) return;
+        change({ lanEnabled: !state.lanEnabled }, "Let other devices connect", "lanEnabled");
+    };
+
+    // A browser on another device reaches a model on this computer (LM Studio,
+    // Ollama) through the relay when the model refuses browser calls from other
+    // sites. The relay answers only this machine unless the player says so here.
+    const toggleRelay = () => {
+        if (state.relayLockedByEnv) return;
+        change({ relayForLan: !state.relayForLan }, "Let other devices send AI calls through this server", "relayForLan");
     };
 
     return (
@@ -1411,6 +1548,23 @@ const NetworkSharing = () => {
             <div style={helperTextStyle}>
             On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
             </div>
+        )}
+
+        {state.lanEnabled && (
+            <>
+            <div style={state.relayLockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+            <Toggle
+            label="Let other devices send AI calls through this server"
+            enabled={Boolean(state.relayForLan)}
+            onToggle={toggleRelay}
+            />
+            </div>
+            <div style={helperTextStyle}>
+            {state.relayLockedByEnv
+                ? "Set by the OH_ALLOW_REMOTE_RELAY environment variable, so this switch is read-only."
+                : "For a browser on another device whose AI runs on this computer (LM Studio, Ollama) and refuses calls from other sites. Anyone on your network could send requests through this server while it is on."}
+            </div>
+            </>
         )}
 
         {state.lanEnabled && state.addresses?.length > 0 && (
@@ -1452,6 +1606,93 @@ const NetworkSharing = () => {
 
         {error && (
             <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginBottom: "0.4rem" }}>{error}</div>
+        )}
+        </div>
+    );
+};
+
+// --- Storage: the community download cache ------------------------------------
+// Every scenario, basemap and flag downloaded from the community is kept on the
+// server's disk (server/hubCache.js), so opening it again needs no download and
+// does not count on GitHub again. It is capped at 1 GB, the files used longest
+// ago going first, but a player who wants the space back now should not have to
+// go looking for a hidden folder. Server-backed builds only, like Network.
+const formatCacheSize = (bytes) => (bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`);
+
+const DownloadCache = () => {
+    const [usage, setUsage] = useState(null);   // null until we know there is a server
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch("/api/hub/cache", { cache: "no-store" });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!cancelled) setUsage(data);
+            } catch {
+                /* no server behind this build — nothing is stored here */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    if (!usage) {
+        return (
+            <div style={{ ...helperStyle, marginTop: 0 }}>
+            No local server is behind this build, so nothing is stored here.
+            </div>
+        );
+    }
+
+    const clear = async () => {
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+            const response = await fetch("/api/hub/cache", { method: "DELETE" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "Could not clear the download cache.");
+            setUsage(data);
+            logSettingMessage("download-cache", "Download cache cleared.");
+        } catch (nextError) {
+            setError(nextError.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const size = formatCacheSize(usage.bytes);
+    return (
+        <div>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.8rem" }}>
+        {usage.files === 0
+            ? "No community downloads are stored."
+            : usage.files === 1
+            ? `1 community download is stored (${size}).`
+            : `${usage.files} community downloads are stored (${size}).`}
+        </span>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={clear}
+        disabled={busy || usage.files === 0}
+        style={{ ...diagnosticsButton, opacity: busy || usage.files === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+        >
+        Clear download cache
+        </button>
+        </div>
+        <div style={{ ...helperStyle, marginTop: 0 }}>
+        Scenarios, maps and flags you download from the community are kept so opening them again needs no new download. Past 1 GB, the ones used longest ago are removed on their own.
+        </div>
+        {error && (
+            <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>{error}</div>
         )}
         </div>
     );
@@ -1579,6 +1820,9 @@ const DiagnosticsPanel = () => {
     // player should say so, rather than pasting an empty report.
     const [count, setCount] = useState(() => getDebugLogSize());
     const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // How many of the oldest entries the size cap has rolled off: a log that
+    // no longer reaches back to the bug should say so before it is sent.
+    const [dropped, setDropped] = useState(() => getDebugLogDroppedCount());
     // Both toggles are read from the module rather than held only here, because
     // the module is where the persisted answer lives — this panel is unmounted
     // every time the menu closes, and a useState default would otherwise be a
@@ -1589,6 +1833,7 @@ const DiagnosticsPanel = () => {
     useEffect(() => subscribeToDebugLog(() => {
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     }), []);
 
     const toggleEnabled = () => {
@@ -1597,6 +1842,7 @@ const DiagnosticsPanel = () => {
         setEnabled(next);
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     };
 
     const toggleVerbose = () => {
@@ -1729,6 +1975,11 @@ const DiagnosticsPanel = () => {
             : cleared
             ? "Cleared."
             : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
+        {enabled && !cleared && dropped > 0 && (
+            <span style={{ display: "block" }}>
+            {dropped === 1 ? "1 older entry dropped to stay within the limit" : `${dropped} older entries dropped to stay within the limit`}
+            </span>
+        )}
         </span>
         <button
         type="button"
@@ -1751,7 +2002,10 @@ const DiagnosticsPanel = () => {
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
         <div style={helperTextStyle}>
-        On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts.
+        {/* The desktop app's own log exists only on desktop. */}
+        {import.meta.env.VITE_OH_WEB
+            ? "On by default. Off: nothing is recorded and the log on this device is deleted. Remembered across save changes and restarts."
+            : "On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts."}
         </div>
 
         <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
@@ -1810,6 +2064,13 @@ const diagnosticsButton = {
 // system, network sharing, diagnostics) sit inside those four sections rather
 // than adding sections of their own.
 
+// The guides are site pages. The Android app leaves them out of the APK
+// (mobile/scripts/stage-www.mjs), so there it opens the website's copy.
+const GUIDES_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/guides/" : "/guides/";
+// The privacy policy, from the same place as the guides: the desktop serves its
+// own copy, the website its root page, and the Android app links to the website.
+const PRIVACY_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/privacy/" : "/privacy/";
+
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
         neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
@@ -1844,10 +2105,44 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         </>
     );
 
+    // Always a new window, never this one: a page opened in place ends the
+    // running skip or AI call, and the desktop window has no back button to
+    // return by (electron/main.cjs sends a new window to the system browser).
     if (href) {
-        return <a href={href} target={href.startsWith("/") ? undefined : "_blank"} rel="noopener noreferrer" style={common}>{content}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" style={common}>{content}</a>;
     }
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
+};
+
+// Which path the map takes on this device (runtime/deviceProfile.js). Auto is
+// the guess; the choice is read once, when the game loads.
+const PERFORMANCE_MODES = [
+    { key: "", label: "Auto" },
+    { key: "constrained", label: "Low memory" },
+    { key: "full", label: "Full" },
+];
+
+const PerformanceModeSetting = () => {
+    const [mode, setMode] = useState(() => getDeviceProfileOverride());
+    const running = isConstrainedDevice();
+    const choose = (value) => {
+        setDeviceProfileOverride(value);
+        const next = getDeviceProfileOverride();
+        setMode(next);
+        logSettingChange("Performance mode", PERFORMANCE_MODES.find((entry) => entry.key === next)?.label ?? "Auto");
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle} htmlFor="game-performance-mode">Performance mode</label>
+        <select id="game-performance-mode" value={mode} onChange={(event) => choose(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        {PERFORMANCE_MODES.map((entry) => <option key={entry.key || "auto"} value={entry.key} style={{ color: "black" }}>{entry.label}</option>)}
+        </select>
+        <div style={helperStyle}>
+        Auto picks Low memory in the Android app, on a touch screen with no mouse, and on a device with 4 GB of memory or less: the map loads in smaller steps with fewer workers. Full is faster on a strong tablet, and Low memory can steady a weak computer. A change applies after the game is reloaded.
+        </div>
+        <div style={helperStyle}>{running ? "Running now: Low memory." : "Running now: Full."}</div>
+        </div>
+    );
 };
 
 // How much of each time skip is about the player's own country (AI/playerFocus.js).
@@ -1881,8 +2176,12 @@ const PlayerFocusSetting = () => {
         setSaving(true);
         setError("");
         try {
-            // undefined clears the override, so the game follows its scenario again.
-            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+            // null clears the override, so the game follows its scenario again.
+            // The stores take `features` as the game's complete override set,
+            // so the others (Espionage off, its own idle diplomacy) are sent
+            // along rather than wiped.
+            const features = withFeatureOverride(library.activeGame?.features, "playerFocus", value ? { level: value } : null);
+            await saveGame(gameId, { features });
         } catch (problem) {
             setError(problem?.message || "That could not be saved.");
         } finally {
@@ -1895,7 +2194,6 @@ const PlayerFocusSetting = () => {
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
-        data-no-translate
         disabled={saving || !gameId}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
@@ -2028,14 +2326,13 @@ const SettingsWorkspace = ({
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
-    const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
     const [basemapsOpen, setBasemapsOpen] = useState(false);
-    // The built-in maps this scenario lets the player switch to (chosen by its
-    // author in the Map Editor; a made-up world may allow none).
-    const { allowedBasemaps: allowedKey } = useWorldBackground();
-    const allowedBasemaps = !forGame || allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
-    const basemapChoices = allowedBuiltinBasemaps(allowedBasemaps);
-    const shownBasemapStyle = isAllowedBasemapOverride(basemapStyle, allowedBasemaps) ? basemapStyle : "";
+    // The system asks for reduced motion: the motion switches are on whatever
+    // is stored, so they show on and stay put (mapSettings.js).
+    const systemReducedMotion = useSystemReducedMotion();
+    // Lookups run only while requests are not being saved (gameplay.js
+    // lookupFunctionsEnabled), so the switch shows as paused meanwhile.
+    const savingRequests = useSavingRequests();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2113,16 +2410,18 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
                 </SettingsSection>
-                <SettingsSection title="Accessibility" description="Reduce automatic camera motion without changing simulation behavior.">
+                <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"
-                    enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+                    enabled={systemReducedMotion || (mapSettings.disableIdleRotation && mapSettings.disableEventCamera)}
+                    disabled={systemReducedMotion}
                     onToggle={() => {
                         const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
                         updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
                         updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
                     }}
                     />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2130,27 +2429,7 @@ const SettingsWorkspace = ({
             {activeSection === "map" && (
                 <>
                 <SettingsSection title="Basemap" description="The flat map drawn under the countries.">
-                    <div style={fieldGroupStyle}>
-                        <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-                        <select
-                            id="game-basemap-style"
-                            data-no-translate
-                            value={shownBasemapStyle}
-                            disabled={basemapChoices.length === 0}
-                            onChange={(event) => updateBasemapStyle(event.target.value)}
-                            style={{ ...inputStyle, cursor: basemapChoices.length ? "pointer" : "default", opacity: basemapChoices.length ? 1 : 0.6 }}
-                        >
-                            <option value="" style={{ color: "black" }}>Scenario default</option>
-                            {basemapChoices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
-                        </select>
-                        <div style={helperStyle}>
-                            {basemapChoices.length === 0
-                                ? "This scenario uses its own basemap only."
-                                : forGame
-                                    ? "Scenario default uses the basemap chosen by the scenario author. Overrides apply immediately."
-                                    : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own basemap."}
-                        </div>
-                    </div>
+                    <BasemapField value={basemapStyle} forGame={forGame} onChange={updateBasemapStyle} />
                 </SettingsSection>
                 <SettingsSection title="Detailed maps" description="Large terrain maps drawn on top of a scenario's basemap, sharp when zoomed in.">
                     <Toggle
@@ -2194,15 +2473,17 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <PerformanceModeSetting />
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
-                    <Toggle label="3D Globe" enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
+                    <GlobeToggle enabled={isGlobeEnabled} onToggle={onToggleGlobe} />
                     <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
                 </SettingsSection>
                 <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">
-                    <Toggle label="Disable idle globe rotation" enabled={mapSettings.disableIdleRotation} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
-                    <Toggle label="Disable camera movement during events" enabled={mapSettings.disableEventCamera} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    <Toggle label="Disable idle globe rotation" enabled={systemReducedMotion || mapSettings.disableIdleRotation} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
+                    <Toggle label="Disable camera movement during events" enabled={systemReducedMotion || mapSettings.disableEventCamera} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2227,13 +2508,13 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
+                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
-                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
+                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
-                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way, and Gemini arrives all at once regardless.
+                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
                     </div>
                     <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
                     <div style={settingsHelper}>
@@ -2265,25 +2546,6 @@ const SettingsWorkspace = ({
                 >
                     <TaskPicks />
                 </SettingsSection>
-                {forGame && (
-                <SettingsSection
-                title="Political World A/B Lab"
-                description="Run the same frozen diplomacy, Council, vote or event-generation task with Political World context on/off — or push one actor through HAWK/DOVE sensitivity variants. The lab never applies either candidate to the campaign."
-                right={(
-                    <button
-                    type="button"
-                    onClick={() => setPoliticalWorldLabOpen(true)}
-                    style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "8px", color: "var(--oh-grey-text)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
-                    >
-                    Open A/B Lab
-                    </button>
-                )}
-                >
-                    <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.55 }}>
-                    Pins every arm to one exact fallback-list entry, counterbalances run order, saves raw prompts/responses and proves the non-Political prompt hash matches before you interpret the result. Blind review is available to reduce confirmation bias.
-                    </div>
-                </SettingsSection>
-                )}
                 <SettingsSection
                 title="Telemetry"
                 description="What the AI debug console can show about every call."
@@ -2312,6 +2574,11 @@ const SettingsWorkspace = ({
                         <NetworkSharing />
                     </SettingsSection>
                 )}
+                {!import.meta.env.VITE_OH_WEB && (
+                    <SettingsSection title="Storage" description="What this server keeps on disk for you.">
+                        <DownloadCache />
+                    </SettingsSection>
+                )}
                 <SettingsSection title="Diagnostics" description="The log a bug report needs. Copy it for Discord, save it for a GitHub issue.">
                     <DiagnosticsPanel />
                 </SettingsSection>
@@ -2325,8 +2592,8 @@ const SettingsWorkspace = ({
     // ✕ or the bottom of the page.
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? `calc(0.45rem + ${SAFE_TOP}) calc(0.45rem + ${SAFE_RIGHT}) calc(0.45rem + ${SAFE_BOTTOM}) calc(0.45rem + ${SAFE_LEFT})` : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
-                <div aria-hidden="true" className="oh-ws-tint" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
+            <div ref={cardRef} className="oh-ws-card" style={{ background: "rgba(32,32,35,0.67)", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
+                <div aria-hidden="true" className="oh-ws-tint" style={{ background: "rgba(32,32,35,0.63)", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
                     <button type="button" className="oh-tap" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -2347,7 +2614,6 @@ const SettingsWorkspace = ({
                     <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
                 </div>
             </div>
-            {politicalWorldLabOpen && <PoliticalWorldABLab onClose={() => setPoliticalWorldLabOpen(false)} />}
         </div>,
         document.body,
     );
@@ -2477,10 +2743,9 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        // Not getMapSetting: this one ships ON, and an absent key must read as
-        // on rather than off (see mapSettings.js).
+        // Off by default, so getMapSetting: an absent key reads as off.
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
-        // Same again: ships ON.
+        // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
@@ -2521,7 +2786,8 @@ const SettingsMenu = ({
         setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
     };
 
-    // Telemetry switches (telemetry.js): their own keys, both on by default.
+    // Telemetry switches (telemetry.js): their own keys; recording is on by
+    // default (off in the Android app), rating off.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
     // Logged here rather than in telemetry.js, which imports nothing on purpose.
@@ -2622,7 +2888,7 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
-                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href={GUIDES_HREF} />
                     <QuickAction
                         title={updateCheckResult.status === "checking" ? "Checking for updates…" : "Check for updates"}
                         description={appUpdateCheckDescription(updateCheckResult)}
@@ -2631,6 +2897,7 @@ const SettingsMenu = ({
                         onClick={checkForUpdatesNow}
                     />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
+                    <QuickAction title="Privacy" description="What the game keeps and sends" symbol="§" href={PRIVACY_HREF} />
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
                     <span style={{ color: "rgba(255,255,255,0.24)", fontSize: "0.6rem" }}>Community</span>
@@ -2686,7 +2953,7 @@ const SettingsMenu = ({
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
-            background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))",
+            background: "rgba(32,32,35,0.63)",
             border: "1px solid var(--oh-hud-border)",
             boxShadow: "var(--oh-hud-shadow)",
         }}

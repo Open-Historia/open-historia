@@ -6,7 +6,6 @@ import {
   applyInstitutionGovernanceCommand,
   applyInstitutionalPlayerMessage,
   castInstitutionProposalVote,
-  castInstitutionProposalVoteBatch,
   callInstitutionProposalVote,
   closeInstitutionProposalVoting,
   createInstitutionProposal,
@@ -327,9 +326,7 @@ test("accepted text-only amendment blocks stale executable consequences until ex
   result = resolveInstitutionProposalAmendment({ world: result.world, institutionId: "council", proposalId: "p1", amendmentId: "a1", status: "accepted", requester: "A" });
   result = transitionInstitutionProposal({ world: result.world, institutionId: "council", proposalId: "p1", status: "formalized" });
   result = openInstitutionProposalVoting({ world: result.world, institutionId: "council", proposalId: "p1" });
-  result = castInstitutionProposalVoteBatch({ world: result.world, institutionId: "council", proposalId: "p1", playerCountry: "", ballots: [
-    { polity: "A", choice: "yes" }, { polity: "B", choice: "yes" }, { polity: "C", choice: "yes" },
-  ] });
+  for (const polity of ["A", "B", "C"]) result = vote(result.world, polity, "yes");
   result = closeInstitutionProposalVoting({ world: result.world, institutionId: "council", proposalId: "p1" });
   assert.equal(result.proposal.status, "passed");
   const implemented = implementInstitutionProposal({ world: result.world, institutionId: "council", proposalId: "p1" });
@@ -556,38 +553,15 @@ test("formal ballots are immutable once recorded", () => {
   assert.equal(result.proposal.voting.ballots.B.choice, "yes");
 });
 
-test("NPC ballot batch is atomic, cannot include player, and snapshots canonical governments", () => {
-  let result = open();
-  result.world.politicalActors.byPolity.B = { polityKey: "B", government: { form: "Parliamentary republic", headOfGovernment: "Prime B" } };
-  result.world.politicalActors.byPolity.C = { polityKey: "C", government: { form: "Republic", headOfState: "President C" } };
-  const batch = castInstitutionProposalVoteBatch({
-    world: result.world,
-    institutionId: "council",
-    proposalId: "p1",
-    playerCountry: "A",
-    date: "2000-01-05",
-    ballots: [
-      { polity: "B", choice: "yes", reason: "Government supports the program." },
-      { polity: "C", choice: "abstain", reason: "Coalition remains divided." },
-    ],
-  });
-  assert.equal(batch.proposal.voting.ballots.B.choice, "yes");
-  assert.match(batch.proposal.voting.ballots.B.government, /Prime B|Parliamentary republic/);
-  assert.equal(batch.proposal.voting.ballots.C.choice, "abstain");
-  assert.throws(() => castInstitutionProposalVoteBatch({
-    world: result.world,
-    institutionId: "council",
-    proposalId: "p1",
-    playerCountry: "A",
-    ballots: [{ polity: "A", choice: "yes" }],
-  }), /cannot cast the player's/i);
-});
-
-test("complete ballot batch finalizes, implements and emits one canonical institutional outcome event", () => {
+test("the ballot that completes the vote finalizes, implements and emits one canonical institutional outcome event", () => {
   let result = open(simpleRule, {
     consequences: [{ id: "admit-d", kind: "membership", op: "join", polity: "D", status: "member" }],
   });
   result = vote(result.world, "A", "yes");
+  result = castInstitutionProposalVote({
+    world: result.world, institutionId: "council", proposalId: "p1", polity: "B", choice: "yes",
+    date: "2000-01-05", government: "Gov", reason: "Supports the joint program.", playerCountry: "A",
+  });
   const resolved = applyInstitutionGovernanceCommand({
     world: result.world,
     chats: [],
@@ -596,12 +570,11 @@ test("complete ballot batch finalizes, implements and emits one canonical instit
     playerCountry: "A",
     date: "2000-01-06",
     command: {
-      type: "vote-batch",
+      type: "vote",
       proposalId: "p1",
-      ballots: [
-        { polity: "B", choice: "yes", reason: "Supports the joint program." },
-        { polity: "C", choice: "yes", reason: "Supports regional cooperation." },
-      ],
+      polity: "C",
+      choice: "yes",
+      reason: "Supports regional cooperation.",
       finalizeWhenComplete: true,
       implementWhenPassed: true,
     },
@@ -620,7 +593,7 @@ test("complete ballot batch finalizes, implements and emits one canonical instit
   assert.equal(resolved.events[0].agency.authority, "autonomous");
 });
 
-test("incomplete NPC batch does not close or emit an outcome event while player ballot is still missing", () => {
+test("an NPC ballot does not close or emit an outcome event while player ballot is still missing", () => {
   const result = applyInstitutionGovernanceCommand({
     world: open().world,
     chats: [],
@@ -629,12 +602,10 @@ test("incomplete NPC batch does not close or emit an outcome event while player 
     playerCountry: "A",
     date: "2000-01-05",
     command: {
-      type: "vote-batch",
+      type: "vote",
       proposalId: "p1",
-      ballots: [
-        { polity: "B", choice: "yes" },
-        { polity: "C", choice: "yes" },
-      ],
+      polity: "B",
+      choice: "yes",
       finalizeWhenComplete: true,
       implementWhenPassed: true,
     },
@@ -840,6 +811,68 @@ test("one-request institution batch refuses model authority for the human withou
   assert.match(result.rejected[0].reason, /human-controlled/i);
   assert.ok(result.world.institutions.byId.council.proposals["npc-motion"]);
   assert.equal(result.world.institutions.byId.council.proposals["fake-player-motion"], undefined);
+});
+
+test("a ballot waiting on the player stays open; once they have voted, a decided ballot closes", async () => {
+  const { institutionBallotSettlement } = await import("./institutionalGovernance.js");
+  const settle = (world) => {
+    const institution = world.institutions.byId.council;
+    return institutionBallotSettlement({ institution, proposal: institution.proposals.p1, playerCountry: "A" });
+  };
+  let world = vote(open().world, "B", "yes").world;
+  world = vote(world, "C", "yes").world;
+  assert.deepEqual(settle(world), { close: false, reason: "" }, "two AI yes votes carry it, but the player has not voted");
+  let playerFirst = vote(open().world, "A", "yes").world;
+  playerFirst = vote(playerFirst, "B", "yes").world;
+  assert.deepEqual(settle(playerFirst), { close: true, reason: "decided" }, "C voting no cannot stop a 2-of-3 majority");
+  let split = vote(open().world, "A", "yes").world;
+  split = vote(split, "B", "no").world;
+  assert.deepEqual(settle(split), { close: false, reason: "" }, "C decides it");
+  let lost = vote(open({ ...simpleRule, type: "unanimity" }).world, "A", "yes").world;
+  lost = vote(lost, "B", "no").world;
+  assert.deepEqual(settle(lost), { close: true, reason: "decided" }, "one no already sinks a unanimity vote");
+});
+
+test("the player's vote closes a ballot whose AI holdouts have been asked enough", () => {
+  let world = vote(open().world, "B", "yes").world;
+  world.institutions.byId.council.proposals.p1.voting.asked = { C: 2 };
+  const result = applyInstitutionGovernanceCommand({
+    world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-06",
+    command: { type: "vote", proposalId: "p1", polity: "A", choice: "no", authority: "player", finalizeWhenComplete: true, implementWhenPassed: true },
+  });
+  assert.equal(result.proposal.status, "failed");
+  assert.equal(result.outcome.participating, 2);
+  assert.equal(result.outcome.reason, "threshold-not-met");
+  assert.equal(result.events.length, 1);
+});
+
+test("the post-turn settlement counts an unanswered ask and closes the ballot at the limit, with no request", async () => {
+  const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
+  let world = vote(open().world, "A", "yes").world;
+  world = vote(world, "B", "no").world;
+  const asked = [{ institutionId: "council", proposalId: "p1", actors: ["C"] }];
+  const first = settleInstitutionBallotsCore({ world, chats: [], events: [], playerCountry: "A", date: "2000-02-01", asked });
+  assert.equal(first.world.institutions.byId.council.proposals.p1.voting.asked.C, 1);
+  assert.equal(first.closed.length, 0);
+  assert.equal(first.changed, true);
+  const idle = settleInstitutionBallotsCore({ world: first.world, chats: first.chats, events: first.events, playerCountry: "A", date: "2000-02-15" });
+  assert.equal(idle.changed, false, "without an answered request nothing is counted");
+  const second = settleInstitutionBallotsCore({ world: first.world, chats: first.chats, events: first.events, playerCountry: "A", date: "2000-03-01", asked });
+  assert.deepEqual(second.closed.map((entry) => [entry.proposalId, entry.reason, entry.status]), [["p1", "exhausted", "failed"]]);
+  const proposal = second.world.institutions.byId.council.proposals.p1;
+  assert.equal(proposal.status, "failed");
+  assert.equal(proposal.voting.closedDate, "2000-03-01");
+  assert.equal(second.events.length, 1);
+});
+
+test("a government that has voted is not counted as asked", async () => {
+  const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
+  const world = vote(open().world, "B", "yes").world;
+  const result = settleInstitutionBallotsCore({
+    world, playerCountry: "A", date: "2000-02-01",
+    asked: [{ institutionId: "council", proposalId: "p1", actors: ["B", "C"] }],
+  });
+  assert.deepEqual(result.world.institutions.byId.council.proposals.p1.voting.asked, { C: 1 });
 });
 
 test("a refused formal action fails closed for that actor's same-turn Council speech and leaves a native notice", async () => {

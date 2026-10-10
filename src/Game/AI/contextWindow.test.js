@@ -8,10 +8,14 @@ import assert from "node:assert/strict";
 
 import {
     CONTEXT_WINDOW_MARGIN,
+    DEFAULT_ANSWER_RESERVE_TOKENS,
+    LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
+    describeRememberedWindow,
     estimateTokens,
     nothingFitsMessage,
+    outputLimitFor,
     parseContextWindowError,
     requestChars,
 } from "./contextWindow.js";
@@ -141,10 +145,104 @@ test("the memory survives a storage that refuses to write", () => {
     assert.equal(memory.refusal("k", 5000), "");
 });
 
+test("a window the player set is named as theirs when it refuses a request", () => {
+    const memory = createContextWindowMemory(memoryStorage());
+    memory.declare("mine", 32768);
+    memory.learn("learned", { limitTokens: 32768 });
+    assert.equal(memory.refusal("mine", 47000), "this request is about 47K tokens and the window you set for this model is 33K");
+    assert.equal(memory.refusal("learned", 47000), "this request is about 47K tokens and the model's window is 33K");
+});
+
+test("Settings is told what is remembered, until when, and nothing once it lapsed", () => {
+    let at = 1000;
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => at });
+    const formatDate = (ms) => `day ${Math.floor(ms / (24 * 60 * 60 * 1000))}`;
+    assert.equal(memory.remembered("k"), null);
+    assert.match(describeRememberedWindow(null, { formatDate }), /learns this model's window from its own refusal/);
+
+    memory.learn("k", { limitTokens: 32768 });
+    assert.equal(describeRememberedWindow(memory.remembered("k"), { formatDate }),
+        "The model said its window is 33K tokens. A request too big for it is not sent to it until day 30.");
+
+    memory.learn("seen", { limitTokens: null, requestTokens: 47000 });
+    assert.equal(describeRememberedWindow(memory.remembered("seen"), { formatDate }),
+        "The model refused a request of about 47K tokens. One that big is not sent to it until day 7.");
+
+    memory.declare("mine", 200000);
+    assert.equal(memory.remembered("mine").until, null);
+    assert.equal(describeRememberedWindow(memory.remembered("mine"), { formatDate }),
+        "You set this model's window to 200K tokens. A request too big for it is not sent to it.");
+
+    at = 8 * 24 * 60 * 60 * 1000;
+    assert.equal(memory.remembered("seen"), null, "lapsed, as the preflight treats it");
+    assert.notEqual(memory.remembered("k"), null);
+
+    memory.forget("k");
+    assert.equal(memory.remembered("k"), null);
+    assert.equal(memory.refusal("k", 470000), "", "forgotten: the next request is sent");
+});
+
+test("a window learned from a server whose window is a setting is not held against it", () => {
+    // LM Studio, loaded at 40,000 tokens, refused a skip; the player loaded the
+    // model again at 128,000. An earlier build remembered the 40,000.
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => 1000 });
+    const key = "openai-compatible|http://localhost:1234/v1|qwen/qwen3.8-27b";
+    memory.learn(key, parseContextWindowError("the model is loaded with context length of only 40000 tokens"));
+    assert.match(memory.refusal(key, 38000), /38K tokens.*window is 40K/, "as a hosted model's would be");
+    assert.equal(memory.refusal(key, 38000, { trustLearned: false }), "", "sent: the server says what its window is now");
+    assert.equal(memory.remembered(key, { trustLearned: false }), null, "and Settings shows nothing in force");
+    assert.notEqual(memory.remembered(key), null);
+
+    // A size merely seen to fail is no more binding.
+    memory.learn("seen", { limitTokens: null, requestTokens: 38000 });
+    assert.notEqual(memory.refusal("seen", 38000), "");
+    assert.equal(memory.refusal("seen", 38000, { trustLearned: false }), "");
+    assert.equal(memory.remembered("seen", { trustLearned: false }), null);
+});
+
+test("a window the player declared counts on any server", () => {
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => 1000 });
+    memory.declare("local", 16000);
+    assert.match(memory.refusal("local", 38000, { trustLearned: false }), /window you set for this model is 16K/);
+    assert.equal(memory.refusal("local", 8000, { trustLearned: false }), "");
+    assert.deepEqual(memory.remembered("local", { trustLearned: false }), { limitTokens: 16000, source: "declared", learnedAt: 1000, until: null });
+});
+
 test("when nothing fits, the message names every entry and what to do", () => {
     const message = nothingFitsMessage([{ label: "small (Local)", reason: "this request is about 47K tokens and the model's window is 33K" }], 46901);
     assert.match(message, /about 47K tokens/);
     assert.match(message, /small \(Local\): this request/);
     assert.match(message, /was not sent/);
     assert.match(message, /Settings → AI/);
+    assert.match(message, /forget its window/);
+});
+
+// --- the output limit KoboldCpp is asked for ---
+//
+// A request with no limit gets KoboldCpp's own default, which cut a player's
+// answers off mid-word, time after time. Every other server reads no limit as
+// none, and is sent none. (Which server is KoboldCpp: koboldCpp.test.js.)
+
+test("KoboldCpp is asked for the answer reserve when nobody named a limit, and no other server is", () => {
+    assert.deepEqual(outputLimitFor({ koboldCpp: true }), { tokens: 4096, source: "koboldcpp" });
+    assert.equal(LOCAL_OUTPUT_LIMIT_TOKENS, DEFAULT_ANSWER_RESERVE_TOKENS, "what the preflight already keeps for the answer, and no more");
+    assert.deepEqual(outputLimitFor({ maxTokens: undefined, customParams: {}, koboldCpp: true }), { tokens: 4096, source: "koboldcpp" });
+    // Any other server, local or hosted, keeps its own maximum: nothing is sent.
+    assert.deepEqual(outputLimitFor({ koboldCpp: false }), { tokens: 0, source: "" });
+    assert.deepEqual(outputLimitFor({ customParams: { temperature: 0.7 } }), { tokens: 0, source: "" });
+    assert.deepEqual(outputLimitFor(), { tokens: 0, source: "" });
+});
+
+test("a limit somebody named is theirs: the task's, and above it the entry's own", () => {
+    // The advisor's cap, KoboldCpp or not.
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192, koboldCpp: true }), { tokens: 8192, source: "task" });
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192 }), { tokens: 8192, source: "task" });
+    // The entry's custom parameters are merged into the request last, so they win.
+    assert.deepEqual(outputLimitFor({ customParams: { max_tokens: 12000 }, koboldCpp: true }), { tokens: 12000, source: "custom" });
+    assert.deepEqual(outputLimitFor({ maxTokens: 8192, customParams: { max_tokens: 2048 } }), { tokens: 2048, source: "custom" });
+    assert.deepEqual(outputLimitFor({ customParams: { max_completion_tokens: "6000" }, koboldCpp: true }), { tokens: 6000, source: "custom" });
+    // Custom parameters that name no limit, or not a usable one, change nothing.
+    assert.deepEqual(outputLimitFor({ customParams: { temperature: 0.7 }, koboldCpp: true }), { tokens: 4096, source: "koboldcpp" });
+    assert.deepEqual(outputLimitFor({ customParams: { max_tokens: 0 }, koboldCpp: true }), { tokens: 4096, source: "koboldcpp" });
+    assert.deepEqual(outputLimitFor({ maxTokens: "nonsense", customParams: null }), { tokens: 0, source: "" });
 });

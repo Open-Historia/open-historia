@@ -132,6 +132,13 @@ jobs:
       - name: Run the tests
         run: npm test
 
+      # The map editor's Generate drawer runs the game's own copy of Azgaar's
+      # Fantasy Map Generator, and the installer packs it (build.files:
+      # fmg/dist/**). --required: a run that cannot fetch it stops here, rather
+      # than attach an installer whose editor has no Generate drawer.
+      - name: Vendor the map generator
+        run: node scripts/fetch-fmg.mjs --required
+
       - name: Build the client
         run: npm run build
 
@@ -144,6 +151,34 @@ jobs:
           # No code-signing certificate. Without this electron-builder tries to
           # discover one and fails the build rather than skipping signing.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # The same files a second time, cut into chunks: an installed app updates by
+      # fetching the chunks that changed instead of the installer again
+      # (scripts/build-update-chunks.mjs, electron/payloadUpdate.cjs). They go to a
+      # release of their own, named after the installers' with "-chunks" on the
+      # end, and they go up before the installers below, so an app the banner
+      # tells of this build already finds its chunks. A problem here never costs
+      # the release its installers: an app that finds no chunks takes the
+      # installer, as every app did before.
+      - name: Cut the app's files into update chunks
+        continue-on-error: true
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            windows-latest) app="release/win-unpacked/resources/app.asar"; platform=win ;;
+            macos-latest) app="$(ls -d release/mac*/*.app | head -1)/Contents/Resources/app.asar"; platform=mac ;;
+            *) app="release/linux-unpacked/resources/app.asar"; platform=linux ;;
+          esac
+          node scripts/build-update-chunks.mjs --app "$app" --out update-chunks --platform "$platform" --channel beta
+
+      - name: Publish the update chunks
+        continue-on-error: true
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || 'desktop-beta' }}
+        shell: bash
+        run: node scripts/publish-update-chunks.mjs --dir update-chunks --tag "${TAG}-chunks" --repo "${{ github.repository }}"
 
       - name: Upload as a build artifact
         uses: actions/upload-artifact@v6
@@ -242,3 +277,25 @@ jobs:
           # Announcing only once the installers are in place closes it.
           gh release upload "$TAG" "${files[@]}" --clobber
           gh release upload "$TAG" "${feeds[@]}" --clobber
+
+  # Once every system's build of this release is up, the chunks no build names
+  # any more come off the chunk release, which holds 1,000 files at most
+  # (scripts/publish-update-chunks.mjs --prune-only). It is the last job, on its
+  # own, so it never runs beside a publish of the same release, and it never
+  # removes what a head still leads to or anything uploaded in the last six
+  # hours. A system whose build failed keeps its old head, and so its chunks.
+  prune-chunks:
+    needs: build
+    if: ${{ !cancelled() && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Remove the update chunks no build names any more
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || 'desktop-beta' }}
+        run: node scripts/publish-update-chunks.mjs --prune-only --tag "${TAG}-chunks" --repo "${{ github.repository }}"

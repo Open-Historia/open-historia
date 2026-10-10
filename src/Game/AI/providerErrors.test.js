@@ -23,6 +23,19 @@ import {
     isContextWindowErrorPayload,
     isContextWindowErrorText,
 } from "./providerErrors.js";
+import {
+  CONNECTION_CLOSED_MESSAGE,
+  OUTPUT_LIMIT_MESSAGE,
+  connectionClosedError,
+  couldNotBeReached,
+  extractErrorMessage,
+  isBrokenBodyError,
+  isCutOffJsonBody,
+  isUnreachableError,
+  stoppedAtOutputLimit,
+  unreachableServerError,
+  unreachableServerMessage,
+} from "./providerErrors.js";
 
 // Both pages are from the same field report's log, abridged. The first is a
 // gateway's own Next.js 404 (the base URL pointed at the website, not the API);
@@ -476,4 +489,104 @@ test("a per-minute limit is Rate limited, and carries the wait the provider aske
   assert.deepEqual(classifyProviderFailure({ status: 429, payload: { error: { message: "Too many requests" } } }), {
     kind: "rateLimited", reason: "rate limited", waitMs: null,
   });
+});
+
+// ---------------------------------------------------------------------------
+// The connection, not the provider. From a player's log: a local model's server
+// went down mid-skip. "TypeError: network error" was not known for a network
+// failure at all, and the relay's 502 for the refused connections that followed
+// was waited on as a busy gateway, twice per task.
+
+test("a body that breaks while it is read is known for one, in each browser's words", () => {
+  assert.equal(isBrokenBodyError(new TypeError("network error")), true, "Chromium");
+  assert.equal(isBrokenBodyError(new TypeError("Error in input stream")), true, "Firefox");
+  assert.equal(isBrokenBodyError(new TypeError("Error in body stream")), true, "Firefox, newer");
+  // fetch() itself failing is the server not being there, not a break partway.
+  assert.equal(isBrokenBodyError(new TypeError("Failed to fetch")), false);
+  // A bug in the game is a TypeError too, and must never pass for either.
+  assert.equal(isBrokenBodyError(new TypeError("Cannot read properties of undefined (reading 'network error')")), false);
+  assert.equal(isBrokenBodyError(new Error("network error")), false, "only what the browser throws");
+  assert.equal(isBrokenBodyError(null), false);
+});
+
+test("a server that cannot be reached is known by the browser's wording, or by the mark", () => {
+  for (const message of ["Failed to fetch", "fetch failed", "NetworkError when attempting to fetch resource.", "Load failed", "Network request failed: connect ECONNREFUSED", "network error", "Error in input stream"]) {
+    assert.equal(isUnreachableError(new TypeError(message)), true, message);
+  }
+  assert.equal(isUnreachableError(new TypeError("x is not a function")), false);
+  assert.equal(isUnreachableError(new Error("Failed to fetch")), false, "only what fetch throws");
+  assert.equal(isUnreachableError(unreachableServerError("http://localhost:5001", "ECONNREFUSED")), true, "the relay's report");
+  assert.equal(isUnreachableError(connectionClosedError()), true);
+  assert.equal(isUnreachableError(undefined), false);
+});
+
+test("a connection that closed mid-answer says so, and is marked as a server that could not be reached", () => {
+  const cause = new TypeError("network error");
+  const error = connectionClosedError(cause);
+  assert.equal(error.message, CONNECTION_CLOSED_MESSAGE);
+  assert.equal(error.message, "The connection closed before the model finished its answer.");
+  assert.equal(error.cause, cause);
+  assert.equal(error.connectionClosed, true);
+  // Busy for the Fallback list, as an unreachable server always was: the entry
+  // sits out and the next one is asked. Never a retry of this one.
+  assert.deepEqual(error.providerFailure, { kind: "busy", reason: "could not be reached" });
+  assert.equal(shouldRetryProviderFailure({ failure: error.providerFailure, attempt: 1, retries: 3, canFallBack: true }), false);
+  assert.equal(connectionClosedError().cause, undefined);
+  // Each error carries its own mark: the Fallback list never shares one.
+  assert.notEqual(couldNotBeReached(), couldNotBeReached());
+});
+
+test("a server the relay could not connect to is named, with what the connection reported", () => {
+  const error = unreachableServerError("http://localhost:5001", "ECONNREFUSED");
+  assert.equal(
+    error.message,
+    "http://localhost:5001 could not be reached (ECONNREFUSED). Check that the AI server is running and that its address in Settings → AI is right.",
+  );
+  assert.equal(error.message, unreachableServerMessage("http://localhost:5001", "ECONNREFUSED"));
+  assert.deepEqual(error.providerFailure, { kind: "busy", reason: "could not be reached" });
+  assert.equal(error.connectionClosed, undefined, "nothing had started to arrive");
+});
+
+test("a failed response's own words are read, a plain string included", () => {
+  const fallback = "OpenAI Compatible is busy right now. Try again in a moment.";
+  // The relay's report of a refused connection, which used to read as the fallback.
+  assert.equal(extractErrorMessage({ error: " (ECONNREFUSED)" }, fallback), "(ECONNREFUSED)");
+  assert.equal(extractErrorMessage({ error: "model 'qwen3' not found" }, fallback), "model 'qwen3' not found");
+  assert.equal(extractErrorMessage({ error: { message: "Overloaded" } }, fallback), "Overloaded");
+  // Both: `message` is the detail, `error` the status line.
+  assert.equal(extractErrorMessage({ statusCode: 400, error: "Bad Request", message: "unknown model" }, fallback), "unknown model");
+  assert.equal(extractErrorMessage({ rawText: "upstream timed out" }, fallback), "upstream timed out");
+  assert.equal(extractErrorMessage("  plain text  ", fallback), "plain text");
+  assert.equal(extractErrorMessage({ error: "   " }, fallback), fallback);
+  assert.equal(extractErrorMessage({}, fallback), fallback);
+  assert.equal(extractErrorMessage(null, fallback), fallback);
+  assert.match(extractErrorMessage({ rawText: MISSING_SCHEME_PAGE }, "request failed (404)"), /answered with a web page/);
+});
+
+test("a buffered body that stops partway, or never starts, is the connection closing", () => {
+  assert.equal(isCutOffJsonBody(""), true);
+  assert.equal(isCutOffJsonBody("  \n"), true);
+  assert.equal(isCutOffJsonBody('{"choices":[{"message":{"content":"The year op'), true);
+  assert.equal(isCutOffJsonBody('[{"candidates":'), true);
+  // Whole but wrong is a gateway's mistake, and keeps its own parse error.
+  assert.equal(isCutOffJsonBody('{"choices": [,]}'), false);
+  assert.equal(isCutOffJsonBody("upstream said no"), false);
+  assert.equal(isCutOffJsonBody('{"ok":true}'), false);
+});
+
+// The same log: a local server's answers stopping mid-sentence at about 4,100
+// characters, each parsed as invalid JSON and asked for again under the same limit.
+test("an answer cut at the model's output limit is recognised in each provider's words", () => {
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "length", message: { content: "{\"topics\":[" } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [] } }] }), true);
+  assert.equal(stoppedAtOutputLimit({ stop_reason: "max_tokens", content: [] }), true);
+  // Finished, or stopped for another reason.
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "stop" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: "tool_calls" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ candidates: [{ finishReason: "STOP" }] }), false);
+  assert.equal(stoppedAtOutputLimit({ stop_reason: "tool_use" }), false);
+  assert.equal(stoppedAtOutputLimit({ choices: [{ finish_reason: null }] }), false);
+  assert.equal(stoppedAtOutputLimit(null), false);
+  assert.equal(stoppedAtOutputLimit("text"), false);
+  assert.equal(OUTPUT_LIMIT_MESSAGE, "The model stopped at its output limit before it finished its answer.");
 });

@@ -9,8 +9,13 @@ import {
 import {
   institutionAuthoringDraft,
   institutionAuthoringRows,
+  institutionMemberNames,
+  institutionMemberRoster,
+  removeScenarioInstitution,
+  unmatchedInstitutionMembers,
   upsertScenarioInstitution,
 } from "../../runtime/institutionAuthoring.js";
+import { PolityMultiPicker } from "./InstitutionsWorkspace.jsx";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import {
   BUILTIN_INSTITUTION_LOGOS,
@@ -119,7 +124,7 @@ const EMPTY_DRAFT = institutionAuthoringDraft(null);
 
 export default function InstitutionAuthoringPanel({ details, onDetailsChange }) {
   const isMobile = useIsMobile();
-  const world = details?.data?.world || {};
+  const world = useMemo(() => details?.data?.world || {}, [details?.data?.world]);
   const rows = useMemo(() => institutionAuthoringRows(world), [world]);
   const [managerOpen, setManagerOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -129,8 +134,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pendingLogoDataUrl, setPendingLogoDataUrl] = useState("");
-  const [memberEntry, setMemberEntry] = useState("");
-  const [memberPickerOpen, setMemberPickerOpen] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -192,7 +195,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId(institution?.id || "");
     setDraft(institutionAuthoringDraft(institution));
     setPendingLogoDataUrl("");
-    setMemberEntry("");
     setDirty(false);
     setMessage("");
   };
@@ -202,7 +204,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId("");
     setDraft(institutionAuthoringDraft(null));
     setPendingLogoDataUrl("");
-    setMemberEntry("");
     setDirty(true);
     setMessage("");
   };
@@ -211,7 +212,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     const selected = rows.find((entry) => entry.id === selectedId) || null;
     setDraft(institutionAuthoringDraft(selected));
     setPendingLogoDataUrl("");
-    setMemberEntry("");
     setDirty(false);
     setMessage("");
   };
@@ -263,6 +263,44 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     }
   };
 
+  const selectedInstitution = rows.find((entry) => entry.id === selectedId) || null;
+
+  const deleteInstitution = async () => {
+    if (!details?.scenario?.id || busy || !selectedInstitution) return;
+    const label = selectedInstitution.name || selectedInstitution.id;
+    if (!window.confirm(`Delete ${label} from this scenario? Its members, history and logo go with it.`)) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = removeScenarioInstitution(world, selectedInstitution.id);
+      if (result.error) throw new Error(result.error);
+
+      const storedLogos = await downloadScenarioJsonAsset(details.scenario.id, "institutionLogos") || {};
+      if (storedLogos && typeof storedLogos === "object" && !Array.isArray(storedLogos) && Object.hasOwn(storedLogos, selectedInstitution.id)) {
+        const nextStoredLogos = { ...storedLogos };
+        delete nextStoredLogos[selectedInstitution.id];
+        await uploadScenarioAsset(
+          details.scenario.id,
+          "institutionLogos",
+          new Blob([JSON.stringify(nextStoredLogos)], { type: "application/json" }),
+        );
+      }
+
+      const nextDetails = await saveScenario(details.scenario.id, {
+        worldPatch: { institutions: result.world.institutions },
+      });
+      onDetailsChange?.(nextDetails);
+      setSelectedId("");
+      setPendingLogoDataUrl("");
+      setDirty(false);
+      setMessage(`${label} deleted from the scenario.`);
+    } catch (error) {
+      setMessage(error?.message || "Could not delete the institution.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const uploadLogo = async (event) => {
     const [file] = Array.from(event.target.files || []);
     event.target.value = "";
@@ -283,45 +321,34 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     : "";
   const previewUrl = pendingLogoDataUrl || storedLogoPreview;
 
-  const memberNames = useMemo(() => {
-    const seen = new Set();
-    return String(draft.membersText || "")
-      .split(/[\n,;]+/g)
-      .map((entry) => entry.trim())
-      .filter((entry) => {
-        const key = entry.toLocaleLowerCase();
-        if (!entry || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [draft.membersText]);
+  const memberNames = useMemo(() => institutionMemberNames(draft.membersText), [draft.membersText]);
 
   const setMemberNames = (names) => edit("membersText", names.join("\n"));
 
-  const resolvePolityOption = (value) => polityLookup.get(clean(value).toLocaleLowerCase()) || null;
-  const memberSelection = resolvePolityOption(memberEntry);
-  const memberKeys = useMemo(() => new Set(memberNames.map((entry) => (resolvePolityOption(entry)?.polityKey || entry).toLocaleLowerCase())), [memberNames, polityLookup]);
-  const memberSuggestions = useMemo(() => {
-    const needle = clean(memberEntry).toLocaleLowerCase();
-    return polityOptions
-      .filter((option) => !memberKeys.has(option.polityKey.toLocaleLowerCase()))
-      .filter((option) => !needle || option.aliases.some((alias) => alias.toLocaleLowerCase().includes(needle)))
-      .slice(0, 10);
-  }, [memberEntry, memberKeys, polityOptions]);
-
-  const addMember = (polityKey = memberSelection?.polityKey || "") => {
-    const next = clean(polityKey);
-    if (!next || !polityOptions.some((option) => option.polityKey === next)) return;
-    if (!memberKeys.has(next.toLocaleLowerCase())) setMemberNames([...memberNames, next]);
-    setMemberEntry("");
-    setMemberPickerOpen(false);
+  const addMember = (name) => {
+    const next = String(name ?? "").trim();
+    if (!next) return;
+    const exists = memberNames.some((entry) => entry.toLocaleLowerCase() === next.toLocaleLowerCase());
+    if (!exists) setMemberNames([...memberNames, next]);
   };
+
+  // The scenario's polities to pick from, and the members that name none of
+  // them, which are kept but flagged before Save.
+  const roster = useMemo(() => institutionMemberRoster(world), [world]);
+  const pickable = useMemo(() => {
+    const taken = new Set(memberNames.map((entry) => entry.toLocaleLowerCase()));
+    return roster.filter((polity) => !taken.has(polity.toLocaleLowerCase()));
+  }, [roster, memberNames]);
+  const unmatched = useMemo(() => new Set(unmatchedInstitutionMembers(memberNames, world)), [memberNames, world]);
+
+  // A member the scenario knows reads by its polity's name on its chip, with
+  // the key it is saved under in the tooltip.
+  const resolvePolityOption = (value) => polityLookup.get(clean(value).toLocaleLowerCase()) || null;
 
   const removeMember = (name) => {
     setMemberNames(memberNames.filter((entry) => entry.toLocaleLowerCase() !== name.toLocaleLowerCase()));
   };
 
-  const selectedInstitution = rows.find((entry) => entry.id === selectedId) || null;
   const selectedIsNew = !draft.id && dirty;
   const displayName = clean(draft.name) || "New institution";
   const displaySubtitle = clean(draft.shortName) || (selectedIsNew ? "Unsaved institution" : "Choose an institution to edit");
@@ -398,13 +425,18 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                 </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                {selectedInstitution && (
+                  <button disabled={busy} onClick={deleteInstitution} style={{ ...actionButtonStyle, background: "rgba(248,113,113,0.08)", borderColor: "rgba(248,113,113,0.3)", color: "#fecaca" }} type="button">
+                    Delete institution
+                  </button>
+                )}
                 <button disabled={!dirty || busy} onClick={discard} style={{ ...actionButtonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
                 <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save institution"}</button>
               </div>
             </div>
 
             {message && (
-              <div style={{ background: /saved/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginBottom: "0.7rem", padding: "0.55rem 0.65rem" }}>
+              <div style={{ background: /saved|deleted from/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved|deleted from/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved|deleted from/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginBottom: "0.7rem", padding: "0.55rem 0.65rem" }}>
                 {message}
               </div>
             )}
@@ -441,58 +473,21 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               <details open style={sectionStyle}>
                 <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Starting membership ({memberNames.length})</summary>
                 <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Add the polities that belong to this institution when the scenario begins. Existing member roles and statuses are preserved for members that remain in the list.</div>
-                <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.6rem" }}>
-                  <div style={{ flex: "1 1 16rem", minWidth: 0, position: "relative" }}>
-                    <input
-                      aria-autocomplete="list"
-                      aria-expanded={memberPickerOpen}
-                      aria-label="Search scenario polities for institution membership"
-                      onBlur={() => window.setTimeout(() => setMemberPickerOpen(false), 120)}
-                      onChange={(event) => { setMemberEntry(event.target.value); setMemberPickerOpen(true); }}
-                      onFocus={() => setMemberPickerOpen(true)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") { setMemberPickerOpen(false); return; }
-                        if (event.key !== "Enter") return;
-                        event.preventDefault();
-                        if (memberSelection) addMember(memberSelection.polityKey);
-                        else if (memberSuggestions.length === 1) addMember(memberSuggestions[0].polityKey);
-                      }}
-                      placeholder="Search scenario polities..."
-                      role="combobox"
-                      style={inputStyle}
-                      value={memberEntry}
-                    />
-                    {memberPickerOpen && (
-                      <div role="listbox" style={{ background: "#1a1b1f", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", boxShadow: "0 14px 36px rgba(0,0,0,0.42)", left: 0, maxHeight: "15rem", overflowY: "auto", padding: "0.3rem", position: "absolute", right: 0, top: "calc(100% + 0.3rem)", zIndex: 40 }}>
-                        {memberSuggestions.length ? memberSuggestions.map((option) => (
-                          <button
-                            key={option.polityKey}
-                            onMouseDown={(event) => { event.preventDefault(); addMember(option.polityKey); }}
-                            role="option"
-                            style={{ background: "transparent", border: 0, borderRadius: "8px", color: "#f8fafc", cursor: "pointer", display: "block", padding: "0.5rem 0.55rem", textAlign: "left", width: "100%" }}
-                            type="button"
-                          >
-                            <span style={{ display: "block", fontSize: "0.72rem", fontWeight: 800 }}>{option.label}</span>
-                            {option.polityKey !== option.label && <code style={{ color: "rgba(255,255,255,0.38)", display: "block", fontSize: "0.58rem", marginTop: "0.12rem" }}>{option.polityKey}</code>}
-                          </button>
-                        )) : (
-                          <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", padding: "0.65rem" }}>{polityOptions.length ? "No matching scenario polity." : "This scenario has no canonical polity roster to choose from."}</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <button disabled={!memberSelection || memberKeys.has(memberSelection.polityKey.toLocaleLowerCase())} onClick={() => addMember(memberSelection?.polityKey)} style={{ ...actionButtonStyle, opacity: memberSelection && !memberKeys.has(memberSelection.polityKey.toLocaleLowerCase()) ? 1 : 0.45 }} type="button">Add member</button>
+                <div style={{ marginTop: "0.6rem" }}>
+                  <PolityMultiPicker allowUnlisted label="Type a polity name" multiple={false} onChange={addMember} polities={pickable} value="" />
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.35rem" }}>Only canonical polities in this scenario can be added. Typing text does not create a membership record - choose a polity from the results.</div>
                 {memberNames.length > 0 ? (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.6rem" }}>
                     {memberNames.map((name) => {
-                      const option = resolvePolityOption(name);
-                      const unresolved = polityOptions.length > 0 && !option;
+                      // A member that names no polity keeps its warning and
+                      // reads exactly as written; a known one reads by name.
+                      const flagged = unmatched.has(name);
+                      const option = flagged ? null : resolvePolityOption(name);
                       const label = option?.label || name;
                       return (
-                        <span key={name.toLocaleLowerCase()} title={unresolved ? "This member does not resolve to the scenario polity roster and must be removed or corrected before saving." : option?.polityKey || name} style={{ alignItems: "center", background: unresolved ? "rgba(248,113,113,0.08)" : "rgba(255,255,255,0.05)", border: `1px solid ${unresolved ? "rgba(248,113,113,0.24)" : "var(--oh-grey-border)"}`, borderRadius: "999px", color: unresolved ? "#fecaca" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
-                          {label}{unresolved ? " · unresolved" : ""}
+                        <span key={name.toLocaleLowerCase()} title={flagged ? "Not a polity in this scenario" : option?.polityKey || name} style={{ alignItems: "center", background: flagged ? "rgba(245,158,11,0.1)" : "rgba(255,255,255,0.05)", border: `1px solid ${flagged ? "rgba(245,158,11,0.38)" : "var(--oh-grey-border)"}`, borderRadius: "999px", color: flagged ? "#fde68a" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
+                          {flagged && <span aria-hidden="true">⚠</span>}
+                          {label}
                           <button aria-label={`Remove ${label}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
                         </span>
                       );
@@ -503,9 +498,15 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                 )}
                 <details style={{ marginTop: "0.65rem" }}>
                   <summary style={{ color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "0.65rem", fontWeight: 750 }}>Advanced bulk edit member list</summary>
-                  <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.35rem" }}>Values are validated against the scenario polity roster on save. Unknown names or IDs are rejected.</div>
-                  <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One canonical polity per line" style={{ ...inputStyle, minHeight: "6rem", marginTop: "0.45rem", resize: "vertical" }} value={draft.membersText} />
+                  <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One polity name per line" style={{ ...inputStyle, minHeight: "6rem", marginTop: "0.45rem", resize: "vertical" }} value={draft.membersText} />
                 </details>
+                {unmatched.size > 0 && (
+                  <div data-institution-unmatched-members="true" style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.24)", borderRadius: 10, color: "#fde68a", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.55rem", padding: "0.5rem 0.6rem" }}>
+                    {unmatched.size === 1
+                      ? `${[...unmatched][0]} is not a polity in this scenario. Check the spelling: it is kept as written, and it will vote and count toward quorum as a member.`
+                      : `${unmatched.size} members, marked ⚠, are not polities in this scenario. Check the spelling: they are kept as written, and they will vote and count toward quorum as members.`}
+                  </div>
+                )}
               </details>
 
               <details style={sectionStyle}>

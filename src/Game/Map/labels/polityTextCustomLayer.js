@@ -1,4 +1,4 @@
-import { MercatorCoordinate } from "maplibre-gl";
+import mapLibreGl from "maplibre-gl";
 import {
   canonicalSingleArcFromPolyline,
   cumulativeArcLengths,
@@ -18,6 +18,10 @@ import {
   scalePolityTextSupportPoints,
 } from "./polityTextLayout.js";
 import { optimizeTerritorialArcPlacement } from "./polityTextPlacement.js";
+
+// The default export, as mapLibreSetup.js takes it: maplibre-gl is a CommonJS
+// bundle, so node (the tests) cannot pick a named export out of it.
+const { MercatorCoordinate } = mapLibreGl;
 
 export const POLITY_TEXT_RENDERER_LAYER_ID = "polity-text-renderer";
 const RASTER_FONT_SIZE_PX = 128;
@@ -610,6 +614,9 @@ export const createPolityTextCustomLayer = ({
   haloWidthPx = 5,
   samples = 128,
   debugBaseline = true,
+  // Per-label console logs on add, shader compile and first render. Off unless
+  // the renderer is being debugged; warnings and errors always log.
+  diagnostics = false,
   // diagnostics only
   isGlobe = false,
 } = {}) => {
@@ -657,8 +664,8 @@ export const createPolityTextCustomLayer = ({
     onAdd(map, gl) {
       this._map = map;
       this._gl = gl;
-      console.info("[map] PTR custom layer onAdd", {
-        labels: prepared.map((entry) => ({
+      if (diagnostics) console.info("[map] PTR custom layer onAdd", {
+        labels: this._entries.map((entry) => ({
           owner: entry.record.owner,
           text: entry.record.text,
           requestedFontPxAtZoom4: Number(entry.requestedFontPxAtZoom4.toFixed(2)),
@@ -743,10 +750,12 @@ export const createPolityTextCustomLayer = ({
       } : null;
       this._programVariant = shaderData.variantName;
       this._failedProgramVariant = null;
-      console.info("[map] PTR shaders compiled for projection", {
-        variantName: shaderData.variantName,
-        reactIsGlobe: Boolean(isGlobe),
-      });
+      if (diagnostics) {
+        console.info("[map] PTR shaders compiled for projection", {
+          variantName: shaderData.variantName,
+          reactIsGlobe: Boolean(isGlobe),
+        });
+      }
       return true;
     },
 
@@ -918,7 +927,7 @@ export const createPolityTextCustomLayer = ({
       }
       if (pendingVisibleResources && !gl.isContextLost?.()) this._map?.triggerRepaint?.();
 
-      if (!this._didLogFirstRender) {
+      if (diagnostics && !this._didLogFirstRender) {
         this._didLogFirstRender = true;
         console.info("[map] PTR first WebGL render", {
           zoom,
@@ -973,6 +982,16 @@ export const createPolityTextCustomLayer = ({
       // (polityTextRasterLifetime.js).
       for (const entry of new Set([...this._entries, ...(this._pendingEntries ?? [])])) {
         releaseEntryGpuResources(gl, entry);
+      }
+      // A replacement still waiting for its uploads is the newest set: the
+      // runtime has already committed to it. Take it now, or the re-added layer
+      // would draw the old names (an annexed country, a former name) until
+      // that polity changed again.
+      if (this._pendingEntries && this._pendingDrawOrder) {
+        this._entries = this._pendingEntries;
+        this._drawOrder = this._pendingDrawOrder;
+        this._visibleEntries = new Array(this._drawOrder.length);
+        this._visibleOpacity = new Float32Array(this._drawOrder.length);
       }
       if (this._textureProgram) gl.deleteProgram(this._textureProgram);
       if (this._lineProgram) gl.deleteProgram(this._lineProgram);

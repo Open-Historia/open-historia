@@ -4,6 +4,9 @@ import UI from "./Game/GameUI/main.jsx";
 
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
+// A shared game's lobby and round bar (multiplayer/): outside the game's UI, so
+// it survives the UI remounting when the page switches to the shared game.
+const SharedGameOverlay = lazy(() => import("./multiplayer/ui/SharedGameOverlay.jsx"));
 // Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
 // while the startup screen is already up, not before it can draw, and the
 // editor never loads them. Nothing outside Game/Map imports maplibre-gl.
@@ -19,6 +22,7 @@ import {
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
 import { prefetchGameplay } from "./Game/AI/gameplayLazy.js";
+import { isConstrainedDevice } from "./runtime/deviceProfile.js";
 
 const WorldShell = {
   backgroundColor: "#000",
@@ -29,14 +33,6 @@ const WorldShell = {
   height: "100%",
   overflow: "hidden",
   touchAction: "none",
-};
-
-const Vignette = {
-  position: "fixed",
-  inset: 0,
-  background: "radial-gradient(ellipse at center, transparent 70%, rgba(0,0,0,0.25) 100%)",
-  pointerEvents: "none",
-  zIndex: 10,
 };
 
 function GameApp() {
@@ -54,11 +50,9 @@ function GameApp() {
   const [isTerrainEnabled, setIsTerrainEnabled] = useState(() => {
     const saved = localStorage.getItem("Terrain");
     if (saved !== null) return JSON.parse(saved);
-    const isMobile = typeof window !== "undefined" && (
-      window.innerWidth <= 768 ||
-      /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    ); // default to false for mobile, true for desktop
-    return !isMobile;
+    // Terrain is the map's most memory-hungry option: off to start with on the
+    // devices the rest of the map treats as short of memory (deviceProfile.js).
+    return !isConstrainedDevice();
   });
   // Key the map/UI on the active GAME id, not the library token. The token also
   // bumps on scenario/asset writes, so Apply & Play (which saves the scenario and
@@ -203,7 +197,6 @@ function GameApp() {
     onInitialIdle={handleFirstWorldIdle}
     />
     </Suspense>
-    <div style={Vignette} />
     </div>
     {isReady && (
       <UI
@@ -245,6 +238,9 @@ function App() {
       <ErrorBoundary>
         <GameApp />
       </ErrorBoundary>
+      <Suspense fallback={null}>
+        <SharedGameOverlay />
+      </Suspense>
     </>
   );
 }

@@ -12,6 +12,7 @@ import {
 } from "../../runtime/tiledBasemaps.js";
 import { resolveTiledBasemap, scenarioTiledBasemap, wantsScenarioTerrain } from "./scenarioTerrain.js";
 import { useWorldBackground } from "./useWorldState.js";
+import { normalizeImageBounds } from "../../../server/mapProjection.js";
 
 // A named Tiled Basemap is optional on top of a vector background: opening its
 // archive proves it is there and readable before the style asks for a single
@@ -59,6 +60,13 @@ export function useCustomBackground() {
       return;
     }
 
+    // A plain sea in place of the built-in tiles (a map that is not Mercator
+    // and has no basemap of its own): declared, and nothing to load.
+    if (bgDescriptor?.kind === "plain") {
+      setState({ ...EMPTY, declared: true, basemap });
+      return undefined;
+    }
+
     // Commit to "no ESRI" from the light descriptor right away, then load the
     // heavy payload and swap in the actual image/vector.
     // A Basemap arriving for the same scenario keeps its painted background on
@@ -96,7 +104,7 @@ export function useCustomBackground() {
       if (!current()) return;
 
       if (bgDescriptor?.kind === "image" && data?.dataUrl) {
-        setState({ ...EMPTY, background: { kind: "image", imageUrl: data.dataUrl }, declared: true, basemap });
+        setState({ ...EMPTY, background: { kind: "image", imageUrl: data.dataUrl, bounds: normalizeImageBounds(bgDescriptor.bounds) }, declared: true, basemap });
         return;
       }
       if (!(bgDescriptor?.kind === "vector" && data?.geojson)) {

@@ -224,15 +224,16 @@ export const suspicionChance = (ownerIntelligence, targetIntelligence) => {
 // Per jump, another polity plants a spy in the player. A capable service does
 // it as a matter of course; a hostile one goes looking.
 //
-// `hostile` is a boolean today because the caller (gameplay.js, the
-// espionageCandidates block) has no war state to read and guesses it. When
-// real wars exist, the intended shape is a 0..1 `hostility` — at peace 0, cold
-// rivalry ~0.4, open war 1 — replacing the flat +0.15 with `+ hostility * 0.2`
-// so a full war roughly doubles a capable service's odds and a skirmish nudges
-// them. Keep the 0.4 cap: three agents in one polity at once is already the
-// limit (MAX_FOREIGN_SPIES), and higher per-roll odds just reach it sooner.
+// `hostility` is graded 0..1 and adds `hostility * 0.2`, so an open war roughly
+// doubles a capable service's odds and a cold rivalry nudges them. gameplay.js
+// (the espionageCandidates block) derives it from the war, relation and
+// reputation ledgers: an active war against the player 1, a ceasefire 0.55, a
+// relation at -70 or worse 0.6, at -40 or worse 0.4, a pariah reputation 0.35.
+// The older boolean `hostile` is still accepted and maps to 0.75, which gives
+// the old flat +0.15. Keep the 0.4 cap: three agents in one polity at once is
+// already the limit (MAX_FOREIGN_SPIES), and higher per-roll odds just reach it
+// sooner.
 export const foreignDeployChance = (polityIntelligence, { hostile = false, hostility = null } = {}) => {
-  // Accept the graded form already, so wiring it is a one-line change upstream.
   // typeof, not Number(): Number(null) is 0, which would silently drop the boolean path.
   const h = typeof hostility === "number" && Number.isFinite(hostility) ? clamp01(hostility) : (hostile ? 0.75 : 0);
   return clamp01(clampPct(polityIntelligence) / 100 * 0.12 + h * 0.2, 0, 0.4);
@@ -244,14 +245,27 @@ export const foreignDeployChance = (polityIntelligence, { hostile = false, hosti
 // world is written. Deterministic: every roll is keyed on the round and the
 // spy, so the same inputs always produce the same outcome.
 //
-// candidates: [{ polity, hostile, hostility? }] — polities that could plant a
+// candidates: [{ polity, hostility, hostile? }] — polities that could plant a
 // spy in the player this round. The caller knows who is in the world and how
 // they stand with the player; this file does not, and must not start to: keep
 // war state upstream in gameplay.js and pass its verdict in. `hostility` (0..1)
-// is the graded form for when wars carry a scale; `hostile` is the boolean
-// stand-in used until then. Both are read by foreignDeployChance.
-export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "", candidates = [] } = {}) => {
+// is the graded verdict gameplay.js derives; `hostile`, the legacy boolean, is
+// read only when no number is given. foreignDeployChance reads both.
+//
+// A shared game has several players (`playerPolities`, the player's own among
+// them; runtime/humanPolities.js). What single player does for the player it
+// then does for each: an agent caught in a person's country waits for that
+// person's decision, a person's own turned agent may come under suspicion, and
+// others may plant agents in any of them (`candidatesFor(polity)` gives each
+// one's candidates; without it only the player's own are known). What one
+// government alone has found out is marked for it alone (`audience`): with
+// one player there is nobody to keep it from, and nothing is marked.
+export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "", playerPolities = [], candidates = [], candidatesFor = null } = {}) => {
   const player = String(playerPolity ?? "").trim();
+  const people = [...new Set([player, ...(Array.isArray(playerPolities) ? playerPolities : []).map((name) => String(name ?? "").trim())].filter(Boolean))];
+  const shared = people.length > 1;
+  const isPerson = (polity) => people.includes(polity);
+  const onlyFor = (polity) => (shared ? { audience: [polity] } : {});
   let spies = normalizeSpies(world?.spies);
   const events = [];
   const notices = [];
@@ -265,13 +279,14 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
 
     if (spy.status === "active") {
       if (roll(`${spy.id}:detect`) < detectionChance(targetIntel, ownerIntel)) {
-        if (spy.target === player) {
-          // The player decides: expel or turn. It stops reporting meanwhile.
+        if (isPerson(spy.target)) {
+          // A person decides: expel or turn. It stops reporting meanwhile.
           notices.push({ kind: "discovered", spyId: spy.id, owner: spy.owner });
           events.push({
             date, kind: "world", source: "espionage",
             title: `Counter-intelligence uncovers a ${spy.owner} agent`,
-            description: `${player}'s security service has identified an agent working for ${spy.owner}. The agent is in custody; how to use them is ${player}'s decision.`,
+            description: `${spy.target}'s security service has identified an agent working for ${spy.owner}. The agent is in custody; how to use them is ${spy.target}'s decision.`,
+            ...onlyFor(spy.target),
           });
           return { ...spy, status: "discovered" };
         }
@@ -291,13 +306,14 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
     }
 
     // Turned, and the owner's own service may notice the reports are wrong.
-    if (spy.status === "turned" && !spy.suspected && spy.owner === player) {
+    if (spy.status === "turned" && !spy.suspected && isPerson(spy.owner)) {
       if (roll(`${spy.id}:suspect`) < suspicionChance(ownerIntel, targetIntel)) {
         notices.push({ kind: "suspected", spyId: spy.id, target: spy.target });
         events.push({
           date, kind: "world", source: "espionage",
           title: `Doubts about the agent in ${spy.target}`,
-          description: `${player}'s analysts suspect the reports coming out of ${spy.target} are being fed to them. The agent may have been turned.`,
+          description: `${spy.owner}'s analysts suspect the reports coming out of ${spy.target} are being fed to them. The agent may have been turned.`,
+          ...onlyFor(spy.owner),
         });
         return { ...spy, suspected: true };
       }
@@ -305,17 +321,21 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
     return spy;
   });
 
-  // Other polities plant spies in the player.
-  if (player) {
-    const inPlayer = () => spies.filter((spy) => spy.target === player && (isLive(spy) || spy.status === "discovered"));
-    for (const candidate of candidates) {
+  // Other polities plant spies in the player, and in every other person's
+  // country. A person's own agents are that person's to place: no person is a
+  // candidate. The player's rolls are keyed as they always were.
+  for (const person of people) {
+    const theirs = person === player ? candidates : (typeof candidatesFor === "function" ? candidatesFor(person) : []);
+    const inside = () => spies.filter((spy) => spy.target === person && (isLive(spy) || spy.status === "discovered"));
+    for (const candidate of Array.isArray(theirs) ? theirs : []) {
       const polity = String(candidate?.polity ?? "").trim();
-      if (!polity || polity === player) continue;
-      if (inPlayer().length >= MAX_FOREIGN_SPIES) break;
-      if (inPlayer().some((spy) => spy.owner === polity)) continue;
-      if (roll(`${polity}:deploy`) < foreignDeployChance(intel(polity), { hostile: candidate?.hostile === true, hostility: candidate?.hostility })) {
+      if (!polity || polity === person || (shared && isPerson(polity))) continue;
+      if (inside().length >= MAX_FOREIGN_SPIES) break;
+      if (inside().some((spy) => spy.owner === polity)) continue;
+      const key = person === player ? `${polity}:deploy` : `${polity}:deploy:${person}`;
+      if (roll(key) < foreignDeployChance(intel(polity), { hostile: candidate?.hostile === true, hostility: candidate?.hostility })) {
         spies = [...spies, {
-          id: mintId(spies, polity, player), owner: polity, target: player, deployedAt: date,
+          id: mintId(spies, polity, person), owner: polity, target: person, deployedAt: date,
           status: "active", turnedAt: "", exposedAt: "", coverStory: "", suspected: false,
         }];
       }

@@ -6,14 +6,17 @@
 // Editor place search. One box finds everything: the custom places added to
 // this map (point features), this map's regions, and the modern world place
 // index (~70k cities/POIs the original app ships). Clicking a result flies the
-// view there; world places offer one-click "+ Add" to drop them onto the map
-// as a custom city. Lives INSIDE the bottom bar (results open upward) so it
+// view there, and a region is selected as well, as in the Regions panel.
+// Regions match by their owner's display name and aliases too
+// (regionSearch.js). World places offer one-click "+ Add" to drop them onto
+// the map as a custom city. Lives INSIDE the bottom bar (results open upward) so it
 // never covers the tool buttons — floating it top-left did, on phones.
 
 import { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import { searchSeedCities } from "./citiesImport.js";
+import { polityDisplayName } from "./regionSearch.js";
 
 const rowStyle = {
   display: "flex",
@@ -53,7 +56,7 @@ const formatPop = (n) => {
   return String(n);
 };
 
-const SearchBar = ({ api, features, onAddCity }) => {
+const SearchBar = ({ api, features, polities, setSelection, onAddCity }) => {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState({ custom: [], regions: [], world: [] });
@@ -71,7 +74,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
       const custom = (features || [])
         .filter((f) => Array.isArray(f.coord) && String(f.name || "").toLowerCase().includes(q))
         .slice(0, 6);
-      const regions = api ? api.queryRegions(q, 5) : [];
+      const regions = api ? api.queryRegions(q, 5, { polities }) : [];
       const world = await searchSeedCities(q, 8);
       if (!cancelled) setResults({ custom, regions, world });
     }, 180);
@@ -79,7 +82,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, features, api]);
+  }, [query, features, polities, api]);
 
   // Close when clicking anywhere outside the search box.
   useEffect(() => {
@@ -164,7 +167,10 @@ const SearchBar = ({ api, features, onAddCity }) => {
             <button
               key={`r-${r.id}`}
               style={rowStyle}
-              onClick={() => api?.zoomToRegion(r.id)}
+              onClick={() => {
+                setSelection?.([r.id]);
+                api?.zoomToRegion(r.id);
+              }}
               onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
@@ -172,7 +178,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
               <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {r.name || r.id}
               </span>
-              <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)" }}>{r.country || r.owner || ""}</span>
+              <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)" }}>{polityDisplayName(polities, r.owner)}</span>
             </button>
           ))}
 

@@ -2,12 +2,12 @@
 // Units are the map's way of showing what the events say, so they have to read
 // as forces in motion rather than counters that blink from place to place.
 //
-// Positions are TWEENED: the controller emits a new list (its 5s poll, or a
-// commit), and the counters glide to their new positions over ~1.2s. The tween
-// runs entirely outside React — one render per data change to declare the
-// layers, then per-frame setData straight on the MapLibre source. Re-rendering
-// React sixty times a second to move a dot would be an obvious way to make the
-// whole map stutter.
+// Positions are TWEENED: the controller emits a new list (a world write it
+// heard through oh:world-updated, or its own commit), and the counters glide
+// to their new positions over ~1.2s. The tween runs entirely outside React —
+// one render per data change to declare the layers, then per-frame setData
+// straight on the MapLibre source. Re-rendering React sixty times a second to
+// move a dot would be an obvious way to make the whole map stutter.
 //
 // Alongside the counters: a dashed heading line to wherever a unit is under
 // orders to go, and a ring around a patrol's station. Those are what let you
@@ -19,6 +19,7 @@ import { getNationColors, getNationFlags } from "../../runtime/assets.js";
 import { subscribeUnits, getUnits, getPendingUnitOrders, startUnitsSync } from "./unitsController.js";
 import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
 import { useWorldState } from "./useWorldState.js";
+import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -111,17 +112,9 @@ const TYPE_GLYPH = {
   garrison: "C",
 };
 
-const ownerColorString = (colorMap, code) => {
-  const rgb = colorMap[code];
-  if (Array.isArray(rgb)) return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-  const normalized = String(code ?? "").toUpperCase();
-  if (normalized.length < 2) return "rgb(120, 120, 120)";
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const a = Math.max(0, alphabet.indexOf(normalized[0]));
-  const b = Math.max(0, alphabet.indexOf(normalized[1]));
-  const c = Math.max(0, alphabet.indexOf(normalized[normalized.length - 1]));
-  return `rgb(${72 + a * 5}, ${72 + c * 5}, ${72 + b * 5})`;
-};
+// A counter takes its owner's colour exactly as the territory shows it
+// (ownerColors.js); a unit with no owner is grey.
+const UNOWNED_UNIT_COLOR = "rgb(120, 120, 120)";
 
 // A geodesic circle for a patrol's station. Generated in JS rather than leaning
 // on a circle layer's radius, which is measured in screen pixels and would grow
@@ -178,13 +171,18 @@ const Units = () => {
   // The polity records: a scenario polity's own flag, and the aliases and map
   // references a renamed or custom-era polity's flag is found through.
   const { polityOverrides } = useWorldState();
+  const resolveOwnerRgb = useMemo(
+    () => createOwnerRgbResolver(colorMap, polityOverrides),
+    [colorMap, polityOverrides],
+  );
 
   // Everything the tween needs, kept out of React state so a frame costs a
   // setData call and nothing else.
   const fromRef = useRef(new Map()); // unitId -> {lng, lat} at the start of the tween
   const toRef = useRef(new Map()); // unitId -> {lng, lat} target
   const unitsRef = useRef([]);
-  const colorRef = useRef({});
+  // The owner colour resolver the tween paints with.
+  const ownerRgbRef = useRef(resolveOwnerRgb);
   const rafRef = useRef(0);
   const startedRef = useRef(0);
   // ownerCode -> flag icon id, for owners whose flag is on the map right now.
@@ -195,8 +193,8 @@ const Units = () => {
   // Published by the effect below so the flag loaders can fold a late-arriving
   // flag in and repaint, without owning any of the tween state themselves.
   const flagRefreshRef = useRef(() => {});
-  // Last set of polity flag URLs seen, so a world poll that changed something
-  // else does not re-run the flag pass every 5 seconds.
+  // Last set of polity flag URLs seen, so a registry change that touched
+  // something else (a colour, a name) does not re-run the flag pass.
   const polityFlagSignatureRef = useRef("");
 
   useEffect(() => {
@@ -207,9 +205,7 @@ const Units = () => {
       getNationColors()
         .then((next) => {
           if (cancelled || generation !== colorGeneration) return;
-          colorRef.current = next;
           setColorMap(next);
-          if (!rafRef.current) flagRefreshRef.current();
         })
         .catch((error) => console.error("Failed to load colors for units:", error));
     };
@@ -258,12 +254,19 @@ const Units = () => {
     };
   }, []);
 
+  // A new palette or registry colour repaints a settled map; a tween already
+  // reads the ref every frame.
+  useEffect(() => {
+    ownerRgbRef.current = resolveOwnerRgb;
+    if (!rafRef.current) flagRefreshRef.current();
+  }, [resolveOwnerRgb]);
+
   useEffect(() => {
     flagSourcesRef.current = { ...flagSourcesRef.current, polities: polityOverrides ?? {} };
-    // world.json is re-read every 5s and comes back as fresh objects, so react to
-    // the flags actually changing rather than to the poll. A rename or a new
-    // alias can change which flag a polity resolves to (resolveUnitFlagUrl), so
-    // those count as a change too.
+    // polityOverrides changes whenever any polity's entry does, so react to
+    // the flags actually changing rather than to every registry edit. A rename
+    // or a new alias can change which flag a polity resolves to
+    // (resolveUnitFlagUrl), so those count as a change too.
     const signature = Object.entries(polityOverrides ?? {})
       .map(([code, polity]) => [
         code,
@@ -319,7 +322,7 @@ const Units = () => {
               // or has no flag at all — falls back to the type glyph.
               flagIcon: flagIconsRef.current[unit.ownerCode] ?? "",
               label: shortUnitLabel(unit.name),
-              rgb: ownerColorString(colorRef.current, unit.ownerCode),
+              rgb: ownerDisplayCss(ownerRgbRef.current, unit.ownerCode, UNOWNED_UNIT_COLOR),
             },
           };
         }),
@@ -327,13 +330,18 @@ const Units = () => {
 
     // react-map-gl creates the source in its own effect, which may not have run
     // when the first sync lands, and the source also disappears for a beat after
-    // a style or projection change. Retry on the next few frames rather than
-    // leaving the map blank until the controller's 5s poll comes round again.
+    // a style or projection change. Retry on the next few frames. Nothing else
+    // would fill it: the controller has no poll, only world writes.
     let retryHandle = 0;
+    // The source object last filled. The source is declared empty, so when
+    // MapLibre rebuilds the style (3D Terrain, a lost WebGL context) it comes
+    // back as a new, empty object; styledata below refills it.
+    let paintedSource = null;
     const paint = (progress, attempt = 0) => {
       const target = source();
       if (target?.setData) {
         target.setData(featuresAt(progress));
+        paintedSource = target;
         return;
       }
       if (attempt >= 60) return;
@@ -424,18 +432,26 @@ const Units = () => {
       rafRef.current = requestAnimationFrame(tick);
     };
 
-    // map.setStyle() empties the image atlas, so put the flags back as soon as
-    // the new style lands rather than leaving counters on the glyph fallback
-    // until the controller's 5s poll comes round. Cheap when nothing is missing:
-    // a hasImage() check per owner and no refetch either way.
+    // map.setStyle() empties the image atlas and rebuilds the sources, so put
+    // the flags back and refill a new units-source as soon as the new style
+    // lands, rather than leaving the counters on the glyph fallback, or gone,
+    // until the next world write. Cheap when nothing is missing: a hasImage()
+    // check per owner, no refetch, and no setData for the source already filled.
+    // A running tween repaints every frame and reaches the new source itself.
+    const onStyleData = () => {
+      refreshFlagIcons();
+      if (rafRef.current) return;
+      const current = source();
+      if (current && current !== paintedSource) paint(1);
+    };
     const mapInstance = map?.getMap?.() ?? map;
-    mapInstance?.on?.("styledata", refreshFlagIcons);
+    mapInstance?.on?.("styledata", onStyleData);
 
     const stop = startUnitsSync();
     const unsubscribe = subscribeUnits(sync);
     sync();
     return () => {
-      mapInstance?.off?.("styledata", refreshFlagIcons);
+      mapInstance?.off?.("styledata", onStyleData);
       flagRefreshRef.current = () => {};
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (retryHandle) cancelAnimationFrame(retryHandle);
@@ -453,7 +469,7 @@ const Units = () => {
     for (const order of orders) {
       const unit = units.get(order.unitId);
       if (!unit || !Number.isFinite(unit.lng) || !Number.isFinite(unit.lat)) continue;
-      const rgb = ownerColorString(colorMap, unit.ownerCode);
+      const rgb = ownerDisplayCss(resolveOwnerRgb, unit.ownerCode, UNOWNED_UNIT_COLOR);
 
       if (order.kind === "patrol" && order.radiusKm > 0) {
         features.push({
@@ -473,7 +489,7 @@ const Units = () => {
       });
     }
     return features.length ? { type: "FeatureCollection", features } : EMPTY_FEATURE_COLLECTION;
-  }, [orders, colorMap]);
+  }, [orders, resolveOwnerRgb]);
 
   return (
     <>

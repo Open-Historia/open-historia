@@ -1,6 +1,7 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
@@ -12,7 +13,7 @@ import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } 
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
-import { isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
+import { assertNoTurnRunning, isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -24,6 +25,7 @@ import { Projects } from "./projects";
 import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, DOCK_WIDTH } from "./hudDock.js";
 import { documentsReadableBy, isDocumentExchange } from "../../runtime/reportDelivery.js";
 import { Presence } from "./presence.jsx";
+import StorageProblemNotice from "./storageProblemNotice.jsx";
 import { useMainMenuOpen } from "./libraryBar";
 import {
     JSON_URLS,
@@ -33,16 +35,18 @@ import {
     loadRegionCatalog,
     readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { readChatsState, writeChatsState, readGameData, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen, mergeChatKnowledgeCursors } from "../../runtime/gameState.js";
 import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import { chatTextDirection } from "../../runtime/i18n.js";
+import { uiString } from "../../runtime/translator.js";
 import { compareGameDates, formatGameDateReadable, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -55,6 +59,7 @@ import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGov
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -64,26 +69,43 @@ const selectGameIdentity = (game) => ({
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
+// A chat's id is a string once stored (gameState.js normalizeChatEntry), so a
+// new chat is given one from the start, and ids are compared as strings: a
+// numeric id from before never matched its stored copy, and every message
+// after the first store sync was shown but not saved.
+const newChatId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const sameChatId = (a, b) => a != null && b != null && String(a) === String(b);
+
+// Whether the save landed: a failed one is said in the panel and kept in
+// memory for its Retry.
 const saveAllChats = async (chats) => {
     try {
         await writeChatsState(chats);
-    } catch (err) { console.error("Failed to save chats:", err); }
+        return true;
+    } catch (err) {
+        console.error("Failed to save chats:", err);
+        return false;
+    }
 };
 
 // How far each leader has been shown of its other threads
-// (AI/crossChatKnowledge.js). Written straight to world state, merged rather
-// than replaced: a turn in one chat must not forget what another chat showed.
+// (AI/crossChatKnowledge.js), merged into world state (gameState.js
+// mergeChatKnowledgeCursors: queued, coalesced and quiet).
 const saveChatKnowledgeCursors = async (cursors) => {
     try {
-        const world = await readWorldState({ force: true });
-        await writeWorldState({ ...world, chatKnowledgeCursors: { ...(world?.chatKnowledgeCursors ?? {}), ...cursors } });
+        await mergeChatKnowledgeCursors(cursors);
     } catch (err) { console.error("Failed to save what each leader has been shown:", err); }
 };
 
+// null when the read FAILED, never []: an empty list here is taken for the
+// player's conversations, and the next save would write it over them.
 const loadAllChats = async ({ force = false } = {}) => {
     try {
         return await readChatsState({ force });
-    } catch { return []; }
+    } catch (err) {
+        logDebugEvent("diplomacy", "The conversations could not be loaded; nothing is saved until they are.", err, { problem: true });
+        return null;
+    }
 };
 
 // ── What a thread missed ──────────────────────────────────────────────────────
@@ -216,6 +238,8 @@ const findCommunityFlagPost = (posts, { code, name }) => {
     const normalizedName = String(name ?? "").trim().toLowerCase();
     return posts.find((post) => {
         if (post.fromScenario || !post.imageUrl) return false;
+        // Flag-Polity is the exact name the flag was shared for: compared as is.
+        if (post.polity && post.polity === String(name ?? "").trim()) return true;
         if (normalizedCode && post.code && post.code.toUpperCase() === normalizedCode) return true;
         return normalizedName && String(post.title ?? "").trim().toLowerCase() === normalizedName;
     }) ?? null;
@@ -317,7 +341,7 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
     const h = height ?? size;
     return url ? (
         <img
-            src={url}
+            src={bundledFlagUrl(url)}
             alt={alt}
             style={{
                 width: w, height: h, objectFit: "cover", borderRadius: "2px",
@@ -834,7 +858,11 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
         <div onMouseEnter={canHover ? () => setHovered(true) : undefined} onMouseLeave={canHover ? () => setHovered(false) : undefined}
             onClick={canHover || isError ? undefined : (event) => { if (!event.target.closest?.("a, button")) setHovered((shown) => !shown); }}
             style={{ position: "relative" }}>
-            <div data-no-translate={isPlayer ? "" : undefined} style={{
+            {/* The player's words and the leaders' replies (written in the chat
+                language) stay as written under the interface translator, which
+                would otherwise put a reply into the interface language at the
+                cost of a request; only an error is interface text. */}
+            <div data-no-translate={isError ? undefined : ""} dir={isPlayer || isError ? undefined : chatTextDirection()} style={{
                 padding: ".62rem .82rem",
                 borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
                 backgroundColor: isPlayer ? "rgba(59,130,246,.92)" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, rgba(35,35,39,0.96))`,
@@ -1113,7 +1141,7 @@ const useTouchDisarm = (armed, setArmed) => {
     }, [armed, canHover, setArmed]);
 };
 
-const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {} }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
     useTouchDisarm(confirmingDelete, setConfirmingDelete);
@@ -1262,9 +1290,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // DEMANDS, in the one-on-one thread between the player and their own
     // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
     // player, from the same shared rule as the list's markers.
-    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
-    const puppetRelations = usePuppetMarkers();
-    const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
+    // A Council or accession table takes the group path even with one AI member
+    // (submitPlayerText), where no demand is read, so none is offered there.
+    const oneOnOne = !isGroup && !isInstitutional && !isLifecycleConversation;
+    const theyAre = oneOnOne ? puppetMarkers[countries[0]?.name]?.theyAre ?? "" : "";
     // The composer offers "make this a demand" only to an Overlord writing to
     // its own Puppet; an Overlord's demands of the player arrive on their own.
     const canDemand = theyAre === "puppet";
@@ -1351,6 +1380,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         logDebugEvent("diplomacy",
             `Opened chat #${chat.id} with ${countries.map((country) => country.name).join(", ") || "(nobody)"} — ${saved.length} saved message(s).`,
             undefined, { verbose: true });
+        // The messages are this thread's. Both render sites key the view on the
+        // chat id, so a switch remounts it; this is the second guard, because a
+        // view still holding the last thread's lines sends them into this one.
+        messagesRef.current = saved;
+        setMessages(saved);
         const shown = withoutUnseenMessages(saved, unseen);
         if (shown.length > 0) loadDiplomaticHistory(shown);
         else startDiplomaticChat();
@@ -1378,6 +1412,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         else startDiplomaticChat();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [unseenKey]);
+
+    // The thread grew outside this view: a Council round run from the
+    // Institutions workspace, a committed turn read back from storage. Shown
+    // when it holds more than the view does, and never mid-turn or mid-reveal,
+    // which write the thread themselves.
+    useEffect(() => {
+        const incoming = chat.messages ?? [];
+        if (incoming === messagesRef.current || incoming.length <= messagesRef.current.length) return;
+        if (isLoading || revealRef.current || lifecycleRevealInProgress) return;
+        messagesRef.current = incoming;
+        setMessages(incoming);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chat.messages]);
 
         useEffect(() => {
             const scroller = messagesScrollRef.current;
@@ -1440,6 +1487,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const addTurnEvents = (reveal, newEvents, { cursors = null, onScreen = true } = {}) => {
             if (campaignChanged(reveal.campaignId, activeCampaignNow())) return false;
             const live = chatRef.current;
+            // A committed turn (a Council's, a hearing's) was saved whole with
+            // its governance before it came back: a step is only shown. Writing
+            // it again would put the thread back to this step, and a cut-in
+            // would then erase the committed lines after it.
+            if (reveal.committed) {
+                reveal.events = [...reveal.events, ...newEvents];
+                if (onScreen && String(live?.id) === String(reveal.chatId)) setMessages(viewMessagesOf(projectChatThread(reveal.events)));
+                return true;
+            }
             const events = [
                 ...logForNextStep({ turnLog: reveal.events, wroteAny: reveal.written, chatId: reveal.chatId, liveChatId: live?.id, liveLog: live?.events }),
                 ...newEvents,
@@ -1481,6 +1537,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const reveal = revealRef.current;
             const unsaid = reveal?.controller?.stop() ?? [];
             if (!unsaid.length) return;
+            // A committed turn has been said, and saved, in full: the rest of it
+            // is shown at once rather than dropped.
+            if (reveal.committed) {
+                addTurnEvents(reveal, unsaid.flatMap((step) => step.events));
+                return;
+            }
             const note = describeChatCutIn({ player: playerCountry, steps: unsaid });
             if (note) actionFeedbackRef.current = [actionFeedbackRef.current, note].filter(Boolean).join("\n\n");
             logDebugEvent("diplomacy",
@@ -1591,12 +1653,34 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     formalBusinessInteractive,
                     institutionDebateRequested,
                     institutionProposalId,
+                    expectedGameId: campaignId,
                 });
                 const newEvents = outcome?.newEvents ?? [];
                 const spoken = newEvents.filter((event) => event.kind === "message");
                 const lifecycleApplied = Array.isArray(outcome?.lifecycle) && outcome.lifecycle.length > 0;
-                if (!newEvents.length && !lifecycleApplied) return false;
+                // What this batch got wrong goes to the next one even when it
+                // produced nothing: that is when it is most needed.
                 actionFeedbackRef.current = outcome?.feedback ?? "";
+                if (!newEvents.length && !lifecycleApplied) {
+                    // Nothing came back to show. Said, with why, rather than
+                    // leaving the player's line unanswered: the request is spent.
+                    const refused = Array.isArray(outcome?.rejected) ? outcome.rejected.length : 0;
+                    const unreachable = outcome?.generation?.source === "fallback";
+                    const why = unreachable
+                        ? "The AI could not be reached, so nobody at the table answered."
+                        : refused === 1 ? "Nobody at the table answered: the AI's action was refused."
+                            : refused > 1 ? `Nobody at the table answered: ${refused} of the AI's actions were refused.`
+                                : "Nobody at the table chose to answer.";
+                    logDebugEvent("diplomacy", `Chat #${chat.id}: the table's turn produced nothing.`, {
+                        refused,
+                        fallbackReason: unreachable ? outcome.generation.fallbackReason || "" : "",
+                    }, { problem: unreachable || refused > 0 });
+                    pushMessages([...messagesRef.current, {
+                        role: "error", speaker: "System", text: why, time: asked?.time || gameDate,
+                        ...(text ? { retry: { group: true, text } } : {}),
+                    }]);
+                    return false;
+                }
                 if (lifecycleApplied) {
                     setLifecycleCaseOverrides((previous) => {
                         const next = { ...previous };
@@ -1639,15 +1723,33 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${openedVote.id}.`, error, { problem: true }));
                     }
                 } else {
+                    // Any other committed turn is presented the same way: the
+                    // thread takes the committed log at once, unsaved again, and
+                    // only the screen follows the reveal.
+                    const committed = outcome.committed === true;
+                    if (committed) {
+                        const projected = projectChatThread(outcome.events);
+                        onThreadUpdate?.(chat.id, {
+                            events: outcome.events,
+                            countries: projected.countries,
+                            title: projected.title,
+                            polls: projected.polls,
+                            demands: projected.demands,
+                            cursors: outcome.cursors,
+                            committed: true,
+                        });
+                        messagesRef.current = viewMessagesOf(projected);
+                    }
                     const [first, ...later] = planChatReveal(newEvents);
                     const reveal = {
                         chatId: chat.id,
                         campaignId,
                         events: outcome.events.slice(0, outcome.events.length - newEvents.length),
                         written: false,
+                        committed,
                         controller: null,
                     };
-                    if (!addTurnEvents(reveal, first.events, { cursors: outcome.cursors })) {
+                    if (!addTurnEvents(reveal, first.events, committed ? {} : { cursors: outcome.cursors })) {
                         logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
                         return true;
                     }
@@ -1659,6 +1761,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; no legacy sequential fallback exists.`, error, { problem: true });
                 pushMessages([...nextMessages, {
                     role: "error", speaker: "System", text: message, time: asked?.time || gameDate,
+                    // A line the player typed is asked again from the bubble,
+                    // not typed again: a second copy of it would change what
+                    // every leader answers. A hearing's or a Council's own
+                    // request has its own button for that.
+                    ...(text ? { retry: { group: true, text } } : {}),
                 }]);
                 return true;
             } finally {
@@ -1756,10 +1863,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 // A change of mind says so, or the other side reads the
                 // acceptance as coming out of nowhere.
                 const reconsidered = demand.status === "refused";
+                // In the interface's language (the shipped pack's own entries):
+                // the player's line, as the player would have typed it.
                 const line = answer === "accepted"
-                    ? (reconsidered ? `We have reconsidered. We accept: ${demand.summary}.` : `We accept: ${demand.summary}.`)
-                    : answer === "refused" ? "We refuse this demand."
-                        : (reconsidered ? `We have reconsidered. ${text}` : text);
+                    ? (reconsidered
+                        ? uiString("We have reconsidered. We accept: {{summary}}.", { summary: demand.summary })
+                        : uiString("We accept: {{summary}}.", { summary: demand.summary }))
+                    : answer === "refused" ? uiString("We refuse this demand.")
+                        : (reconsidered ? uiString("We have reconsidered. {{text}}", { text }) : text);
                 await submitPlayerText(line);
             } finally {
                 setDemandBusy(false);
@@ -1772,7 +1883,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setDemandBusy(true);
             try {
                 appendThreadEvents([event]);
-                await submitPlayerText(`We accept your alternative: ${demand.alternative}.`);
+                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }));
             } finally {
                 setDemandBusy(false);
             }
@@ -1783,7 +1894,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const rejectAlternative = async (demand, revised = "") => {
             setDemandBusy(true);
             try {
-                await submitPlayerText(revised || `No. The demand stands: ${demand.summary}.`, {
+                await submitPlayerText(revised || uiString("No. The demand stands: {{summary}}.", { summary: demand.summary }), {
                     onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
                         player: playerCountry,
                         target: demand.target,
@@ -1832,6 +1943,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
+            // In a shared game the host keeps every thread and answers for the AI
+            // governments: the line is sent to it, and the thread comes back in the
+            // next view. A thread started here reaches the host with its first line.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("say", chat.pendingShared
+                    ? { thread: null, to: countries.map((country) => country.name).filter(Boolean).slice(0, 8), text }
+                    : { thread: String(chat.id), to: [], text });
+                if (!answer.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
+                    return;
+                }
+                if (chat.pendingShared) onBack?.();
+                return;
+            }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
@@ -1849,7 +1974,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // the same AI request that writes the turn. There is no legacy sequential
             // group-chat fallback. A one-on-one thread has exactly one AI counterpart,
             // so native code selects it directly and makes only the diplomacy request.
-            if (isGroup || (chat.lifecycleCaseIds?.length && chat.lifecycleInstitutionId)) {
+            // An institution's Council is never that, even with one AI member: it
+            // has an agenda, a charter and votes, which only the batch can act on.
+            if (isGroup || isInstitutional || isLifecycleConversation) {
                 await runGroupTurn(text, nextMessages);
                 return;
             }
@@ -1874,6 +2001,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!playerLifecycleCase || isLoading) return;
             setIsLoading(true);
             try {
+                // The case lives in the world a running turn writes back.
+                assertNoTurnRunning();
                 const result = await commitInstitutionLifecycleCommand({
                     playerCountry,
                     date: gameDate,
@@ -1913,6 +2042,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            if (retry.group) {
+                // The table's turn again, answering the player's line as it
+                // stands in the thread: no second copy of it is added.
+                logDebugEvent("diplomacy", `Retrying the table's turn in chat #${chat.id}.`, undefined, { verbose: true });
+                const rest = messagesRef.current.filter((_, i) => i !== index);
+                pushMessages(rest);
+                await runGroupTurn(retry.text, rest);
+                return;
+            }
             logDebugEvent("diplomacy", `Retrying ${retry.country?.name || "a leader"}'s reply in chat #${chat.id}.`, undefined, { verbose: true });
             pushMessages(messagesRef.current.filter((_, i) => i !== index));
             await fetchLeaderResponse(retry.country, retry.playerMessage);
@@ -1936,13 +2074,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
 
         // DEMANDS, placed in the conversation rather than under it
         // (runtime/demandCheck.js placeDemandCards).
-        // A demand belongs to an overlord and its puppet, so a game with the
-        // system switched off shows none — including ones a thread was already
-        // carrying when it was switched off. They are not deleted: the thread
-        // keeps its log, and switching back on brings the open ones back.
         const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
             messages: visibleEntries.map(({ msg }) => msg),
-            demands: puppetStatesOn ? chat.demands : [],
+            demands: chat.demands,
             isGroup,
         });
         const renderDemandCard = (demand) => (
@@ -2141,8 +2275,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
                     rows={1} value={playerInput}
+                    enterKeyHint="enter"
                     onChange={e => setPlayerInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
+                    onKeyDown={e => { if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handlePlayerSubmit(); } }}
                     onInput={fitComposer}
                     // On a touch screen the keyboard takes up to half the screen,
                     // and the panel shrinks with it: a composer grown to 12rem then
@@ -2207,8 +2342,6 @@ const ChatDateSeparator = ({ value }) => (
 // A long thread renders its recent tail first; older messages come in on demand.
 const CHAT_INITIAL_RENDER_WINDOW = 12;
 const CHAT_RENDER_WINDOW_STEP = 40;
-// A group chat takes at most this many NPC replies to one player message; the
-// floor then returns to the player rather than letting a six-way table monologue.
 
 // ── Incoming diplomacy notifications ──────────────────────────────────────────
 //
@@ -2523,55 +2656,21 @@ const GeneratingBanner = () => (
 //
 // The answer comes from runtime/puppets.js, like the country panel's and the
 // map overlay's, so the three cannot disagree about the player's own empire.
-const usePuppetMarkers = () => {
-    const [markers, setMarkers] = React.useState({});
-    React.useEffect(() => {
-        let cancelled = false;
-        let shown = "";
-        const load = async () => {
-            // A hidden tab has no list to decorate; it catches up when shown.
-            if (typeof document !== "undefined" && document.hidden) return;
-            try {
-                // The cached view, not a forced re-read: this decorates a list
-                // row, and forcing world.json off the server every 15 s for the
-                // life of the panel is a lot of traffic for a label.
-                const [world, game] = await Promise.all([
-                    readWorldStateView().catch(() => ({})),
-                    readGameData().catch(() => ({})),
-                ]);
-                if (cancelled) return;
-                // Per counterpart: the label, and what THEY are to the player —
-                // the demand card and the composer's "make this a demand" need
-                // the relationship itself, not a label to parse.
-                const next = {};
-                for (const row of livePuppetsFor(world, game?.country || "")) {
-                    describeRole(row, {
-                        puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
-                        overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
-                        foreign: () => {},
-                    });
-                }
-                // Every 15 s the same labels, as a new object: re-rendering the
-                // whole list for that is the work this skips.
-                const key = JSON.stringify(next);
-                if (key === shown) return;
-                shown = key;
-                setMarkers(next);
-            } catch { /* a marker is decoration; never break the list for it */ }
-        };
-        load();
-        const timer = setInterval(load, 15000);
-        const onVisible = () => {
-            if (!document.hidden) load();
-        };
-        document.addEventListener("visibilitychange", onVisible);
-        return () => {
-            cancelled = true;
-            clearInterval(timer);
-            document.removeEventListener("visibilitychange", onVisible);
-        };
-    }, []);
-    return markers;
+// Worked out once, in ChatPanel, from the runtime store's world (below), and
+// handed to the conversation: it follows a world write rather than a poll.
+const puppetMarkersFor = (world, player) => {
+    // Per counterpart: the label, and what THEY are to the player — the demand
+    // card and the composer's "make this a demand" need the relationship
+    // itself, not a label to parse.
+    const next = {};
+    for (const row of livePuppetsFor(world, player || "")) {
+        describeRole(row, {
+            puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
+            overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
+            foreign: () => {},
+        });
+    }
+    return next;
 };
 
 const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
@@ -2875,6 +2974,11 @@ const WorkspaceTabIcon = ({ type, size = 14 }) => {
     return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>;
 };
 
+// Two names for one country, however they are cased or spaced. Outside the
+// component: the country list below is memoized on it, and a function made anew
+// on every render is a dependency no list can name.
+const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
@@ -2926,7 +3030,6 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [storyDraft, setStoryDraft] = useState({});
     const [savedFlash, setSavedFlash] = useState("");
 
-    const sameCountry = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
     const countryByName = (name) => countries.find((country) => sameCountry(country.name, name)) || { name };
     const countryRows = useMemo(() => countries
         .filter((country) => !sameCountry(country.name, playerCountry))
@@ -2938,7 +3041,18 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         setSelectedCountry(preferred);
     }, [selectedCountry, countryRows, spies, intercepts]);
 
+    // Refused while a turn runs: the turn writes back the world it read, and a
+    // deployed, expelled or recalled agent would be undone when it landed. Every
+    // caller shows the error.
+    // In a shared game an agent's order is asked of the host, which keeps every
+    // player's agents and holds each order to the same rules
+    // (multiplayer/host/agents.js); the change comes back in the next view.
+    const askHostForAgent = async (fields) => {
+        const answer = await requestFromHost("agent", { target: "", spy: "", story: "", ...fields });
+        if (!answer.ok) throw new Error(answer.error || "The host did not take the order.");
+    };
     const commitSpies = async (next) => {
+        assertNoTurnRunning();
         const fresh = await readWorldState({ force: true });
         const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
         const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });
@@ -2950,16 +3064,25 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 
     const handleExpel = async (spy) => {
         setError("");
-        try { await commitSpies(expelSpy(world, spy.id, { date: gameDate })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "expel", spy: spy.id });
+            else await commitSpies(expelSpy(world, spy.id, { date: gameDate }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent expelled" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleTurn = async (spy) => {
         setError("");
-        try { await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" })); void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" }); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "turn", spy: spy.id, story: String(storyDraft[spy.id] || "").slice(0, 300) });
+            else await commitSpies(turnSpy(world, spy.id, { date: gameDate, coverStory: storyDraft[spy.id] || "" }));
+            void ensureCountryAssessed(spy.owner, { reason: "foreign agent turned" });
+        } catch (err) { setError(err?.message || String(err)); }
     };
     const handleStory = async (spy) => {
         setError("");
         try {
-            await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
+            if (inSharedGame()) await askHostForAgent({ op: "story", spy: spy.id, story: String(storyDraft[spy.id] ?? spy.coverStory ?? "").slice(0, 300) });
+            else await commitSpies(setCoverStory(world, spy.id, storyDraft[spy.id] ?? spy.coverStory));
             setSavedFlash(spy.id);
             setTimeout(() => setSavedFlash((current) => (current === spy.id ? "" : current)), 1800);
         } catch (err) { setError(err?.message || String(err)); }
@@ -2968,8 +3091,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         setChoosing(false); setError("");
         const target = selected?.[0]?.name;
         try {
-            const next = deploySpy(world, target, { date: gameDate, playerPolity: playerCountry });
-            await commitSpies(next);
+            if (inSharedGame()) await askHostForAgent({ op: "deploy", target: String(target || "") });
+            else await commitSpies(deploySpy(world, target, { date: gameDate, playerPolity: playerCountry }));
             setSelectedCountry(target || "");
             setSection("countries");
             void ensureCountryAssessed(target, { reason: "agent deployed" });
@@ -2977,7 +3100,10 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     };
     const handleRecall = async (spy) => {
         setError("");
-        try { await commitSpies(recallSpy(world, spy.id)); } catch (err) { setError(err?.message || String(err)); }
+        try {
+            if (inSharedGame()) await askHostForAgent({ op: "recall", spy: spy.id });
+            else await commitSpies(recallSpy(world, spy.id));
+        } catch (err) { setError(err?.message || String(err)); }
     };
 
     if (open) {
@@ -3211,12 +3337,36 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
     const currentView = view === "spy" && !espionageOn ? "chats" : view;
-    const puppetMarkers = usePuppetMarkers();
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
     const [gameDate, setGameDate]                 = useState("");
     const [chats, setChats]                       = useState([]);
+    // The stored list could not be read: nothing is saved until it is, since
+    // the list in hand is not the player's. And whether the last save failed,
+    // with the list kept here for the Retry.
+    const [chatsLoadFailed, setChatsLoadFailed]   = useState(false);
+    const [chatsSaveFailed, setChatsSaveFailed]   = useState(false);
+    const [chatsRetrying, setChatsRetrying]       = useState(false);
+    const chatsLoadFailedRef = useRef(false);
+    chatsLoadFailedRef.current = chatsLoadFailed;
+    const chatsRef = useRef(chats);
+    chatsRef.current = chats;
+    const persistChats = (list) => {
+        if (chatsLoadFailedRef.current) return;
+        void saveAllChats(list).then((ok) => setChatsSaveFailed(!ok));
+    };
+    // The list could be read at last (a Retry, or the store's own read): the
+    // chats begun meanwhile, kept in memory and unsaved, join it and are saved
+    // with it, rather than being replaced by it and lost.
+    const adoptRecoveredChats = (saved) => {
+        const begun = chatsRef.current.filter((chat) => !saved.some((entry) => sameChatId(entry.id, chat.id)));
+        const merged = [...begun, ...saved];
+        setChats(merged);
+        setChatsLoadFailed(false);
+        chatsLoadFailedRef.current = false;
+        if (begun.length) persistChats(merged);
+    };
     const [activeChat, setActiveChat]             = useState(null);
     const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
     const institutionAutomationInFlight = useRef(new Set());
@@ -3374,7 +3524,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // The list row is the thread as shown; the conversation gets the stored one,
     // which is what it writes back.
     const openChatFromList = (chat) => {
-        setActiveChat(chats.find((entry) => entry.id === chat.id) ?? chat);
+        setActiveChat(chats.find((entry) => sameChatId(entry.id, chat.id)) ?? chat);
         setHeldUnreadId(null);
         setChatReadState(chat, true);
     };
@@ -3411,7 +3561,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (cancelled) return;
             setCountries(countryList);
             setLoadingCountries(false);
-            if (savedChats.length > 0) setChats(savedChats);
+            if (savedChats === null) setChatsLoadFailed(true);
+            else if (savedChats.length > 0) setChats(savedChats);
             setHasLoadedInitialData(true);
         })
         .catch(() => {
@@ -3424,8 +3575,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return () => { cancelled = true; };
     }, [hasLoadedInitialData, isOpen]);
 
-    const worldSnapshot = useRuntimeState("world", (world) => world || {});
+    // The whole world, so no selector: a selector's output is deep-compared on
+    // every world write, and for the whole document that is a full walk.
+    const worldDocument = useRuntimeState("world");
+    const worldSnapshot = useMemo(() => worldDocument || {}, [worldDocument]);
     const identity = useRuntimeState("game", selectGameIdentity);
+    // Who is the player's Overlord or Puppet, for the list's markers and a
+    // thread's demands: from the world this panel already holds, so it moves
+    // when the world is written.
+    const puppetMarkers = useMemo(
+        () => puppetMarkersFor(worldSnapshot, identity.country),
+        [worldSnapshot, identity.country],
+    );
     useEffect(() => {
         if (!isOpen) return;
         if (identity.country) setPlayerCountry(identity.country);
@@ -3444,12 +3605,20 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         const sync = (saved) => {
             if (cancelled) return;
             if (!Array.isArray(saved)) { setFreshSinceOpen(true); return; }
+            // A list the store read (or was written) is the player's: saving
+            // is safe again, and what was begun while it could not be read
+            // joins it.
+            if (chatsLoadFailedRef.current) {
+                adoptRecoveredChats(saved);
+                setFreshSinceOpen(true);
+                return;
+            }
             setChats((prev) => {
                 const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
                 if (signature(saved) === signature(prev)) return prev;
                 setActiveChat((ac) => {
                     if (!ac) return ac;
-                    const updated = saved.find((c) => c.id === ac.id);
+                    const updated = saved.find((c) => sameChatId(c.id, ac.id));
                     // Only adopt storage's copy when it has MORE messages (an
                     // outreach note landed); otherwise the in-panel state wins.
                     return updated && (updated.messages?.length ?? 0) > (ac.messages?.length ?? 0) ? updated : ac;
@@ -3477,12 +3646,36 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                        [countries, landHolders, playerCountry]
     );
 
+    // Retry for a list that could not be read: once it is, the chats begun
+    // meanwhile (kept in memory, unsaved) join it and are saved with it.
+    const retryChatsLoad = async () => {
+        setChatsRetrying(true);
+        try {
+            const saved = await loadAllChats({ force: true });
+            if (saved === null) return;
+            adoptRecoveredChats(saved);
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
+
+    // Retry for a save that failed: the list as it stands now, which holds
+    // everything the failed one did.
+    const retryChatsSave = async () => {
+        setChatsRetrying(true);
+        try {
+            setChatsSaveFailed(!(await saveAllChats(chatsRef.current)));
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
+
     const handleMessagesUpdate = (chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") recordRecentDiplomaticOutgoing(chatId);
         setChats(prev => {
-            const updated = prev.map(c => c.id === chatId ? { ...c, messages: newMessages } : c);
-            saveAllChats(updated);
-            setActiveChat(ac => ac?.id === chatId ? { ...ac, messages: newMessages } : ac);
+            const updated = prev.map(c => sameChatId(c.id, chatId) ? { ...c, messages: newMessages } : c);
+            persistChats(updated);
+            setActiveChat(ac => sameChatId(ac?.id, chatId) ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
     };
@@ -3493,13 +3686,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // live in world state, so they are written there rather than on the chat.
     const handleThreadUpdate = (chatId, { events, countries, title, polls, demands, cursors, committed = false }) => {
         setChats((prev) => {
-            const updated = prev.map((c) => (c.id === chatId
+            const updated = prev.map((c) => (sameChatId(c.id, chatId)
                 ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls, demands: demands ?? c.demands }
                 : c));
             // Institutional one-request turns are already committed atomically
             // with their legal governance/world/event changes in gameplay.js.
-            if (!committed) saveAllChats(updated);
-            setActiveChat((ac) => (ac?.id === chatId ? updated.find((c) => c.id === chatId) ?? ac : ac));
+            if (!committed) persistChats(updated);
+            setActiveChat((ac) => (sameChatId(ac?.id, chatId) ? updated.find((c) => sameChatId(c.id, chatId)) ?? ac : ac));
             return updated;
         });
         if (!committed && cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
@@ -3563,28 +3756,28 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ...current.filter((entry) => entry.key !== key),
                 { key, institutionId: id, proposalId: proposal, kind: mode },
             ]);
-            let materialized = await ensureInstitutionalChannel({
-                institutionId: id,
-                playerCountry,
-                date: gameDate,
-                expectedGameId,
-            });
             // Publish the native Council channel immediately. The model may take
             // several seconds to reason, but the institution workspace should
             // already show that formal business is actively being considered.
-            adoptInstitutionalResult(materialized);
+            // A comment from the player is committed in the same write, since
+            // saying it materializes the channel too; without one, a Council
+            // that already stands costs no write at all.
             const comment = String(playerComment || "").trim();
-            if (comment) {
-                const spoken = await commitInstitutionalPlayerMessage({
+            const materialized = comment
+                ? await commitInstitutionalPlayerMessage({
                     institutionId: id,
                     playerCountry,
                     text: comment,
                     date: gameDate,
                     expectedGameId,
+                })
+                : await ensureInstitutionalChannel({
+                    institutionId: id,
+                    playerCountry,
+                    date: gameDate,
+                    expectedGameId,
                 });
-                adoptInstitutionalResult(spoken);
-                materialized = { ...materialized, channel: spoken.channel || materialized.channel };
-            }
+            adoptInstitutionalResult(materialized);
             const result = await runChatActionBatch({
                 chat: materialized.channel,
                 playerMessage: mode === "amendment" ? comment : "",
@@ -3595,6 +3788,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 formalBusinessRequested: mode === "vote",
                 formalBusinessInteractive: mode === "vote",
                 useCanonicalState: true,
+                expectedGameId,
             });
             adoptInstitutionalResult({ ...result, channel: result?.channel || materialized.channel });
             logDebugEvent("diplomacy", `Institution ${mode} round completed for ${id}/${proposal}.`, { source }, { verbose: true });
@@ -3637,8 +3831,15 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     const handleStartChat = (selected) => {
-        const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
-        setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
+        // In a shared game a thread is the host's to open, with its first line
+        // (ConversationView's submitPlayerText); until then it lives only here.
+        if (inSharedGame()) {
+            setShowSelector(false);
+            setActiveChat({ id: `pending-${Date.now()}`, countries: selected, messages: [], status: "open", pendingShared: true });
+            return;
+        }
+        const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
+        setChats(prev => { const u = [newChat, ...prev]; persistChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
     };
@@ -3655,11 +3856,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // question of which one really deleted it.
     const handleDeleteChat = (id) => {
         setChats(prev => {
-            const updated = prev.map(chat => chat.id === id ? { ...chat, status: "closed" } : chat);
-            saveAllChats(updated);
+            const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
+            persistChats(updated);
             return updated;
         });
-        if (activeChat?.id === id) setActiveChat(null);
+        if (sameChatId(activeChat?.id, id)) setActiveChat(null);
     };
 
     // Lifecycle invitation/application threads are purpose-built negotiations,
@@ -3758,9 +3959,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
                 return prev;
             }
-            const newChat = { id: Date.now(), countries: [{ name: country.name, code }], messages: [], status: "open" };
+            const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
-            saveAllChats(u);
+            persistChats(u);
             setView("chats");
             setActiveChat(newChat);
             if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
@@ -3829,12 +4030,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
+            {chatsLoadFailed ? (
+                <StorageProblemNotice title="Could not load your conversations." detail="Nothing new is saved until they load." onRetry={retryChatsLoad} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : chatsSaveFailed ? (
+                <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retryChatsSave} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : null}
+
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
-                draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
+                draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
             ) : (
@@ -3886,7 +4093,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                         onCouncilVisibleChange={setVisibleCouncilChatId}
                         renderCouncil={(channel) => (
                             <ConversationView
+                                key={String(channel.id)}
                                 chat={channel}
+                                puppetMarkers={puppetMarkers}
                                 playerCountry={playerCountry}
                                 gameDate={gameDate}
                                 world={worldSnapshot}
@@ -3894,7 +4103,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 onThreadUpdate={handleThreadUpdate}
                                 unread={unreadIds.has(String(channel.id))}
                                 onToggleRead={() => toggleActiveChatRead(channel)}
-                                draft={composerDraft?.chatId === channel.id ? composerDraft.text : ""}
+                                draft={sameChatId(composerDraft?.chatId, channel.id) ? composerDraft.text : ""}
                                 onDraftApplied={() => setComposerDraft(null)}
                                 onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
                                 onLifecycleResult={adoptInstitutionalResult}
@@ -4516,13 +4725,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     top: `calc(4.35rem + ${SAFE_TOP})`,
                     left: "auto",
                     // Advisor and Stats share the same resizable right drawer,
-                    // and the toasts were meant to sit left of it: the drawer
-                    // was to publish its live width as this variable. Nothing
-                    // sets it on this line (the setter was in advisor.jsx on the
-                    // Continuum checkpoint and never came across), so it is 0
-                    // and the toasts sit at the right edge, over an open drawer.
-                    // On a phone the drawer is the whole screen, with nothing
-                    // beside it, so there the offset is left out.
+                    // and the toasts sit left of it: main.jsx sets this
+                    // variable to the drawer's live width while it is open,
+                    // and to 0 while it is shut. On a phone the drawer is the
+                    // whole screen, with nothing beside it, so there the
+                    // offset is left out.
                     right: isMobile
                         ? `calc(0.75rem + ${SAFE_RIGHT})`
                         : `calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem + ${SAFE_RIGHT})`,
@@ -4560,7 +4767,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             textAlign: "left",
                             border: "1px solid rgba(230,230,233,0.20)",
                             borderRadius: "14px",
-                            background: "linear-gradient(180deg, rgba(42,42,46,0.72), rgba(17,17,19,0.62))",
+                            background: "rgba(30,30,33,0.67)",
                             backdropFilter: "blur(26px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(26px) saturate(1.35)",
                             color: "white",
@@ -4658,7 +4865,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                 overflowY: "auto",
                                 borderRadius: "16px",
                                 border: "1px solid rgba(230,230,233,0.18)",
-                                background: "linear-gradient(180deg, rgba(41,41,45,0.74), rgba(17,17,19,0.64))",
+                                background: "rgba(29,29,32,0.69)",
                                 backdropFilter: "blur(28px) saturate(1.38)",
                                 WebkitBackdropFilter: "blur(28px) saturate(1.38)",
                                 boxShadow: "0 18px 50px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08)",
@@ -4757,7 +4964,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             padding: "0 0.65rem",
                             borderRadius: "10px",
                             border: "1px solid rgba(230,230,233,0.20)",
-                            background: "linear-gradient(180deg, rgba(45,45,49,0.72), rgba(18,18,20,0.62))",
+                            background: "rgba(32,32,35,0.67)",
                             backdropFilter: "blur(24px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(24px) saturate(1.35)",
                             color: "white",
@@ -4857,4 +5064,4 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     );
 });
 
-export { Toolbar, Chat, ChatPanel };
+export { Toolbar };

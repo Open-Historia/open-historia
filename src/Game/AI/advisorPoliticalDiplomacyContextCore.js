@@ -36,6 +36,112 @@ const proposalSummary = (view) => {
   return rows;
 };
 
+// What the advisor may and may not do with the options below. Sent whole,
+// ahead of the lists, whatever they hold.
+const AUTHORITY_BOUNDARY = Object.freeze([
+  "Advisor authority boundary:",
+  "- You may recommend, explain, compare, draft language and point out pending institutional obligations.",
+  "- You may NOT silently cast the player's vote, accept an amendment, found/join/leave an institution, accept an invitation, sign an agreement, or infer sovereign authorization from PWv2. Those remain explicit player/native actions.",
+  "- When you recommend a concrete formal institution step the player can legally take now, normally prepare the typed institution-action draft in the same reply so the player gets a confirmation button. Do not stop at a generic 'formal execution remains your prerogative'. Phrase it as a recommendation/offer, and never claim the act occurred until the player confirms it.",
+  "- For membership, follow the charter's actual lifecycle. If the legal next step is an invitation whose acceptance later triggers an approval ballot, offer the invitation; do not fabricate an immediate accession vote just because it sounds more formal.",
+  "- You MAY explain pending invitations/applications, charter accession/withdrawal rules, likely consequences, and where the player can exercise the corresponding explicit lifecycle control in the Institutions workspace.",
+  "- When the player asks what is possible, distinguish ordinary diplomatic speech from formal institutional acts and identify any pending player decision clearly.",
+]);
+
+// The least the lists get, however long the rules grow.
+const ADVISOR_DIPLOMACY_MIN_LIST_CHARS = 1500;
+
+const linesSize = (lines) => lines.reduce((sum, line) => sum + line.length + 1, 0);
+
+// One list inside `budget` characters, cut a whole row at a time: each row in
+// full while it fits (at most `maxFull`), then each remaining row's one-line
+// short form while that fits, then one line counting the rest. `total` counts
+// the rows the caller never passed as well (the builder caps them). The count
+// line is always given room, so nothing leaves the brief unsaid.
+const fitRows = (rows, { budget, maxFull, total, omitted }) => {
+  const out = [];
+  const reserve = omitted(total).length + 1;
+  let used = 0;
+  let index = 0;
+  for (; index < rows.length && index < maxFull; index += 1) {
+    const cost = linesSize(rows[index].full);
+    if (used + cost + reserve > budget) break;
+    out.push(...rows[index].full);
+    used += cost;
+  }
+  for (; index < rows.length; index += 1) {
+    const cost = rows[index].short.length + 1;
+    if (used + cost + reserve > budget) break;
+    out.push(rows[index].short);
+    used += cost;
+  }
+  if (total > index) out.push(omitted(total - index));
+  return out;
+};
+
+const institutionRow = (entry) => {
+  const institution = entry?.institution || {};
+  const member = entry?.member || {};
+  const options = [];
+  if (entry.canParticipate) options.push("Council access");
+  if (entry.canTableProposal) options.push("may table a resolution");
+  if (entry.canParticipate && clean(institution?.charter?.lifecycle?.accession?.mode || "approval") !== "not-permitted") options.push("may invite eligible governments");
+  if (entry.playerPendingBallotCount) options.push(`${entry.playerPendingBallotCount} player ballot${entry.playerPendingBallotCount === 1 ? "" : "s"} pending`);
+  if (entry.playerPendingAmendmentReviewCount) options.push(`${entry.playerPendingAmendmentReviewCount} amendment review${entry.playerPendingAmendmentReviewCount === 1 ? "" : "s"} pending`);
+  const lifecycle = institution?.charter?.lifecycle || {};
+  const identity = lifecycle?.identity || {};
+  const lifecycleBits = [
+    list(lifecycle.purpose).length ? `purpose: ${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
+    clean(identity.politicalCharacter) ? `character: ${clean(identity.politicalCharacter).slice(0, 180)}` : "",
+    list(identity.geographicScope).length ? `scope: ${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
+    clean(institution?.charter?.note) ? `charter/obligations: ${clean(institution.charter.note).slice(0, 220)}` : "",
+    lifecycle?.withdrawal?.mode ? `withdrawal: ${lifecycle.withdrawal.mode}${Number(lifecycle.withdrawal.noticeDays) > 0 ? ` (${lifecycle.withdrawal.noticeDays}d notice)` : ""}` : "",
+  ].filter(Boolean);
+  const members = list(institution?.members).slice(0, 16).map((item) => `${clean(item?.polity)} (${clean(item?.status || "member")}${clean(item?.role) && clean(item.role) !== "member" ? `/${clean(item.role)}` : ""})`).filter(Boolean);
+  const voting = institution?.charter?.decisionRule || institution?.charter?.votingRule || institution?.charter?.governance?.decisionRule || "";
+  const full = [`- ${institution.name || institution.id} [${institution.id}] — ${clean(institution.kind) || "other"} / ${clean(institution.status) || "active"} — ${member.status || "member"}${member.role && member.role !== "member" ? ` / ${member.role}` : ""}${options.length ? ` | ${options.join("; ")}` : ""}`];
+  if (members.length) full.push(`  members: ${members.join(", ")}`);
+  if (voting && typeof voting === "string") full.push(`  decision rule: ${clean(voting)}`);
+  if (lifecycleBits.length) full.push(`  ${lifecycleBits.join(" | ")}`);
+  full.push(...proposalSummary(entry));
+  return {
+    full,
+    short: `- ${institution.name || institution.id} [${institution.id}] — ${member.status || "member"}${entry.playerPendingBallotCount ? " | vote pending" : ""}`,
+  };
+};
+
+const lifecycleRow = (entry) => {
+  const institution = entry?.institution || {};
+  const lifecycleCase = entry?.case || {};
+  const lifecycle = institution?.charter?.lifecycle || {};
+  const identity = lifecycle?.identity || {};
+  const fit = [
+    list(lifecycle.purpose).length ? `purpose=${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
+    clean(identity.politicalCharacter) ? `character=${clean(identity.politicalCharacter).slice(0, 160)}` : "",
+    list(identity.geographicScope).length ? `scope=${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
+    list(identity.primaryThreatModel).length ? `threat model=${list(identity.primaryThreatModel).slice(0, 3).join(", ")}` : "",
+    clean(institution?.charter?.note) ? `obligations=${clean(institution.charter.note).slice(0, 180)}` : "",
+  ].filter(Boolean).join(" | ");
+  const head = `- ${institution.name || institution.id} [${institution.id}] — ${lifecycleCase.kind || "lifecycle"} / ${lifecycleCase.status || "pending"}${lifecycleCase.requestedStatus ? ` | requested ${lifecycleCase.requestedStatus}` : ""}`;
+  return {
+    full: [`${head}${lifecycleCase.effectiveDate ? ` | effective ${lifecycleCase.effectiveDate}` : ""}${fit ? ` | ${fit}` : ""}${lifecycleCase.reason ? ` | case=${lifecycleCase.reason}` : ""}`],
+    short: head,
+  };
+};
+
+const threadRow = (thread) => {
+  const type = clean(thread?.type).toUpperCase().replace(/-/g, " ");
+  const ids = [
+    clean(thread?.institutionId) ? `institution=${clean(thread.institutionId)}` : "",
+    list(thread?.lifecycleCaseIds).length ? `cases=${list(thread.lifecycleCaseIds).join(",")}` : "",
+    clean(thread?.id) ? `thread=${clean(thread.id)}` : "",
+  ].filter(Boolean).join(" | ");
+  const head = `- ${type}${ids ? ` [${ids}]` : ""} | participants: ${list(thread?.participants).join(", ") || "—"}`;
+  const full = [`${head}${clean(thread?.title) ? ` | title: ${clean(thread.title)}` : ""}`];
+  if (clean(thread?.latestText)) full.push(`  latest ${clean(thread?.latestSpeaker) || "message"}: ${clean(thread.latestText)}`);
+  return { full, short: head };
+};
+
 /**
  * Pure formatter for the Advisor's private-government briefing and current
  * institution affordances. The caller owns retrieval of the bounded PWv2
@@ -47,6 +153,9 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
   institutionViews = [],
   institutionLifecycleCases = [],
   threadContexts = [],
+  // How many there are in all, when the caller passed only the first few.
+  institutionLifecycleCaseCount = 0,
+  threadCount = 0,
 } = {}) => {
   const polity = clean(playerPolity);
   if (!polity) return { text: "", politicalText: "", diplomacyText: "", institutionIds: [], politicalContext: null };
@@ -80,87 +189,67 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
     "You may also prepare a formal institution-action draft (proposal, submit-for-vote, ballot, or membership invitation) when the current canonical state makes that exact step available. A draft is not execution: the player must explicitly confirm it in the Advisor UI, and native governance validates it again.",
   ];
 
+  // The rules are laid down before the lists and are never cut. The whole
+  // brief used to be sliced to its cap after the lists, so a busy campaign (a
+  // dozen threads, a few institutions) lost the rule against casting the
+  // player's vote, and with four institutions the whole section: exactly the
+  // campaigns where the advisor drafts votes and invitations. Only the lists
+  // are budgeted, a whole row at a time (fitRows).
+  lines.push(...AUTHORITY_BOUNDARY);
+  const listBudget = Math.max(ADVISOR_DIPLOMACY_MIN_LIST_CHARS, ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS - linesSize(lines));
+  let remaining = listBudget;
+
   if (!views.length) {
     lines.push("Formal institutions: the player currently has no tracked institutional memberships.");
+    remaining -= linesSize(lines.slice(-1));
   } else {
-    lines.push("Formal institutions:");
-    for (const entry of views.slice(0, 12)) {
-      const institution = entry.institution || {};
-      const member = entry.member || {};
-      const options = [];
-      if (entry.canParticipate) options.push("Council access");
-      if (entry.canTableProposal) options.push("may table a resolution");
-      if (entry.canParticipate && clean(institution?.charter?.lifecycle?.accession?.mode || "approval") !== "not-permitted") options.push("may invite eligible governments");
-      if (entry.playerPendingBallotCount) options.push(`${entry.playerPendingBallotCount} player ballot${entry.playerPendingBallotCount === 1 ? "" : "s"} pending`);
-      if (entry.playerPendingAmendmentReviewCount) options.push(`${entry.playerPendingAmendmentReviewCount} amendment review${entry.playerPendingAmendmentReviewCount === 1 ? "" : "s"} pending`);
-      const lifecycle = institution?.charter?.lifecycle || {};
-      const identity = lifecycle?.identity || {};
-      const lifecycleBits = [
-        list(lifecycle.purpose).length ? `purpose: ${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
-        clean(identity.politicalCharacter) ? `character: ${clean(identity.politicalCharacter).slice(0, 180)}` : "",
-        list(identity.geographicScope).length ? `scope: ${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
-        clean(institution?.charter?.note) ? `charter/obligations: ${clean(institution.charter.note).slice(0, 220)}` : "",
-        lifecycle?.withdrawal?.mode ? `withdrawal: ${lifecycle.withdrawal.mode}${Number(lifecycle.withdrawal.noticeDays) > 0 ? ` (${lifecycle.withdrawal.noticeDays}d notice)` : ""}` : "",
-      ].filter(Boolean);
-      const members = list(institution?.members).slice(0, 16).map((item) => `${clean(item?.polity)} (${clean(item?.status || "member")}${clean(item?.role) && clean(item.role) !== "member" ? `/${clean(item.role)}` : ""})`).filter(Boolean);
-      const voting = institution?.charter?.decisionRule || institution?.charter?.votingRule || institution?.charter?.governance?.decisionRule || "";
-      lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${clean(institution.kind) || "other"} / ${clean(institution.status) || "active"} — ${member.status || "member"}${member.role && member.role !== "member" ? ` / ${member.role}` : ""}${options.length ? ` | ${options.join("; ")}` : ""}`);
-      if (members.length) lines.push(`  members: ${members.join(", ")}`);
-      if (voting && typeof voting === "string") lines.push(`  decision rule: ${clean(voting)}`);
-      if (lifecycleBits.length) lines.push(`  ${lifecycleBits.join(" | ")}`);
-      for (const proposal of proposalSummary(entry)) lines.push(proposal);
-    }
-    if (views.length > 12) lines.push(`- ${views.length - 12} additional membership(s) omitted from the inline brief; use institution lookups when needed.`);
+    const heading = "Formal institutions:";
+    const fitted = fitRows(views.map(institutionRow), {
+      budget: Math.floor(listBudget * 0.5) - heading.length - 1,
+      maxFull: 12,
+      total: views.length,
+      omitted: (count) => (count === 1
+        ? "- 1 more membership omitted from this brief."
+        : `- ${count} more memberships omitted from this brief.`),
+    });
+    lines.push(heading, ...fitted);
+    remaining -= linesSize([heading, ...fitted]);
   }
 
-  if (lifecycleCases.length) {
-    lines.push("Pending institution lifecycle:");
-    for (const entry of lifecycleCases.slice(0, 12)) {
-      const institution = entry?.institution || {};
-      const lifecycleCase = entry?.case || {};
-      const lifecycle = institution?.charter?.lifecycle || {};
-      const identity = lifecycle?.identity || {};
-      const fit = [
-        list(lifecycle.purpose).length ? `purpose=${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
-        clean(identity.politicalCharacter) ? `character=${clean(identity.politicalCharacter).slice(0, 160)}` : "",
-        list(identity.geographicScope).length ? `scope=${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
-        list(identity.primaryThreatModel).length ? `threat model=${list(identity.primaryThreatModel).slice(0, 3).join(", ")}` : "",
-        clean(institution?.charter?.note) ? `obligations=${clean(institution.charter.note).slice(0, 180)}` : "",
-      ].filter(Boolean).join(" | ");
-      lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${lifecycleCase.kind || "lifecycle"} / ${lifecycleCase.status || "pending"}${lifecycleCase.requestedStatus ? ` | requested ${lifecycleCase.requestedStatus}` : ""}${lifecycleCase.effectiveDate ? ` | effective ${lifecycleCase.effectiveDate}` : ""}${fit ? ` | ${fit}` : ""}${lifecycleCase.reason ? ` | case=${lifecycleCase.reason}` : ""}`);
-    }
+  const lifecycleTotal = Math.max(lifecycleCases.length, Number(institutionLifecycleCaseCount) || 0);
+  if (lifecycleTotal) {
+    const heading = "Pending institution lifecycle:";
+    const fitted = fitRows(lifecycleCases.map(lifecycleRow), {
+      budget: Math.floor(remaining * 0.4) - heading.length - 1,
+      maxFull: 12,
+      total: lifecycleTotal,
+      omitted: (count) => (count === 1
+        ? "- 1 more pending lifecycle case omitted from this brief."
+        : `- ${count} more pending lifecycle cases omitted from this brief.`),
+    });
+    lines.push(heading, ...fitted);
+    remaining -= linesSize([heading, ...fitted]);
   } else {
     lines.push("Pending institution lifecycle: none.");
   }
 
   const threads = list(threadContexts);
+  const threadTotal = Math.max(threads.length, Number(threadCount) || 0);
   lines.push("Diplomatic thread identity:");
-  if (!threads.length) {
+  if (!threadTotal) {
     lines.push("- no recent visible diplomatic threads");
   } else {
-    for (const thread of threads.slice(0, 12)) {
-      const type = clean(thread?.type).toUpperCase().replace(/-/g, " ");
-      const ids = [
-        clean(thread?.institutionId) ? `institution=${clean(thread.institutionId)}` : "",
-        list(thread?.lifecycleCaseIds).length ? `cases=${list(thread.lifecycleCaseIds).join(",")}` : "",
-        clean(thread?.id) ? `thread=${clean(thread.id)}` : "",
-      ].filter(Boolean).join(" | ");
-      lines.push(`- ${type}${ids ? ` [${ids}]` : ""} | participants: ${list(thread?.participants).join(", ") || "—"}${clean(thread?.title) ? ` | title: ${clean(thread.title)}` : ""}`);
-      if (clean(thread?.latestText)) lines.push(`  latest ${clean(thread?.latestSpeaker) || "message"}: ${clean(thread.latestText)}`);
-    }
+    lines.push(...fitRows(threads.map(threadRow), {
+      budget: remaining - "Diplomatic thread identity:".length - 1,
+      maxFull: 12,
+      total: threadTotal,
+      omitted: (count) => (count === 1
+        ? "- 1 more diplomatic thread omitted from this brief."
+        : `- ${count} more diplomatic threads omitted from this brief.`),
+    }));
   }
 
-  lines.push(
-    "Advisor authority boundary:",
-    "- You may recommend, explain, compare, draft language and point out pending institutional obligations.",
-    "- You may NOT silently cast the player's vote, accept an amendment, found/join/leave an institution, accept an invitation, sign an agreement, or infer sovereign authorization from PWv2. Those remain explicit player/native actions.",
-    "- When you recommend a concrete formal institution step the player can legally take now, normally prepare the typed institution-action draft in the same reply so the player gets a confirmation button. Do not stop at a generic 'formal execution remains your prerogative'. Phrase it as a recommendation/offer, and never claim the act occurred until the player confirms it.",
-    "- For membership, follow the charter's actual lifecycle. If the legal next step is an invitation whose acceptance later triggers an approval ballot, offer the invitation; do not fabricate an immediate accession vote just because it sounds more formal.",
-    "- You MAY explain pending invitations/applications, charter accession/withdrawal rules, likely consequences, and where the player can exercise the corresponding explicit lifecycle control in the Institutions workspace.",
-    "- When the player asks what is possible, distinguish ordinary diplomatic speech from formal institutional acts and identify any pending player decision clearly.",
-  );
-
-  const diplomacyText = lines.join("\n").slice(0, ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS).trim();
+  const diplomacyText = lines.join("\n").trim();
   const text = [politicalText, diplomacyText].filter(Boolean).join("\n\n");
   return { text, politicalText, diplomacyText, institutionIds, politicalContext: political };
 };

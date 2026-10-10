@@ -266,7 +266,11 @@ export const validatePoliticalActorOperationShape = (operation, { allowNativeDer
   } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_PRESSURES) {
     if (!objectPatch(operation.state || operation.pressures)) return "set-political-pressures requires a state/pressures object.";
   } else if (op === POLITICAL_ACTOR_OPS.SET_BEHAVIORAL_DISPOSITION) {
-    if (!objectPatch(operation.state || operation.disposition)) return "set-behavioral-disposition requires a state/disposition object.";
+    // An explicit null clears a disposition whose inputs have run out; the apply
+    // branch below deletes it.
+    const clears = (hasOwn(operation, "state") && operation.state === null)
+      || (!hasOwn(operation, "state") && hasOwn(operation, "disposition") && operation.disposition === null);
+    if (!clears && !objectPatch(operation.state || operation.disposition)) return "set-behavioral-disposition requires a state/disposition object (or null to clear it).";
   } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM) {
     const patch = objectPatch(operation.patch) || objectPatch(operation.system);
     if (!patch || !Object.keys(patch).length) return "set-political-system requires a non-empty patch/system object.";
@@ -521,22 +525,27 @@ export const applyPoliticalActorOperation = (world, operation) => {
     const patch = operation.patch && typeof operation.patch === "object" && !Array.isArray(operation.patch)
       ? cloneValue(operation.patch)
       : {};
-    actor.government = {
-      ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-      ...patch,
-    };
+    // A string `coalition` is the coalition's name, not a list of its parties.
+    if (typeof patch.coalition === "string") {
+      if (!clean(patch.coalitionName)) patch.coalitionName = patch.coalition;
+      delete patch.coalition;
+    }
+    const current = actor.government && typeof actor.government === "object" ? actor.government : {};
+    actor.government = { ...current, ...patch };
 
-    const hasPartyRefs = [
-      "rulingPartyIds",
-      "rulingParties",
-      "coalitionPartyIds",
-      "coalition",
-    ].some((field) => field in patch);
+    // A patch that names only one side of the government keeps the other side
+    // as it was, so updating the coalition partners never demotes the rulers.
+    const patchesRuling = ["rulingPartyIds", "rulingParties", "rulingParty"].some((field) => hasOwn(patch, field));
+    const patchesCoalition = ["coalitionPartyIds", "coalitionParties", "coalition"].some((field) => hasOwn(patch, field));
 
-    if (hasPartyRefs) {
-      const ruling = normalizePartyIdList(actor, patch.rulingPartyIds || patch.rulingParties || []);
+    if (patchesRuling || patchesCoalition) {
+      const ruling = patchesRuling
+        ? normalizePartyIdList(actor, patch.rulingPartyIds || patch.rulingParties || (clean(patch.rulingParty) ? [patch.rulingParty] : []))
+        : { ids: asArray(current.rulingPartyIds), error: "" };
       if (ruling.error) return result({ op, error: ruling.error });
-      const coalition = normalizePartyIdList(actor, patch.coalitionPartyIds || patch.coalition || []);
+      const coalition = patchesCoalition
+        ? normalizePartyIdList(actor, patch.coalitionPartyIds || patch.coalitionParties || patch.coalition || [])
+        : { ids: asArray(current.coalitionPartyIds), error: "" };
       if (coalition.error) return result({ op, error: coalition.error });
       updateGovernmentMembership(
         actor,

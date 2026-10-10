@@ -33,11 +33,12 @@
 // nobody has mentioned in three rounds) is computed here from the game clock by
 // runtime/projects.js, NOT read off what the model last wrote. That is what keeps
 // the board honest between AI turns.
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
-import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
+import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import {
   PROJECT_BOARD_LIMIT,
   applyProjectOpsToWorld,
@@ -61,6 +62,8 @@ import {
   sortProjects,
 } from "../../runtime/projects.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { uiString } from "../../runtime/translator.js";
+import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
 
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
@@ -73,50 +76,51 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 // board stays empty and the player gets a wall of text. Ten at a time, one
 // sentence each, and only the milestones still ahead keeps a reply inside its
 // budget; the retry button asks for the next batch.
-export const PROJECTS_BACKFILL_PROMPT =
-  "Put my current projects and operations on the board — the sustained efforts, "
-  + "mine and any belonging to other powers that we know about. Start with the TEN "
-  + "most significant and stop there; I will ask for the next batch after. Keep each "
-  + "summary to one sentence, and give each only the milestones still ahead of it "
-  + "plus the single most recent one already achieved. Only include efforts that genuinely "
-  + "appear in our history — never invent one to round out the list — and say plainly if "
-  + "you are unsure about any of them.";
+//
+// One string, so the string catalog reads it whole; handed over in the
+// interface's language (uiString).
+export const PROJECTS_BACKFILL_PROMPT = "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.";
 
-const buildBriefPrompt = (project) => {
-  const label = project.kind === "operation" ? "operation" : "project";
-  return `Brief me in full on the ${label} "${project.name}". Where does it actually stand `
-    + "right now, what has moved since the last round, what does the next milestone need from "
-    + "me, and what is most likely to go wrong? Be specific and tell me if the board is "
-    + "out of date.";
-};
+// The card seeds below are whole sentences, one per variant, handed over in the
+// interface's language (uiString) like the backfill prompt: a kind or an owner
+// glued in as a word would stay English inside a translated sentence.
+const buildBriefPrompt = (project) => (project.kind === "operation"
+  ? uiString("Brief me in full on the operation \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name })
+  : uiString("Brief me in full on the project \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name }));
 
 // The same button on a foreign card, asking the questions that are actually
 // answerable about somebody else's programme. "What does the next milestone need
 // from me" is nonsense here — nothing about a rival's shipyard needs anything from
 // the player — and asking it invites the model to answer as though they ran it.
 const buildForeignBriefPrompt = (project, owner) => {
-  const label = project.kind === "operation" ? "operation" : "programme";
-  const whose = owner ? `${owner}'s ` : "the foreign ";
-  return `Brief me on ${whose}${label} "${project.name}". What do we actually know, how good `
-    + "is the sourcing, what has changed since we last looked, and what does it mean for us if "
-    + "it succeeds? Be honest about how much of this is inference rather than intelligence.";
+  const params = { name: project.name, owner };
+  if (project.kind === "operation") {
+    return owner
+      ? uiString("Brief me on {{owner}}'s operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params)
+      : uiString("Brief me on the foreign operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params);
+  }
+  return owner
+    ? uiString("Brief me on {{owner}}'s programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params)
+    : uiString("Brief me on the foreign programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params);
 };
 
 // The seed behind a foreign card's second button. Deliberately asks a QUESTION
 // rather than issuing an order: the player cannot cancel another government's
 // programme, but they can decide to do something about it, and that something is a
 // project of their own the advisor may legitimately open.
-const buildCounterPrompt = (project, owner) => {
-  const whose = owner ? `${owner}'s` : "this";
-  return `What can we actually do about ${whose} "${project.name}"? Lay out the realistic `
-    + "options — diplomatic, economic, covert, or simply outpacing them — with what each would "
-    + "cost us and how it could go wrong. If we settle on one, open it as our own effort.";
-};
+const buildCounterPrompt = (project, owner) => (owner
+  ? uiString("What can we actually do about {{owner}}'s \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name, owner })
+  : uiString("What can we actually do about this \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name }));
 
 // ---- styling ---------------------------------------------------------------
 // Inline objects and per-file constants, the house convention: there is no shared
 // primitives module, so the pattern is copied and the source cited. Surface and
 // palette match actions.jsx / time.jsx so the panel reads as part of the same HUD.
+
+// Same sizing rule as the Actions panel: use what a tall screen offers, never
+// below a usable 30rem, never into the 9rem the top HUD needs. Named because
+// the Tags menu is sized against it (TAG_MENU_MAX_HEIGHT).
+const PANEL_HEIGHT = `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`;
 
 const STATUS_TONES = {
   proposed: { label: "Proposed", color: "#93c5fd", bg: "rgba(59,130,246,0.16)" },
@@ -304,7 +308,7 @@ const OwnerBadge = ({ flagUrl, mine, name }) => {
         {flagUrl && !flagFailed ? (
           <img
             alt=""
-            src={flagUrl}
+            src={bundledFlagUrl(flagUrl)}
             onError={() => setFlagFailed(true)}
             style={{ height: "100%", objectFit: "cover", width: "100%" }}
           />
@@ -712,6 +716,383 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
   );
 });
 
+// ---- the Tags menu ---------------------------------------------------------
+//
+// Every tag on the board, behind one control. They used to be a chip each, in
+// a row of their own under the filters, which suited the handful a new
+// campaign has and not a vocabulary that is open and only ever grows
+// (runtime/countryTags.js): a long game reached about sixty, the chips filled
+// the panel, and the projects they were there to filter were pushed off the
+// bottom of it. A menu is the same toggles in a box that scrolls inside
+// itself, so the board keeps its room however many there are.
+//
+// The mechanics are the game card's menu (libraryBar.jsx GameCard): a button
+// that says it has a menu, a listener on the document for a press anywhere
+// else — this panel's backdrop-filter makes it the containing block of
+// anything fixed inside it, so a click-away layer would cover the panel and
+// nothing beyond — and Back closing it on a phone. Two things that menu never
+// needed are added, because this one stays open while tags are ticked: Escape
+// closes it, and so does the focus leaving it, or a keyboard would walk on
+// into the cards underneath an open menu.
+
+// How tall the open menu may grow. The panel clips whatever leaves it, so the
+// menu has to end above the panel's bottom edge: 12rem is what stands over the
+// menu when the chips have wrapped onto three lines (the header, the search
+// box, the chips), with a little to spare. With fewer lines the menu only ends
+// higher. At the panel's usual 30rem and up this is the 18rem.
+const TAG_MENU_MAX_HEIGHT = `min(18rem, calc(${PANEL_HEIGHT} - 12rem))`;
+// On a phone the filters scroll with the cards (scrollAsOne) and the menu with
+// them, so nothing is clipped. There it is sized to be seen whole with the
+// board scrolled to its top (finger-sized chips stand taller, hence 14rem),
+// and never so short that a phone on its side, or the keyboard, leaves no room
+// for a row of tags: past that the sheet scrolls to the rest of it.
+const TAG_MENU_MAX_HEIGHT_SCROLLING = `min(18rem, max(11rem, calc(${PANEL_HEIGHT} - 14rem)))`;
+
+const TAG_ITEM_SELECTOR = "[role=\"menuitemcheckbox\"]";
+
+const tagMenuBoxStyle = {
+  backgroundColor: "#1b1b1e",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: "10px",
+  boxShadow: "0 12px 30px rgba(0,0,0,0.5)",
+  display: "flex",
+  flexDirection: "column",
+  // Under the whole row of chips and as wide as it, not hung from the button:
+  // the button sits wherever the row wrapped to, and a menu that started at it
+  // would run out of the side of the panel.
+  left: 0,
+  overflow: "hidden",
+  position: "absolute",
+  right: 0,
+  top: "calc(100% + 0.3rem)",
+  zIndex: 5,
+};
+
+// The count on the button, in the accent: what says a filter is at work while
+// the menu is shut.
+const tagCountStyle = {
+  backgroundColor: "rgba(43,193,243,0.14)",
+  border: "1px solid rgba(43,193,243,0.38)",
+  borderRadius: "999px",
+  color: "#2bc1f3",
+  fontSize: "0.6rem",
+  fontWeight: 800,
+  lineHeight: 1,
+  // Pulled in so the button stands no taller than the chips beside it.
+  margin: "-0.1rem 0",
+  minWidth: "1rem",
+  padding: "0.08rem 0.28rem",
+  textAlign: "center",
+};
+
+const TagMenuChevron = ({ open }) => (
+  <svg aria-hidden="true" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.16s ease" }}>
+    <path d="M5 9l7 7 7-7" />
+  </svg>
+);
+
+// The box beside a tag. Drawn rather than a native checkbox: the toggle is the
+// whole row, whose role carries the state to a screen reader, and a native box
+// inside it would be a second control saying the same thing.
+const TagTick = ({ checked }) => (
+  <span
+    aria-hidden="true"
+    style={{
+      alignItems: "center",
+      backgroundColor: checked ? "#2bc1f3" : "transparent",
+      border: `1px solid ${checked ? "#2bc1f3" : "rgba(255,255,255,0.32)"}`,
+      borderRadius: "4px",
+      color: "#0e0e10",
+      display: "flex",
+      flexShrink: 0,
+      height: "0.95rem",
+      justifyContent: "center",
+      transition: "background-color 0.12s ease, border-color 0.12s ease",
+      width: "0.95rem",
+    }}
+  >
+    {checked && (
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 12.5l4.5 4.5L19 7.5" />
+      </svg>
+    )}
+  </span>
+);
+
+// Attached only where a pointer can hover (useCanHover): a tap fires mouseenter
+// and nothing fires mouseleave after it, so on a phone the last tag tapped
+// would stay lit as though it meant something.
+const lightTagRow = (event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; };
+const dimTagRow = (event) => { event.currentTarget.style.background = "transparent"; };
+
+// What the open menu holds. A component of its own so that it exists only
+// while the menu is open: the search box starts empty every time and the list
+// is put in order every time, with no reset to remember.
+const TagMenuBody = ({ id, maxHeight, onClear, onToggle, selected, tags }) => {
+  const [needle, setNeedle] = useState("");
+  // What was ticked as the menu opened goes first in the list (tickedFirst),
+  // and the order then holds until it closes: held in state, never set, so a
+  // tag ticked now stays where the pointer found it.
+  const [tickedAtOpen] = useState(selected);
+  const isTouch = useTouchPrimary();
+  const canHover = useCanHover();
+  const searchRef = useRef(null);
+  const listRef = useRef(null);
+
+  const searchable = tags.length >= TAG_SEARCH_FROM;
+  const listed = tickedFirst(tags, tickedAtOpen);
+  const shown = searchable ? searchTags(listed, needle) : listed;
+  const ticked = new Set(selected);
+  const noneTicked = selected.length === 0;
+
+  const tagItems = () => Array.from(listRef.current?.querySelectorAll(TAG_ITEM_SELECTOR) ?? []);
+
+  // With a keyboard the menu takes the focus as it opens — the search box when
+  // there is one, else the first tag — so the next key lands inside it. Not
+  // where a finger is the pointer: focus in a text field raises the keyboard
+  // over the list the player opened the menu to read.
+  useEffect(() => {
+    if (isTouch) return;
+    (searchRef.current ?? listRef.current?.querySelector(TAG_ITEM_SELECTOR))?.focus();
+  }, [isTouch]);
+
+  // The arrow keys a menu is expected to answer. Tab walks the tags as well,
+  // each being a button, but sixty of them is a long walk.
+  const onListKeyDown = (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const items = tagItems();
+    const index = items.indexOf(event.target);
+    if (index === -1) return;
+    const next = stepTagFocus({
+      // The tags level with the first one are a row of the grid.
+      columns: items.filter((item) => item.offsetTop === items[0].offsetTop).length,
+      count: items.length,
+      index,
+      key: event.key,
+      rtl: getComputedStyle(event.currentTarget).direction === "rtl",
+    });
+    if (next === null) return;
+    event.preventDefault();
+    // Up from the top row is back to the search box, the way Down left it.
+    if (next === index && event.key === "ArrowUp" && searchRef.current) searchRef.current.focus();
+    else items[next].focus();
+  };
+
+  return (
+    <div id={id} style={{ ...tagMenuBoxStyle, maxHeight }}>
+      <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", flexShrink: 0, gap: "0.35rem", padding: "0.35rem" }}>
+        {searchable && (
+          <input
+            ref={searchRef}
+            className="oh-tap-row"
+            value={needle}
+            onChange={(event) => setNeedle(event.target.value)}
+            onKeyDown={(event) => {
+              // Not while an input method is composing: Down picks a candidate there.
+              if (event.key !== "ArrowDown" || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              tagItems()[0]?.focus();
+            }}
+            onFocus={(event) => { event.currentTarget.style.borderColor = "rgba(43,193,243,0.6)"; }}
+            onBlur={(event) => { event.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
+            placeholder="Find a tag…"
+            aria-label="Find a tag…"
+            style={{
+              backgroundColor: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: "8px",
+              color: "white",
+              flex: 1,
+              fontFamily: "sans-serif",
+              fontSize: "0.72rem",
+              minWidth: 0,
+              outline: "none",
+              padding: "0.3rem 0.5rem",
+            }}
+          />
+        )}
+        {/* Dimmed when nothing is ticked, never disabled and never taken away.
+            Taken away, it would bring its row back with the first tick and move
+            every tag down under the pointer. Disabled, a button that had the
+            focus as it went dead takes the keyboard with it in some browsers:
+            no key reaches the page at all, Escape included. */}
+        <button
+          type="button"
+          className="oh-tap-row"
+          aria-disabled={noneTicked}
+          onClick={() => { if (!noneTicked) onClear(); }}
+          style={{
+            ...ghostButtonStyle,
+            cursor: noneTicked ? "default" : "pointer",
+            flexShrink: 0,
+            marginInlineStart: "auto",
+            opacity: noneTicked ? 0.45 : 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Clear selection
+        </button>
+      </div>
+
+      {shown.length > 0 ? (
+        <div
+          ref={listRef}
+          role="menu"
+          aria-label="Tags"
+          onKeyDown={onListKeyDown}
+          style={{
+            // As many columns as fit: two in the panel and on a phone, one on
+            // a narrow phone. Tags are a word or two, and half the scrolling
+            // is worth more than a line each.
+            display: "grid",
+            gap: "0.1rem 0.2rem",
+            gridTemplateColumns: "repeat(auto-fill, minmax(8.75rem, 1fr))",
+            minHeight: 0,
+            overflowY: "auto",
+            // The end of the list is not a reason to start scrolling the board.
+            overscrollBehavior: "contain",
+            padding: "0.3rem",
+            scrollbarColor: "rgba(255,255,255,0.22) transparent",
+            scrollbarWidth: "thin",
+          }}
+        >
+          {shown.map((tag) => {
+            const checked = ticked.has(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={checked}
+                className="oh-tap-row"
+                onClick={() => onToggle(tag)}
+                onMouseEnter={canHover ? lightTagRow : undefined}
+                onMouseLeave={canHover ? dimTagRow : undefined}
+                style={{
+                  alignItems: "center",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: "7px",
+                  color: checked ? "#f4f4f5" : "rgba(255,255,255,0.68)",
+                  cursor: "pointer",
+                  display: "flex",
+                  fontFamily: "sans-serif",
+                  fontSize: "0.72rem",
+                  gap: "0.45rem",
+                  padding: "0.3rem 0.45rem",
+                  textAlign: "start",
+                }}
+              >
+                <TagTick checked={checked} />
+                {/* Written by the model or the player, like the tags on a card:
+                    the translator leaves it as it is. A long one wraps rather
+                    than being cut, since a phone has no tooltip to finish it. */}
+                <span data-no-translate style={{ minWidth: 0, overflowWrap: "anywhere" }}>{tag}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.72rem", fontStyle: "italic", padding: "0.75rem 0.6rem", textAlign: "center" }}>
+          Nothing matched the search.
+        </div>
+      )}
+    </div>
+  );
+};
+
+const TagMenu = ({ maxHeight, onClear, onOpenChange, onToggle, open, selected, tags }) => {
+  const rootRef = useRef(null);
+  const buttonRef = useRef(null);
+  const menuId = useId();
+  // Lit while it is open and while it is filtering. With the count, that is
+  // what stops a ticked tag hiding half the board from behind a shut menu.
+  const lit = open || selected.length > 0;
+
+  // Both listeners exist only while the menu is open.
+  useEffect(() => {
+    if (!open) return undefined;
+    // A press anywhere but on the menu or its button shuts it. The focus is
+    // left to whatever was pressed.
+    const onPointerDown = (event) => {
+      if (!rootRef.current?.contains(event.target)) onOpenChange(false);
+    };
+    // Heard on the document, wherever the focus is: a press on the menu's own
+    // blank space leaves the focus on nothing, and a key handler on the menu
+    // would never hear Escape again. Stopped here so that one press closes one
+    // thing, the menu, and not whatever else is listening for it behind. The
+    // focus goes back to the button that opened it. An Escape that is only
+    // cancelling an input method's composition is left alone.
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.stopPropagation();
+      onOpenChange(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open, onOpenChange]);
+  // On a phone, Back shuts the menu, and the Back after it the panel
+  // (runtime/backToClose.js: the newest step closes first).
+  useBackToClose(open, () => onOpenChange(false));
+
+  // The focus going somewhere else closes the menu: Tab past the last tag
+  // lands on a card, which is under it. Only a focus that has gone TO something
+  // counts. A press on the menu's own blank space, or a tap in a browser that
+  // does not focus what is tapped, takes the focus away to nothing, and that is
+  // not leaving; a press outside the menu is the listener's above.
+  const closeWhenFocusLeaves = (event) => {
+    const next = event.relatedTarget;
+    if (open && next && !event.currentTarget.contains(next)) onOpenChange(false);
+  };
+
+  return (
+    <div ref={rootRef} onBlur={closeWhenFocusLeaves} style={{ display: "flex" }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="oh-tap-row"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={selected.length > 0 ? `Tags, ${selected.length} selected` : undefined}
+        title="Show only the entries that carry any of the tags you tick"
+        onClick={() => onOpenChange(!open)}
+        style={{
+          ...chipBase,
+          alignItems: "center",
+          background: lit ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.05)",
+          border: `1px solid ${lit ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)"}`,
+          color: lit ? "#f4f4f5" : "rgba(255,255,255,0.6)",
+          display: "inline-flex",
+          gap: "0.3rem",
+        }}
+      >
+        {/* Each in an element of its own, so the translator and the string
+            catalog see the word "Tags" alone and not a sentence built around
+            the count. */}
+        <span>Tags</span>
+        {selected.length > 0 && <span data-no-translate style={tagCountStyle}>{selected.length}</span>}
+        <TagMenuChevron open={open} />
+      </button>
+      {open && (
+        <TagMenuBody
+          id={menuId}
+          maxHeight={maxHeight}
+          onClear={onClear}
+          onToggle={onToggle}
+          selected={selected}
+          tags={tags}
+        />
+      )}
+    </div>
+  );
+};
+
 // ---- the panel -------------------------------------------------------------
 
 // Store slices, so a world write that touched neither the board nor the polity
@@ -769,6 +1150,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   // Foreign is one chip away and says how many are behind it.
   const [owner, setOwner] = useState("mine");
   const [activeTags, setActiveTags] = useState([]);
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   // The project a write is currently in flight for, so its own controls can be
@@ -851,18 +1233,25 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   // because it is a VIEW, not a filter: coming back to the board and being shown
   // finished work is not what anyone opening it expects. Owner is in here for the
   // same reason — the board has a default and reopening should honour it, not
-  // strand the player in the rival column they glanced at last time.
+  // strand the player in the rival column they glanced at last time. The Tags
+  // menu shuts with the panel because the panel is only ever hidden, never
+  // unmounted: left open it would still hold its Back step, and the next Back
+  // would close a menu nobody can see instead of the panel in front of them.
+  // The tags ticked in it stay ticked, as they always have.
   useEffect(() => {
     if (isOpen) return;
     setExpandedId(null);
     setShowClosed(false);
     setOwner("mine");
+    setTagMenuOpen(false);
   }, [isOpen]);
 
   const availableTags = useMemo(() => collectProjectTags(projects), [projects]);
 
-  // Tag chips that no longer exist on the board would filter everything out with
-  // no way to see why, so drop a selection once its tag is gone.
+  // A ticked tag that no longer exists on the board would filter everything out
+  // with no way to see why — the Tags menu lists only what the board carries, so
+  // there would be nothing left to untick — so drop a selection once its tag is
+  // gone.
   useEffect(() => {
     setActiveTags((current) => {
       const next = current.filter((tag) => availableTags.includes(tag));
@@ -911,10 +1300,21 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
     if (closedCount === 0) setShowClosed(false);
   }, [closedCount]);
 
+  // And once more for the Tags menu, whose control is only rendered while the
+  // board carries a tag at all. A menu open as the last tag went would come
+  // back open, unasked, with the next one. Shut it with its control.
+  useEffect(() => {
+    if (availableTags.length === 0) setTagMenuOpen(false);
+  }, [availableTags]);
+
   const toggleTag = useCallback((tag) => {
     setActiveTags((current) => (current.includes(tag)
       ? current.filter((entry) => entry !== tag)
       : [...current, tag]));
+  }, []);
+
+  const clearTags = useCallback(() => {
+    setActiveTags([]);
   }, []);
 
   const toggleExpand = useCallback((id) => {
@@ -1035,9 +1435,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         display: "flex",
         flexDirection: "column",
         fontFamily: "sans-serif",
-        // Same sizing rule as the Actions panel: use what a tall screen offers,
-        // never below a usable 30rem, never into the 9rem the top HUD needs.
-        height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`,
+        height: PANEL_HEIGHT,
         left: "0rem",
         maxWidth: "calc(100vw - 1rem)",
         minHeight: "10rem",
@@ -1124,7 +1522,8 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             />
           </div>
 
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
+          {/* position: the open Tags menu hangs under this row and is as wide. */}
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem", position: "relative" }}>
             <select
               className="oh-tap-row"
               value={sortKey}
@@ -1163,17 +1562,20 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
                 {showClosed ? `← Running (${openCount})` : `Closed (${closedCount})`}
               </Chip>
             )}
+            {/* Only while the board carries a tag, as the chips were: a Tags
+                button opening onto nothing is a dead control. */}
+            {availableTags.length > 0 && (
+              <TagMenu
+                open={tagMenuOpen}
+                onOpenChange={setTagMenuOpen}
+                tags={availableTags}
+                selected={activeTags}
+                onToggle={toggleTag}
+                onClear={clearTags}
+                maxHeight={scrollAsOne ? TAG_MENU_MAX_HEIGHT_SCROLLING : TAG_MENU_MAX_HEIGHT}
+              />
+            )}
           </div>
-
-          {availableTags.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.4rem" }}>
-              {availableTags.map((tag) => (
-                <Chip key={tag} active={activeTags.includes(tag)} onClick={() => toggleTag(tag)}>
-                  {tag}
-                </Chip>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -1223,7 +1625,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             <button
               type="button"
               className="oh-tap-row"
-              onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+              onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
               style={{
                 background: "rgba(255,255,255,0.06)",
                 border: "1px solid rgba(255,255,255,0.25)",
@@ -1310,7 +1712,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
           <button
             type="button"
             className="oh-tap-row"
-            onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+            onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
             style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}

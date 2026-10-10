@@ -10,6 +10,9 @@ export const COUNTRY_STATS_HISTORY_MAX_SAMPLES = 1200;
 export const COUNTRY_STATS_TRACKING_VERSION = 1;
 export const COUNTRY_STATS_TRACKING_MAX_POLITIES = 8;
 export const COUNTRY_STATS_TRACKING_INTERVALS = Object.freeze([0, 3, 6, 12, 24]);
+// How far one event's stats patch may move a polity's GDP or GDP per head
+// (mergeCountryStatPatch maxAggregateRescale): tenfold up or down.
+export const COUNTRY_STATS_EVENT_RESCALE_LIMIT = 10;
 
 export const COUNTRY_STATS_COMPONENT_GROUPS = Object.freeze([
   "core",
@@ -53,12 +56,6 @@ export const normalizeCustomCountryStats = (value) => {
     if (Object.keys(out).length >= MAX_CUSTOM_STATS_VALUES) break;
   }
   return Object.keys(out).length ? out : undefined;
-};
-
-export const countryStatsTrackingIntervalLabel = (months) => {
-  const numeric = Math.max(0, Math.trunc(Number(months) || 0));
-  if (!numeric) return "Manual only";
-  return numeric === 1 ? "Every month" : `Every ${numeric} months`;
 };
 
 const uniqueTrackingPolities = (values, playerCountry = "", intervalMonths = 0) => {
@@ -133,6 +130,14 @@ export const countryStatsTrackingMonthsElapsed = (fromDate, toDate) => {
   return Math.max(0, months);
 };
 
+const STAT_SCALES = Object.freeze({
+  trillion: 1e12, tn: 1e12, t: 1e12,
+  billion: 1e9, bn: 1e9, b: 1e9,
+  million: 1e6, mn: 1e6, m: 1e6,
+  thousand: 1e3, k: 1e3,
+});
+const STAT_SCALE_AFTER_NUMBER = /^\s*(trillion|tn|t|billion|bn|b|million|mn|m|thousand|k)(?![a-z])/;
+
 export const parseStatNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
@@ -146,24 +151,16 @@ export const parseStatNumber = (value) => {
     .replace(/−/g, "-")
     .toLowerCase();
 
+  // The first number and the scale word written right after it, read together:
+  // "48.5 billion", "$48.5B", "€3.1tn", "850mn", "1.2 trillion". Only that
+  // number's own suffix scales it, so "€520 billion (about $0.6 trillion)" is
+  // 520 billion, and a unit word that merely starts with a scale letter
+  // ("5 months", "3 tonnes") scales nothing.
   const match = normalized.match(/[-+]?\d+(?:\.\d+)?/);
   if (!match) return null;
 
-  let number = Number(match[0]);
-  if (!Number.isFinite(number)) return null;
-
-  // Accept the common forms produced by old saves and older AI prompts:
-  // "48.5 billion", "$48.5B", "1.2 trillion", "850 million".
-  if (/\btrillion\b|\btn\b/.test(normalized) || /\d(?:\.\d+)?\s*t\b/.test(normalized)) {
-    number *= 1e12;
-  } else if (/\bbillion\b|\bbn\b/.test(normalized) || /\d(?:\.\d+)?\s*b\b/.test(normalized)) {
-    number *= 1e9;
-  } else if (/\bmillion\b|\bmn\b/.test(normalized) || /\d(?:\.\d+)?\s*m\b/.test(normalized)) {
-    number *= 1e6;
-  } else if (/\bthousand\b/.test(normalized) || /\d(?:\.\d+)?\s*k\b/.test(normalized)) {
-    number *= 1e3;
-  }
-
+  const scale = normalized.slice(match.index + match[0].length).match(STAT_SCALE_AFTER_NUMBER);
+  const number = Number(match[0]) * (scale ? STAT_SCALES[scale[1]] : 1);
   return Number.isFinite(number) ? number : null;
 };
 
@@ -317,9 +314,11 @@ const normalizeEconomy = (value) => {
 
   for (const key of ECONOMY_NUMERIC_KEYS) {
     let normalized = null;
-    if (["gdpGrowth", "budgetBalance"].includes(key)) normalized = normalizeSignedPercent(value[key]);
+    // Inflation is signed: deflation is a real reading (the GM schema allows
+    // -1000..1000). Public debt cannot go below zero.
+    if (["gdpGrowth", "budgetBalance", "inflation"].includes(key)) normalized = normalizeSignedPercent(value[key]);
     else if (key === "unemployment") normalized = normalizePercent(value[key]);
-    else if (["inflation", "publicDebt"].includes(key)) {
+    else if (key === "publicDebt") {
       const parsed = parseStatNumber(value[key]);
       normalized = parsed == null ? null : clamp(parsed, 0, 1000);
     } else normalized = parseStatNumber(value[key]);
@@ -553,11 +552,12 @@ const scaleComponentPopulation = (components, predicate, targetPopulation) => {
   ));
 };
 
-// Population calibration is a bootstrap/reconstruction tool, not a second ledger.
-// The model still estimates the relative distribution across every live-map component;
-// native code then rescales those rows to ONE scenario-canonical population anchor so
-// map granularity cannot make a 300-province empire randomly gain/lose tens of millions.
-// The exact integer target is conserved with largest-remainder rounding.
+// Scales the selected component rows so their populations sum to exactly the
+// target. expandTerritorialMacroEstimates uses it to share each macro bucket's
+// population estimate out over that bucket's live-map components, in the
+// proportions it gives them, so map granularity cannot make a 300-province
+// empire gain or lose tens of millions. The exact integer target is conserved
+// with largest-remainder rounding.
 const scaleComponentPopulationExact = (components, predicate, targetPopulation) => {
   const target = Math.max(0, Math.round(Number(targetPopulation) || 0));
   const selected = components
@@ -567,7 +567,7 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
   if (!selected.length) {
     return target === 0
       ? { components, error: "" }
-      : { components, error: `population calibration target ${target} has no matching territorial component rows.` };
+      : { components, error: `its population estimate of ${target} has no component rows to go to.` };
   }
 
   const current = selected.reduce((sum, { component }) => sum + component.population, 0);
@@ -577,7 +577,7 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
           components: components.map((component) => (predicate(component) ? { ...component, population: 0 } : component)),
           error: "",
         }
-      : { components, error: `population calibration cannot allocate target ${target} because the matching component estimates sum to zero.` };
+      : { components, error: `its population estimate of ${target} cannot be shared out because its components' provisional populations sum to zero.` };
   }
 
   const ratio = target / current;
@@ -612,69 +612,6 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
         : component
     )),
     error: "",
-  };
-};
-
-export const calibrateTerritorialComponentPopulations = (componentsInput, calibration) => {
-  const components = normalizeTerritorialComponents(componentsInput);
-  if (!components.length) {
-    return { components: [], error: "population calibration requires at least one valid territorial component." };
-  }
-  if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)) {
-    return { components, error: "populationCalibration is required for this native Stats bootstrap/reconstruction." };
-  }
-
-  const total = parseStatNumber(calibration.totalPopulation);
-  const core = parseStatNumber(calibration.coreIntegratedPopulation);
-  const other = parseStatNumber(calibration.otherTerritoriesPopulation);
-  if (![total, core, other].every((value) => Number.isFinite(value) && value >= 0)) {
-    return { components, error: "populationCalibration must provide non-negative numeric totalPopulation, coreIntegratedPopulation, and otherTerritoriesPopulation." };
-  }
-
-  const targetTotal = Math.round(total);
-  const targetCore = Math.round(core);
-  const targetOther = Math.round(other);
-  if (!(targetTotal > 0)) {
-    return { components, error: "populationCalibration.totalPopulation must be greater than zero." };
-  }
-  if (targetCore + targetOther !== targetTotal) {
-    return {
-      components,
-      error: `populationCalibration group targets must sum exactly to totalPopulation (${targetCore} + ${targetOther} != ${targetTotal}).`,
-    };
-  }
-
-  const corePredicate = (component) => component.group !== "overseas/dependent";
-  const otherPredicate = (component) => component.group === "overseas/dependent";
-  const before = aggregateTerritorialEconomy(components);
-
-  let next = components;
-  const coreScaled = scaleComponentPopulationExact(next, corePredicate, targetCore);
-  if (coreScaled.error) return { components, error: coreScaled.error };
-  next = coreScaled.components;
-
-  const otherScaled = scaleComponentPopulationExact(next, otherPredicate, targetOther);
-  if (otherScaled.error) return { components, error: otherScaled.error };
-  next = otherScaled.components;
-
-  const after = aggregateTerritorialEconomy(next);
-  if (!after || after.population !== targetTotal || after.corePopulation !== targetCore || after.otherPopulation !== targetOther) {
-    return {
-      components,
-      error: `population calibration invariant failed after scaling (expected ${targetTotal}/${targetCore}/${targetOther}; got ${after?.population ?? "none"}/${after?.corePopulation ?? "none"}/${after?.otherPopulation ?? "none"}).`,
-    };
-  }
-
-  return {
-    components: next,
-    error: "",
-    diagnostics: {
-      beforeTotal: before?.population ?? null,
-      afterTotal: after.population,
-      coreTarget: targetCore,
-      otherTarget: targetOther,
-      totalTarget: targetTotal,
-    },
   };
 };
 
@@ -1001,7 +938,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false, continuity = null } = {},
+  { replaceComponents = false, continuity = null, maxAggregateRescale = 0 } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const patch = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -1114,10 +1051,21 @@ export const mergeCountryStatPatch = (
 
   if (components.length && patch.economy && typeof patch.economy === "object" && !Array.isArray(patch.economy)) {
     const before = aggregateTerritorialEconomy(components);
-    const requestedGdp = parseStatNumber(patch.economy.gdp);
-    const requestedWholePc = parseStatNumber(patch.economy.gdpPerCapita);
-    const requestedCorePc = parseStatNumber(patch.economy.coreGdpPerCapita);
-    const requestedOtherPc = parseStatNumber(patch.economy.otherGdpPerCapita);
+    // `maxAggregateRescale`: a target that would multiply or divide the ledger's
+    // current value by more than this is ignored. An event's figure is prose the
+    // model wrote ("€3.1tn"); one misread must not rescale every component of a
+    // polity to a GDP per head of 1. Exact GM and editor corrections pass none.
+    const plausible = (requested, current) => {
+      if (!Number.isFinite(requested) || !(requested > 0)) return null;
+      const limit = Number(maxAggregateRescale);
+      if (!(limit > 1) || !(Number(current) > 0)) return requested;
+      const ratio = requested / Number(current);
+      return ratio > limit || ratio < 1 / limit ? null : requested;
+    };
+    const requestedGdp = plausible(parseStatNumber(patch.economy.gdp), before?.gdp);
+    const requestedWholePc = plausible(parseStatNumber(patch.economy.gdpPerCapita), before?.gdpPerCapita);
+    const requestedCorePc = plausible(parseStatNumber(patch.economy.coreGdpPerCapita), before?.coreGdpPerCapita);
+    const requestedOtherPc = plausible(parseStatNumber(patch.economy.otherGdpPerCapita), before?.otherGdpPerCapita);
 
     // Total GDP is the strongest aggregate authority. If both GDP and GDP/capita
     // are supplied inconsistently, GDP wins and per-capita is recomputed.
@@ -1264,6 +1212,9 @@ export const buildCountryStatHistorySample = (sheetInput, { date = "", round = 0
   });
 };
 
+const compareHistorySamples = (a, b) =>
+  compareGameDates(a.date, b.date) || Number(a.round || 0) - Number(b.round || 0);
+
 const normalizeHistorySeries = (value) => {
   if (!Array.isArray(value)) return [];
   const byDate = new Map();
@@ -1272,9 +1223,41 @@ const normalizeHistorySeries = (value) => {
     if (sample) byDate.set(sample.date, sample); // latest source wins deterministically
   }
   return [...byDate.values()]
-    .sort((a, b) => compareGameDates(a.date, b.date) || Number(a.round || 0) - Number(b.round || 0))
+    .sort(compareHistorySamples)
     .slice(-COUNTRY_STATS_HISTORY_MAX_SAMPLES);
 };
+
+// What a sample measured, without when: two samples that agree here are the
+// same reading. Normalized samples always list their fields in one order.
+const historySampleValues = (sample) => {
+  const { date: _date, round: _round, historyVersion: _version, ...values } = sample;
+  return JSON.stringify(values);
+};
+
+// One normalized sample into one normalized, sorted series. A sample on a date
+// the series already has replaces it (a same-day refresh or GM edit). A sample
+// that reads exactly like the one before it is not a new measurement and is not
+// kept: a sheet nobody reassessed would otherwise add a copy every turn, and the
+// charts would show each copy as a fresh data point.
+const appendHistorySample = (series, sample) => {
+  const sameDate = series.findIndex((entry) => entry.date === sample.date);
+  if (sameDate >= 0) {
+    const next = [...series];
+    next[sameDate] = sample;
+    return next;
+  }
+  const previous = series.filter((entry) => compareGameDates(entry.date, sample.date) < 0).at(-1);
+  if (previous && historySampleValues(previous) === historySampleValues(sample)) return series;
+  const last = series.at(-1);
+  const next = !last || compareHistorySamples(last, sample) < 0
+    ? [...series, sample]
+    : [...series, sample].sort(compareHistorySamples);
+  return next.slice(-COUNTRY_STATS_HISTORY_MAX_SAMPLES);
+};
+
+const buildHistorySample = (sheetOrSample, options) =>
+  normalizeCountryStatHistorySample(sheetOrSample) ||
+  buildCountryStatHistorySample(sheetOrSample, options);
 
 export const normalizeCountryStatsHistory = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -1298,20 +1281,38 @@ export const appendCountryStatHistorySample = (
   if (!key) return normalizeCountryStatsHistory(historyInput);
 
   const history = normalizeCountryStatsHistory(historyInput);
-  const sample = normalizeCountryStatHistorySample(sheetOrSample) ||
-    buildCountryStatHistorySample(sheetOrSample, { date, round });
+  const sample = buildHistorySample(sheetOrSample, { date, round });
   if (!sample) return history;
 
-  history[key] = normalizeHistorySeries([...(history[key] || []), sample]);
+  history[key] = appendHistorySample(history[key] || [], sample);
   return history;
 };
+
+// The series to draw for one polity: its stored samples, then the current sheet
+// at the current date when that is newer than the last stored one. Stored history
+// keeps only readings that changed, so without this point a sheet unchanged for
+// years would end its line at the last change. For display only; never stored.
+export const withCurrentCountryStatSample = (seriesInput, sheet, { date = "", round = 0 } = {}) => {
+  const series = normalizeHistorySeries(seriesInput);
+  const current = buildCountryStatHistorySample(sheet, { date, round });
+  const last = series.at(-1);
+  if (!current || (last && compareGameDates(last.date, current.date) >= 0)) return series;
+  return [...series, current];
+};
+
+// Merged series keep one sample per reading too: a sample that reads like the
+// one before it is dropped, as appendHistorySample would. Otherwise samples
+// recovered from rollback snapshots (one per turn) put back the unchanged
+// copies the stored history no longer keeps.
+const withoutRepeatedReadings = (series) => series.filter((sample, index) =>
+  index === 0 || historySampleValues(series[index - 1]) !== historySampleValues(sample));
 
 export const mergeCountryStatsHistory = (...values) => {
   let out = {};
   for (const value of values) {
     const normalized = normalizeCountryStatsHistory(value);
     for (const [polity, samples] of Object.entries(normalized)) {
-      out[polity] = normalizeHistorySeries([...(out[polity] || []), ...samples]);
+      out[polity] = withoutRepeatedReadings(normalizeHistorySeries([...(out[polity] || []), ...samples]));
     }
   }
   return out;
@@ -1319,16 +1320,20 @@ export const mergeCountryStatsHistory = (...values) => {
 
 // Capture every sheet that CURRENTLY exists. This does not generate missing Stats
 // and therefore adds no AI work to a turn. Repeated dates replace the prior sample,
-// which makes same-day refreshes and GM edits deterministic rather than duplicative.
+// which makes same-day refreshes and GM edits deterministic rather than duplicative,
+// and a sheet that reads as it did at its last sample adds nothing. The history is
+// normalized once for the whole world, not once per polity.
 export const captureCountryStatsHistory = (worldInput, { date = "", round = 0 } = {}) => {
   if (!worldInput || typeof worldInput !== "object" || Array.isArray(worldInput)) return worldInput;
   const countryStats = worldInput.countryStats && typeof worldInput.countryStats === "object"
     ? worldInput.countryStats
     : {};
-  let history = normalizeCountryStatsHistory(worldInput.countryStatsHistory);
+  const history = normalizeCountryStatsHistory(worldInput.countryStatsHistory);
 
   for (const [polity, sheet] of Object.entries(countryStats)) {
-    history = appendCountryStatHistorySample(history, polity, sheet, { date, round });
+    const key = clean(polity);
+    const sample = key ? buildHistorySample(sheet, { date, round }) : null;
+    if (sample) history[key] = appendHistorySample(history[key] || [], sample);
   }
 
   return {
@@ -1365,6 +1370,18 @@ export const isCompleteCustomCountryStatSheet = (value, expectedKeys = []) => {
   return keys.length > 0 && keys.every((key) => Number.isFinite(Number(sheet.customStats?.[key])));
 };
 
+// Whether a tracked polity's sheet is complete enough for the periodic refresh
+// to carry it: every one of the scenario's own values for a custom sheet
+// (`customKeys`), the whole standard sheet otherwise. A polity without one is
+// skipped until its first reading. The scheduler (gameplay.js) and the tracking
+// panel (stats.jsx) both ask this, so the panel says what the scheduler does —
+// it used to call any sheet at all "Stats ready".
+export const isTrackedStatSheetReady = (value, customKeys = null) => {
+  const sheet = normalizeCountryStatSheet(value);
+  if (!sheet) return false;
+  return Array.isArray(customKeys) ? isCompleteCustomCountryStatSheet(sheet, customKeys) : isCompleteCountryStatSheet(sheet);
+};
+
 export const buildEconomicConditionSummary = (value) => {
   const sheet = finalizeCountryStatSheet(value);
   if (!sheet || !sheet.economy) return "No canonical economic stat sheet is available yet.";
@@ -1383,6 +1400,7 @@ export const buildEconomicConditionSummary = (value) => {
   if (Number.isFinite(inflation)) {
     if (inflation >= 20) clauses.push("very high inflation");
     else if (inflation >= 8) clauses.push("elevated inflation");
+    else if (inflation < 0) clauses.push("deflation");
     else if (inflation <= 3) clauses.push("contained inflation");
   }
   if (Number.isFinite(unemployment)) {

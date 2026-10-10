@@ -5,6 +5,7 @@ import {
   collectAutonomousInstitutionBallotWork,
   institutionBallotWorkForProposal,
   interactiveInstitutionBallotDirective,
+  routeAutonomousBallotVotes,
   unresolvedNpcVotersForProposal,
 } from "./institutionAutonomy.js";
 
@@ -120,6 +121,73 @@ test("interactive ballot directive allows a few short statements but still requi
   assert.match(directive, /up to THREE governments/i);
   assert.match(directive, /send_message/);
   assert.match(directive, /Do not act for the human player/);
+});
+
+const twoCouncils = () => {
+  const baltic = structuredClone(institution);
+  baltic.proposals.p2 = {
+    id: "p2",
+    title: "Energy grid",
+    status: "voting",
+    voting: {
+      openedDate: "2014-09-01",
+      eligibleVoters: ["Republic of Latvia", "Republic of Lithuania", "Republic of Estonia"],
+      ballots: {},
+      asked: { "Republic of Estonia": 2 },
+    },
+  };
+  const nordic = {
+    id: "nordic-council",
+    name: "Nordic Council",
+    status: "active",
+    members: [
+      { polity: "Republic of Latvia", status: "member" },
+      { polity: "Kingdom of Sweden", status: "member" },
+    ],
+    proposals: {
+      p1: { id: "p1", title: "Fisheries", status: "voting", voting: { openedDate: "2014-07-01", eligibleVoters: ["Republic of Latvia", "Kingdom of Sweden"], ballots: {} } },
+    },
+  };
+  return { institutions: { schemaVersion: 1, byId: { "baltic-union": baltic, "nordic-council": nordic } } };
+};
+
+test("post-turn work covers every open ballot in every institution, minus seats asked enough", () => {
+  const work = collectAutonomousInstitutionBallotWork(twoCouncils(), "Republic of Latvia");
+  const rows = work.map((item) => [item.institutionId, item.proposalId, item.actors]);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.find(([id, proposalId]) => id === "baltic-union" && proposalId === "p1"), ["baltic-union", "p1", ["Republic of Lithuania", "Republic of Estonia"]]);
+  assert.deepEqual(rows.find(([id, proposalId]) => id === "baltic-union" && proposalId === "p2"), ["baltic-union", "p2", ["Republic of Lithuania"]], "Estonia was asked twice already");
+  assert.deepEqual(rows.find(([id]) => id === "nordic-council"), ["nordic-council", "p1", ["Kingdom of Sweden"]]);
+  const capped = collectAutonomousInstitutionBallotWork(twoCouncils(), "Republic of Latvia", { maxBallots: 2 });
+  assert.equal(capped.reduce((sum, item) => sum + item.actors.length, 0), 2);
+});
+
+test("a ballot whose AI voters have all been asked enough leaves the work list", () => {
+  const world = twoCouncils();
+  world.institutions.byId["nordic-council"].proposals.p1.voting.asked = { "Kingdom of Sweden": 2 };
+  const work = collectAutonomousInstitutionBallotWork(world, "Republic of Latvia");
+  assert.equal(work.some((item) => item.institutionId === "nordic-council"), false);
+});
+
+test("one directive lists every ballot, and each vote is routed back to its institution", () => {
+  const work = collectAutonomousInstitutionBallotWork(twoCouncils(), "Republic of Latvia");
+  const directive = autonomousInstitutionBallotDirective(work);
+  assert.match(directive, /Proposal p1 in Baltic Union/);
+  assert.match(directive, /Proposal p2 in Baltic Union/);
+  assert.match(directive, /Proposal p1 in Nordic Council/);
+  const routed = routeAutonomousBallotVotes(work, [
+    { type: "institution_vote", actorName: "Kingdom of Sweden", proposalId: "p1", voteChoice: "yes" },
+    { type: "institution_vote", actorName: "Republic of Lithuania", proposalId: "p1", voteChoice: "no" },
+    { type: "institution_vote", actorName: "Republic of Lithuania", proposalId: "P2", voteChoice: "abstain" },
+    { type: "institution_vote", actorName: "Republic of Estonia", proposalId: "p2", voteChoice: "yes" },
+    { type: "institution_vote", actorName: "Republic of Latvia", proposalId: "p1", voteChoice: "yes" },
+  ]);
+  assert.deepEqual(routed.byInstitution.get("nordic-council").map((vote) => vote.actorName), ["Kingdom of Sweden"]);
+  assert.deepEqual(routed.byInstitution.get("baltic-union").map((vote) => [vote.actorName, vote.proposalId]), [
+    ["Republic of Lithuania", "p1"],
+    ["Republic of Lithuania", "p2"],
+  ]);
+  assert.equal(routed.unmatched.length, 2, "an unlisted seat and the player are applied nowhere");
 });
 
 test("autonomous ballot work services an accession ballot even when the human is only the applicant", () => {

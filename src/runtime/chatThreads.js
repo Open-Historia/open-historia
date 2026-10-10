@@ -523,10 +523,14 @@ export const threadAsSeenBy = (events, polity) => {
 // silently dropped them on the next read: the second one-request group turn
 // lost the very message the player had just sent.
 //
-// A message is already in the log when the log has one with its id, or with the
-// same speaker and the same words. An error bubble is the panel's, not the
-// thread's, and never enters it. A message that came without an id gets one from
-// its content, so reading a thread twice gives the same log.
+// A message with an id is in the log when the log has that id. Words alone do
+// not make it so: a player who says "Agreed." twice said it twice. The one
+// exception is a copy of the thread whose ids differ from the log's (a legacy
+// thread given fresh ids by two reads): a logged line that no message here
+// claims by id answers for ONE message with its speaker and words. A message
+// without an id (an older writer's) is recognised by speaker and words, and
+// gets an id from its content, so reading a thread twice gives the same log. An
+// error bubble is the panel's, not the thread's, and never enters it.
 const contentId = (text) => {
     let value = 0x811c9dc5;
     for (let index = 0; index < text.length; index += 1) {
@@ -542,6 +546,13 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
     const logged = projectChatThread(log).messages;
     const ids = new Set(logged.map((message) => asText(message.id)).filter(Boolean));
     const said = new Set(logged.map((message) => `${fold(message.speaker)}|${asText(message.text)}`));
+    const claimed = new Set(asArray(messages).map((message) => asText(message?.id)).filter(Boolean));
+    const unclaimed = new Map();
+    for (const message of logged) {
+        if (claimed.has(asText(message.id))) continue;
+        const key = `${fold(message.speaker)}|${asText(message.text)}`;
+        unclaimed.set(key, (unclaimed.get(key) ?? 0) + 1);
+    }
     const additions = [];
     for (const message of asArray(messages)) {
         const role = asText(message?.role ?? message?.sender);
@@ -551,7 +562,11 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
         const speaker = asText(message?.speaker ?? message?.senderName);
         const id = asText(message?.id);
         const key = `${fold(speaker)}|${text}`;
-        if ((id && ids.has(id)) || said.has(key)) continue;
+        if (id) {
+            if (ids.has(id)) continue;
+            const left = unclaimed.get(key) ?? 0;
+            if (left > 0) { unclaimed.set(key, left - 1); continue; }
+        } else if (said.has(key)) continue;
         said.add(key);
         additions.push({
             id: id || `${asText(threadId) || "chat"}-unlogged-${contentId(`${key}|${asText(message?.time)}`)}`,

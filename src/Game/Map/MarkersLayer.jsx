@@ -3,45 +3,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
-import {
-  getMarkerPresentation,
-  MARKER_VISIBILITY_TIER,
-} from "./vnext/presentationPolicy.js";
-
-const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
-
-const MARKER_STATUS_LABEL = {
-  planned: "Planned",
-  under_construction: "Under construction",
-  active: "Active",
-  damaged: "Damaged",
-  inactive: "Inactive",
-  abandoned: "Abandoned",
-  destroyed: "Destroyed",
-};
-
-const normalizeMarkerStatus = (status) => {
-  const key = String(status || "").trim().toLowerCase();
-  return Object.prototype.hasOwnProperty.call(MARKER_STATUS_LABEL, key) ? key : "active";
-};
-
-const markerStatusOpacity = (status) => ({
-  planned: 0.76,
-  under_construction: 0.86,
-  active: 1,
-  damaged: 0.95,
-  inactive: 0.68,
-  abandoned: 0.64,
-  destroyed: 0.62,
-}[normalizeMarkerStatus(status)]);
-
-
-const ownerColorString = (colorMap, code) => {
-  const rgb = colorMap[String(code ?? "").trim()];
-  if (Array.isArray(rgb)) return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-  // Unowned / unknown-owner structures read as neutral parchment, not an error.
-  return "rgb(226, 222, 205)";
-};
+import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
+import { MARKER_VISIBILITY_TIER } from "./vnext/presentationPolicy.js";
+import { buildMarkerFeatureCollection, UNOWNED_MARKER_COLOR } from "./markerFeatures.js";
 
 // World.markers — structures founded during play (cities, military bases,
 // bunkers, missile silos, embassies…). Rendered in the visual language of the
@@ -72,51 +36,48 @@ const V_NEXT_TIER_LAYERS = [
 ];
 
 const MarkersLayer = () => {
-  const { markers } = useWorldState();
+  const { markers, polityOverrides } = useWorldState();
   const [colorMap, setColorMap] = useState({});
 
+  // Re-read the palette whenever colors.json is written (a polity founded or
+  // recoloured mid-game; assets.js drops its cached palette first) or another
+  // game opens, as Units.jsx does; read once, a base built by a new polity
+  // stayed parchment until a reload. A failed read is retried by the next write.
   useEffect(() => {
-    getNationColors()
-      .then(setColorMap)
-      .catch((error) => console.error("Failed to load colors for markers:", error));
-  }, []);
-
-  const data = useMemo(() => {
-    if (!markers.length) return EMPTY_FEATURE_COLLECTION;
-    return {
-      type: "FeatureCollection",
-      features: markers
-        .filter((marker) => Number.isFinite(marker.lng) && Number.isFinite(marker.lat) && marker.name)
-        .map((marker) => {
-          const status = normalizeMarkerStatus(marker.status);
-          const statusLabel = MARKER_STATUS_LABEL[status];
-          const presentation = getMarkerPresentation(marker);
-          return {
-            type: "Feature",
-            id: marker.id,
-            geometry: { type: "Point", coordinates: [marker.lng, marker.lat] },
-            properties: {
-              id: marker.id,
-              name: marker.name,
-              // Lifecycle is encoded by opacity and remains fully described in
-              // the feature popup, so the map label stays the plain name.
-              displayName: marker.name,
-              kind: marker.kind || "landmark",
-              ownerCode: marker.ownerCode || "",
-              status,
-              statusLabel,
-              statusOpacity: markerStatusOpacity(status),
-              family: presentation.family,
-              priority: presentation.priority,
-              sortKey: presentation.sortKey,
-              visibilityTier: presentation.visibilityTier,
-              glyph: presentation.glyph,
-              rgb: ownerColorString(colorMap, marker.ownerCode),
-            },
-          };
-        }),
+    let cancelled = false;
+    let generation = 0;
+    const refreshColors = () => {
+      const current = ++generation;
+      getNationColors()
+        .then((next) => {
+          if (!cancelled && current === generation) setColorMap(next);
+        })
+        .catch((error) => console.error("Failed to load colors for markers:", error));
     };
-  }, [markers, colorMap]);
+    refreshColors();
+    window.addEventListener("oh:colors-updated", refreshColors);
+    window.addEventListener("oh:active-game-changed", refreshColors);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("oh:colors-updated", refreshColors);
+      window.removeEventListener("oh:active-game-changed", refreshColors);
+    };
+  }, []);
+  const resolveOwnerRgb = useMemo(
+    () => createOwnerRgbResolver(colorMap, polityOverrides),
+    [colorMap, polityOverrides],
+  );
+
+  // Unowned structures read as neutral parchment, not an error. An owned one
+  // takes its owner's colour exactly as the territory shows it (ownerColors.js),
+  // painted over the features markerFeatures.js builds.
+  const data = useMemo(() => {
+    const collection = buildMarkerFeatureCollection(markers, { colorMap, polityOverrides });
+    for (const feature of collection.features) {
+      feature.properties.rgb = ownerDisplayCss(resolveOwnerRgb, feature.properties.ownerCode, UNOWNED_MARKER_COLOR);
+    }
+    return collection;
+  }, [markers, colorMap, polityOverrides, resolveOwnerRgb]);
 
   return (
     <Source id="markers-source" type="geojson" data={data}>

@@ -3,11 +3,13 @@
 // The Community tab of the scenario library: featured/pinned posts get one
 // dedicated shelf, while every other scenario lives in a single searchable
 // browse grid that can be sorted by installs, likes or recency. Data comes
-// straight from the public
+// from the public
 // Scenario Hub — a GitHub
-// repo where every issue is a posted scenario — and bundles import through the
-// server's /api/hub proxy. Publishing exports the chosen scenario locally and
-// opens a prefilled hub post where the author drags the bundle in.
+// repo where every issue is a posted scenario — as the hub's own index lists
+// it: the posts whose file the hub has checked and released. Bundles import
+// from those checked copies, through the server's /api/hub proxy. Publishing
+// exports the chosen scenario locally and opens a prefilled hub post where the
+// author drags the bundle in.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -25,17 +27,21 @@ import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
   splitScenarioBundleImage,
+  unresolvedBundleBackground,
 } from "../../runtime/communityBasemaps.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { zipBundle } from "../../runtime/bundleZip.js";
 import { sha256Hex } from "../../runtime/basemapLibrary.js";
+import { noteMissingBasemapTried } from "../../runtime/missingBasemap.js";
 import { listFlags } from "../../runtime/flagLibrary.js";
 import {
   HUB_NEW_POST_URL,
   HUB_URL,
   SCENARIO_KEY_LINE,
-  downloadHubBundle,
+  downloadHubScenario,
   fetchHubPosts,
+  hubCopiesByPostId,
+  hubCopyStatus,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
 import { fetchOfficialBasemaps, findOfficialBasemap, findOfficialEntry } from "../../runtime/tiledBasemaps.js";
@@ -44,8 +50,9 @@ import TiledBasemapOffer from "../Map/TiledBasemapOffer.jsx";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
 // src/runtime/hubPosts.js, so the library can use it without this tab. The
-// two functions other modules have always imported from here stay exported.
-export { downloadHubBundle, fetchHubPosts };
+// post list, which the translator has always imported from here, stays
+// exported.
+export { fetchHubPosts };
 
 // How many of a scenario's custom flags are the author's OWN — i.e. worth
 // advertising to the hub. A flag installed from the Community tab is already
@@ -178,7 +185,47 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
   </div>
 );
 
-const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, fillWidth = false }) => (
+// What the library already holds of a post (hubCopyStatus), as a small pill.
+// "unchecked" is a copy downloaded the old way, from the post's attachment
+// before the hub checked its files: it reads as an update too, with its own
+// reason, because that is what its card in the Scenarios tab asks for.
+const LIBRARY_BADGES = {
+  current: { label: "In your library", title: "A copy of this scenario is in your Scenarios tab." },
+  update: { label: "Update available", title: "Your copy is older than this post, or its basemap could not be downloaded. Update it from the Scenarios tab." },
+  unchecked: { label: "Update available", title: "Your copy was downloaded before the hub started checking its files. Update it from the Scenarios tab." },
+  edited: { label: "Edited copy in your library", title: "You changed your copy of this scenario, so it keeps your changes." },
+};
+
+const LibraryBadge = ({ status }) => {
+  const badge = LIBRARY_BADGES[status];
+  if (!badge) return null;
+  const update = status === "update" || status === "unchecked";
+  return (
+    <span
+      title={badge.title}
+      style={{
+        alignSelf: "flex-start",
+        background: update ? "rgba(39,166,99,0.16)" : "rgba(255,255,255,0.08)",
+        border: `1px solid ${update ? "rgba(39,166,99,0.45)" : "rgba(255,255,255,0.18)"}`,
+        borderRadius: "999px",
+        color: update ? "#bbf7d0" : "#e4e4e7",
+        fontSize: "0.68rem",
+        fontWeight: 700,
+        padding: "0.12rem 0.5rem",
+      }}
+    >
+      {badge.label}
+    </span>
+  );
+};
+
+// The Import button's words. A post the library already holds asks first:
+// "Import again", then "Import a second copy" (armed) — another copy is a
+// second scenario with its own map files, which is rarely what was meant.
+const importLabel = (busy, status, armed) =>
+  busy ? "Importing…" : !status ? "Import" : armed ? "Import a second copy" : "Import again";
+
+const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, status, armed, fillWidth = false }) => (
   <div
     style={{
       ...cardSurface,
@@ -196,7 +243,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, fillWid
         <div
           title={post.official ? "Official: posted by a hub maintainer (verified by GitHub, not by the title)" : undefined}
           style={{
-            // The OFFICIAL badge marks a verified post (hub-owner). A random poster writing
+            // The OFFICIAL badge marks a post made by a team member (the hub's owner or a collaborator). A random poster writing
             // "official" in their title stays white.
             color: post.official ? "#e4e4e7" : "#fff",
             fontSize: "0.95rem",
@@ -219,6 +266,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, fillWid
         </div>
       </div>
     </div>
+    <LibraryBadge status={status} />
     <div style={{ color: "rgba(244,244,246,0.72)", flex: 1, fontSize: "0.8rem", lineHeight: 1.5 }}>
       {post.description || "No description."}
     </div>
@@ -247,7 +295,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, fillWid
         className="oh-tap-row"
         disabled={!post.bundleUrl || busy}
         onClick={(event) => { event.stopPropagation(); onImport(post); }}
-        title={post.bundleUrl ? "Import into your Scenarios" : "This post has no scenario file attached"}
+        title={!post.bundleUrl ? "This post has no scenario file attached" : !status ? "Import into your Scenarios" : armed ? "Click again to import another copy" : "This scenario is already in your library"}
         style={touchFit({
           ...pillButton,
           minHeight: "1.8rem",
@@ -257,13 +305,13 @@ const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile, fillWid
           cursor: post.bundleUrl && !busy ? "pointer" : "default",
         }, touch)}
       >
-        {busy ? "Importing…" : "Import"}
+        {importLabel(busy, status, armed)}
       </button>
     </div>
   </div>
 );
 
-const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile }) => (
+const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile, libraryOf, armedId }) => (
   <div style={{ marginBottom: "1.15rem" }}>
     {title ? <div style={rowTitleStyle}>{title}</div> : null}
     {posts.length === 0 ? (
@@ -273,13 +321,13 @@ const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layo
     ) : layout === "grid" ? (
       <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: COMMUNITY_GRID_TEMPLATE, paddingBottom: "0.35rem" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} fillWidth />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} fillWidth />
         ))}
       </div>
     ) : (
       <div style={{ display: "flex", gap: "0.8rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} status={libraryOf(post).status} armed={armedId === post.id} />
         ))}
       </div>
     )}
@@ -305,7 +353,9 @@ const StatusBanner = ({ notice, error }) => (
   </>
 );
 
-const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) => (
+// With a copy already in the library the page plays that copy, and importing
+// another is the two-step side button; otherwise it imports, then plays.
+const ScenarioDetail = ({ post, busy, onImport, onPlay, onBack, notice, error, touch, library, armed }) => (
   <div style={{ color: "#fff" }}>
     <button
       type="button"
@@ -331,6 +381,11 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
     <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.8rem", marginBottom: "0.9rem" }}>
       by {post.author} · {new Date(post.createdAt).toLocaleDateString()}
     </div>
+    {library.status && (
+      <div style={{ marginBottom: "0.9rem" }}>
+        <LibraryBadge status={library.status} />
+      </div>
+    )}
 
     <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "1.1rem", marginBottom: "0.55rem" }}>
       {post.installs != null && <span style={detailStat}>⬇ {post.installs} imported</span>}
@@ -341,33 +396,72 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
       Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>
 
-    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
-      {post.description || "No description."}
+    {/* The whole description, in the author's own lines (hubPosts.js);
+        the card shows the one-line cut. */}
+    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem", overflowWrap: "anywhere", whiteSpace: "pre-line" }}>
+      {post.fullDescription || post.description || "No description."}
     </p>
 
     {/* Wraps on a phone, where the two side by side are wider than the screen. */}
     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
-      <button
-        type="button"
-        className="oh-tap-row"
-        disabled={!post.bundleUrl || busy}
-        onClick={() => onImport(post)}
-        style={{
-          alignItems: "center",
-          background: post.bundleUrl ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.08)",
-          border: "none",
-          borderRadius: "10px",
-          color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
-          cursor: post.bundleUrl && !busy ? "pointer" : "default",
-          display: "flex",
-          fontSize: "1rem",
-          fontWeight: 700,
-          justifyContent: "center",
-          padding: "0.8rem 1.6rem",
-        }}
-      >
-        {busy ? "Importing…" : "▶ Import & Play"}
-      </button>
+      {library.copy && onPlay ? (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={busy}
+          onClick={() => onPlay(library.copy)}
+          title={`Start a new game from “${library.copy.name}” in your Scenarios tab`}
+          style={{
+            alignItems: "center",
+            background: "rgba(255,255,255,0.1)",
+            border: "none",
+            borderRadius: "10px",
+            color: "#fff",
+            cursor: busy ? "default" : "pointer",
+            display: "flex",
+            fontSize: "1rem",
+            fontWeight: 700,
+            justifyContent: "center",
+            padding: "0.8rem 1.6rem",
+          }}
+        >
+          ▶ Play your copy
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={!post.bundleUrl || busy}
+          onClick={() => onImport(post, { play: true })}
+          style={{
+            alignItems: "center",
+            background: post.bundleUrl ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.08)",
+            border: "none",
+            borderRadius: "10px",
+            color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
+            cursor: post.bundleUrl && !busy ? "pointer" : "default",
+            display: "flex",
+            fontSize: "1rem",
+            fontWeight: 700,
+            justifyContent: "center",
+            padding: "0.8rem 1.6rem",
+          }}
+        >
+          {busy ? "Importing…" : "▶ Import & Play"}
+        </button>
+      )}
+      {library.copy && onPlay && (
+        <button
+          type="button"
+          className="oh-tap-row"
+          disabled={!post.bundleUrl || busy}
+          onClick={() => onImport(post)}
+          title={armed ? "Click again to import another copy" : "This scenario is already in your library"}
+          style={touchFit({ ...pillButton, cursor: post.bundleUrl && !busy ? "pointer" : "default" }, touch)}
+        >
+          {importLabel(busy, library.status, armed)}
+        </button>
+      )}
       <a href={post.url} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, textDecoration: "none" }, touch)}>
         👍 Like / 💬 Comment ↗
       </a>
@@ -399,7 +493,10 @@ const installOfferFor = async (bundle) => {
   return update?.needed ? update : null;
 };
 
-const CommunityPanel = ({ fullPage = false, onImported }) => {
+// onPlay(scenario) opens the library's country picker for a scenario already
+// in the library: "Import & Play" imports and then plays, and a post the
+// library holds plays that copy.
+const CommunityPanel = ({ fullPage = false, onPlay }) => {
   const { scenarios } = useLibraryState();
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -415,8 +512,14 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const [missingMap, setMissingMap] = useState(null);
   const [publishPickerOpen, setPublishPickerOpen] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
+  // The post whose Import button was clicked once while the library already
+  // held a copy: the second click imports another (importLabel).
+  const [armedId, setArmedId] = useState(null);
+  // The prefilled hub post a publish made, kept as a link: the export takes long
+  // enough that a browser may block the page it tries to open by itself.
+  const [publishPostUrl, setPublishPostUrl] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
-  // description. No extra network calls; the hub API is only ever hit by load().
+  // description. No extra network calls; the hub is only ever read by load().
   const [searchQuery, setSearchQuery] = useState("");
   const [browseSort, setBrowseSort] = useState("installs");
 
@@ -433,7 +536,15 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   const clearBanners = () => {
     setNotice(null);
     setError(null);
+    setArmedId(null);
+    setPublishPostUrl(null);
   };
+
+  // What the library already holds of each post: every import is stamped with
+  // hubOrigin.postId, so a card can say "In your library" or "Update
+  // available" (runtime/hubPosts.js, shared with the Scenarios tab).
+  const copiesByPost = useMemo(() => hubCopiesByPostId(scenarios), [scenarios]);
+  const libraryOf = (post) => hubCopyStatus(copiesByPost.get(Number(post?.id)), post);
 
   // A notice/error from one post (e.g. "Imported X") must not leak into a
   // different post's detail view when the selection changes.
@@ -527,31 +638,33 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
     return { pinned, browse };
   }, [browseSort, filteredPosts]);
 
-  const handleImport = async (post) => {
+  const handleImport = async (post, { play = false } = {}) => {
     if (!post.bundleUrl || busyId) return;
+    if (libraryOf(post).status && armedId !== post.id) {
+      setArmedId(post.id);
+      return;
+    }
     setBusyId(post.id);
     clearBanners();
     try {
-      const bundle = await downloadHubBundle(post.bundleUrl);
-      // Provenance: which post and which exact bundle file this copy came from.
-      // The library's Scenarios tab compares this against the post's CURRENT
-      // bundle URL to offer an Update button while the copy is unedited; once
-      // the player edits it the link stays, marked edited, so they can suggest
-      // their changes back to the post (server/hubProvenance.js).
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
+      // The checked copy of the post's file, from the hub's releases, stamped
+      // with its provenance: which post, which file of it, and which copy was
+      // downloaded (hubPosts.js downloadHubScenario). The library's Scenarios
+      // tab compares this against the post's CURRENT bundle URL to offer an
+      // Update button while the copy is unedited; once the player edits it the
+      // link stays, marked edited, so they can suggest their changes back to
+      // the post (server/hubProvenance.js).
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      // Nothing is reported anywhere: the download of the post's file from the
+      // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);
       // A scenario on a detailed map offers that map's download right here, with
       // its size and the choice of its basemap, rather than leaving the player
       // to meet it over the map.
       const mapToOffer = await installOfferFor(bundle).catch(() => null);
-      // Best-effort: tell the server this import succeeded so it can count it
-      // (once per install) on the hub's self-hosted import counter. Never blocks
-      // or fails the import — fire and forget.
-      fetch("/api/hub/import-log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: post.bundleUrl, id: post.id, title: post.title }),
-      }).catch(() => {});
+      // A basemap that just failed to download is not tried again this session
+      // (runtime/missingBasemap.js); Import & Play opens the picker next.
+      noteMissingBasemapTried(details?.scenario);
       // The user may have navigated to a different post's detail view while
       // this was in flight — don't attribute this result to whatever happens
       // to be on screen now unless it's still this post (or the grid).
@@ -561,13 +674,21 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
             `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
+        const missingBasemap = unresolvedBundleBackground(bundle);
+        if (missingBasemap) {
+          setError(`The scenario was imported, but its community basemap could not be downloaded. ${missingBasemap} The game tries again the next time you start it and open the scenario.`);
+        }
       }
       // While an earlier install's map offer is still open (perhaps downloading),
       // it keeps the page: moving on now would cancel it, and its answer moves on.
       // This scenario's own map, if any, is then offered over the map instead.
       if (missingMap) return;
-      if (mapToOffer) setMissingMap({ basemap: mapToOffer, details });
-      else onImported?.(details);
+      // "Import & Play" goes on to the country picker, which opens over the
+      // menu — once the map offer is answered, and unless the player has
+      // already moved on to another post.
+      const playNext = play && details?.scenario ? details.scenario : null;
+      if (mapToOffer) setMissingMap({ basemap: mapToOffer, postId: post.id, playNext });
+      else if (playNext && selectedPostRef.current?.id === post.id) onPlay?.(playNext);
     } catch (nextError) {
       const stillRelevant = !selectedPostRef.current || selectedPostRef.current.id === post.id;
       if (stillRelevant) {
@@ -582,7 +703,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   // where the author drags the downloaded bundle into the description.
   const handlePublish = async (scenario) => {
     setPublishPickerOpen(false);
-    setError(null);
+    clearBanners();
     try {
       const bundle = await exportScenarioBundle(scenario.id);
       // If this scenario's custom basemap is already on the community hub,
@@ -648,7 +769,10 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // The scenario's publish key, written into the post: finding it there is
       // how this install later learns which post is its player's own, and so
       // which posts' comments to read for suggested changes. The same key for
-      // every post made of this scenario; the scenario keeps it.
+      // every post made of this scenario; the scenario keeps it, until its
+      // player unlinks the post. That is for good (server/hubProvenance.js):
+      // the record and its key go, so this mints another, and the post made
+      // now is followed while the unlinked one is never found again.
       const publishKey = scenario.hubPublished?.key || newPublishKey();
       const technicalLines = [
         ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),
@@ -658,10 +782,15 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
         `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
+      // A browser lets a click open a window only for a moment, and the export
+      // above can outlast it (web, Android), so the page may be blocked, and
+      // with noopener window.open says nothing either way. Try anyway (the
+      // desktop app always opens it), and keep the post as a link the player
+      // can click (publishPostUrl).
       window.open(scenarioUrl, "_blank", "noopener");
       extra += describeScenarioTiledBasemap(bundle);
-      // After the page is open: a browser only lets a click open a window for
-      // a moment, and this write is not worth losing the page over.
+      setPublishPostUrl(scenarioUrl);
+      // After the page is open: this write is not worth losing the page over.
       if (!scenario.hubPublished?.key) {
         saveScenario(scenario.id, {
           hubPublished: { ...(scenario.hubPublished ?? {}), key: publishKey, publishedAt: new Date().toISOString() },
@@ -669,7 +798,10 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       }
       setNotice(
         `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
-          `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
+          (hasCover
+            ? "On the GitHub post page, drag both files into the Description box, then submit."
+            : "On the GitHub post page, drag that file into the Description box, then submit.") +
+          " If that page did not open, use the Open the GitHub post button." +
           `${hasCover ? " The cover image becomes the card's preview in the hub." : ""}${extra}`,
       );
     } catch (nextError) {
@@ -678,9 +810,9 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   };
 
   const finishInstall = () => {
-    const { details } = missingMap;
+    const { postId, playNext } = missingMap;
     setMissingMap(null);
-    onImported?.(details);
+    if (playNext && selectedPostRef.current?.id === postId) onPlay?.(playNext);
   };
 
   return (
@@ -701,6 +833,9 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           post={selectedPost}
           busy={busyId === selectedPost.id}
           onImport={handleImport}
+          onPlay={onPlay}
+          library={libraryOf(selectedPost)}
+          armed={armedId === selectedPost.id}
           onBack={backToGrid}
           notice={notice}
           error={error}
@@ -711,7 +846,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.9rem" }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>
               Community scenarios from the hub — ⬇ = imports, 👍 = likes. Open any post to 👍 like or 💬 comment on GitHub.
-              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a verified post.</span>
+              {" "}<span style={{ color: "#e4e4e7" }}>The OFFICIAL badge marks a post made by a team member of the game.</span>
             </div>
             <div style={{ flex: 1 }} />
             <input
@@ -759,6 +894,11 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           )}
 
           <StatusBanner notice={notice} error={error} />
+          {publishPostUrl && (
+            <a href={publishPostUrl} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, marginBottom: "0.9rem", textDecoration: "none" }, touch)}>
+              Open the GitHub post ↗
+            </a>
+          )}
 
           {!posts && !error && (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
@@ -778,6 +918,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                 layout="grid"
                 touch={touch}
                 isMobile={isMobile}
+                libraryOf={libraryOf}
+                armedId={armedId}
               />
             ) : (
               <>
@@ -790,6 +932,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                     onSelect={selectPost}
                     touch={touch}
                     isMobile={isMobile}
+                    libraryOf={libraryOf}
+                    armedId={armedId}
                   />
                 )}
                 <div style={{ alignItems: isMobile ? "stretch" : "flex-end", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.7rem", justifyContent: "space-between", margin: "1.4rem 0 0.8rem" }}>
@@ -826,6 +970,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                   layout="grid"
                   touch={touch}
                   isMobile={isMobile}
+                  libraryOf={libraryOf}
+                  armedId={armedId}
                 />
               </>
             )

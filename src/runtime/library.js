@@ -14,6 +14,7 @@ import { enqueueContentStrings } from "./translator.js";
 const LIBRARY_API_ROOT = "/api/library";
 const SCENARIOS_API_ROOT = "/api/scenarios";
 const GAMES_API_ROOT = "/api/games";
+const TRASH_API_ROOT = "/api/trash";
 
 const INITIAL_LIBRARY_STATE = {
   activeGame: null,
@@ -152,8 +153,22 @@ const requestJson = async (pathname, { body, method = "GET" } = {}) => {
   }
 };
 
+// A shared game (multiplayer/client/sharedGame.js) is played through a game in
+// this library: the host's own campaign, or a guest's stand-in of the same
+// scenario. Its documents are then the host's view, but the library reads the
+// entry from this device's files, which a shared game never writes: the entry
+// would name the stand-in's country and the date the game was opened at. While
+// one is open, the entry shows the view's country and date instead.
+let sharedGameEntry = null; // { gameId, country, currentDate }
+let lastCatalog = null;
+
+const withSharedGameEntry = (game) => (sharedGameEntry && game?.id === sharedGameEntry.gameId
+  ? { ...game, country: sharedGameEntry.country, currentDate: sharedGameEntry.currentDate || game.currentDate }
+  : game);
+
 const applyLibraryCatalog = (catalog) => {
-  const games = Array.isArray(catalog?.games) ? catalog.games : [];
+  lastCatalog = catalog;
+  const games = Array.isArray(catalog?.games) ? catalog.games.map(withSharedGameEntry) : [];
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
@@ -221,6 +236,16 @@ const applyLibraryCatalog = (catalog) => {
   return libraryState;
 };
 
+// { gameId, country, currentDate } while a shared game is open, null after.
+export const setSharedGameEntry = (entry) => {
+  const next = entry?.gameId
+    ? { gameId: String(entry.gameId), country: String(entry.country ?? ""), currentDate: String(entry.currentDate ?? "") }
+    : null;
+  if (JSON.stringify(next) === JSON.stringify(sharedGameEntry)) return;
+  sharedGameEntry = next;
+  if (lastCatalog) applyLibraryCatalog(lastCatalog);
+};
+
 
 export const getLibraryState = () => libraryState;
 
@@ -261,6 +286,21 @@ export const refreshLibraryCatalog = async ({ force = false } = {}) => {
   return libraryCatalogRequest;
 };
 
+// Every write below refreshes the catalog when it lands: a GET /api/library (a
+// whole IndexedDB catalog build on the web and on Android) and a re-render of
+// everything that reads the library. A caller making several writes in a row —
+// the Workshop's save is a scenario save and six asset writes — passes
+// { refresh: false } to each and runs them inside this instead, so the catalog
+// is rebuilt once, after the last write, whether or not the writes succeeded.
+export const withSingleLibraryRefresh = async (write) => {
+  try {
+    return await write();
+  } finally {
+    // The catalog records its own failure; the writes' outcome is what the caller gets.
+    await refreshLibraryCatalog({ force: true }).catch(() => {});
+  }
+};
+
 export const ensureLibraryCatalog = async () => {
   if (libraryState.loaded) {
     return libraryState;
@@ -284,13 +324,13 @@ export const createScenario = async (payload) => {
   return details;
 };
 
-export const saveScenario = async (scenarioId, payload) => {
+export const saveScenario = async (scenarioId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -326,23 +366,23 @@ const toUploadBuffer = async (file) => {
 };
 
 // Fetch a scenario's JSON asset (regions/cities geojson, colors). Returns null
-// when the scenario has no such asset (404) instead of throwing — callers treat
-// a missing asset as "use the default".
+// when the scenario has no such asset (404) — callers treat a missing asset as
+// "use the default". Any other failure THROWS: a download that failed, or a
+// file too big to parse on a phone, is not an absent asset, and a caller that
+// took it for one wrote the default back over the author's flags, tags,
+// background and geometry on the next save.
 // `coarse` asks for the regions coarsened for a zoomed-out preview (the
 // country picker) instead of the full-resolution file: a few MB, not 221.
 export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse = false } = {}) => {
-  try {
-    const response = await fetch(
-      `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
-    );
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(
+    `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`One of this scenario's files could not be loaded (HTTP ${response.status}).`);
+  return response.json();
 };
 
-export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
+export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -355,22 +395,22 @@ export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearScenarioAsset = async (scenarioId, assetKey) => {
+export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const uploadGameAsset = async (gameId, assetKey, file) => {
+export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -383,18 +423,18 @@ export const uploadGameAsset = async (gameId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearGameAsset = async (gameId, assetKey) => {
+export const clearGameAsset = async (gameId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -464,6 +504,18 @@ export const writeGameSnapshotsText = async (gameId, snapshotsText) => {
   if (!response.ok) throw new Error(`Could not restore this game's restore points (HTTP ${response.status}).`);
 };
 
+// A time skip that finished while another game was open, kept for its own game
+// until the player applies or discards it there (src/Game/AI/parkedTurn.js).
+// By id: it is written while another game is the active one. null when none.
+export const readGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`);
+
+export const writeGameParkedTurn = async (gameId, parkedTurn) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { body: parkedTurn, method: "PUT" });
+
+export const removeGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { method: "DELETE" });
+
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
@@ -484,13 +536,13 @@ export const createGame = async (payload) => {
   return details;
 };
 
-export const saveGame = async (gameId, payload) => {
+export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -516,7 +568,32 @@ export const removeGame = async (gameId) => {
   return applyLibraryCatalog(catalog);
 };
 
-export const resolveScenarioCountryName = (name, code) =>
-  resolveCountryNameOverride(libraryState.runtimeScenario?.countryNameOverrides, name, code);
+// What delete moved to the trash, for the library's Recently deleted shelves:
+// { entries: [{ entry, kind, id, name, deletedAt, bytes? }], keepDays, keepCount? }.
+// The desktop serves it to the machine it runs on only; anywhere else this
+// throws and the shelves stay hidden.
+export const listTrash = async () => requestJson(TRASH_API_ROOT);
+
+export const restoreFromTrash = async (entry) => {
+  const result = await requestJson(`${TRASH_API_ROOT}/${encodeURIComponent(entry)}/restore`, { method: "POST" });
+  applyLibraryCatalog(result.library);
+  return result;
+};
+
+// kind "game" or "scenario" empties that shelf only.
+export const emptyTrash = async (kind) =>
+  requestJson(`${TRASH_API_ROOT}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`, { method: "DELETE" });
+
+// A scenario's community basemap that could not be downloaded when it was
+// imported or updated, downloaded since (src/runtime/missingBasemap.js):
+// payload is { dataUrl } or { geojson }.
+export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
+    body: { payload },
+    method: "PUT",
+  });
+  await refreshLibraryCatalog({ force: true });
+  return details;
+};
 
 syncLibraryRuntime();

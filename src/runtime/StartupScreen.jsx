@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 // Google on every start, and the right faces with no network.
 import "../assets/fonts/fonts.css";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
+import { translateNow } from "./translator.js";
 // Loading-screen artwork. The first is the original; the rest cycle in once the
 // files exist in /public. Missing files are skipped (see the preload check), so
 // the screen never flashes a broken image.
@@ -83,6 +84,14 @@ const StartupScreen = ({
 
   const currentBg = bgIndex % availableImages.length;
 
+  // In the player's language from the first frame the pack is in: looked up
+  // here (translateNow), because the DOM translator leaves this screen alone
+  // until it is gone. Each string whole, so the packs can hold it.
+  const title = translateNow(timedOut ? "Continuing…" : "Preparing the World");
+  const stepName = translateNow(activeStep ? activeStep.label : stage);
+  const stepCounter = translateNow(`${doneCount} of ${steps.length} complete`);
+  const cached = loadedBytes > 0 ? translateNow(`${formatBytes(loadedBytes)} cached so far`) : "";
+
   return (
     <>
     <style>{`
@@ -108,23 +117,6 @@ const StartupScreen = ({
         z-index: 0;
       }
 
-      /* Bottom-half gradient so UI reads over artwork */
-      .ss-gradient {
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(
-          to bottom,
-          rgba(0,0,0,0)       0%,
-                                    rgba(0,0,0,0)       35%,
-                                    rgba(4,3,2,0.55)    55%,
-                                    rgba(4,3,2,0.88)    72%,
-                                    rgba(4,3,2,0.97)    85%,
-                                    rgba(4,3,2,1)       100%
-        );
-        pointer-events: none;
-        z-index: 1;
-      }
-
       /* Subtle grain overlay for cinematic texture */
       .ss-grain {
         position: absolute;
@@ -144,7 +136,10 @@ const StartupScreen = ({
         left: 0;
         right: 0;
         z-index: 10;
-        padding: 0 calc(5vw + ${SAFE_RIGHT}) calc(2.8rem + ${SAFE_BOTTOM}) calc(5vw + ${SAFE_LEFT});
+        /* One flat dark strip, so the UI reads over any artwork. */
+        background: rgba(6,6,7,0.84);
+        border-top: 1px solid rgba(255,255,255,0.08);
+        padding: 1.6rem calc(5vw + ${SAFE_RIGHT}) calc(2.2rem + ${SAFE_BOTTOM}) calc(5vw + ${SAFE_LEFT});
         display: flex;
         flex-direction: column;
         gap: 1.1rem;
@@ -249,16 +244,7 @@ const StartupScreen = ({
       .ss-rule {
         width: 100%;
         height: 1px;
-        background: linear-gradient(
-          90deg,
-          transparent 0%,
-          rgba(180,135,40,0.2) 8%,
-                                    rgba(210,165,55,0.55) 30%,
-                                    rgba(235,190,65,0.75) 50%,
-                                    rgba(210,165,55,0.55) 70%,
-                                    rgba(180,135,40,0.2) 92%,
-                                    transparent 100%
-        );
+        background: rgba(210,165,55,0.45);
       }
 
       /* PROGRESS ROW */
@@ -291,35 +277,10 @@ const StartupScreen = ({
       .ss-progress-fill {
         height: 100%;
         border-radius: 3px;
-        background: linear-gradient(90deg,
-                                    #7a5008 0%,
-                                    #b8860a 25%,
-                                    #d4a820 55%,
-                                    #f0cc40 80%,
-                                    #ffe370 100%
-        );
+        background: #d4a820;
         transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
         position: relative;
         overflow: hidden;
-      }
-
-      /* Animated shimmer sweep */
-      .ss-progress-fill::after {
-        content: '';
-  position: absolute;
-  top: 0; bottom: 0; left: -100%;
-  width: 60%;
-  background: linear-gradient(90deg,
-                              transparent 0%,
-                              rgba(255,255,255,0.3) 50%,
-                              transparent 100%
-  );
-  animation: sweep 2.2s ease-in-out infinite;
-      }
-
-      @keyframes sweep {
-        0%   { left: -60%; }
-        100% { left: 160%; }
       }
 
       /* Glow head at tip of fill */
@@ -408,7 +369,8 @@ const StartupScreen = ({
 
       {/* data-startup-screen: the translator waits for this to disappear
           before doing ANY work, so translation can never stall the load;
-          data-no-translate keeps its fast-changing progress text verbatim. */}
+          data-no-translate keeps the translator off it, since its text is
+          already looked up above. */}
       <div className="ss-shell" data-startup-screen="" data-no-translate="">
       {availableImages.map((src, index) => (
         <div
@@ -417,7 +379,6 @@ const StartupScreen = ({
         style={{ backgroundImage: `url('${src}')`, opacity: index === currentBg ? 1 : 0 }}
         />
       ))}
-      <div className="ss-gradient" />
       <div className="ss-grain" />
       <div className="ss-copyright">Image © 2026 Nicholas Krol</div>
 
@@ -430,7 +391,7 @@ const StartupScreen = ({
       <div className="ss-title-block">
       <div className="ss-game-name">Open Historia</div>
       <div className="ss-title">
-      {timedOut ? "Continuing…" : "Preparing the World"}
+      {title}
       </div>
       </div>
       </div>
@@ -438,11 +399,11 @@ const StartupScreen = ({
       {steps.length > 0 && (
         <div className="ss-step-info">
         <div className="ss-step-name">
-        {activeStep ? activeStep.label : stage}
+        {stepName}
         </div>
         {steps.length > 1 && (
           <div className="ss-step-counter">
-          {doneCount} of {steps.length} complete
+          {stepCounter}
           </div>
         )}
         </div>
@@ -478,12 +439,12 @@ const StartupScreen = ({
         <div
         key={step.id}
         className={`ss-dot ss-dot-${step.status}`}
-        title={step.label}
+        title={translateNow(step.label)}
         />
       ))}
       </div>
       <div className="ss-cache">
-      {loadedBytes > 0 ? `${formatBytes(loadedBytes)} cached` : ""}
+      {cached}
       </div>
       </div>
 

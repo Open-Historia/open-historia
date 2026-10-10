@@ -30,6 +30,42 @@ const uniqueText = (value) => {
   return out;
 };
 
+// The member list, one polity per line. Polity names are exact keys and may
+// hold commas ("Bonaire, Sint Eustatius and Saba"), so it never splits on them.
+export const institutionMemberNames = (membersText) => uniqueText(String(membersText ?? "").split(/\r?\n/g));
+
+// The polities an author can pick as members: every polity in the scenario,
+// dormant ones included, since an author may list one on purpose.
+export const institutionMemberRoster = (world = {}) => collectScenarioPoliticalPolities(world)
+  .map((entry) => entry.polityKey);
+
+// Members that name no polity in the scenario, exactly as written. Polity names
+// are exact keys, so a typo or a near-name would found a phantom member that
+// votes and counts toward quorum without matching any country. Kept, not
+// refused: this only warns. An exact name or alias a polity is known by counts.
+// With no roster to compare against there is nothing to warn about, and a
+// world without ownerCodes has none: on the stock map every country the map
+// draws owns its land without being listed, as the country picker assumes, so
+// "France" would be flagged there although it is on the map.
+export const unmatchedInstitutionMembers = (names = [], world = {}) => {
+  if (!Array.isArray(world?.ownerCodes) || !world.ownerCodes.length) return [];
+  const roster = institutionMemberRoster(world);
+  if (!roster.length) return [];
+  const known = new Set(roster);
+  for (const override of Object.values(world?.polityOverrides ?? {})) {
+    if (!override || typeof override !== "object") continue;
+    for (const token of [override.name, ...(Array.isArray(override.aliases) ? override.aliases : [])]) {
+      if (clean(token)) known.add(clean(token));
+    }
+  }
+  // A name the save turns into a polity's key (upsertScenarioInstitution: a
+  // known name or alias, in any letter case) is that polity, so it is not
+  // flagged either.
+  const resolvePolity = createScenarioPolityResolver(world);
+  return (Array.isArray(names) ? names : [])
+    .filter((name) => clean(name) && !known.has(clean(name)) && !known.has(resolvePolity(name)));
+};
+
 export const institutionAuthoringRows = (world = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   return Object.values(institutions.byId || {})
@@ -67,13 +103,10 @@ export const validateInstitutionAuthoringDraft = (draft = {}, world = {}) => {
     return "Logo must be an http(s) URL, a normal image asset path, or a persistent raster image data URL.";
   }
 
-  const polityRows = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
-  if (polityRows.length) {
-    const polityKeys = new Set(polityRows.map((entry) => entry.polityKey));
-    const resolvePolity = createScenarioPolityResolver(world);
-    const invalidMember = uniqueText(draft.membersText).find((member) => !polityKeys.has(resolvePolity(member)));
-    if (invalidMember) return `Unknown institution member "${invalidMember}". Choose a polity from the scenario roster.`;
-  }
+  // Members are not checked here: a member that names no polity in the
+  // scenario is kept and flagged (unmatchedInstitutionMembers), never refused.
+  // A refusal on the roster alone also turned away real countries on the stock
+  // map, where the drawn countries are not listed.
 
   const institutions = normalizeInstitutions(world?.institutions, world);
   const existing = institutions.byId?.[normalizedId];
@@ -105,11 +138,14 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   const id = clean(draft.id) ? institutionAuthoringId(draft.id) : institutionAuthoringId(draft.name);
   const existing = institutions.byId?.[id] || null;
+  // A name or alias the scenario knows a polity by is saved as that polity's
+  // key, so the member is its country and not a namesake. A name that resolves
+  // to nothing is saved as written.
   const polityRows = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
   const resolvePolity = createScenarioPolityResolver(world);
-  const canonicalizePolity = (value) => polityRows.length ? resolvePolity(value) : clean(value);
+  const canonicalizePolity = (value) => (polityRows.length ? resolvePolity(value) : "") || clean(value);
   const existingMembers = new Map((existing?.members || []).map((member) => [lower(canonicalizePolity(member?.polity)), member]));
-  const members = uniqueText(draft.membersText).map((polity) => preserveMember(existingMembers, canonicalizePolity(polity)));
+  const members = institutionMemberNames(draft.membersText).map((polity) => preserveMember(existingMembers, canonicalizePolity(polity)));
   const memberKeys = new Set(members.map((member) => lower(member.polity)));
   const leaders = (existing?.leaders || []).filter((polity) => memberKeys.has(lower(polity)));
 
@@ -144,6 +180,23 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   return {
     world: { ...world, institutions: nextInstitutions },
     institution: normalized,
+    error: "",
+  };
+};
+
+// Takes an institution out of the scenario's canon, members, proposals and
+// history with it. The uploaded logo lives in a separate scenario asset, which
+// the Politics tab clears on its own.
+export const removeScenarioInstitution = (world = {}, institutionId = "") => {
+  const institutions = normalizeInstitutions(world?.institutions, world);
+  const id = clean(institutionId);
+  const existing = id && Object.hasOwn(institutions.byId || {}, id) ? institutions.byId[id] : null;
+  if (!existing) return { world, institution: null, error: "That institution is not in this scenario." };
+  const byId = { ...(institutions.byId || {}) };
+  delete byId[id];
+  return {
+    world: { ...world, institutions: { ...institutions, byId } },
+    institution: existing,
     error: "",
   };
 };

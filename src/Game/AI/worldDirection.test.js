@@ -1,7 +1,7 @@
 /*! Open Historia — world direction: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/worldDirection.test.js
 //
-// Runs without node_modules: worldDirection.js imports nothing.
+// Runs without node_modules: worldDirection.js imports only runtime/gameDates.js.
 //
 // These are an author's settings, so the promise is to the author: the number
 // they set is the number the engine uses. And to the player: none of it may
@@ -15,10 +15,12 @@ import {
     PRIORITY_RULES_HEADING,
     applyTerritoryTempo,
     beatIsWritten,
+    buildPriorityRulesBlock,
     buildScriptedEventsInstruction,
     dateKey,
     ensureScriptedEvents,
     parseScriptedEvents,
+    reviewScriptedEvents,
     scriptedBeatsInSpan,
     territoryTempoAllowance,
     WORLD_SHARE_MIN_EVENTS,
@@ -64,6 +66,30 @@ test("the player's name is matched as whole words, never inside another", () => 
     assert.equal(eventConcernsPlayer(event("Talks open in Oman"), ["Oman"]), true);
     // A name too short to mean anything is not searched for at all.
     assert.equal(eventConcernsPlayer(event("Ob river floods"), ["Ob"]), false);
+});
+
+// A name was looked for with everything but a-z and 0-9 taken out of it and of
+// the event, so one written in another script was never found.
+test("the player's name is found in any script, still as whole words", () => {
+    assert.equal(eventConcernsPlayer(event("Польша направила ноту России", "Нота адресована Российской Федерации."), ["Российская Федерация", "России"]), true);
+    assert.equal(eventConcernsPlayer(event("Белоруссия проводит учения"), ["Россия", "Руссия"]), false, "not inside another word");
+    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал"), ["Россия"]), false);
+    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会"), ["俄罗斯"]), false, "Chinese is not written in words: only the simulator's mark counts there");
+    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会", "", { playerRelated: true }), ["俄罗斯"]), true);
+    assert.equal(eventConcernsPlayer(event("Η Πολωνία διαμαρτύρεται στη Ρωσία"), ["Ρωσία"]), true);
+});
+
+test("the player's name is found in any script, as whole words there too", () => {
+    // Folded to a-z0-9 a name in Cyrillic was no name, and no event ever named it.
+    assert.equal(eventConcernsPlayer(event("Польша направила ноту", "Российская Федерация отвечает зеркально."), ["Российская Федерация"]), true);
+    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал", "Экспортёры кофе довольны."), ["Российская Федерация"]), false);
+    assert.equal(eventConcernsPlayer(event("Переговоры открылись", "Оман принимает делегации."), ["Оман"]), true);
+    assert.equal(eventConcernsPlayer(event("Романовы возвращаются"), ["Оман"]), false, "never inside another word");
+    // Chinese: found where punctuation sets the name apart. Still a whole word
+    // of three characters or more, and an unbroken sentence is one word.
+    assert.equal(eventConcernsPlayer(event("首尔消息：大韩民国，举行选举。"), ["大韩民国"]), true);
+    assert.equal(eventConcernsPlayer(event("大韩民国举行选举"), ["大韩民国"]), false);
+    assert.equal(eventConcernsPlayer(event("东京消息：日本，公布新预算。"), ["日本"]), false);
 });
 
 test("the floor is met when enough of the period belongs to the rest of the world", () => {
@@ -147,7 +173,22 @@ test("a beat is a dated line in the author's words; the rest of the text is igno
 test("dates sort as numbers, years before AD 1 included", () => {
     assert.ok(dateKey("-0218-08-02") < dateKey("0001-01-01"));
     assert.ok(dateKey("1914-07-28") < dateKey("1914-08-01"));
+    assert.ok(dateKey("-0218-04-15") < dateKey("-0218-12-18"), "April comes before December inside a BC year");
+    assert.ok(dateKey("-0218-12-31") < dateKey("-0217-01-01"), "218 BC comes before 217 BC");
     assert.equal(dateKey("not a date"), null);
+});
+
+test("BC beats list in calendar order and land in the skip that covers them", () => {
+    const beats = parseScriptedEvents([
+        "-0218-12-18 Hannibal defeats the Romans at the Trebia.",
+        "-0218-04-15 Hannibal crosses the Rhone with his elephants.",
+        "-0217-06-21 Hannibal ambushes the Romans at Lake Trasimene.",
+    ].join("\n"));
+    assert.deepEqual(beats.map((beat) => beat.date), ["-0218-04-15", "-0218-12-18", "-0217-06-21"]);
+    const spring = scriptedBeatsInSpan(beats, { originDate: "-0218-03-01", targetDate: "-0218-06-30" });
+    assert.deepEqual(spring.map((beat) => beat.date), ["-0218-04-15"]);
+    const winter = scriptedBeatsInSpan(beats, { originDate: "-0218-06-30", targetDate: "-0218-12-31" });
+    assert.deepEqual(winter.map((beat) => beat.date), ["-0218-12-18"]);
 });
 
 test("a period covers the beats after its origin up to its target; the first skip covers its origin day too", () => {
@@ -156,6 +197,46 @@ test("a period covers the beats after its origin up to its target; the first ski
     assert.deepEqual(scriptedBeatsInSpan(beats, span).map((beat) => beat.text), ["B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { ...span, includeOrigin: true }).map((beat) => beat.text), ["A", "B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { originDate: "bad", targetDate: "2014-05-21" }), []);
+});
+
+test("the editor's check counts the beats and names every line the engine will not use", () => {
+    const text = [
+        "# a comment is not a problem",
+        "1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.",
+        "28/07/1914 Austria-Hungary declares war on Serbia",
+        "1914-08-01",
+        "  1914-8-3 Germany declares war on France",
+        "",
+        "1914-08-04 Britain declares war on Germany.",
+    ].join("\n");
+    const review = reviewScriptedEvents(text, { currentDate: "1914-01-01" });
+    assert.equal(review.count, 2);
+    assert.deepEqual(review.ignored, [
+        { line: "28/07/1914 Austria-Hungary declares war on Serbia", problem: "no-date" },
+        { line: "1914-08-01", problem: "no-text" },
+        { line: "1914-8-3 Germany declares war on France", problem: "no-date" },
+    ]);
+    // The same beats the engine parses.
+    assert.equal(parseScriptedEvents(text).length, review.count);
+    assert.deepEqual(reviewScriptedEvents("", { currentDate: "1914-01-01" }), { count: 0, ignored: [] });
+});
+
+test("a beat no skip will reach is flagged; the first skip still covers the day itself", () => {
+    const text = "1914-06-28 Sarajevo.\n1914-07-28 Vienna declares war.\n1914-08-01 Berlin declares war.";
+    const later = reviewScriptedEvents(text, { currentDate: "1914-07-28" });
+    assert.equal(later.count, 1);
+    assert.deepEqual(later.ignored.map((entry) => [entry.line, entry.problem]), [
+        ["1914-06-28 Sarajevo.", "passed"],
+        ["1914-07-28 Vienna declares war.", "passed"],
+    ]);
+    const first = reviewScriptedEvents(text, { currentDate: "1914-07-28", includeOrigin: true });
+    assert.equal(first.count, 2);
+    assert.deepEqual(first.ignored.map((entry) => entry.line), ["1914-06-28 Sarajevo."]);
+    // Years before AD 1 compare as the engine compares them (scriptedBeatsInSpan).
+    assert.equal(reviewScriptedEvents("-0216-08-02 Cannae.", { currentDate: "-0218-03-01" }).count, 1);
+    assert.equal(reviewScriptedEvents("-0219-12-01 Too early.", { currentDate: "-0218-03-01" }).ignored[0]?.problem, "passed");
+    // No usable date to measure against: nothing is called passed.
+    assert.equal(reviewScriptedEvents(text, { currentDate: "" }).count, 3);
 });
 
 test("a beat is written when an event near its date shares its particular words", () => {
@@ -202,6 +283,34 @@ test("exact selected-outcome wording uses parent context for the prompt without 
     assert.equal(beatIsWritten(beat, [{ date: beat.date, title: beat.title, description: beat.text }]), true, "exact visible wording need not repeat the parent context");
     const { events } = ensureScriptedEvents([], [beat]);
     assert.equal(events[0].description, beat.text, "exact fallback remains exactly the selected authored wording");
+});
+
+// A beat's words were split on a-z and 0-9 alone. One its author wrote in
+// Russian had none, so it was never found in the answer and the engine wrote it
+// again beside the model's own telling of it.
+test("a beat written in another script is found in an answer in that script", () => {
+    const beats = parseScriptedEvents("2014-05-02 Столкновения в Одессе: десятки погибших в Доме профсоюзов.\n2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
+    const [odesa, election] = beats;
+    const answer = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах на Украине уже в первом туре." }];
+    assert.equal(beatIsWritten(election, answer), true);
+    assert.equal(beatIsWritten(odesa, answer), false, "the other beat is not this event");
+    const { written, inserted } = ensureScriptedEvents(answer, beats);
+    assert.deepEqual(written.map((beat) => beat.date), ["2014-05-25"]);
+    assert.deepEqual(inserted.map((beat) => beat.date), ["2014-05-02"], "only the beat the answer left out is written by the engine");
+});
+
+test("a beat its author wrote in Russian is found written, and is not written a second time", () => {
+    // Split on a-z0-9 the beat had no words, so it was never found written: the
+    // engine added the author's event beside the model's own telling of it.
+    const beats = parseScriptedEvents("2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
+    const told = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах уже в первом туре." }];
+    assert.equal(beatIsWritten(beats[0], told), true);
+    assert.equal(beatIsWritten(beats[0], [{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }]), false, "same day, different event");
+    const kept = ensureScriptedEvents(told, beats);
+    assert.deepEqual([kept.events.length, kept.written.length, kept.inserted.length], [1, 1, 0]);
+    // Left out, it is still written by the engine.
+    const added = ensureScriptedEvents([{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }], beats);
+    assert.deepEqual([added.events.length, added.inserted.length], [2, 1]);
 });
 
 test("a beat the answer left out is written by the engine, in the author's words, without impacts", () => {
@@ -326,4 +435,21 @@ test("the simulator is told the tempo as a number for the period", () => {
     assert.match(directive, /^\[The Map's Tempo — counted by the engine\]/);
     assert.match(directive, /no faster than 2 regions per thirty days: 3 this period/);
     assert.equal(buildWorldDirectionDirective({ worldShare: 0, priorityRules: "", territoryTempo: 0 }), "");
+});
+
+test("the priority rules alone: no share, no tempo, nothing without rules", () => {
+    const direction = { worldShare: 35, territoryTempo: 2, priorityRules: "No nuclear weapons before 1945." };
+    const block = buildPriorityRulesBlock(direction);
+    assert.ok(block.startsWith(PRIORITY_RULES_HEADING));
+    assert.match(block, /outrank everything else you have been told/);
+    assert.ok(block.endsWith("No nuclear weapons before 1945."));
+    assert.doesNotMatch(block, /World's Share|Map's Tempo/);
+    assert.equal(buildPriorityRulesBlock({ worldShare: 35, priorityRules: "  " }), "");
+    assert.equal(buildPriorityRulesBlock(null), "");
+});
+
+test("the time skip's directive carries the same rules block as every other task", () => {
+    const direction = { worldShare: 35, priorityRules: "The Tsar never abdicates." };
+    const directive = buildWorldDirectionDirective(direction, { playerPolity: "France" });
+    assert.ok(directive.endsWith(buildPriorityRulesBlock(direction)));
 });

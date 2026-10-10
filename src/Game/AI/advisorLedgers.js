@@ -15,6 +15,26 @@ export const polityEntry = (ledger, name) => {
 
 const MAX_ADVISOR_FOREIGN_SHEETS = 8;
 
+// The bounded slice is the simulator's context and always ends its ledgers
+// with a SUBORDINATIONS section: every standing subordination as the truth,
+// covert ones included (nativeDiplomaticDirector.js). It has no switch for
+// that any more, so the advisor's copy is built from the world without its
+// puppet ledger — no subordination pulls a country into the slice — and that
+// section, which would then say nobody directs anybody, is cut from the text.
+const SUBORDINATIONS_HEADING = "SUBORDINATIONS (who directs whom)";
+const SUBORDINATIONS_CLOSING = "A Puppet is a SEPARATE COUNTRY";
+const withoutSubordinations = (text) => {
+  const lines = String(text ?? "").split("\n");
+  const heading = lines.indexOf(SUBORDINATIONS_HEADING);
+  if (heading < 0) return lines.join("\n");
+  const closing = lines.findIndex((line, index) => index > heading && line.startsWith(SUBORDINATIONS_CLOSING));
+  // The blank line above the heading goes with it.
+  const from = heading > 0 && lines[heading - 1] === "" ? heading - 1 : heading;
+  const to = closing < 0 ? heading + 1 : closing;
+  lines.splice(from, to - from + 1);
+  return lines.join("\n");
+};
+
 // What the player's own Stats panel shows about the rest of the world, which the
 // advisor otherwise had to reconstruct from the event prose: the war ledger, the
 // Diplomacy tab's relations and agreements for the player and the powers they
@@ -30,11 +50,10 @@ export function describeWorldLedgersForAdvisor(worldData, chatData, country) {
     .slice(0, 6)
     .flatMap((chat) => (Array.isArray(chat?.countries) ? chat.countries : []).map((entry) => entry?.name || entry?.code))
     .filter(Boolean);
-  const diplomacy = buildBoundedDiplomaticContext(worldData, {
+  const diplomacy = buildBoundedDiplomaticContext({ ...worldData, puppets: [] }, {
     playerPolity: player,
     focusActors: partners,
     maxActors: 8,
-    puppetStates: false,
   });
   const wars = buildCanonicalWarContext(worldData);
 
@@ -56,7 +75,7 @@ export function describeWorldLedgersForAdvisor(worldData, chatData, country) {
     "WARS",
     wars.startsWith("No active") ? "No war or ceasefire is recorded." : wars,
     "",
-    diplomacy.text,
+    withoutSubordinations(diplomacy.text),
     ...(figures.length ? ["", "OTHER POWERS' RECORDED FIGURES", ...figures] : []),
   ].join("\n");
 }

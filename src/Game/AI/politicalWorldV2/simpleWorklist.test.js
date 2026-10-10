@@ -82,6 +82,31 @@ test("one uncovered institution creates exactly one institution-centric membersh
   assert.deepEqual(task.targets, ["pact"]);
 });
 
+test("smaller institutions share a membership call; a global body and a retry go alone", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stagedWorld.institutions.byId.aa = { id: "aa", name: "World Body", kind: "international_organization", foundedDate: "1945-10-24", members: {} };
+  const regional = Array.from({ length: 8 }, (_, index) => `r${index + 1}`);
+  for (const id of regional) checkpoint.stagedWorld.institutions.byId[id] = { id, name: `Pact ${id}`, kind: "regional_bloc", foundedDate: "2000-01-01", members: {} };
+
+  let task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["aa"]);
+  assert.deepEqual(task.payload, { institutionId: "aa" });
+  // 1 global body + 8 regional in batches of 6.
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).total, 3);
+
+  checkpoint.membership.resolvedInstitutionIds = ["aa"];
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, regional.slice(0, 6));
+  assert.deepEqual(task.payload, { institutionIds: regional.slice(0, 6) });
+
+  checkpoint.attempts["institution-membership-resolution:r1"] = 1;
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["r1"], "an institution dropped from a batch is retried on its own");
+});
+
 test("exhausted actor targets are deferred instead of blocking later polities", () => {
   const checkpoint = base();
   checkpoint.attempts = {
@@ -194,6 +219,93 @@ test("null fallback power scores remain actionable instead of counting as comple
   assert.deepEqual(task.targets, ["A", "C"]);
 });
 
+
+// An actor missing only party support goes to the generator's separate fast
+// call; a task mixing it with a new actor made two calls against a one-call
+// ceiling and failed every time.
+const landscapeOnlyActor = (polityKey) => ({
+  ...completeActor(polityKey),
+  parties: [{ id: "gov", name: "Government Party", ideology: "Pragmatic", publicPriorities: ["Maintain stability"] }],
+});
+
+test("actors missing only their landscape never share a task with other actors", () => {
+  const checkpoint = base(["A", "C"]);
+  checkpoint.stagedWorld.politicalActors.byPolity.A = landscapeOnlyActor("A");
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.stagedWorld.politicalActors.byPolity.B = completeActor("B");
+  checkpoint.coverage["political-actor"] = ["B"];
+  let task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "political-actor");
+  assert.deepEqual(task.targets, ["A"]);
+
+  checkpoint.attempts["political-actor:A"] = 2;
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["C"]);
+
+  delete checkpoint.attempts["political-actor:A"];
+  const summary = summarizePoliticalWorldV2Worklist({ checkpoint, inputs });
+  assert.equal(summary.total, 2, "one landscape call and one generation call");
+});
+
+test("landscape-only actors take the fast call's 48-polity batch", () => {
+  const polities = Array.from({ length: 60 }, (_, index) => `P${index + 1}`);
+  const checkpoint = base([]);
+  checkpoint.stagedWorld.politicalActors.byPolity = Object.fromEntries(polities.map((polity) => [polity, landscapeOnlyActor(polity)]));
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs: { polities } });
+  assert.deepEqual(task.targets, polities.slice(0, 48));
+});
+
+test("a verification task carries the sentinel's challenged paths, not only its one-line issue", () => {
+  const checkpoint = base();
+  checkpoint.historicalVerificationRequired = true;
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  checkpoint.stagedWorld.powerStatus.byPolity = Object.fromEntries(["A", "B", "C"].map((polity) => [polity, { tier: "minor-power", score: 30, baselineScore: 30, basis: "generated-relative-baseline" }]));
+  checkpoint.verification.challenges.B = {
+    issue: "The head of government changed before the scenario date.",
+    challengedFacts: [{ id: "F2", path: "government.headOfGovernment", display: "Leader Old" }],
+    temporalCorrectionEstablished: true,
+  };
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "historical-verification");
+  assert.deepEqual(task.targets, ["B"]);
+  assert.equal(task.payload.reviewContextByPolity.B, [
+    "The head of government changed before the scenario date.",
+    "CHALLENGED GENERATED TEMPORAL PATHS:",
+    "- government.headOfGovernment = Leader Old",
+  ].join("\n"));
+  assert.deepEqual(task.payload.correctionRequiredPolities, ["B"]);
+});
+
+test("the call estimate covers every stage still to run, not only the current one", () => {
+  const polities = Array.from({ length: 30 }, (_, index) => `P${index + 1}`);
+  const checkpoint = base([]);
+  checkpoint.historicalVerificationRequired = true;
+  checkpoint.stagedWorld.institutions.byId.pact = { id: "pact", name: "Pact", foundedDate: "2000-01-01", members: {} };
+  const summary = summarizePoliticalWorldV2Worklist({ checkpoint, inputs: { polities } });
+  // actors 3 (12 a call) + alignment 1 (48) + discovery 1 + one known
+  // institution's membership 1 + governance 1 + agreements 1 + power 2 (24)
+  // + sentinel 3 (12).
+  assert.equal(summary.pending, 3, "the work queue still counts only the actor stage");
+  assert.equal(summary.estimatedCallsRemaining, 13);
+});
+
+test("the call estimate is zero for a finished world and skips stages behind an exhausted gate", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stagedWorld.powerStatus.byPolity = Object.fromEntries(["A", "B", "C"].map((polity) => [polity, { tier: "minor-power", score: 30, baselineScore: 30, basis: "generated-relative-baseline" }]));
+  checkpoint.attempts["institution-discovery:global"] = 2;
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).estimatedCallsRemaining, 0);
+  delete checkpoint.attempts["institution-discovery:global"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).estimatedCallsRemaining, 0);
+});
 
 test("stale 202/202 coverage reopens an Other-heavy generated electoral roster", () => {
   const checkpoint = base();

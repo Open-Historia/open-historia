@@ -76,7 +76,8 @@ const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 // never sent to the AI: the pack has it, and a string it lacks stays English
 // rather than costing the player a request. Only what a scenario or a player
 // made (scenario and game names and descriptions, custom polities, custom
-// stats, region names on a hand-drawn map, community posts) is translated live.
+// stats, the region names of a map that is not built in, community posts) is
+// translated live.
 // Every other language in the picker still translates the interface live.
 export const SHIPPED_PACK_LANGUAGES = Object.freeze([
   "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",
@@ -90,7 +91,14 @@ export const getLanguageOptions = () => LANGUAGES;
 export const languageDisplayName = (code) =>
   LANGUAGES.find((entry) => entry.code === code)?.name || code;
 
+// The server's choice for this page only, when this device could not store it
+// (syncLanguageFromServer). Null while the stored copy is the truth.
+let heldLanguage = null;
+// Per tab: the language a boot already reloaded for (syncLanguageFromServer).
+const RELOADED_KEY = "ui_language_reloaded";
+
 export const getStoredLanguage = () => {
+  if (heldLanguage) return heldLanguage;
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     return stored && stored.trim() ? stored.trim() : DEFAULT_LANGUAGE;
@@ -126,8 +134,35 @@ export const setStoredLanguage = async (code) => {
   }
 };
 
-// Boot-time reconcile: the server's choice wins. Returns true when the local
-// value changed (caller reloads so the translator restarts cleanly).
+// The tab's record of the language a boot reloaded for. Null when this tab
+// cannot keep one.
+const readReloaded = () => {
+  try {
+    return sessionStorage.getItem(RELOADED_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const writeReloaded = (code) => {
+  try {
+    if (code) sessionStorage.setItem(RELOADED_KEY, code);
+    else sessionStorage.removeItem(RELOADED_KEY);
+  } catch {
+    // No session storage: the read-back in syncLanguageFromServer still guards.
+  }
+};
+
+// Boot-time reconcile: the server's choice wins. Returns true when this device
+// now holds it and the caller should reload, so the translator restarts
+// cleanly.
+//
+// A reload only helps if the choice survives it. With storage full or blocked
+// the write fails quietly, the next boot reads the old value, and asking again
+// reloaded the page every second for good. So the choice is read back before a
+// reload is asked for, and a tab reloads at most once for one language. When
+// either says no, the choice is held for this page instead (getStoredLanguage
+// returns it) and the caller applies it where it can without a reload.
 export const syncLanguageFromServer = async () => {
   try {
     const response = await fetch("/api/ui-settings");
@@ -142,7 +177,14 @@ export const syncLanguageFromServer = async () => {
 
     if (serverLanguage !== getStoredLanguage()) {
       writeLocalLanguage(serverLanguage);
-      return true;
+      if (getStoredLanguage() === serverLanguage && readReloaded() !== serverLanguage) {
+        writeReloaded(serverLanguage);
+        return true;
+      }
+      heldLanguage = serverLanguage;
+    } else if (readReloaded()) {
+      // The reload landed on the choice: a later change may reload again.
+      writeReloaded("");
     }
   } catch {
     // Server unreachable: keep the local value.
@@ -180,6 +222,15 @@ export const resolveChatLanguage = () => getStoredChatLanguage();
 export const chatLanguageDiffersFromUi = () => resolveChatLanguage() !== getStoredLanguage();
 
 export const isRtlLanguage = (code) => RTL_LANGUAGES.has(code);
+
+// The text direction of a reply written in the chat language (the advisor's,
+// a leader's), when that is not the interface's: under an Arabic interface an
+// English reply still reads left to right, and the other way round.
+// undefined: the interface's own direction applies.
+export const chatTextDirection = () => {
+  if (!chatLanguageDiffersFromUi()) return undefined;
+  return isRtlLanguage(resolveChatLanguage()) ? "rtl" : "ltr";
+};
 
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.

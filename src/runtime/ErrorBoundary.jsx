@@ -1,6 +1,31 @@
 /*! Open Historia — React error boundary (recoverable render-crash fallback) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
-import { flushDebugLog, logDebugEvent, withConsoleCaptureMuted } from "./debugLog.js";
+import { buildRenderCrashIncident, flushDebugLog, logDebugEvent, withConsoleCaptureMuted } from "./debugLog.js";
+import { useFailureReportButton } from "./saveDebugLog.js";
+
+// The crash screen's report button, as every other failure has one
+// (runtime/saveDebugLog.js): Save the log with the crash attached, or, with
+// logging off, copy the crash on its own. A component of its own because the
+// boundary is a class and the button is a hook.
+const CrashReportButton = ({ error, componentStack }) => {
+  const report = useFailureReportButton({
+    buildIncident: () => buildRenderCrashIncident(error, componentStack),
+    copyIdleLabel: "📋 Copy crash details",
+  });
+  return (
+    <button
+      type="button"
+      style={styles.secondaryButton}
+      disabled={report.busy}
+      onClick={report.onClick}
+      title={report.loggingOn
+        ? "Saves the diagnostics log as a file, with this crash's full details at the top. Attach the file to your bug report."
+        : "Copies this crash's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."}
+    >
+      {report.label}
+    </button>
+  );
+};
 
 // Catches render/lifecycle/constructor throws in the map, game UI and panels so a
 // crash shows a recoverable fallback (with a Reload) instead of React unmounting the
@@ -12,7 +37,9 @@ import { flushDebugLog, logDebugEvent, withConsoleCaptureMuted } from "./debugLo
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { error: null };
+    // componentStack arrives with componentDidCatch, after the error: kept
+    // whole for the report button, which the log entry below is not.
+    this.state = { error: null, componentStack: "" };
   }
 
   static getDerivedStateFromError(error) {
@@ -25,12 +52,16 @@ class ErrorBoundary extends React.Component {
     // two crashes.
     withConsoleCaptureMuted(() => console.error("Render crash caught by ErrorBoundary:", error, info?.componentStack));
     // A render crash is the one entry a reader should never have to hunt for,
-    // so it gets its own category — and the first few frames of the component
-    // stack, which name the panel that blew up.
+    // so it gets its own category — the first frames of the error's own stack,
+    // which say where it threw, and of the component stack, which name the
+    // panel that blew up. Both whole go in the report the Save button makes.
+    const componentStack = String(info?.componentStack || "");
     logDebugEvent("crash", "Render crash caught by the error boundary.", {
       error: `${error?.name || "Error"}: ${error?.message || String(error)}`,
-      componentStack: String(info?.componentStack || "").trim().split("\n").slice(0, 4).join(" <- "),
+      stack: String(error?.stack || "").trim().split("\n").slice(1, 4).map((line) => line.trim()).join(" <- "),
+      componentStack: componentStack.trim().split("\n").slice(0, 4).join(" <- "),
     });
+    this.setState({ componentStack });
     // Written out now rather than on the debounce: the player's next move is the
     // Reload button below, and the whole point of persisting the log is that it
     // survives that.
@@ -43,7 +74,7 @@ class ErrorBoundary extends React.Component {
   };
 
   render() {
-    const { error } = this.state;
+    const { componentStack, error } = this.state;
     if (!error) return this.props.children;
 
     return (
@@ -55,9 +86,12 @@ class ErrorBoundary extends React.Component {
             are safe — reloading usually recovers.
           </div>
           {error?.message ? <pre style={styles.detail}>{String(error.message)}</pre> : null}
-          <button type="button" style={styles.button} onClick={this.handleReload}>
-            Reload
-          </button>
+          <div style={styles.actions}>
+            <button type="button" style={styles.button} onClick={this.handleReload}>
+              Reload
+            </button>
+            <CrashReportButton error={error} componentStack={componentStack} />
+          </div>
         </div>
       </div>
     );
@@ -113,16 +147,32 @@ const styles = {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
-  button: {
-    alignSelf: "center",
+  actions: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "0.6rem",
+    justifyContent: "center",
     marginTop: "0.4rem",
+  },
+  button: {
     padding: "0.6rem 1.6rem",
     fontSize: "0.9rem",
     fontWeight: 600,
     letterSpacing: "0.08em",
     color: "#050403",
-    background: "linear-gradient(90deg, #d4a820, #ffe370)",
+    background: "#e8c040",
     border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+  },
+  secondaryButton: {
+    padding: "0.6rem 1.1rem",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    color: "#f2e8cc",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(210,165,55,0.4)",
     borderRadius: "6px",
     cursor: "pointer",
   },

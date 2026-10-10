@@ -13,7 +13,10 @@
 // every check that would ask a model switched off — the events were checked
 // when they were made.
 //
-// DELIBERATELY IMPORT-FREE: the rules on the journal, tested on their own.
+// Imports only the game-date rules (runtime/gameDates.js, itself import-free):
+// the rules on the journal, tested on their own.
+
+import { compareGameDates } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -79,11 +82,12 @@ const referencesKept = (update, journalIds, keptIds) => {
 // going to advance at all — a turn that moves the clock nowhere reads as a
 // turn that did not happen.
 export const closingDateAfterIntervene = ({ keptEvents = [], originDate = "", minimumDate = "" } = {}) => {
-    const dates = asArray(keptEvents).map((event) => asText(event?.date)).filter(Boolean).sort();
+    const dates = asArray(keptEvents).map((event) => asText(event?.date)).filter(Boolean).sort(compareGameDates);
     const last = dates.length ? dates[dates.length - 1] : "";
     const floor = asText(minimumDate) || asText(originDate);
     if (!last) return floor;
-    return floor && last < floor ? floor : last;
+    // By the calendar, never the text: -0217-01-15 comes after -0218-12-20.
+    return floor && compareGameDates(last, floor) < 0 ? floor : last;
 };
 
 // The journal cut down to its first `keptCount` events — the ones revealed —

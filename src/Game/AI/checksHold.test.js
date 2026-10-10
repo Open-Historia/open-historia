@@ -34,15 +34,17 @@ test("a failed turn review holds the turn before anything is applied", () => {
     assert.ok(applied > thrown, "nothing is applied until the review is settled");
 });
 
-test("with Save AI requests off, every separate check goes through the turn's checks", () => {
+// A skip is one request, so the checks left to ask are few: the review of a
+// skip a provider refused folded, and what the apply still asks for a turn
+// that has no review. Order attribution and the three Directors ride the
+// review and ask nothing.
+test("what a skip still asks goes through the turn's checks, and the rest asks nothing", () => {
     const finish = body(gameplay, "const finishTimelineJump = async");
-    assert.match(finish, /checks\.run\(\s*"actions"/);
-    assert.match(finish, /directorAnalyzers\(\{[\s\S]*?checks,/);
+    assert.match(finish, /: await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\);/);
+    assert.doesNotMatch(finish, /checks\.run\(\s*"actions"/);
     assert.match(finish, /applyArgs\.projects = \{[^}]*checks \}/);
     const directors = body(gameplay, "const directorAnalyzers = ");
-    for (const key of ["units", "territory", "structures"]) {
-        assert.match(directors, new RegExp(`askAsCheck\\("${key}", `), `${key} is a check`);
-    }
+    assert.doesNotMatch(directors, /askAsCheck|runJsonTask\(/, "a Director is answered from the review's part");
     const apply = body(gameplay, "const applySimulationResult = async");
     assert.match(apply, /checks\.run\("timeline", ask, fellBack, \{ about: JSON\.stringify\(input\.candidates\) \}\)/);
     assert.match(apply, /checks\.run\("breadth", searchBreadth, \(answer\) => \(answer\?\.failed \?/);
@@ -146,7 +148,8 @@ test("a failed check holds the turn before the board is asked", () => {
 
 test("a board retry that a check then holds hands the turn to the checks", () => {
     const finish = body(gameplay, "const finishTimelineJump = async");
-    assert.match(finish, /holdTurn\(HELD_TURN\.board, \{ applyArgs, context, state \}\)/);
+    // With its message, which the Timeline puts the notice back from when the campaign is reopened.
+    assert.match(finish, /holdTurn\(HELD_TURN\.board, \{ applyArgs, context, state, message: error\.message \}\)/);
     const retry = body(gameplay, "export const retryPendingProjectsJump = async");
     assert.match(retry, /error\?\.heldKind === HELD_TURN\.checks && heldProjectsJump\.context[\s\S]*holdTurn\(HELD_TURN\.checks, \{ context: heldProjectsJump\.context, state: heldProjectsJump\.state \}\)/);
 });
@@ -157,26 +160,6 @@ test("a canned turn's checks never hold it: the fallback page and its Rollback d
     const accepted = finish.indexOf('=== "fallback") checks.accept();');
     const firstHold = finish.indexOf("checksHoldTurn(checks)");
     assert.ok(created > -1 && accepted > created && firstHold > accepted);
-});
-
-// ---- Agents' reports with Save AI requests off ------------------------------------
-// Asked after the turn is written, so a failure cannot hold it: it is told instead.
-
-test("the agents whose report failed ride on the turn's result", () => {
-    const refresh = body(gameplay, "export const refreshSpyIntercepts = async");
-    assert.match(refresh, /failed\.push\(\{ target: spy\.target, reason:/);
-    const apply = body(gameplay, "const applySimulationResult = async");
-    assert.match(apply, /agentReportsFailed = \(await refreshSpyIntercepts\(\)\)\.failed\.map\(\(entry\) => entry\.target\)/);
-    assert.match(apply, /\r?\n {4}agentReportsFailed,\r?\n/);
-});
-
-test("the Events page says which agents did not report, and asks only them again", () => {
-    assert.match(time, /setAgentReports\(\{ failed: result\.agentReportsFailed \?\? \[\], state: "idle" \}\)/);
-    assert.match(time, /retryAgentReports\(\{ targets: agentReports\.failed \}\)/);
-    assert.match(time, /did not report this turn/);
-    assert.match(time, /Retry the reports/);
-    const retry = body(gameplay, "export const retryAgentReports = async");
-    assert.match(retry, /isSimulationBusy\(\)\) throw/, "never while a turn is being written");
 });
 
 test("a held turn's retry can be cancelled from its notice", () => {

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   attachAttemptOutcome,
   attachCallMetrics,
+  attachRequestOutcome,
   clearAiRecords,
   exportTelemetryCsv,
   finishAiRecord,
@@ -17,7 +18,9 @@ import {
   isRatingEnabled,
   isTelemetryEnabled,
   normalizeParsedSummary,
+  requestCount,
   setGenerationRating,
+  setTelemetryEnabled,
   startAiRecord,
 } from "./telemetry.js";
 
@@ -26,6 +29,32 @@ test.beforeEach(async () => { await clearAiRecords(); });
 test("recording defaults to on and rating to off when nothing is stored", () => {
   assert.equal(isTelemetryEnabled(), true);
   assert.equal(isRatingEnabled(), false);
+});
+
+test("in the Android app recording is off until the player turns it on", (t) => {
+  const saved = { window: globalThis.window, localStorage: globalThis.localStorage };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  });
+  const local = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => (local.has(key) ? local.get(key) : null),
+    setItem: (key, value) => { local.set(key, String(value)); },
+  };
+  globalThis.window = Object.assign(new EventTarget(), { Capacitor: {} });
+  assert.equal(isTelemetryEnabled(), false, "nothing stored: off on Android");
+  setTelemetryEnabled(true);
+  assert.equal(isTelemetryEnabled(), true, "the player's choice stands");
+  setTelemetryEnabled(false);
+  assert.equal(isTelemetryEnabled(), false);
+
+  // The same stored nothing everywhere else is on.
+  local.clear();
+  delete globalThis.window.Capacitor;
+  assert.equal(isTelemetryEnabled(), true);
 });
 
 test("a direct call's record is complete when it finishes", async () => {
@@ -129,7 +158,7 @@ test("the CSV export is one row per record with quoted free text", async () => {
   assert.ok(row.includes(",openai,gpt-x,jumpForward,"));
   assert.ok(row.includes(",100,20,60,"));
   assert.ok(row.includes('"bad ""shape"", really"'));
-  assert.ok(row.endsWith(",failed,\"bad \"\"shape\"\", really\",,2,,,,"), row);
+  assert.ok(row.endsWith(",failed,\"bad \"\"shape\"\", really\",,2,,,,,,,"), row);
 });
 
 test("clearing forgets the session", async () => {
@@ -175,8 +204,22 @@ test("lookup rounds are kept on the record, whole, and exported", async () => {
   finishAiRecord(record, { ok: true, rawResponse: "{}" });
   attachAttemptOutcome(record, { ok: true });
   const csv = exportTelemetryCsv(await getAiRecords());
-  assert.match(csv.split("\n")[0], /lookupRounds,lookupCalls,lookupNames$/);
-  assert.match(csv, /,2,3,list_powers list_regions region_info$/m);
+  assert.match(csv.split("\n")[0], /lookupRounds,lookupCalls,lookupNames,requestsOk,requestsRefused,requestsFailed$/);
+  assert.match(csv, /,2,3,list_powers list_regions region_info,,,$/m);
+});
+
+test("a generation counts its own HTTP requests, the way the request budget does", async () => {
+  // Two lookup rounds, a 429 on the first entry, then a server error and the
+  // answer: five requests for one generation.
+  const record = startAiRecord({ taskKey: "jumpForward", provider: "gemini" });
+  assert.equal(requestCount(record), null, "nothing counted yet");
+  for (const status of [200, 200, 429, 503, 200]) attachRequestOutcome(record, status);
+  assert.deepEqual(record.requests, { ok: 3, refused: 1, failed: 1 });
+  assert.equal(requestCount(record), 5);
+  attachRequestOutcome(null, 200);
+  finishAiRecord(record, { ok: true, rawResponse: "{}" });
+  assert.match(exportTelemetryCsv([record]), /,3,1,1$/m);
+  assert.equal(requestCount({}), null, "a record from before requests were counted");
 });
 
 test("a record without lookups exports empty lookup columns and attachLookupRound tolerates no record", async () => {
@@ -185,5 +228,5 @@ test("a record without lookups exports empty lookup columns and attachLookupRoun
   const record = startAiRecord({ taskKey: "advisor", provider: "gemini" });
   finishAiRecord(record, { ok: true, rawResponse: "hi" });
   assert.equal(record.lookups, null);
-  assert.match(exportTelemetryCsv([record]), /,,,$/m);
+  assert.match(exportTelemetryCsv([record]), /,,,,,,$/m);
 });

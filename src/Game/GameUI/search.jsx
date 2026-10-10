@@ -4,7 +4,10 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { useWorldState } from "../Map/useWorldState.js";
-import { focusFeature } from "../Selection/Features.jsx";
+import { dismissFeaturePopup, focusFeature } from "../Selection/Features.jsx";
+import { focusUnit } from "../Selection/Units.jsx";
+import { dismissRegionPopup } from "../Selection/Regions.jsx";
+import { getUnits, subscribeUnits } from "../Map/unitsController.js";
 import {
   buildLocalPlaceEntries,
   dedupeGeocodedPlaces,
@@ -124,11 +127,12 @@ const KIND_ICON = {
 };
 
 // The world's own places outrank the geocoder's and are worth a closer camera.
-const FAMILY_ICON = { settlement: ICON_CITY, polity: ICON_GLOBE };
+const FAMILY_ICON = { settlement: ICON_CITY, polity: ICON_GLOBE, group: ICON_REGION };
 const LOCAL_RESULT_LIMIT = 4;
 const SUGGESTION_LIMIT = 7;
 const LOCAL_ZOOM = 7;
 const POLITY_ZOOM = 4;
+const GROUP_ZOOM = 5;
 const NO_LOCAL_PLACES = [];
 const NO_REMOTE_RESULTS = { query: "", results: [] };
 
@@ -154,7 +158,7 @@ const localEntry = (place) => ({
   region: place.detail,
   lng: place.lng,
   lat: place.lat,
-  zoom: place.source === "polity" ? POLITY_ZOOM : LOCAL_ZOOM,
+  zoom: place.source === "polity" ? POLITY_ZOOM : place.source === "group" ? GROUP_ZOOM : LOCAL_ZOOM,
   payload: place.payload,
   lookup: place.lookup,
 });
@@ -167,8 +171,10 @@ const Search = memo(({ mapRef }) => {
   const [status, setStatus] = useState(null);
   const [remote, setRemote] = useState(NO_REMOTE_RESULTS);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const { markers, cityRenames, polityOverrides, fictionalWorld } = useWorldState();
+  const { markers, cityRenames, polityOverrides, groups, fictionalWorld } = useWorldState();
   const placeIndex = useSyncExternalStore(subscribeWorldPlaceIndex, getWorldPlaceIndex, getWorldPlaceIndex);
+  // The units as the map shows them, a turn's unrevealed ones hidden (unitsController.js).
+  const units = useSyncExternalStore(subscribeUnits, getUnits, getUnits);
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
   const searchAbortRef = useRef(null);
@@ -223,9 +229,12 @@ const Search = memo(({ mapRef }) => {
         markers,
         cityRenames,
         polityOverrides,
+        groups: placeIndex.groups,
+        groupRecords: groups,
+        units,
       })
       : NO_LOCAL_PLACES),
-    [expanded, placeIndex, markers, cityRenames, polityOverrides],
+    [expanded, placeIndex, markers, cityRenames, polityOverrides, groups, units],
   );
 
   const suggestions = useMemo(() => {
@@ -284,8 +293,15 @@ const Search = memo(({ mapRef }) => {
       });
     }
 
-    // The popup tracks the camera, so it can open before the flight lands.
-    if (entry.payload) focusFeature(entry.payload);
+    // The popup tracks the camera, so it can open before the flight lands. A
+    // unit's card takes over from any other, as a click on the unit would.
+    if (entry.payload?.source === "unit") {
+      dismissRegionPopup();
+      dismissFeaturePopup();
+      focusUnit(entry.payload);
+    } else if (entry.payload) {
+      focusFeature(entry.payload);
+    }
 
     close();
   };

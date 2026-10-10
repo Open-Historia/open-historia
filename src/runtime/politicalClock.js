@@ -1,5 +1,7 @@
 /*! Open Historia — native political background clock (Continuum) */
 
+import { gameDateDayNumber, normalizeGameDate } from "./gameDates.js";
+
 export const POLITICAL_SIMULATION_CLOCK_VERSION = 1;
 export const MAX_POLITICAL_RESPONSE_TICKS_PER_ADVANCE = 24;
 const AVERAGE_MONTH_DAYS = 365.2425 / 12;
@@ -8,18 +10,12 @@ const clean = (value) => String(value ?? "").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const round4 = (value) => Math.round(Number(value) * 10000) / 10000;
 
+// A game date in any year, BC included (runtime/gameDates.js): its canonical
+// text and its time in milliseconds, or null.
 const parseDateParts = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean(value));
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const date = new Date(0);
-  date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(year, month - 1, day);
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  return { text: `${match[1]}-${match[2]}-${match[3]}`, time: date.getTime() };
+  const dayNumber = gameDateDayNumber(clean(value));
+  if (dayNumber === null) return null;
+  return { text: normalizeGameDate(clean(value)), time: dayNumber * 86400000 };
 };
 
 export const politicalDaysBetween = (fromDate, toDate) => {
@@ -29,16 +25,33 @@ export const politicalDaysBetween = (fromDate, toDate) => {
   return Math.max(0, Math.round((to.time - from.time) / 86400000));
 };
 
+// Regions each Political Actor administered when the clock last advanced
+// (politicalStructuralPressure.js heldRegionCounts), so the next advance can
+// feel a net loss of ground.
+const MAX_HELD_REGION_POLITIES = 512;
+const normalizeHeldRegions = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out = {};
+  for (const [rawKey, rawCount] of Object.entries(value).slice(0, MAX_HELD_REGION_POLITIES)) {
+    const key = clean(rawKey);
+    const count = Number(rawCount);
+    if (key && Number.isInteger(count) && count > 0) out[key] = count;
+  }
+  return Object.keys(out).length ? out : null;
+};
+
 export const normalizePoliticalSimulationClock = (value) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const lastProcessedDate = parseDateParts(source.lastProcessedDate)?.text || "";
   const lastProcessedRound = Number(source.lastProcessedRound);
   const remainder = Number(source.responseRemainderMonths);
+  const heldRegions = normalizeHeldRegions(source.heldRegions);
   return {
     schemaVersion: POLITICAL_SIMULATION_CLOCK_VERSION,
     ...(lastProcessedDate ? { lastProcessedDate } : {}),
     ...(Number.isInteger(lastProcessedRound) && lastProcessedRound >= 0 ? { lastProcessedRound } : {}),
     responseRemainderMonths: Number.isFinite(remainder) ? round4(clamp(remainder, 0, 0.9999)) : 0,
+    ...(heldRegions ? { heldRegions } : {}),
   };
 };
 

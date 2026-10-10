@@ -24,6 +24,8 @@ import { Row, TextField, SelectField, ColorField, TagField } from "./fields.jsx"
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { rgbToHex } from "./fields.jsx";
 import { normalizeGroups } from "../runtime/groups.js";
+import { commonClaimants, claimantDelta, applyClaimantDelta } from "./claimantEdits.js";
+import { bundledFlagUrl } from "../runtime/countryFlags.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -38,7 +40,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection, regionEpoch],
   );
-  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [], group: "" });
+  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [], claimantsMixed: false, group: "" });
   // What the Polity field shows while it is being typed in; null when it is
   // not, so the field follows the owner (and a rename in the Polities panel).
   const [ownerDraft, setOwnerDraft] = useState(null);
@@ -58,13 +60,15 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
   }, [countryNames, polities]);
 
   useEffect(() => {
-    // Claimants are an array, so "common value" compares serialized lists.
-    const claimantKeys = summaries.map((s) => JSON.stringify(s.claimants || []));
+    // Claimants are an array: the field shows the claims every region shares,
+    // and a selection whose lists differ is marked mixed.
+    const claimants = commonClaimants(summaries.map((s) => s.claimants || []));
     setForm({
       name: summaries.length === 1 ? summaries[0].name : "",
       typeId: commonOr(summaries.map((s) => s.typeId)),
       owner: commonOr(summaries.map((s) => s.owner || "")),
-      claimants: JSON.parse(commonOr(claimantKeys, "[]") || "[]"),
+      claimants: claimants.shown,
+      claimantsMixed: claimants.mixed,
       group: commonOr(summaries.map((s) => s.group || "")),
     });
     setOwnerDraft(null);
@@ -226,10 +230,15 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
         <TagField
           value={form.claimants}
           suggestions={polityOptions.map((row) => row.key)}
+          placeholder={form.claimantsMixed ? "mixed — adds to every region…" : undefined}
           onChange={(next) => {
             const claimants = next.map((v) => String(v).trim()).filter(Boolean);
+            // Differing lists change per region: an added claimant joins each
+            // region's own list and a removed one leaves it, so the claims only
+            // some regions carry survive. Identical lists are replaced whole.
+            const delta = form.claimantsMixed ? claimantDelta(form.claimants, claimants) : null;
             setForm((f) => ({ ...f, claimants }));
-            apply({ claimants });
+            apply({ claimants: delta ? (list) => applyClaimantDelta(list, delta) : claimants });
           }}
         />
       </Row>
@@ -284,7 +293,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {ownerFlag && (
               <img
-                src={ownerFlag}
+                src={bundledFlagUrl(ownerFlag)}
                 alt=""
                 style={{ width: 26, height: 18, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.3)" }}
               />

@@ -80,6 +80,43 @@ test("generated ops cannot write native-derived pressure/disposition state", () 
   assert.match(error, /native-derived/i);
 });
 
+test("a native null disposition clears the stale disposition instead of failing validation", () => {
+  assert.equal(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: null,
+  }), "");
+  assert.equal(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    disposition: null,
+  }), "");
+  assert.match(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+  }), /state\/disposition object/i);
+  assert.match(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: "calm",
+  }), /state\/disposition object/i);
+
+  const world = {
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        Ruritania: { polityKey: "Ruritania", behavioralDisposition: { threatPerception: 80, updatedAt: "2014-03-01" } },
+      },
+    }),
+  };
+  const outcome = applyPoliticalActorOperation(world, {
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: null,
+  });
+  assert.equal(outcome.applied, true, outcome.error);
+  assert.equal(getPoliticalProfile(world, "Ruritania").behavioralDisposition, undefined);
+});
+
 
 test("every provider-writable political operation has one prompt example that passes native shape validation", () => {
   const nativeOnly = new Set([
@@ -202,4 +239,55 @@ test("native form-coalition rejects unknown parties while accepting parties crea
   const actor = getPoliticalProfile(world, "The Baltic Union");
   assert.deepEqual(actor.government.rulingPartyIds, ["existing-party"]);
   assert.deepEqual(actor.government.coalitionPartyIds, ["new-party"]);
+});
+
+test("set-government that names only one side of the government keeps the other side", () => {
+  const makeWorld = () => ({
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        Ruritania: {
+          polityKey: "Ruritania",
+          parties: [
+            { id: "red", name: "Red Party" },
+            { id: "blue", name: "Blue Party" },
+            { id: "green", name: "Green Party" },
+          ],
+          government: { rulingPartyIds: ["red"], coalitionPartyIds: ["blue"], coalitionName: "Old Alliance" },
+        },
+      },
+    }),
+  });
+
+  const coalitionOnly = makeWorld();
+  assert.equal(applyPoliticalActorOperation(coalitionOnly, {
+    op: "set-government", polityKey: "Ruritania", patch: { coalitionPartyIds: ["green"] },
+  }).applied, true);
+  let government = getPoliticalProfile(coalitionOnly, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red"]);
+  assert.deepEqual(government.coalitionPartyIds, ["green"]);
+
+  const rulingOnly = makeWorld();
+  assert.equal(applyPoliticalActorOperation(rulingOnly, {
+    op: "set-government", polityKey: "Ruritania", patch: { rulingPartyIds: ["green"] },
+  }).applied, true);
+  government = getPoliticalProfile(rulingOnly, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["green"]);
+  assert.deepEqual(government.coalitionPartyIds, ["blue"]);
+
+  const named = makeWorld();
+  assert.equal(applyPoliticalActorOperation(named, {
+    op: "set-government", polityKey: "Ruritania", patch: { coalition: "Grand Coalition" },
+  }).applied, true);
+  government = getPoliticalProfile(named, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red"]);
+  assert.deepEqual(government.coalitionPartyIds, ["blue"]);
+  assert.equal(government.coalitionName, "Grand Coalition");
+
+  const promoted = makeWorld();
+  assert.equal(applyPoliticalActorOperation(promoted, {
+    op: "set-government", polityKey: "Ruritania", patch: { rulingPartyIds: ["red", "blue"] },
+  }).applied, true);
+  government = getPoliticalProfile(promoted, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red", "blue"]);
+  assert.deepEqual(government.coalitionPartyIds, []);
 });

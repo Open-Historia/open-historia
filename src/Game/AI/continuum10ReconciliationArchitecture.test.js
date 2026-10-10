@@ -28,8 +28,11 @@ test("Continuum-10 keeps Beta host mechanics while layering Political World auth
 
 test("Continuum-10 Advisor keeps streaming safety and institution draft actions together", () => {
   const advisor = read("src/Game/GameUI/advisor.jsx");
-  assert.match(advisor, /extractFencedJson\(afterDrafts, "institutiondraft", \{ streaming \}\)/);
-  assert.match(advisor, /parseMessage\(msg\.text, \{ streaming: Boolean\(msg\.streaming\) \}\)/);
+  // The reply's fences are read in advisorReply.js (parseAdvisorReply), where
+  // the panel's parser moved; the streaming option travels with it.
+  const reply = read("src/Game/GameUI/advisorReply.js");
+  assert.match(reply, /extractFencedJson\(afterDrafts, "institutiondraft", \{ streaming \}\)/);
+  assert.match(advisor, /parseAdvisorReply\(msg\.text, \{[^}]*streaming: Boolean\(msg\.streaming\) \}\)/);
   assert.match(advisor, /onExecuteInstitutionDraft/);
 });
 

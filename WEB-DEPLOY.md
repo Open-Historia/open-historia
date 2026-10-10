@@ -2,20 +2,28 @@
 
 This is the browser-playable Open Historia — the "play on a website" build. It's a
 static app (served from a trusted origin) that keeps games client-side, sends AI keys
-straight to the player's provider, and loads map data from the content-node network.
+straight to the player's provider, and serves the world map from its own `assets/`
+folder.
 
-**Chosen setup:** app on **Cloudflare Pages**; map data from **content nodes only**
-(no origin fallback — the map loads once at least one node in the signed directory is
-serving it).
+**Chosen setup:** app on **Cloudflare Pages**, with the map data inside the site. The
+build downloads the six map files pinned in `scripts/map-assets.web.json` from the
+`map-data` GitHub Release, verifies each one, and lays them under `dist-web/assets/`.
+There is no content node to run and nothing to sign.
 
-Prerequisites: a free Cloudflare account, Node 18+, and the offline root signing key
-(`trust/oh-root.key.pem`, from `scripts/gen-signing-key.mjs`).
+Prerequisites: a free Cloudflare account and Node.js 22 LTS or newer (the client build
+runs on Vite 7; see the README).
 
 ---
 
-## 1. Deploy the registry Worker (control plane)
+## 1. Deploy the registry Worker (community hub proxy)
 
-From the **open-historia-admin** repo:
+The site calls the registry Worker for one thing: community hub downloads
+(`VITE_OH_HUB_URL`, the Worker's `/hub/file` route). Community bundles are files on
+GitHub, and a browser cannot read those itself because GitHub sends no CORS header on
+them. The map does not go through the Worker.
+
+`.env.web` points `VITE_OH_HUB_URL` at the project's Worker. To run your own, deploy it
+from the **open-historia-admin** repo:
 
 ```bash
 cd registry
@@ -31,19 +39,30 @@ npx wrangler deploy                        # note the URL, e.g.
 > tier could not absorb node heartbeats. `schema.sql` also creates the accounts and
 > presence tables.
 
-## 2. Build the game for the web, pointed at the live directory
+## 2. Build the game for the web
 
-From **this** repo, set the directory URL to the Worker's `/node-directory.json`:
+From **this** repo:
+
+```bash
+npm install
+npm run build:web
+```
+
+This produces `dist-web/`, with the map under `dist-web/assets/`: six files, about
+69 MB, each under Cloudflare Pages' 25 MiB a file. The first build downloads them into
+`map-cache/` (gitignored) and later builds reuse that cache. The build fails if a file
+cannot be downloaded or does not match its pinned size and sha256. (Base path is `/`,
+correct for Cloudflare Pages.)
+
+To use your own Worker for the community hub, set its URL for the build:
 
 ```bash
 # macOS/Linux
-VITE_OH_DIRECTORY_URL="https://open-historia-registry.<you>.workers.dev/node-directory.json" npm run build:web
+VITE_OH_HUB_URL="https://open-historia-registry.<you>.workers.dev" npm run build:web
 
 # Windows PowerShell
-$env:VITE_OH_DIRECTORY_URL="https://open-historia-registry.<you>.workers.dev/node-directory.json"; npm run build:web
+$env:VITE_OH_HUB_URL="https://open-historia-registry.<you>.workers.dev"; npm run build:web
 ```
-
-This produces `dist-web/`. (Base path is `/`, correct for Cloudflare Pages.)
 
 ## 3. Deploy `dist-web/` to Cloudflare Pages
 
@@ -54,24 +73,20 @@ npx wrangler pages deploy dist-web --project-name open-historia
 First run creates the project; it prints your URL (e.g. `https://open-historia.pages.dev`).
 Add a custom domain in the Cloudflare Pages dashboard if you want.
 
-## 4. Run at least one content node (so maps load)
+## 4. The map (nothing to run)
 
-On an always-on machine, follow the **open-historia-node** README:
+The map is part of the site you deployed in step 3. No content node, node directory or
+signed manifest is involved, and the admin panel is not needed for it.
 
-```bash
-# in the node repo, after install:
-#   OH_NODE_REGISTRY_URL   = the Worker URL
-#   OH_NODE_DIRECTORY_URL  = <Worker URL>/node-directory.json
-#   OH_NODE_PUBLIC_URL     = your node's public https URL (e.g. a Cloudflare Tunnel)
-npm run populate    # download + verify the map data
-# start it, expose it over HTTPS
-```
+The host must answer byte-range requests for static files, which Cloudflare Pages does.
+To host the site somewhere else, use a server that does too: nginx, Caddy, Apache,
+Netlify and GitHub Pages all do.
 
-A node registers itself and is listed as **active** straight away. To publish it to
-players, run the **admin panel** (open-historia-admin/panel, with `oh-root.key.pem`
-present) and re-sign the directory — the game starts loading map data from it with no
-rebuild, since the Worker serves the directory live. The panel is also where you pause or
-ban a node, and where **Update all nodes** rolls out a new node release.
+The site carries the map because a browser cannot fetch it from GitHub at run time:
+neither the release download nor the API route sends an `Access-Control-Allow-Origin`
+header on a release asset. The content-node software
+([Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node))
+still exists as a separate project, but the game no longer loads map data from it.
 
 ## 5. Play
 
@@ -83,13 +98,14 @@ in the browser (Export/Import for backups).
 
 ## Notes
 
-- **No node yet = blank map.** With "content nodes only" there is no origin fallback for
-  the pmtiles, so the world map is empty until at least one node in the signed directory
-  serves it. The
-  rest of the site (menus, scenarios) loads fine. (To add an always-on fallback later, host
-  the 3 pmtiles on a CORS-enabled bucket like Cloudflare R2 and wire it as the origin.)
-- **The signing key stays offline** — only the machine running the admin panel touches it.
-- **Updating the game:** rebuild with the same `VITE_OH_DIRECTORY_URL` and re-run
+- **The map is six static files under `assets/`:** `regions.pmtiles`, `countries.pmtiles`,
+  `cities.pmtiles`, `regions-seed.geojson`, `default-regions.geojson` and
+  `cities-seed.json`. If the world map is empty, check that they are in the deployed site
+  and that the host answers a `Range` request for a `.pmtiles` file with a 206.
+- **Nothing in the site is signed,** so no signing key is needed to build or deploy it.
+- **Updating the game:** rebuild (`npm run build:web`) and re-run
   `wrangler pages deploy`. Everyone gets the update on their next load — no per-player step.
+- **Updating the map:** the files are pinned in `scripts/map-assets.web.json`. A rebuild
+  after that list changes downloads the new files and the next deploy carries them.
 - **Local single-player is unaffected** by all of this — the downloadable app still runs
-  its own server and never uses any of the web-mode / node code.
+  its own server and never uses any of the web-mode code.

@@ -166,19 +166,19 @@ test("the hold comes before anything is written, and before the board is asked",
     const hold = apply.indexOf("throw playerEventsHeldError(playerFailures)");
     assert.ok(hold > 0, "the apply holds on the player's failures");
     assert.ok(hold > apply.indexOf("settleOrders("), "once the orders are settled");
-    assert.ok(hold < apply.indexOf("await boardCheck("), "before the board");
+    assert.ok(hold < apply.indexOf("boardCheck(() => generateProjectOps("), "before the board");
     assert.ok(hold < apply.indexOf("await writeCanonicalTurnState("), "before the write");
     assert.match(apply, /if \(result\.holdOnPlayerFailures\)/, "only when the setting asked for it");
 });
 
 test("the setting is off unless switched on, and never holds a canned turn or one the player kept", () => {
-    assert.match(gameplay, /stopOnPlayerFailures: !evaluationMode && getMapSetting\(MAP_SETTING_KEYS\.stopOnPlayerFailures\)/);
+    assert.match(gameplay, /stopOnPlayerFailures: getMapSetting\(MAP_SETTING_KEYS\.stopOnPlayerFailures\)/);
     assert.match(gameplay, /holdOnPlayerFailures: Boolean\(context\.stopOnPlayerFailures\) && !state\.playerFailuresAccepted\s+&& normalizeString\(state\.generation\?\.source\) !== "fallback"/);
 });
 
 test("a targeted retry is a segment like any other, that never falls back over the period", () => {
     const segments = section("const runJumpSegments = async", "\nexport const ");
-    assert.match(segments, /evaluation \|\| context\.amend \|\| segmentCount > 1/, "no canned fallback for the retry's own request");
+    assert.match(segments, /\.\.\.\(context\.amend \|\| segmentCount > 1/, "no canned fallback for the retry's own request");
     assert.match(segments, /if \(context\.amend\) throw error;/, "a failed retry is never canned");
     assert.match(segments, /event\.id = `retry-\$\{context\.amend\.round\}-/, "a retry's events get ids of their own");
     assert.match(segments, /payload\.events = restrictToRetriedOrders\(payload\.events, context\.amend\.orderIds\)/);

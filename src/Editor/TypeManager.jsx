@@ -5,9 +5,15 @@
 
 // Region Type Manager — mirrors the official editor. Each region "type" carries
 // render settings (opacity, unowned opacity, z-index, stroke, override color,
-// zoom band) plus gameplay flags (pathfinding speed, interactable, passable,
-// show-to-default-prompt, included-in-labels). Editing a type live-restyles the
-// map (OlMap restyles on the types prop changing).
+// zoom band, included-in-labels) plus gameplay flags (pathfinding speed,
+// interactable, passable). Editing a type live-restyles the map (OlMap
+// restyles on the types prop changing). The types go to the game with the
+// scenario (world.regionTypes, runtime/regionTypes.js): the game map draws the
+// override colour, opacity, stroke and zoom band, and the unit and structure
+// directors are told the three flags as rules for moving and placing. Z-Index
+// and Included In Labels have no counterpart in the game, and the panel says
+// so. The official editor's Show To Default Prompt has no reader in the game,
+// so it is not offered here; a type keeps whatever value it had.
 
 import { useState } from "react";
 import Panel from "./Panel.jsx";
@@ -68,6 +74,9 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
           <Icon name="plus" size={14} /> Add
         </button>
       </div>
+      <div style={{ fontSize: 11, lineHeight: 1.45, color: "rgba(255,255,255,0.5)" }}>
+        The game draws each type's override colour, opacity, stroke and zoom range as well. Z-Index and Included In Labels only style this Workshop map.
+      </div>
 
       {types.map((t) => {
         const open = expanded.has(t.id);
@@ -116,16 +125,16 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                     {t.overrideColor && <ColorField value={t.overrideColor} onChange={(v) => update(t.id, { overrideColor: v })} />}
                   </span>
                 </Row>
-                <Row label="Pathfinding Speed">
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 3 }}>
+                  When the AI moves units and places structures, it is told which regions are impassable, slower or faster to cross, or not in play.
+                </div>
+                <Row label="Pathfinding Speed" title="1 is the usual speed. Below 1 is slower, above 1 is faster, and 0 is impassable.">
                   <NumberField value={t.pathfindingSpeed} step={0.1} min={0} onChange={(v) => update(t.id, { pathfindingSpeed: v })} />
                 </Row>
-                <Row label="Interactable">
+                <Row label="Interactable" title="Off: the AI places no units and builds no structures in these regions.">
                   <Toggle value={t.interactable} onChange={(v) => update(t.id, { interactable: v })} />
                 </Row>
-                <Row label="Show To Default Prompt">
-                  <Toggle value={t.showToDefaultPrompt} onChange={(v) => update(t.id, { showToDefaultPrompt: v })} />
-                </Row>
-                <Row label="Passable">
+                <Row label="Passable" title="Off: the AI moves no units into or through these regions.">
                   <Toggle value={t.passable} onChange={(v) => update(t.id, { passable: v })} />
                 </Row>
                 <Row label="Included In Labels">

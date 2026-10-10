@@ -51,6 +51,7 @@ const buildGroups = (regions, ownershipOverrides = {}, ownerFilter = null) => {
         for (const ring of polygon ?? []) group.vertexCount += Array.isArray(ring) ? ring.length : 0;
       }
       if (gadm0) group.gadm0Counts.set(gadm0, (group.gadm0Counts.get(gadm0) || 0) + 1);
+      for (let polygonIndex = 0; polygonIndex < polygons.length; polygonIndex += 1) group.polygonGadm0.push(gadm0);
     } else {
       let vertexCount = 0;
       for (const polygon of polygons) {
@@ -62,6 +63,7 @@ const buildGroups = (regions, ownershipOverrides = {}, ownerFilter = null) => {
         polygonCount: polygons.length,
         vertexCount,
         gadm0Counts: new Map(gadm0 ? [[gadm0, 1]] : []),
+        polygonGadm0: polygons.map(() => gadm0),
       });
     }
   }
@@ -82,6 +84,9 @@ const collectionFromGroups = (groups) => ({
       gadm0: [...group.gadm0Counts.entries()]
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
         .map(([code]) => code),
+      // The stock country each polygon came from, index for index with the
+      // coordinates: the label engine keeps the polity's name on its home ground.
+      polygonGadm0: group.polygonGadm0,
     },
     geometry: { type: "MultiPolygon", coordinates: group.polygons },
   })),

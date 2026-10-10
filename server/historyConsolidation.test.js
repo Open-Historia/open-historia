@@ -14,8 +14,11 @@ import {
   HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
+  buildSkipHistoryJob,
   countWords,
+  deferredConsolidationStillDue,
   describeHistoryConsolidation,
+  judgeSkipHistoryAnswer,
   planHistoryConsolidation,
   seedHistoryDocumentText,
 } from "../src/Game/AI/historyConsolidation.js";
@@ -97,6 +100,25 @@ test("resolved orders ride along once; planned ones and folded ones do not", () 
   const world = { consolidatedHistory: [{ summary: "Earlier.", actionIds: ["order-folded"], throughEventId: "", throughDate: "2000-12-01" }] };
   const plan = planHistoryConsolidation(bundle({ events: events(sizeThreshold + 1), actions, world }));
   assert.deepEqual(plan.actionsToConsolidate.map((action) => action.id), ["order-done"]);
+});
+
+test("a batched pass that comes back later is dropped once another pass has folded its events", () => {
+  const log = events(sizeThreshold + 1);
+  const plan = planHistoryConsolidation(bundle({ events: log }));
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: log })), true, "nothing folded meanwhile");
+  const folded = { consolidatedHistory: [{ summary: "Folded synchronously.", throughEventId: plan.throughEvent.id, throughDate: plan.throughEvent.date }] };
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: log, world: folded })), false);
+});
+
+test("a batched chats-only pass is dropped once its chats were folded, not applied twice", () => {
+  // No events were due, so there is no boundary event to test against; the
+  // chats it folds are what say whether it is still wanted.
+  const chats = [{ id: "chat-done", status: "closed", countries: ["France"], messages: [] }];
+  const plan = planHistoryConsolidation(bundle({ events: events(5), chats }));
+  assert.equal(plan.throughEvent, null);
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: events(5), chats })), true);
+  const folded = { consolidatedHistory: [{ summary: "Folded.", chatIds: ["chat-done"], throughEventId: "" }] };
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: events(5), chats, world: folded })), false);
 });
 
 test("the boundary is the last pass's event, and the log itself is untouched", () => {
@@ -228,4 +250,86 @@ test("the status line says how many events are waiting, when a turn will fold th
   const withDocument = describeHistoryConsolidation(bundle({ world: { historyDocument: { text: "one two three", revision: 2, source: "manual", throughDate: "2001-01-01" } } }));
   assert.equal(withDocument.documentWords, 3);
   assert.match(withDocument.text, new RegExp(`3 words of a ${documentWordBudget}-word budget \\(revision 2, last edited by hand, through 2001-01-01\\)`));
+});
+
+// ---------------------------------------------------------------------------
+// The fold a time skip carries. A skip is one request, so a fold that is due
+// rides on it as a fenced job and comes back in one field of its answer.
+
+const words = (count, word = "word") => Array.from({ length: count }, () => word).join(" ");
+
+test("a skip plans its fold for the round it is about to produce, on the campaign as it stands", () => {
+  const thirty = events(30);
+  // Round 4 now: the skip produces round 5, which is a folding round.
+  const before = bundle({ events: thirty, game: { round: 4, gameDate: "2001-02-01", country: "France" } });
+  assert.equal(planHistoryConsolidation(before).due, false, "judged after the skip it would wait for round 5");
+  const planned = planHistoryConsolidation(before, { round: 5 });
+  assert.equal(planned.reason, "interval");
+  assert.equal(planned.eventsToConsolidate.length, 30 - retainEvents, "only what is already on the record: nothing the skip is about to write");
+  // A round given as nothing is the game's own.
+  assert.equal(planHistoryConsolidation(bundle({ events: thirty, game: { round: 5 } }), { round: null }).reason, "interval");
+  assert.equal(planHistoryConsolidation(bundle({ events: thirty, game: { round: 5 } }), { round: 6 }).due, false);
+});
+
+test("the job a skip carries is the consolidator's own prompt, fenced off from the period being simulated", () => {
+  assert.equal(buildSkipHistoryJob(""), "", "nothing due, nothing added to the prompt");
+  assert.equal(buildSkipHistoryJob(null), "");
+  const job = buildSkipHistoryJob("THE CONSOLIDATOR'S BRIEF\nwith its events and its document");
+  const lines = job.split("\n");
+  assert.match(lines[0], /^#{10} BEGINNING OF A SEPARATE JOB: THE HISTORY DOCUMENT #{10}$/);
+  assert.match(lines.at(-1), /^#{10} END OF A SEPARATE JOB: THE HISTORY DOCUMENT #{10}$/);
+  assert.ok(job.includes("THE CONSOLIDATOR'S BRIEF\nwith its events and its document"), "the brief whole, not summarised");
+  assert.match(job, /Do it LAST, after the events and everything else, and put its answer in the "history" field/);
+  assert.match(job, /The events you write in this answer are not part of it/);
+  assert.match(job, /nothing in it changes how you write the events/);
+});
+
+test("a fold is taken only when there is something to keep the folded events in", () => {
+  const current = words(1400);
+  // A whole document: taken as the consolidator's own answer would have been.
+  const whole = judgeSkipHistoryAnswer({ summary: words(60), document: words(1450) }, { currentText: current });
+  assert.deepEqual([whole.ok, countWords(whole.document), whole.reason], [true, 1450, ""]);
+  // Condensed to its budget from a document that had outgrown it: still whole.
+  const condensed = judgeSkipHistoryAnswer({ summary: words(60), document: words(documentWordBudget) }, { currentText: words(3200) });
+  assert.equal(condensed.ok && countWords(condensed.document) === documentWordBudget, true);
+  // A stub where a document should be (an answer that ran out of room): the
+  // document is left out and the summary appended, so nothing is lost.
+  const stub = judgeSkipHistoryAnswer({ summary: words(60), document: words(90) }, { currentText: current });
+  assert.deepEqual([stub.ok, stub.document], [true, ""]);
+  assert.match(stub.reason, /its document came back at 90 words against the 1400 the campaign has; its summary is appended instead/);
+  const applied = applyHistoryDocumentUpdate({ historyDocument: { text: current, revision: 3 } }, { document: stub.document, summary: stub.summary, throughDate: "2001-03-01", baseRevision: 3 });
+  assert.equal(applied.mode, "appended");
+  assert.ok(applied.historyDocument.text.startsWith(current), "the campaign's document is still all there");
+  // No document at all, with a real summary: the same.
+  const summaryOnly = judgeSkipHistoryAnswer({ summary: words(HISTORY_CONSOLIDATION.minSummaryWords) }, { currentText: current });
+  assert.deepEqual([summaryOnly.ok, summaryOnly.document], [true, ""]);
+  // Too little of either: not a fold. What it would have covered stays on the
+  // record, in full, for the next skip.
+  for (const [answer, reason] of [
+    [{ summary: "A quiet period.", document: words(40) }, /its summary is too short to stand for what it would replace/],
+    [{ summary: "A quiet period." }, /it gave no document, and its summary is too short/],
+    [{ document: words(1400) }, /its history had no summary/],
+    [{}, /its history had no summary/],
+    [undefined, /it carried no history/],
+    ["a string", /it carried no history/],
+    [[{ summary: words(60), document: words(1400) }], /it carried no history/],
+  ]) {
+    const verdict = judgeSkipHistoryAnswer(answer, { currentText: current });
+    assert.equal(verdict.ok, false, JSON.stringify(answer)?.slice(0, 60));
+    assert.match(verdict.reason, reason);
+    assert.deepEqual([verdict.summary, verdict.document], ["", ""]);
+  }
+});
+
+test("the first document a campaign gets must be a document too", () => {
+  const first = judgeSkipHistoryAnswer({ summary: words(50), document: words(HISTORY_CONSOLIDATION.minDocumentWords) }, { currentText: "" });
+  assert.equal(first.ok && Boolean(first.document), true);
+  const thin = judgeSkipHistoryAnswer({ summary: words(50), document: "Not much happened." }, { currentText: "" });
+  assert.deepEqual([thin.ok, thin.document], [true, ""], "three words are not a history: the summary is kept instead");
+  assert.equal(judgeSkipHistoryAnswer({ summary: "Nothing.", document: "Not much happened." }, { currentText: "" }).ok, false);
+});
+
+test("a fold that fails only waits so long", () => {
+  assert.equal(HISTORY_CONSOLIDATION.ownRequestThreshold, sizeThreshold * 2, "twice the pile that makes a turn fold by itself");
+  assert.ok(HISTORY_CONSOLIDATION.ownRequestThreshold > sizeThreshold + batchSize - retainEvents);
 });

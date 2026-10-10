@@ -12,13 +12,15 @@ import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
 import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat, transformExtent } from "ol/proj";
+import { boundsFillSquare, normalizeImageBounds } from "../../../server/mapProjection.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { isBrowserOnline } from "../../runtime/networkStatus.js";
-import { SCREEN_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { SCREEN_HEIGHT, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { createPickerHover } from "./countryPickerHover.js";
 const codeToColor = (code) => {
   let h = 0;
   for (let i = 0; i < code.length; i += 1) h = (h * 31 + code.charCodeAt(i)) >>> 0;
@@ -94,9 +96,16 @@ const CUSTOM_SEA = "#0b1a2b";
 // vector biomes each carrying its own `fill`. Every other scenario keeps the
 // ESRI canvas, exactly as before.
 const buildBaseLayer = (customBackground) => {
+  // A plain sea: no tiles, as the game map draws such a scenario.
+  if (customBackground?.kind === "plain") return new VectorImageLayer({ source: new VectorSource({ wrapX: false }) });
   if (customBackground?.kind === "image" && customBackground.imageUrl) {
+    // On the scenario's own bounds when it states them, as the game map lays it.
+    const bounds = normalizeImageBounds(customBackground.bounds);
+    const imageExtent = bounds && !boundsFillSquare(bounds)
+      ? transformExtent([bounds.west, bounds.south, bounds.east, bounds.north], "EPSG:4326", "EPSG:3857")
+      : WORLD_IMAGE_EXTENT;
     return new ImageLayer({
-      source: new ImageStatic({ url: customBackground.imageUrl, imageExtent: WORLD_IMAGE_EXTENT, projection: "EPSG:3857" }),
+      source: new ImageStatic({ url: customBackground.imageUrl, imageExtent, projection: "EPSG:3857" }),
     });
   }
   if (customBackground?.kind === "vector" && customBackground.geojson) {
@@ -117,6 +126,10 @@ const buildBaseLayer = (customBackground) => {
   }
   return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
 };
+
+// Whether the focus an element has is the keyboard's, the one drawn with a
+// ring. A button pressed with the mouse takes the focus as well.
+const hasKeyboardFocus = (element) => element.matches(":focus-visible");
 const CountryPickerMap = ({
   countryOptions,
   onPickCountry,
@@ -148,7 +161,10 @@ const CountryPickerMap = ({
   customBackgroundRef.current = customBackground;
   const layerRef = useRef(null);
   const sourceRef = useRef(null);
-  const hoveredCodeRef = useRef(null);
+  // The country drawn highlighted: the one under the pointer on the map, or
+  // the one whose row of the list is pointed at (countryPickerHover.js has who
+  // wins). Made with the map, whose region layer it repaints.
+  const hoverRef = useRef(null);
   const hoveredRegionRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
@@ -158,6 +174,7 @@ const CountryPickerMap = ({
   const [touchFirst] = useState(() => isTouchPrimary());
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
+  const canHover = useCanHover();
   // While a search is typed on a phone the map folds away and the matches sit
   // right under the box, above the keyboard. By the query, not by focus: a
   // blur as the finger lands on a match would move the list under it.
@@ -193,6 +210,15 @@ const CountryPickerMap = ({
       ? countryOptions.filter((c) => `${c.name} ${c.code}`.toLowerCase().includes(q))
       : countryOptions;
   }, [countryOptions, query]);
+  // The rows the list shows: the first few, and more of them once a search has
+  // narrowed it.
+  const rowLimit = query.trim() ? 30 : 12;
+  const shownOptions = useMemo(() => filteredOptions.slice(0, rowLimit), [filteredOptions, rowLimit]);
+  // A row taken away under the pointer (the search narrowing the list) gets no
+  // mouseleave and no blur, so the hover is told which rows are left.
+  useEffect(() => {
+    hoverRef.current?.rowsShown(shownOptions.map((c) => c.code));
+  }, [shownOptions]);
 
   // The scenario's basemap arrives after the map does (it is fetched once the
   // scenario's details are in), so the base layer is swapped in place rather
@@ -225,6 +251,13 @@ const CountryPickerMap = ({
     });
     layerRef.current = layer;
     sourceRef.current = source;
+    // A change of the highlighted country is one such re-rasterise, whether
+    // the pointer is on the map or on a row of the list: the style function
+    // reads the one code and the layer is told it changed. So running the
+    // pointer down the list costs what running it across the map does, and
+    // renders nothing, reloads nothing and never moves the view.
+    const hover = createPickerHover(() => layer.changed());
+    hoverRef.current = hover;
 
     const baseLayer = buildBaseLayer(customBackgroundRef.current);
     baseLayerRef.current = baseLayer;
@@ -270,7 +303,7 @@ const CountryPickerMap = ({
 
       const code = feature.get("owner") || feature.get("gid0");
       const isPlayable = code && playableCodesRef.current.has(code);
-      const isHovered = code === hoveredCodeRef.current;
+      const isHovered = code === hover.code;
 
       if (!isPlayable) {
         return new Style({
@@ -334,10 +367,10 @@ const CountryPickerMap = ({
       const isClickable = code && playableCodesRef.current.has(code);
       olMap.getTargetElement().style.cursor = isClickable ? "pointer" : "";
 
-      if (hoveredCodeRef.current !== code) {
-        hoveredCodeRef.current = isClickable ? code : null;
-        layer.changed();
-      }
+      // The pointer is on the map, so the map's own hover has the highlight
+      // again, whatever row of the list held it: the playable country under
+      // the pointer, or none.
+      hover.overMap(isClickable ? code : null);
     });
 
     return () => {
@@ -453,12 +486,25 @@ const CountryPickerMap = ({
           overflowY: "auto",
         }}
       >
-        {filteredOptions.slice(0, query.trim() ? 30 : 12).map((c) => (
+        {shownOptions.map((c) => (
           <button
             key={c.code}
             type="button"
             className="oh-tap-row"
             onClick={() => onPickCountry(c.code)}
+            // Pointing at a row lights its country on the map, with the
+            // pointer or with the keyboard focus, and leaving it puts it out
+            // (countryPickerHover.js). By the row's code, which is the owner
+            // the map's regions carry; the name is only what is shown. The
+            // focus only when it is the keyboard's: a row pressed with the
+            // mouse and let go of elsewhere keeps the focus, and would keep
+            // its country lit with nothing pointing at it. Not on a touch
+            // screen: nothing hovers there, and a tap would light the country
+            // for the moment before it is picked.
+            onMouseEnter={canHover ? () => hoverRef.current?.enterRow(c.code) : undefined}
+            onMouseLeave={canHover ? () => hoverRef.current?.leaveRow(c.code) : undefined}
+            onFocus={canHover ? (event) => { if (hasKeyboardFocus(event.currentTarget)) hoverRef.current?.focusRow(c.code); } : undefined}
+            onBlur={canHover ? () => hoverRef.current?.blurRow(c.code) : undefined}
             style={{
               alignItems: "center",
               background: "rgba(255,255,255,0.06)",
@@ -484,9 +530,9 @@ const CountryPickerMap = ({
             <span>{c.name}</span>
           </button>
         ))}
-        {filteredOptions.length > (query.trim() ? 30 : 12) && (
+        {filteredOptions.length > rowLimit && (
           <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", padding: "0.3rem", textAlign: "center" }}>
-            {filteredOptions.length - (query.trim() ? 30 : 12)} more… type to search
+            {filteredOptions.length - rowLimit} more… type to search
           </div>
         )}
       </div>

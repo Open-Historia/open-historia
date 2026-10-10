@@ -132,6 +132,9 @@ export const fmgToEditorSeed = (data, options = {}) => {
   for (const [key, g] of regionGroups) {
     const state = stateById.get(g.stateId);
     if (!state || state.i === 0) continue; // neutral/unclaimed land isn't a region
+    // Nor is a removed state's: it gets no polity below, so its land would
+    // arrive owned by a name that is not a country on the map.
+    if (state.removed) continue;
     const owner = nameOf(state);
     if (!owner) continue; // a nameless state can't be a named country
     const geometry = dissolve(g.geoms);

@@ -9,6 +9,7 @@ import {
   normalizeFeatureSettings,
   playerFocusOf,
   resolveFeatures,
+  withFeatureOverride,
   worldDirectionOf,
   normalizeScriptedEvents,
 } from "./gameFeatures.js";
@@ -17,7 +18,8 @@ import {
 // carries every feature, so the exact-object checks below spread it in.
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
-const puppetStates = featureDefaults().puppetStates;
+const groups = featureDefaults().groups;
+const listenIn = featureDefaults().listenIn;
 const pregameHistory = featureDefaults().pregameHistory;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
@@ -40,7 +42,8 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(settings, {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
-    puppetStates,
+    groups,
+    listenIn,
     pregameHistory,
     worldDirection,
     playerFocus,
@@ -49,7 +52,8 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(normalizeFeatureSettings({ espionage: false, idleDiplomacy: { averageMinutes: 100000 } }), {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
-    puppetStates,
+    groups,
+    listenIn,
     pregameHistory,
     worldDirection,
     playerFocus,
@@ -100,6 +104,29 @@ test("isFeatureEnabled and the idle diplomacy chance read the resolved configura
   assert.equal(idleDiplomacyChancePerMinute(resolved), 0.25);
   assert.equal(idleDiplomacyChancePerMinute(resolveFeatures({ idleDiplomacy: false }, {})), 0);
   assert.equal(idleDiplomacyChancePerMinute(null), 0);
+});
+
+// Groups ship on; a scenario switches them off for every game made from it, and
+// a game may switch them back for itself.
+test("groups are a feature a scenario can switch off and a game can switch back on", () => {
+  assert.deepEqual(featureDefaults().groups, { enabled: true });
+  assert.equal(FEATURE_DEFINITIONS.find((definition) => definition.key === "groups")?.toggleable, undefined, "it has an on/off switch");
+  const scenario = { groups: false };
+  assert.equal(isFeatureEnabled(resolveFeatures(scenario, {}), "groups"), false);
+  assert.equal(isFeatureEnabled(resolveFeatures(scenario, { groups: { enabled: true } }), "groups"), true);
+  assert.deepEqual(normalizeFeatureOverrides({ groups: { enabled: false } }), { groups: { enabled: false } });
+});
+
+// Puppet states were a feature a scenario could switch off until 2026-10-05.
+// A scenario, a game or an imported bundle saved before then may still carry
+// the key, off included: it is dropped like any feature this build does not
+// define, so the game plays with puppet states on.
+test("an older save's puppetStates setting is dropped from a scenario and from a game", () => {
+  const scenario = normalizeFeatureSettings({ espionage: false, puppetStates: { enabled: false } });
+  assert.deepEqual(scenario, { ...featureDefaults(), espionage: { enabled: false } });
+  assert.equal("puppetStates" in scenario, false);
+  assert.deepEqual(normalizeFeatureOverrides({ espionage: { enabled: true }, puppetStates: { enabled: false } }), { espionage: { enabled: true } });
+  assert.equal("puppetStates" in resolveFeatures({ puppetStates: { enabled: false } }, { puppetStates: { enabled: false } }), false);
 });
 
 test("legacy scripted-event text migrates to unconditional composable rules without changing its dated beat", () => {
@@ -252,6 +279,20 @@ test("Player focus: the scenario sets the default level and a game chooses its o
   assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
   assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
   assert.equal(featureDefaults().playerFocus.enabled, true);
+});
+
+test("Changing one feature's override keeps the game's other overrides", () => {
+  const game = { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } };
+  assert.deepEqual(
+    withFeatureOverride(game, "playerFocus", { level: "spotlight" }),
+    { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 }, playerFocus: { level: "spotlight" } },
+  );
+  // Back to the scenario default: only Player focus goes.
+  const focused = { ...game, playerFocus: { level: "focused" } };
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", null), game);
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", { level: undefined }), game);
+  assert.deepEqual(withFeatureOverride(null, "playerFocus", { level: "balanced" }), { playerFocus: { level: "balanced" } });
+  assert.deepEqual(game, { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } }, "the input is not changed");
 });
 
 test("scripted event normalization preserves weighted outcomes and new canonical predicates", () => {

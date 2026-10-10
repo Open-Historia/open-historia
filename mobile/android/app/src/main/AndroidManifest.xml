@@ -35,6 +35,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The app downloads its own updates and opens Android's installer on them
+         (UpdatePlugin.java). Android still asks the player to confirm each one,
+         and the first time to allow installs from Open Historia. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Lets the WebView see connectivity. Without it navigator.onLine is always
          true, so the game could not tell it was offline: the map kept asking
          remote tile servers instead of drawing its bundled relief. A normal

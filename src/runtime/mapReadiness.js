@@ -61,9 +61,12 @@ export const announceMapRerender = () => {
   announceGameOpening(store().gameId ?? "");
 };
 
+// failed: the borders and labels gave up for good (Nations.jsx marks it only
+// once the boundary worker has no retry left) and the map shows canonical
+// fills with the simpler labels. A retry that is still coming is not a failure.
 export const markPolitiesReady = (url = "", { failed = false } = {}) => {
   if (typeof window === "undefined") return;
-  const record = { gameId: store().gameId ?? "", url: String(url ?? ""), at: now(), failed };
+  const record = { gameId: store().gameId ?? "", url: String(url ?? ""), at: now(), failed: Boolean(failed) };
   store().polities = record;
   window.dispatchEvent(new CustomEvent(MAP_POLITIES_READY_EVENT, { detail: record }));
 };
@@ -74,6 +77,10 @@ const currentRecord = () => {
 };
 
 export const politiesReady = () => Boolean(currentRecord());
+
+// This game's map fell back to the simpler borders and labels
+// (GameUI/bordersFallbackNotice.jsx tells the player).
+export const politiesFailed = () => Boolean(currentRecord()?.failed);
 
 // Ready AND drawn: the map has gone idle since the layers landed.
 export const politiesSettled = () => {

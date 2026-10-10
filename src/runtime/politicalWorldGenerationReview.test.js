@@ -96,46 +96,6 @@ test("balanced relevance promotes both sides of an active Puppet relationship to
   });
   assert.equal(relevance["Overlord State"].depth, "rich");
   assert.equal(relevance["Puppet Republic"].depth, "rich");
-
-  const disabled = buildScenarioPoliticalRelevance({
-    world,
-    playerPolity: "Kingdom of Poland",
-    mode: POLITICAL_WORLD_GENERATION_MODES.BALANCED,
-    puppetStates: false,
-  });
-  assert.equal(disabled["Overlord State"].depth, "standard");
-  assert.equal(disabled["Puppet Republic"].depth, "standard");
-});
-
-test("scenario Political World generation respects a disabled Puppet States feature", () => {
-  const details = {
-    ...scenarioDetails,
-    scenario: {
-      ...scenarioDetails.scenario,
-      features: { puppetStates: { enabled: false } },
-    },
-    data: {
-      ...scenarioDetails.data,
-      world: {
-        ...scenarioDetails.data.world,
-        wars: [],
-        ownerCodes: [...scenarioDetails.data.world.ownerCodes, "Overlord State", "Puppet Republic"],
-        puppets: [{
-          id: "dependency-1",
-          overlord: "Overlord State",
-          puppet: "Puppet Republic",
-          kind: "client",
-          loyalty: 60,
-          secrecy: "open",
-          status: "active",
-        }],
-      },
-    },
-  };
-
-  const inputs = buildScenarioPoliticalGenerationInputs(details, { mode: POLITICAL_WORLD_GENERATION_MODES.BALANCED });
-  assert.equal(inputs.relevanceByPolity["Overlord State"].depth, "standard");
-  assert.equal(inputs.relevanceByPolity["Puppet Republic"].depth, "standard");
 });
 
 test("simulation-ready mode makes ordinary sovereign polities rich without promoting peripheral landless entries", () => {
@@ -170,6 +130,13 @@ test("scenario generation inputs use saved scenario canon and bounded polity-spe
   assert.equal(inputs.contextByPolity["Kingdom of Poland"].scenarioNote, "Constitutional monarchy.");
   assert.ok(!inputs.polities.some((entry) => entry.polityKey === "NA"));
   assert.ok(!inputs.polities.some((entry) => entry.polityKey === "Former Republic"), "dissolved polities are historical state, not current generation targets");
+});
+
+test("scenario generation inputs carry the scenario's own country tags as base tags", () => {
+  const tags = { "Kingdom of Poland": ["monarchist", "authoritarian"] };
+  assert.deepEqual(buildScenarioPoliticalGenerationInputs(scenarioDetails, { countryTags: tags }).baseCountryTags, tags);
+  assert.equal(buildScenarioPoliticalGenerationInputs(scenarioDetails).baseCountryTags, null);
+  assert.equal(buildScenarioPoliticalGenerationInputs(scenarioDetails, { countryTags: ["not", "a", "map"] }).baseCountryTags, null);
 });
 
 const validProposal = ({ polityKey = "Kingdom of Poland", actorPatch } = {}) => ({

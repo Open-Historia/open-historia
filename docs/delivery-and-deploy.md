@@ -1,24 +1,24 @@
 # Delivery, Deploy & Releases
 
-Open Historia ships to four surfaces from one repo: a **downloadable desktop app** (self-hosted local server), an **Android app** (embedded in-process server), the **playable website** (`openhistoria.com`, static app on Cloudflare Pages), plus supporting **Cloudflare Workers** (import counter, node registry). Which surface a commit reaches, and when, is decided by *which long-lived channel branch it lands on* (`main` / `beta` / `alpha`) and *which GitHub Actions workflow or local deploy engine fires*. This page maps every build script, workflow, release, and the local admin-panel deploy path, and traces how a single change flows out to players.
+Open Historia ships to four surfaces from one repo: a **downloadable desktop app** (the local server inside Electron), an **Android app** (the web build on the device, no server), the **playable website** (`openhistoria.com`, static app on Cloudflare Pages), plus supporting **Cloudflare Workers** (import counter, node registry). Which surface a commit reaches, and when, is decided by *which long-lived channel branch it lands on* (`main` / `beta` / `alpha`) and *which GitHub Actions workflow or local deploy engine fires*. This page maps every build script, workflow, release, and the local admin-panel deploy path, and traces how a single change flows out to players.
 
-The Vite build has one pivotal switch — `--mode web` — that produces a *completely different* artifact from the default build (`vite.config.ts:65`). Almost everything below hangs off that distinction: desktop vs. web.
+The Vite build has one pivotal switch — `--mode web` — that produces a *completely different* artifact from the default build (`vite.config.ts`). Almost everything below hangs off that distinction: desktop vs. web.
 
 ---
 
 ## 1. Build scripts (`package.json`)
 
-Every delivery path starts with one of these npm scripts (`package.json:9`). The mode (`web` or not) is the load-bearing difference — it flips `import.meta.env.VITE_OH_WEB` into a compile-time literal so Rollup dead-code-eliminates the whole web (or desktop) runtime from the other build (`vite.config.ts:75`).
+Every delivery path starts with one of these npm scripts (`package.json`). The mode (`web` or not) is the load-bearing difference — it flips `import.meta.env.VITE_OH_WEB` into a compile-time literal so Rollup dead-code-eliminates the whole web (or desktop) runtime from the other build (`vite.config.ts`).
 
 | Script | Command | Output dir | Mode | Base | Purpose |
 |---|---|---|---|---|---|
 | `build` | `vite build` | `dist/` | *(default/desktop)* | `/` | The desktop/local app bundle. Served by the Express server (`server/server.js`) and copied into the Android app. |
-| `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`). Used by `WEB-DEPLOY.md`'s manual path. |
-| `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`. This is what actually deploys to production. |
+| `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` → `stage-map-assets.mjs dist-web` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`), with its map under `assets/`. Used by `WEB-DEPLOY.md`'s manual path. |
+| `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `stage-map-assets.mjs dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`, the map under `/play/assets/`. This is what actually deploys to production. |
 | `build:android` | `node scripts/seed-web-defaults.mjs && vite build --mode android --outDir dist-android --emptyOutDir` | `dist-android/` | `VITE_OH_WEB` + `VITE_OH_NATIVE` | `.env.android` | The Android app's bundle. `mobile/scripts/stage-www.mjs` then lays the verified map data under `www/assets`. |
-| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts:87`). |
+| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && stage-map-assets.mjs public --missing-only && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts`). `dev:web` first lays the web map files `public/` lacks, never overwriting a developer's desktop copies. |
 
-**The map-binary trap** (`vite.config.ts:10-60`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
+**The map-binary trap** (`vite.config.ts`): the desktop's pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants those copies there (the desktop streams its archives via `/api/runtime/pmtiles/:assetKey`; the web build carries its own, web-sized files). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the world files (`regions-seed.geojson`, `cities-seed.json`, `default-regions.geojson`) from the *web* build only. For a web build, `scripts/stage-map-assets.mjs` then lays the six files pinned in `scripts/map-assets.web.json` into the output under the same names (§8). This matters because Cloudflare Pages rejects any file over 25 MiB, and the desktop's `regions-seed.geojson` is 55 MB: the site must carry the staged files, never whatever a developer's `public/` holds. The trap "only fires on a machine that has actually played" (the desktop's files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
 
 ---
 
@@ -37,8 +37,8 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 
 | Channel branch | What it feeds | CI trigger | Reaches players via |
 |---|---|---|---|
-| `main` | Stable | `app-bundle.yml` (push) → `app-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages; `android-apk.yml` (dispatch) → `android` release | Desktop stable download; the live website; the Android app |
-| `beta` | Beta testers | `app-bundle.yml` (push) → `app-beta` release; `android-apk-beta.yml` (dispatch) → `android-beta` release | Desktop beta download; the Android beta app |
+| `main` | Stable | `desktop-installer.yml` (dispatch / `desktop-v*` tag) → `desktop-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages; `android-apk.yml` (dispatch) → `android` release | The desktop app; the live website; the Android app |
+| `beta` | Beta testers | `desktop-beta.yml` (dispatch / `desktop-beta-v*` tag) → `desktop-beta` pre-release; `android-apk-beta.yml` (dispatch) → `android-beta` release | The desktop beta app; the Android beta app |
 | `alpha` | Experimental staging | *(no push-triggered workflow)* | Only reaches users when its work is **bridged** into `beta`/`main` |
 
 `alpha` is a staging branch with **no CI publish trigger of its own**. Work on `alpha` does not reach any installed app or the website until it is bridged forward into `beta` (then `main`).
@@ -65,11 +65,12 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 
 | Release tag | Built by | From | Asset(s) | Prerelease? | For |
 |---|---|---|---|---|---|
-| `app-stable` | `app-bundle.yml` | push to `main` | `Open-Historia.zip` (source + map data) | no (`--latest=false`) | One-download desktop install, stable |
-| `app-beta` | `app-bundle.yml` | push to `beta` | `Open-Historia.zip` | no (`--latest=false`) | One-download desktop install, beta |
+| `desktop-stable` | `desktop-installer.yml` (§4.1) | `workflow_dispatch` from `main` / `desktop-v*` tag | `Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, the `latest.yml` / `latest-mac.yml` / `latest-linux.yml` update feeds, `latest.json` | no | The desktop app; it updates itself from here (not on macOS) |
+| `desktop-beta` | `desktop-beta.yml` (§4.1) | `workflow_dispatch` from `beta` / `desktop-beta-v*` tag | The same set named `Open-Historia-Beta-*` | **yes** (`--prerelease`) | "Open Historia Beta", a second desktop app beside the stable one, with its own saves; it updates itself from here |
+| `desktop-stable-chunks`, `desktop-beta-chunks` | the same two workflows (`scripts/publish-update-chunks.mjs`) | the same runs | The app's own files cut into chunks: `c-<hash>.bin` (about 180 a build, each uploaded once), the manifests `m-<hash>.json`, and one head per system, `payload-{win,mac,linux}.json`, the only files replaced | no (`--latest=false`) | The desktop app, which updates by fetching the chunks that changed (§11.2). Nothing here is downloaded by hand |
 | `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (the `appId` in `mobile/capacitor.config.json`); it self-updates from here |
 | `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (the stable id + `.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
-| `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
+| `map-data` | *manually uploaded* | — | The desktop's list: `regions-z8.pmtiles`, `countries-z8.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson`. The web builds' list: the same two archives, `cities.pmtiles` and `cities-seed.json`, plus `regions-seed-clean.geojson` and `default-regions-names-web-clean.geojson`. Earlier editions stay on the release | — | The world-map binaries, off Git LFS (§8) |
 
 The APK asset names are contractual — they, and the two Android application ids (the `appId` in `mobile/capacitor.config.json`, and the beta's, the same id + `.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from the project's earlier name to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
 
@@ -77,21 +78,24 @@ The APK asset names are contractual — they, and the two Android application id
 
 ## 4. GitHub Actions workflows (`.github/workflows/`)
 
-Three workflow files live on `main`. `android-apk-beta.yml` (§4.3) is there too, only so its Run workflow entry appears; it refuses to run from anything but `beta`.
+`desktop-installer.yml`, `android-apk.yml`, `deploy-site.yml` and `tests.yml` are the stable channel's workflows. `desktop-beta.yml` and `android-apk-beta.yml` (§4.3) are on `main` too, only so their Run workflow entries appear; each refuses to run from anything but `beta`.
 
-### 4.1 `app-bundle.yml` — full-app one-download bundle
+### 4.1 `desktop-installer.yml` and `desktop-beta.yml` — the desktop app
 
-`.github/workflows/app-bundle.yml`. Packages the **whole app plus the world-map data** into one `Open-Historia.zip` so players install with a single download — no Git, no Git LFS, no separate map-data step.
+`.github/workflows/desktop-installer.yml`. Builds the Electron app for Windows, macOS and Linux — the client compiled here and packaged with the server — and attaches one installer per platform to the rolling `desktop-stable` release. Nothing is built on the player's machine.
 
 | Aspect | Detail |
 |---|---|
-| Triggers | `workflow_dispatch`; push to `main` or `beta` |
-| Map data | `node scripts/fetch-map-assets.mjs` writes the binaries into the tree (guarded: absent script → code-only bundle, never a failure) |
-| Assemble | `rsync` the tree into `bundle/Open-Historia/` excluding `.git`, `.github`, `node_modules`, `dist`, `bundle`; restore exec bits on the `Launch`/`Update` scripts; `zip -r` |
-| Channel pick | `github.ref_name == main` → tag `app-stable`; else → `app-beta` (`.github/workflows/app-bundle.yml:57`) |
-| Publish | `gh release create <tag> --latest=false … || gh release edit …`; then `gh release upload <tag> Open-Historia.zip --clobber` |
+| Triggers | `workflow_dispatch` (the `tag` input, default `desktop-stable`; clear it to build without publishing); push tag `desktop-v*` |
+| Matrix | `windows-latest` / `macos-latest` / `ubuntu-latest`, `fail-fast: false`; each installer must be built on its own OS |
+| Version | `electron/build-id.json` gets the run id; `package.json` `version` becomes `0.0.<run_number>`, which is what `electron-updater` compares |
+| Build | `npm ci` → `npm run build` → `npx electron-builder <--win|--mac|--linux> --publish never` (unsigned: `CSC_IDENTITY_AUTO_DISCOVERY: false`) |
+| Map data | Not packaged: the app runs `scripts/fetch-map-assets.mjs --ensure` on first launch (`electron/main.cjs`) |
+| Publish | `gh release create` on first use, then `gh release upload <tag> … --clobber`: the installers, the `latest*.yml` update feeds, and (from the Windows job) `latest.json` with a link per platform |
 
-Runs on **every** push to `main`/`beta` so the download never goes stale. The zip's launchers (`Launch Open Historia.{bat,command,sh}`) install deps, build, fetch map assets, and start the game at `http://localhost:3000`.
+`.github/workflows/desktop-beta.yml` is the same pipeline from `beta`, with the channel stamped (`scripts/stamp-channel.mjs beta`), the tests run first, and `--config electron-builder.beta.yml`, which gives it its own app id, name, icon and update feed. It publishes to the `desktop-beta` pre-release (dispatch from `beta`, or a `desktop-beta-v*` tag) and installs **beside** the stable app with its own saves.
+
+These replaced `app-bundle.yml`, which zipped the source, the map data and the `Launch`/`Update` scripts into `Open-Historia.zip` on the `app-stable` / `app-beta` releases; the workflow, the scripts and both releases are gone (`b34a0e38`).
 
 ### 4.2 `android-apk.yml` — stable Android APK
 
@@ -102,7 +106,7 @@ Runs on **every** push to `main`/`beta` so the download never goes stale. The zi
 | Triggers | `workflow_dispatch` from `main` (from any other branch its first step fails: a dispatch from `beta` once published the beta's code as the stable app, build 14 on 2026-09-25); push tag `android-v*` |
 | Toolchain | Node 24, Temurin Java 21 |
 | Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode`/`versionName`; the update banner compares the bundle's number against `latest.json` |
-| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data, cached on the manifest hash) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
+| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data; `map-cache/` is cached on the hash of `scripts/map-assets.web.json`) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
 | Collect | copies the APK → `open-historia.apk` |
 | Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `latest.json` (`{ build, apk, notes }`) with `--clobber` |
 
@@ -129,22 +133,23 @@ The map data must be staged **before** `cap sync` copies `www/` into the native 
 |---|---|
 | Triggers | `workflow_dispatch`; push to `main` with `paths-ignore` for `**.md`, `mobile/**`, `.github/**` (docs/app can't change what the site serves) |
 | Concurrency | group `deploy-site`, `cancel-in-progress: true` — a newer push supersedes an in-flight deploy rather than racing it live |
-| Build | `npm ci` → `npm run build:site` |
+| Build | `npm ci` → restore `map-cache/` (`actions/cache`, keyed on the hash of `scripts/map-assets.web.json`) → `npm run build:site`, which fetches and verifies the six map files and lays them under `/play/assets/` |
 | Size guard | fails if any `dist-site` file exceeds 24 MiB (Pages rejects >25 MiB *after* reporting a green build) |
 | Deploy | `cloudflare/wrangler-action@v3` → `pages deploy dist-site --project-name=open-historia --branch=main`. `--branch=main` is what marks it the **production** deployment; without it Pages treats it as a preview and the live domain keeps the old build |
 | Secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 
-Why an Action rather than Git-connected Pages: the Pages project is direct-upload and Cloudflare can't convert those to Git-connected without a new project + domain move (downtime). CI is also "the one place the map-binary trap cannot fire" — a runner never has the gitignored pmtiles.
+Why an Action rather than Git-connected Pages: the Pages project is direct-upload and Cloudflare can't convert those to Git-connected without a new project + domain move (downtime). A runner has no map files to sweep in by accident: the desktop's are gitignored and never on it. The only ones in the site are the six `build:site` fetches, and the build fails if one cannot be had, so a site without its map is never deployed.
 
 ---
 
 ## 5. The website build pipeline (`build:site` → `assemble-site.mjs`)
 
-`build:site` runs three stages in order, then hands off to the assembler:
+`build:site` runs four stages in order, the last of them the assembler:
 
-1. `node scripts/seed-web-defaults.mjs` — bundles the built-in default scenario for the browser (§8).
+1. `node scripts/seed-web-defaults.mjs` — bundles the built-in default scenario for the browser (§10).
 2. `vite build --mode web --base /play/ --outDir dist-web` — the game, based at `/play/`.
-3. `node scripts/assemble-site.mjs` — stitches `site/` (landing page) + `dist-web/` (game) into `dist-site/`.
+3. `node scripts/stage-map-assets.mjs dist-web` — downloads the six map files pinned in `scripts/map-assets.web.json` into `map-cache/`, verifies each, and lays them into `dist-web/assets/` (§8).
+4. `node scripts/assemble-site.mjs` — stitches `site/` (landing page) + `dist-web/` (game, map included) into `dist-site/`, so the map is served at `/play/assets/`.
 
 ### `scripts/assemble-site.mjs`
 
@@ -152,12 +157,12 @@ Produces `dist-site/`: landing page at `/`, game under `/play/`.
 
 | Constant / step | Location | Behavior |
 |---|---|---|
-| `siteDir` = `site/` | `assemble-site.mjs:10` | Marketing landing page source (`index.html`, `_redirects`) copied to `dist-site/` root |
-| `gameDir` = `dist-web/` | `assemble-site.mjs:11` | Web game (base `/play/`) copied to `dist-site/play/` |
-| `outDir` = `dist-site/` | `assemble-site.mjs:12` | The deployable output |
-| `ROOT_PAGES` | `assemble-site.mjs:22` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
-| `ROOT_ASSETS` | `assemble-site.mjs:34` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, PWA icons, `screenshot.png`). Copied to `/` if present; **silently skipped** if renamed (a missing image is a cosmetic 404, not build-fatal) |
-| Guard | `assemble-site.mjs:41` | Fatal if `dist-web/index.html` is missing (build the game first) |
+| `siteDir` = `site/` | `assemble-site.mjs` | Marketing landing page source (`index.html`, `_redirects`) copied to `dist-site/` root |
+| `gameDir` = `dist-web/` | `assemble-site.mjs` | Web game (base `/play/`) copied to `dist-site/play/` |
+| `outDir` = `dist-site/` | `assemble-site.mjs` | The deployable output |
+| `ROOT_PAGES` | `assemble-site.mjs` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
+| `ROOT_ASSETS` | `assemble-site.mjs` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, the default cover `scenario-placeholder.webp`, PWA icons, `screenshot.png`). Copied to `/` if present; a missing one prints a `[warn]` naming it but does not fail the build (a missing image is a cosmetic 404). `server/siteAssembly.test.js` checks every listed name exists in `public/` |
+| Guard | `assemble-site.mjs` | Fatal if `dist-web/index.html` is missing (build the game first) |
 
 The `--base /play/` split is why absolute `/logo.png` in the game needs a duplicate at the site root: under `/play/` an absolute URL resolves against the origin, not the base.
 
@@ -169,10 +174,10 @@ The website is now deployed with a **button in the admin panel**, which runs on 
 
 ### Why a git worktree, not an in-place build
 
-`deploySite()` (`panel/lib/deploy-site.mjs:123`) never builds the maintainer's checkout. It maintains a **throwaway worktree pinned to `<remote>/main`** for three reasons (`deploy-site.mjs:6-19`):
+`deploySite()` (`panel/lib/deploy-site.mjs`) never builds the maintainer's checkout. It maintains a **throwaway worktree pinned to `<remote>/main`** for three reasons (`deploy-site.mjs`):
 
 1. "Deploy from main" must mean *main* — the maintainer's `work-repo` usually sits on a feature branch.
-2. It sidesteps the map-binary trap for free — a freshly hard-reset worktree never has the gitignored pmtiles, so they can't be swept into `dist-site`.
+2. It sidesteps the map-binary trap for free — a freshly hard-reset worktree never has the desktop's gitignored map files in `public/`, so they can't be swept into `dist-site`. The six files the site does carry are fetched by `build:site` into the worktree's `map-cache/`, which is gitignored too.
 3. It leaves the maintainer's working tree and `node_modules` untouched.
 
 ### Configuration (env-overridable)
@@ -190,11 +195,11 @@ The website is now deployed with a **button in the admin panel**, which runs on 
 
 ### Steps (`deploySite`)
 
-1. **Fetch** `upstream/main`; record the target commit (`deploy-site.mjs:130`).
-2. **Prepare a clean tree** — if the worktree is registered, `git reset --hard upstream/main` + `git clean -fd` (no `-x`, so gitignored `node_modules` survives for a fast install); otherwise `git worktree add --force --detach` (`deploy-site.mjs:135`).
+1. **Fetch** `upstream/main`; record the target commit (`deploy-site.mjs`).
+2. **Prepare a clean tree** — if the worktree is registered, `git reset --hard upstream/main` + `git clean -fd` (no `-x`, so gitignored `node_modules` survives for a fast install); otherwise `git worktree add --force --detach` (`deploy-site.mjs`).
 3. **Install** `npm install --no-audit --no-fund` in the worktree.
 4. **Build** `npm run build:site`.
-5. **Size guard** — recursive scan of `dist-site`; refuse to deploy if any file > 24 MiB (`deploy-site.mjs:153`).
+5. **Size guard** — recursive scan of `dist-site`; refuse to deploy if any file > 24 MiB (`deploy-site.mjs`).
 6. **Deploy** `wrangler pages deploy dist-site --project-name=open-historia --branch=main --commit-dirty=true` (build output is untracked in the throwaway worktree by design). Parses the printed `*.pages.dev` URL from stdout.
 7. **Deploy the Workers** (§6.1) unless skipped — the site is already live, so a worker failure is collected and reported, not treated as "nothing deployed."
 
@@ -202,11 +207,11 @@ Auth uses whatever `wrangler login` OAuth token (or `CLOUDFLARE_API_TOKEN`) is a
 
 ### The button (`server.js` + panel HTML)
 
-- `POST /api/deploy-site` (`panel/server.js:154`) sets a `deploying` mutex (409 if already running), then **streams** the log as `text/plain` one line per chunk; the final line is `DEPLOY_OK <url>` or `DEPLOY_FAILED <message>` so the client can tell how it ended.
-- **CSRF guard** (`server.js:130`): `admin-panel.html` opens from `file://` (origin `null`), so the Deploy button hits this endpoint cross-origin. Allowed only when Origin is absent/`null` or a `localhost`/`127.0.0.1`/`[::1]` host — never a real website. Origin can't be forged by a browser, making it a reliable guard.
-- The 🚀 button ("Deploy website + workers") lives at `panel/public/index.html:51` and `admin-panel.html:73`; it confirms, POSTs, and renders the live log.
+- `POST /api/deploy-site` (`panel/server.js`) sets a `deploying` mutex (409 if already running), then **streams** the log as `text/plain` one line per chunk; the final line is `DEPLOY_OK <url>` or `DEPLOY_FAILED <message>` so the client can tell how it ended.
+- **CSRF guard** (`server.js`): `admin-panel.html` opens from `file://` (origin `null`), so the Deploy button hits this endpoint cross-origin. Allowed only when Origin is absent/`null` or a `localhost`/`127.0.0.1`/`[::1]` host — never a real website. Origin can't be forged by a browser, making it a reliable guard.
+- The 🚀 button ("Deploy website + workers") lives at `panel/public/index.html` and `admin-panel.html`; it confirms, POSTs, and renders the live log.
 
-### 6.1 Workers that ride every site deploy (`WORKERS`, `deploy-site.mjs:44`)
+### 6.1 Workers that ride every site deploy (`WORKERS`, `deploy-site.mjs`)
 
 Two Cloudflare Workers deploy alongside the site so merged worker code can never sit undeployed while the website moves on (this happened once — the import-counter shipped in a PR and served stale code for days because nothing ran `wrangler deploy`). Each is skipped with a log line if its `wrangler.toml` is absent.
 
@@ -219,42 +224,44 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ## 7. Cloudflare Workers (the control/edge plane)
 
-### 7.1 Import counter — `tools/import-counter/`
+### 7.1 Import counter — `tools/import-counter/` (retired)
 
-A tiny Worker that counts community-scenario imports. The game server pings it once per successful install via `server/server.js` → `/api/hub/import-log` (`server/server.js:657`), giving real numbers even for scenarios GitHub can't count (issue attachments).
+A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's workflow checks each post's attachment, puts a checked copy of it in a release, adds the downloads up every half hour, and writes them to `index.json` on its `hub-index` branch, with where each copy is, the list of released posts and the suggestions it has checked; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. That index is also the game's only list of the hub's posts, and the copies it names are the only hub files the game downloads: a post's own attachment is never fetched, and GitHub's API is asked for nothing but a post's comments. See [runtime-services.md](runtime-services.md).
+
+Until 2026-10-05 the count was kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game.
+
+Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| Entry | `worker.js` |
-| Storage | KV binding `IMPORTS` (counts live in each key's metadata so `/counts` is one list call) |
-| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js:654`) |
-| Override | `OH_IMPORT_COUNTER_URL` env on the game server |
-| Dedup | Website: once per **account _and_ IP** (skip if either seen); app/anonymous web: once per **IP**. Raw IPs never stored — hashed with `HASH_SALT` |
-| Read routes | `/counts` (all), `/count/<hub-issue-number>` (one) |
+| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
+| `POST /hit` | Accepted and ignored: the download the import made is what counted it |
+| Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers (`data/legacy-import-counts.json` there) |
+
+It takes effect when this `worker.js` is on `main` and the site is deployed (§6.1).
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
-The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`.
+The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)). Nor does it call the `/content` map proxy or read the node directory: the website carries its own map (see [web-build.md §8](web-build.md)). The one route the game still calls is `/hub/file`, the community hub proxy, because community bundles are files on GitHub and a browser cannot read those itself.
 
 | Binding | Kind | Purpose |
 |---|---|---|
 | `NODES` | KV | Small hot keys + TTL items (magic-link tokens, sessions via `acct:`/`magic:`/`sess:` prefixes) |
 | `OH_ACCOUNTS` | D1 (`oh-accounts`) | Nodes table, users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
-| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | Direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
+| `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
-The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js:66`). No game rebuild is needed for a directory change.
+The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live (`panel/server.js`). The game no longer reads the directory, so a directory change does not reach players.
 
-The web game points at the registry through build-time env (`.env.web`):
+The web game points at the registry through build-time env (`.env.web`), for the hub proxy only:
 
 | `VITE_OH_*` flag | Value | Used for |
 |---|---|---|
 | `VITE_OH_WEB` | `1` | The compile-time web/desktop switch |
-| `VITE_OH_PMTILES_URL` | `…workers.dev/content` | Map tiles served/proxied by the registry |
-| `VITE_OH_DIRECTORY_URL` | `…/node-directory.json` | The signed content-node directory |
-| `VITE_OH_HUB_URL` / `VITE_OH_ACCOUNT_URL` | `…workers.dev` | Scenario hub + magic-link accounts/sync |
-| `VITE_OH_GOOGLE_CLIENT_ID` | *(client id)* | Google sign-in |
+| `VITE_OH_HUB_URL` | `…workers.dev` | Scenario hub proxy |
+
+`VITE_OH_PMTILES_URL` and `VITE_OH_DIRECTORY_URL` are gone from `.env.web`: the map is part of the site (§8).
 
 ---
 
@@ -263,11 +270,13 @@ The web game points at the registry through build-time env (`.env.web`):
 The ~200 MB world-map binaries left Git LFS (whose free 1 GB/mo org-wide bandwidth was exhausted by a handful of full checkouts, then 403'd) and now ship as assets on the `map-data` GitHub Release, whose download bandwidth is free and unmetered.
 
 - **Manifest:** `scripts/map-assets.json` — `owner`/`repo`/`release` (`Open-Historia`/`open-historia`/`map-data`) plus each asset's `path`, release `asset` name, `bytes`, and `sha256`.
-- **Fetcher:** `scripts/fetch-map-assets.mjs` makes the local tree match the manifest. Full run verifies SHA-256 and re-fetches anything missing or changed; `--ensure` trusts byte-size for speed. **Best-effort — never exits non-zero**, so it can never block a launch, update, or the `app-bundle.yml` bundle step. Downloads to a `.download` temp then atomic-renames.
-- **Name namespaces:** the manifest maps a *versioned* release asset name to a *stable* local path — e.g. `regions-seed-z8.geojson` (release) → `public/assets/regions-seed.geojson` (tree), and `default-regions-names.geojson` → `server/data/stock/regions.geojson` (the stock world every scenario without a map of its own renders on; it used to be the built-in scenario's file). The client always reads the stable path. The built-in scenario's own map is not on the release at all: it ships in the app as `server/seed/default/regions.geojson` (see [Assets](assets-and-data.md) §3).
-- **Callers:** the app launchers/updater and `app-bundle.yml` call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
+- **Fetcher:** `scripts/fetch-map-assets.mjs` makes the local tree match the manifest. Full run verifies SHA-256 and re-fetches anything missing or changed; `--ensure` hashes a right-size file only when it has not been verified since it last changed (`.map-assets-verified.json`), so a normal launch is a stat per file. **Best-effort — never exits non-zero**, so it can never block a launch or an update. Downloads to a `.download` temp then atomic-renames.
+- **Name namespaces:** the manifest maps a *versioned* release asset name to a *stable* local path — e.g. `regions-seed-z8-clean.geojson` (release) → `public/assets/regions-seed.geojson` (tree), and `default-regions-names-clean.geojson` → `server/data/stock/regions.geojson` (the stock world every scenario without a map of its own renders on; it used to be the built-in scenario's file). The client always reads the stable path. The built-in scenario's own map is not on the release at all: it ships in the app as `server/seed/default/regions.geojson` (see [Assets](assets-and-data.md) §3).
+- **Callers:** the desktop app on launch (`electron/main.cjs`, `--ensure`) and anyone running from a clone call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
+- **The web builds' list and stager:** the website and the Android app are the same bundle and carry the same six files, pinned in `scripts/map-assets.web.json` (each entry: `asset`, the release name; `path`, the stable name under the build; `bytes`; `sha256`): the z8 archives, `cities.pmtiles`, `cities-seed.json` and the web-sized world files, about 69 MB. `scripts/stage-map-assets.mjs` downloads them into `map-cache/` at the repo root (gitignored), verifies each, and lays them into a build: `dist-web/assets/` for `build:web` / `build:site`, the files `public/` lacks for `dev:web`, and `mobile/www/assets/` through `mobile/scripts/stage-www.mjs` (§9). Unlike the fetcher it **exits non-zero** when a file cannot be had. Every file must stay under Cloudflare Pages' 25 MiB a file. See [Assets](assets-and-data.md) §3.
+- **Why the website carries its copy:** a browser cannot read a GitHub release asset, because GitHub sends no `Access-Control-Allow-Origin` header on the download. The website used to go through a Worker proxy and community content nodes to get around that; it no longer does. See [web-build.md §8](web-build.md).
 
-When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`.
+When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`, and in `scripts/map-assets.web.json` when the web builds carry it. The desktop fetches the change at its next launch; the website and the Android app get it when they are next built.
 
 ---
 
@@ -277,8 +286,8 @@ The Android app has no server of its own: it is the `--mode android` web bundle,
 
 | Script | What it does |
 |---|---|
-| `stage-map-assets.mjs` (`npm run map`) | Downloads the six files in `mobile/map-assets.android.json` from the `map-data` release into `mobile/map-cache/` and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the 12.8 MB `default-regions.geojson`, `regions-seed.geojson` and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
-| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap, the signed node directory), and lays `map-cache/*` under `www/assets/`. |
+| `stage-map-assets.mjs` (`npm run map`) | A thin wrapper around `scripts/stage-map-assets.mjs` (§8): downloads the six files in `scripts/map-assets.web.json`, the list the website's build reads too, from the `map-data` release into `map-cache/` at the repo root and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the web-sized `default-regions.geojson` (13.1 MB, owners as country names) and `regions-seed.geojson` (13.1 MB), and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
+| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap), and lays the six files from `map-cache/` under `www/assets/` at their stable names. |
 
 `build.gradle` stores `*.pmtiles` uncompressed (`androidResources { noCompress 'pmtiles' }`) so a Range read never inflates from byte 0; `versionCode`/`versionName` come from `OH_ANDROID_BUILD`; the `release` type signs with `OH_ANDROID_KEYSTORE` when set and the debug key otherwise. See [mobile.md](mobile.md).
 
@@ -291,10 +300,12 @@ The Android app has no server of its own: it is the `--mode android` web bundle,
 | Output | Content |
 |---|---|
 | `defaultScenario.js` | `{ meta, cover (base64), colors, data{game,prompts,world,actions,advisor,chat,events} }` |
-| `countryNames.js` | Canonical code→name registry, mirroring `server/country-names.json` (used by `canonicalizeCountryRef`) |
+| `defaultScenarioMeta.js` | the built-in map's stamp, revision and asset URL |
 | `fallbackColors.js` | App-level default palette from `public/assets/colors.json`, immutable & scenario-independent |
 
-It reads only from `server/seed/default`, which **is** committed (map included) — so the website build (including CI) needs nothing from the `map-data` Release.
+The code→name country registry is not among them: the web store (`src/runtime/web/models.js`) reads the committed `src/runtime/generated/countryNames.js` that `scripts/generate-country-tables.mjs` writes from `server/country-names.json`, the same table the map editor uses.
+
+It reads only from `server/seed/default`, which **is** committed (map included), so this step needs nothing from the `map-data` Release. The six map files the site carries do come from there: `scripts/stage-map-assets.mjs` fetches them later in the same build (§5).
 
 ---
 
@@ -302,32 +313,58 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 
 | Surface | Landing branch | Build artifact | Delivery mechanism | Player action |
 |---|---|---|---|---|
-| **Desktop (stable)** | `main` | `Open-Historia.zip` on `app-stable` | `app-bundle.yml` on push | Download zip once, or run "Update Open Historia" |
-| **Desktop (beta)** | `beta` | `Open-Historia.zip` on `app-beta` | `app-bundle.yml` on push | Download the beta zip |
-| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; the app self-updates from `android/latest.json` |
-| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; self-updates from `android-beta/latest.json` |
-| **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — next page load |
+| **Desktop (stable)** | `main` | Installers on `desktop-stable` | `desktop-installer.yml` (dispatch from `main` / `desktop-v*` tag) | Install once; opening the app installs a waiting update from `desktop-stable` (§11.1; macOS: install the new zip by hand) |
+| **Desktop (beta)** | `beta` | `Open-Historia-Beta-*` installers on `desktop-beta` | `desktop-beta.yml` (dispatch from `beta` / `desktop-beta-v*` tag) | Install from the pre-release, beside the stable app; opening it installs a waiting update from `desktop-beta` |
+| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; opening the app downloads a waiting update from `android/latest.json` and opens Android's installer on it (§11.1) |
+| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; updates the same way from `android-beta/latest.json` |
+| **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
-| **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | Live, no rebuild |
-| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` at launch/update/bundle | Downloaded on first run |
+| **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | None: the game no longer reads it |
+| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and laid into the website and the APK by `scripts/stage-map-assets.mjs` when they are built | Desktop: downloaded on first run. Website and Android: nothing, the map is part of the build |
 
 Key asymmetries a newcomer should internalize:
 
-- **A push to `main` or `beta` re-ships the desktop zip automatically; a push does *not* ship the website or the APK.** The website waits for a maintainer to click 🚀 (or dispatch `deploy-site.yml`); the APK waits for a `workflow_dispatch` or an `android-v*` tag.
+- **A push to `main` or `beta` ships nothing to installed apps.** The desktop installers wait for a `workflow_dispatch` or a `desktop-v*` / `desktop-beta-v*` tag, the APKs for a dispatch or an `android-v*` / `android-beta-v*` tag, and the website for a maintainer to click 🚀 (or for `deploy-site.yml`, which a push to `main` still triggers).
 - **`alpha` ships nothing on its own** — it reaches users only once bridged into `beta`/`main`.
 - **Worker code and website move together** through the admin-panel deploy engine, precisely to stop merged worker code from sitting undeployed.
-- **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit.
+- **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit. The desktop fetches the change at its next launch; the website and the Android app carry the map, so they get it at their next build.
+
+### 11.1 How an installed game updates
+
+Opening the game installs a waiting update; the update banner (`src/runtime/AppUpdateBanner.jsx`) is only for an update found while the game is already open (asked for 2026-09-29). The banner still checks every 3 minutes and when the window comes back into view.
+
+| Build | As the game opens | While it is open |
+|---|---|---|
+| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. The stable app's screen also offers **Download the beta** (`betaOffer`, `setup:open-beta`): the beta's Windows installer, or its release page on other systems, opened in the player's browser while the update goes on. The beta is a separate app with its own saves, and its own update screen makes no such offer. | The banner: **Update now** downloads, **Restart now** installs. |
+| **Website** | The first `version.json` check after the page loads, if it answers within 15 s (`LAUNCH_UPDATE_WINDOW_MS`), reloads onto the new bundle under a cover. | The banner's **Update now** reloads. |
+| **Android** | The same first check (`/api/app-update` → the release's `latest.json`): a cover downloads the APK with a progress bar (`UpdatePlugin.java`, `OhUpdate`, through `src/runtime/native/appInstaller.js`) and opens Android's installer on it. Android asks the player to confirm, and the first time to allow installs from the app (`REQUEST_INSTALL_PACKAGES`); it refuses an APK not signed with the installed app's key. **Not now** cancels the download. The APK is kept in the app's cache under its build number, so closing the installer and tapping **Update now** later does not download it again; it is deleted once the app is on that build. | The banner's **Update now** does the same download in the banner; after a failure it falls back to the phone's browser, as every update used to. |
+| **macOS** | An update made of chunks installs itself as on the other systems (§11.2; not yet run on a Mac). One that needs the installer does nothing: Squirrel.Mac needs a signed app, and the build is unsigned. | The same; for an update that needs the installer the banner links to the new zip. |
+
+A build that fails at launch twice (a desktop download that fails; a website reload that lands on the same old bundle; an APK that downloads but is not installed) is left to the banner: the desktop counts in `launch-update.json` in the app's user-data folder, the page in `localStorage` `oh-launch-update` (`appUpdate.js` `shouldUpdateAtLaunch`). A newer build starts again from zero.
+
+### 11.2 An update made of chunks
+
+The installer is about 140 MB, and an update used to be all of it again, although most of it had not changed: the Electron runtime never, and most of the app's own files not either. So a release also publishes the app's own files (everything inside `app.asar`: the built client, the server, the language packs, the node modules; 142 MB in some 9,500 files) cut into chunks, each a file of its own on a release, and an installed app fetches only the chunks it cannot make from the files it already has. The desktop row of §11.1 is unchanged by it: the same check as the game opens, the same screen, the same banner. What is fetched is smaller, and there is no installer to run.
+
+- **Cutting** (`electron/payloadChunks.cjs`, run by `scripts/build-update-chunks.mjs` on what electron-builder packed). A file of 256 KB or more is cut where its own content says to: a rolling hash decides, never before 256 KB and always by 4 MB, so an edit moves the cuts around the edit and nowhere else, and the chunks before and after it are last release's. A smaller file shares a chunk, a *pack*, with other small files of its own part of the app (24 packs for `node_modules`, 24 for `dist`, 16 for `server`, 4 for the rest), chosen by its name without the build's stamp, so a rebuilt `index-<hash>.js` stays in its pack and an edited server file does not cost a slice of the node modules. Every number is fixed, because the app cuts the files it has the same way to find their chunks; changing one needs a new `FORMAT`.
+- **Measured** on a packed build of this branch: 183 chunks, the largest 3.0 MB. A second build with one line changed in the client and one in the server had 162 of them unchanged: 21 chunks, 11.4 MB, to fetch (Vite renamed 33 bundles for that one line, which is most of it). The app's own updater took 15 s to do it from a local server, nearly all of it putting the 9,500 files in place.
+- **Publishing** (`scripts/publish-update-chunks.mjs`). A chunk is `c-<hash>.bin` on the `desktop-stable-chunks` or `desktop-beta-chunks` release (§3), named by its content, so one already there is the same bytes and is never uploaded again or replaced. The manifest, which lists every file with its hash and its parts (2.3 MB), goes up the same way as `m-<hash>.json`. Last goes the head, `payload-win.json` / `payload-mac.json` / `payload-linux.json`: 300 bytes under a fixed name, saying which build is published, the Electron it runs on and which manifest describes it. So an app is never told of a build whose chunks are not all there. The three systems' builds share every chunk their files share. A release holds 1,000 files, so old chunks come off: the last job of each workflow, `prune-chunks`, runs `--prune-only` once every system's build of the release is up, and removes the chunks and manifests no head leads to any more. It never removes what a head leads to (a system whose build failed keeps its old head, and its chunks), nor anything uploaded in the last six hours, which a publish still under way may be about to name. A publish that would fill the release stops, with a message, before it starts.
+- **Updating** (`electron/payloadUpdate.cjs`). The app reads the head, which is all a start with nothing newer fetches. For a newer build on its own Electron it reads the manifest (checked against the hash the head gives), hashes the files it has, fetches the chunks it lacks (four at a time; each checked against its name; three attempts; a chunk fetched before a failure or a Cancel is kept for the next attempt) and puts the new set together under `<userData>/app-payload/<build>/`. An unchanged file is copied (or linked, from a set an earlier update made); a changed one is made of the chunks read out of the old file and the ones fetched. Every file is checked against the manifest before it is written, and only then is `app-payload/current.json` written. Nothing touches the files that are running, and a failure at any point leaves the app as it was.
+- **Starting** (`electron/bootstrap.cjs`, which is `package.json`'s `main`; the rules are in `electron/payloadBoot.cjs`). A start runs the newer set when it is finished, newer than what the installer put down (so an installer run since then wins), built for this Electron and this `PROTOCOL`, and has not failed to start twice: a start counts as failed until the game's window is up (`globalThis.__ohPayload.confirm()`, from `main.cjs`), and a set given up on is never fetched again. Otherwise the installed files run, as before. The Desktop log's `app.files` line says which. `OH_NO_PAYLOAD=1` makes a packaged app run its installed files, to tell a fault in an update from a fault in the app.
+- **When the installer still updates** (`electron/layeredUpdate.cjs`, the one updater the launch screen and the banner's routes drive; it has electron-updater's methods and events). A release packed with another Electron, or with a higher `PROTOCOL`: raise that when a release changes anything only the installer can change (packaging, files kept outside the archive, what the bootstrap does). A set this app could not start from. Chunks that cannot be looked up, fetched or put together: the same release is then taken whole. After an update made of chunks the installed files are the older ones, so the installer's feed offering the version that is running is not an update.
+- **Not covered:** the Android app (Android installs an APK whole) and the website (a browser already fetches only the files that changed).
+
+Tests: `server/payloadChunks.test.js`, `server/payloadUpdate.test.js` (a release on a local server, end to end), `server/updateChunksRelease.test.js`. `OH_PAYLOAD_FEED=http://127.0.0.1:<port>/` points a packaged build at a release served from the same machine, and from nowhere else.
 
 ---
-
 ## 12. Traps & invariants
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
-- **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
+- **Never let a file over 25 MiB into a Pages build** — the site carries its map, so every file in `scripts/map-assets.web.json` must stay under the limit (`SITE_FILE_LIMIT_BYTES` in the stager; `src/runtime/worldFiles.test.js` checks the list). The `oh-drop-map-binaries` plugin keeps the desktop's larger copies out, and both CI size guards and the local deploy engine's `findOversized` defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts`, `deploy-site.yml`, `deploy-site.mjs`).
 - **Neither Android application id may ever change** (the `appId` in `mobile/capacitor.config.json`; the beta's, the same id + `.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (from the project's earlier name to `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
-- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
+- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 and a build warning (`assembleSite` in `assemble-site.mjs`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
 - **`--branch=main` / `--branch=<BRANCH>` is what makes a Pages upload production** — omit it and the live domain keeps the old build while the deploy still reports success.
 
@@ -336,5 +373,5 @@ Key asymmetries a newcomer should internalize:
 ### See also
 
 - [World state](world-state.md) — the `world.json` shape that scenarios and the web seed carry
-- [Web mode & content nodes](web-build.md) — how the browser build resolves map data from the signed directory
+- [Web build](web-build.md) — how the browser build carries and reads its map data
 - [Scenario hub](runtime-services.md) — the import flow that feeds the import counter

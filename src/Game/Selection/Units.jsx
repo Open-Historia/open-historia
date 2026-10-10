@@ -7,7 +7,7 @@
 // are disband one of their own units and ask, in words, for orders — which
 // queues an action the AI weighs on the next jump rather than moving anything now.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import {
@@ -15,10 +15,11 @@ import {
   getUnitById,
   getUnitOrder,
   getPlayerCode,
-  removeUnit,
+  disbandUnit,
   requestUnitOrders,
+  ORDER_NOT_SAVED,
 } from "../Map/unitsController.js";
-import { readEventsState } from "../../runtime/gameState.js";
+import { useEventsById } from "./eventLookup.js";
 // One posture vocabulary and one set of strength bands for the popup and the
 // Forces panel — duplicates of either would drift and describe the same formation
 // two different ways on two screens.
@@ -28,6 +29,9 @@ import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useCanHover, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { TURN_RUNNING_NOTE } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "../GameUI/useTurnRunning.js";
+import { useCardScreenPos } from "./mapCards.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -42,6 +46,12 @@ export const onUnitSelected = ({ id, lngLat }) => {
     return;
   }
   if (_currentSelection) _dismiss?.();
+  _setSelection({ id, lngLat });
+};
+
+// Search opens a unit without a click's toggle, so landing on the one already open leaves it open.
+export const focusUnit = ({ id, lngLat }) => {
+  if (!_setSelection || !id) return;
   _setSelection({ id, lngLat });
 };
 
@@ -188,12 +198,13 @@ const UnitPopup = () => {
   const [selection, setSelection] = useState(null);
   const [unit, setUnit] = useState(null);
   const [order, setOrder] = useState(null);
-  const [screenPos, setScreenPos] = useState(null);
   const [animKey, setAnimKey] = useState(0);
   const [dismissing, setDismissing] = useState(false);
   const [request, setRequest] = useState("");
   const [requestState, setRequestState] = useState("idle"); // idle | sending | queued
-  const [originEvent, setOriginEvent] = useState(null);
+  // Said when an order (a request or a disband) could not be saved.
+  const [orderError, setOrderError] = useState("");
+  const [disbanding, setDisbanding] = useState(false);
   const { current: map } = useMap();
   // On a touch screen Disband sits a thumb's width from Request orders, and on
   // a phone just above the toolbar; one stray tap would stand the formation
@@ -201,6 +212,9 @@ const UnitPopup = () => {
   // chat does). A mouse keeps the one click.
   const isTouch = useTouchPrimary();
   const [confirmingDisband, setConfirmingDisband] = useState(false);
+  // A turn landing would bring a disbanded unit back (unitsController.js), so
+  // Disband waits for it. Requesting orders does not: they join the queue.
+  const turnRunning = useTurnRunning(Boolean(selection));
   useEffect(() => {
     if (!confirmingDisband) return undefined;
     const timer = setTimeout(() => setConfirmingDisband(false), 4000);
@@ -216,6 +230,7 @@ const UnitPopup = () => {
     setRequest("");
     setRequestState("idle");
     setConfirmingDisband(false);
+    setOrderError("");
     if (value !== null) setAnimKey((key) => key + 1);
   };
 
@@ -236,50 +251,17 @@ const UnitPopup = () => {
     return unsubscribe;
   }, []);
 
-  // Resolve "what put this formation here" from the event log. Cached by id, so
-  // the log is read at most once per selected unit that carries an eventId and
+  // Resolve "what put this formation here" from the event log, through the
+  // cache the structure card shares (eventLookup.js): read at most once per id,
   // never on a render or a map move.
   //
   // The cache used to be the whole log, read ONCE. This popup is mounted for the
   // life of the map, so every unit spawned by an event after that first read
   // resolved to nothing and silently lost its "Detected" row — the card's main
-  // reason for existing. Re-read when the id we want is not in hand; a miss is
-  // remembered as null so an event that has genuinely aged out of the log costs one
-  // read, not one per selection.
-  const eventCache = useRef(new Map());
-  const eventId = unit?.eventId || "";
-  useEffect(() => {
-    let cancelled = false;
-    if (!eventId) {
-      setOriginEvent(null);
-      return undefined;
-    }
-    if (eventCache.current.has(eventId)) {
-      setOriginEvent(eventCache.current.get(eventId));
-      return undefined;
-    }
-    const resolve = async () => {
-      let events = [];
-      try {
-        events = await readEventsState({ force: true });
-      } catch {
-        // A failed read is not an answer: leave the id unrecorded so selecting the
-        // unit again tries once more, rather than pinning it to "not found".
-        return;
-      }
-      for (const entry of events) eventCache.current.set(entry.id, entry);
-      if (!eventCache.current.has(eventId)) eventCache.current.set(eventId, null);
-      if (cancelled) return;
-      setOriginEvent(eventCache.current.get(eventId) ?? null);
-    };
-    resolve();
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId]);
+  // reason for existing.
+  const [originEvent = null] = useEventsById(unit?.eventId ? [unit.eventId] : []);
 
-  const handleAnimationEnd = (e) => {
-    if (e.animationName !== "unitPopupFadeOut" && e.animationName !== "unitSheetFadeOut") return;
+  const finishDismiss = () => {
     _currentSelection = null;
     setSelection(null);
     setUnit(null);
@@ -287,55 +269,24 @@ const UnitPopup = () => {
     setDismissing(false);
   };
 
+  const handleAnimationEnd = (e) => {
+    if (e.animationName !== "unitPopupFadeOut" && e.animationName !== "unitSheetFadeOut") return;
+    finishDismiss();
+  };
+
+  // A phone's sheet follows no point on the map, so nothing is tracked
+  // (mapCards.js). The card follows the unit when it moves.
+  const screenPos = useCardScreenPos(
+    map,
+    unit && Number.isFinite(unit.lng) ? { lng: unit.lng, lat: unit.lat } : selection?.lngLat,
+    Boolean(selection) && !asSheet,
+  );
+
+  // A card that is not on screen has no fade-out to play, and the fade's end
+  // is what clears the selection: without this a dismiss left it selected.
   useEffect(() => {
-    // A phone's sheet follows no point on the map, so nothing is tracked.
-    if (!map || !selection || asSheet) {
-      setScreenPos(null);
-      return;
-    }
-
-    const update = () => {
-      const center = map.getCenter();
-      const toRad = (deg) => (deg * Math.PI) / 180;
-      const anchor = unit && Number.isFinite(unit.lng)
-        ? { lng: unit.lng, lat: unit.lat }
-        : selection.lngLat;
-      const lat1 = toRad(center.lat);
-      const lat2 = toRad(anchor.lat);
-      const dLng = toRad(anchor.lng - center.lng);
-      const cosAngle =
-        Math.sin(lat1) * Math.sin(lat2) + Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLng);
-
-      if (cosAngle < 0) {
-        setScreenPos(null);
-        return;
-      }
-
-      const point = map.project(anchor);
-      setScreenPos((prev) => {
-        if (prev && Math.abs(prev.x - point.x) < 0.5 && Math.abs(prev.y - point.y) < 0.5) {
-          return prev;
-        }
-        return { x: point.x, y: point.y };
-      });
-    };
-
-    let frameId = 0;
-    const scheduleUpdate = () => {
-      if (frameId) return;
-      frameId = requestAnimationFrame(() => {
-        frameId = 0;
-        update();
-      });
-    };
-
-    update();
-    map.on("move", scheduleUpdate);
-    return () => {
-      if (frameId) cancelAnimationFrame(frameId);
-      map.off("move", scheduleUpdate);
-    };
-  }, [map, selection, unit, asSheet]);
+    if (dismissing && (!unit || (!asSheet && !screenPos))) finishDismiss();
+  }, [dismissing, unit, asSheet, screenPos]);
 
   // Full owner name, never the code (called before the early return —
   // hook order must not depend on the selection).
@@ -360,22 +311,43 @@ const UnitPopup = () => {
   const orderText = describeOrder(unit, order);
   const postureText = POSTURE_LABEL[unit.posture] || "";
 
-  const disband = () => {
+  // The unit leaves the map and a Disband order rides with the next jump, so
+  // the AI narrates the stand-down (unitsController.js disbandUnit). The card
+  // closes once both are saved; if they could not be, it stays and says so.
+  const disband = async () => {
+    if (turnRunning || disbanding) return;
     if (isTouch && !confirmingDisband) {
       setConfirmingDisband(true);
       return;
     }
     setConfirmingDisband(false);
-    removeUnit(unit.id);
-    _dismiss?.();
+    setOrderError("");
+    setDisbanding(true);
+    let result = null;
+    try {
+      result = await disbandUnit(unit.id);
+    } catch (error) {
+      console.error("Failed to disband unit:", error);
+    }
+    setDisbanding(false);
+    if (result?.ok) _dismiss?.();
+    else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
+  // A request that could not be saved keeps its text in the box, to try again.
   const sendRequest = async () => {
     if (!request.trim() || requestState === "sending") return;
+    setOrderError("");
     setRequestState("sending");
-    const queued = await requestUnitOrders(unit.id, request);
+    let queued = false;
+    try {
+      queued = await requestUnitOrders(unit.id, request);
+    } catch (error) {
+      console.error("Failed to request unit orders:", error);
+    }
     setRequestState(queued ? "queued" : "idle");
     if (queued) setRequest("");
+    else setOrderError(ORDER_NOT_SAVED);
   };
 
   return createPortal(
@@ -512,6 +484,7 @@ const UnitPopup = () => {
                 onChange={(e) => {
                   setRequest(e.target.value);
                   if (requestState === "queued") setRequestState("idle");
+                  if (orderError) setOrderError("");
                 }}
                 rows={2}
                 placeholder="Request orders, e.g. move to the Med"
@@ -539,9 +512,20 @@ const UnitPopup = () => {
                 <ActionButton
                   label={confirmingDisband ? "Disband?" : "Disband"}
                   tone={confirmingDisband ? "danger" : "neutral"}
+                  disabled={turnRunning || disbanding}
                   onClick={disband}
                 />
               </div>
+              {turnRunning && (
+                <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
+                  {TURN_RUNNING_NOTE}
+                </div>
+              )}
+              {orderError && (
+                <div role="alert" style={{ marginTop: "5px", fontSize: "10px", lineHeight: 1.4, color: "#fca5a5", textAlign: "center" }}>
+                  {orderError}
+                </div>
+              )}
               {requestState === "queued" && (
                 <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
                   Added to your actions for this round.

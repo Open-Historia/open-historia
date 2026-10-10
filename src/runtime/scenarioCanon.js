@@ -215,24 +215,3 @@ export const updateScenarioCanonContext = (world = {}, canonContext = {}) => mat
   canonContext,
 });
 
-const actorRecordCount = (world = {}) => Object.keys(object(world?.politicalActors?.byPolity)).length;
-const institutionCount = (world = {}) => Object.keys(normalizeInstitutions(world?.institutions, world).byId).length;
-const powerRecordCount = (world = {}) => Object.keys(object(world?.powerStatus?.byPolity)).length;
-
-export const summarizeScenarioCanon = (world = {}) => {
-  const view = readScenarioCanon(world);
-  return {
-    mode: view.mode,
-    version: view.version,
-    initialized: view.initialized,
-    universeId: clean(view.canonContext?.universe?.id),
-    universeType: clean(view.canonContext?.universe?.type),
-    referencePackIds: enabledReferencePackIds(view.canonContext),
-    politicalActors: actorRecordCount(world),
-    institutions: institutionCount(world),
-    agreements: array(world?.agreements).length,
-    wars: array(world?.wars).length,
-    relations: array(world?.relations).length,
-    powerStatus: powerRecordCount(world),
-  };
-};

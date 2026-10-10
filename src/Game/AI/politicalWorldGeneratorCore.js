@@ -12,6 +12,7 @@ import {
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
 import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
+import { compareGameDates, isCanonicalGameDate } from "../../runtime/gameDates.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -2078,10 +2079,10 @@ const shouldHistoricallyVerifyEntry = (entry) => {
 };
 
 const scenarioDateIsNotFuture = (scenarioDate, generatedAt) => {
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(clean(scenarioDate)) ? clean(scenarioDate) : "";
+  const start = isCanonicalGameDate(clean(scenarioDate)) ? clean(scenarioDate) : "";
   const generated = clean(generatedAt).slice(0, 10);
-  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(generated)) return true;
-  return start <= generated;
+  if (!start || !isCanonicalGameDate(generated)) return true;
+  return compareGameDates(start, generated) <= 0;
 };
 
 const temporalAuthorityVerificationAllowed = (scenarioDate, generatedAt, historyAuthority) => {
@@ -2090,10 +2091,20 @@ const temporalAuthorityVerificationAllowed = (scenarioDate, generatedAt, history
   // start-world date is in the future: the verifier is explicitly forbidden
   // from snapping target-date state to remembered post-boundary chronology.
   if (contract.mode === "exclusive") return true;
-  // No-reference worlds are normally not scheduled for this expensive pass at
-  // all. If a legacy/manual caller requests it, keep the old future safeguard.
+  // A universe with no reference authority has no external timeline to check
+  // against, so Pass A, the sentinel and adjudication would only spend requests
+  // (roughly 13 to 26 for 50 polities). v2 already skips it. A game with no
+  // authority object at all is "legacy" and keeps its checks.
+  if (contract.mode === "none") return false;
+  // If a legacy/manual caller requests it, keep the old future safeguard.
   return scenarioDateIsNotFuture(scenarioDate, generatedAt);
 };
+
+const temporalVerificationSkippedReason = (scenarioDate, historyAuthority) => (
+  historyAuthorityPromptContract(historyAuthority, scenarioDate).mode === "none"
+    ? "no reference authority; the scenario has no external timeline to verify against"
+    : "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology"
+);
 
 export const validateHistoricalVerificationPayload = ({ payload, entries, context }) => {
   const rawVerifications = Array.isArray(payload?.verifications) ? payload.verifications : [];
@@ -2315,7 +2326,7 @@ const normalizedOfficeholderCollisionKey = (value, role) => {
   return text.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 };
 
-const crossPolityOfficeholderCollisions = (entries = []) => {
+export const crossPolityOfficeholderCollisions = (entries = []) => {
   const byPerson = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
     const polityKey = clean(entry?.item?.polityKey ?? entry?.proposal?.polityKey);
@@ -2353,7 +2364,7 @@ const crossPolityOfficeholderCollisions = (entries = []) => {
   return collisions;
 };
 
-const collisionReviewContextByPolity = (collisions = [], scenarioDate = "") => {
+export const collisionReviewContextByPolity = (collisions = [], scenarioDate = "") => {
   const out = {};
   for (const collision of collisions) {
     const assignments = collision.records
@@ -3565,7 +3576,10 @@ export const generatePoliticalWorldProposalsCore = async ({
   // across those external attempts so a retry is actually corrective instead
   // of asking the model the same question again or losing a proven-valid field.
   retryErrorsByPolity = {},
-  retryPoliticalSystemLocksByPolity = {},
+  // The political-system fields that already passed validation on an earlier
+  // external attempt, keyed by polity; returned again for polities still
+  // unresolved so the next one-call attempt keeps them.
+  politicalSystemLocksByPolity = {},
   callModel,
   generatedAt = () => new Date().toISOString(),
   signal,
@@ -3588,7 +3602,6 @@ export const generatePoliticalWorldProposalsCore = async ({
   const warnings = [];
   const batchResults = [];
   const diagnostics = [];
-  const retryPoliticalSystemLocks = {};
 
   const fastItems = plan.items
     .map((item) => prioritizedQuantitativeLandscapeFastItem(item, prioritizeQuantitativeLandscapeBackfill))
@@ -3602,6 +3615,7 @@ export const generatePoliticalWorldProposalsCore = async ({
   const totalGenerationBatches = regularBatches.length + fastBatches.length;
   const fastNativeFallbackPolities = new Set();
   let fastModelCalls = 0;
+  const retainedPoliticalSystemLocks = {};
 
   for (const [batchIndex, initialItems] of regularBatches.entries()) {
     let unresolved = [...initialItems];
@@ -3611,7 +3625,7 @@ export const generatePoliticalWorldProposalsCore = async ({
         : []])
       .filter(([, errors]) => errors.length));
     const politicalSystemLocks = Object.fromEntries(initialItems
-      .map((item) => [item.polityKey, retryPoliticalSystemLocksByPolity?.[item.polityKey]])
+      .map((item) => [item.polityKey, politicalSystemLocksByPolity?.[item.polityKey]])
       .filter(([, lock]) => isRetryPoliticalSystemLock(lock))
       .map(([polityKey, lock]) => [polityKey, clone(lock)]));
     const acceptedKeys = new Set();
@@ -3717,14 +3731,13 @@ export const generatePoliticalWorldProposalsCore = async ({
     }
 
     for (const item of unresolved) {
-      const retryLock = politicalSystemLocks[item.polityKey];
-      if (isRetryPoliticalSystemLock(retryLock)) retryPoliticalSystemLocks[item.polityKey] = clone(retryLock);
       failures.push({
         polityKey: item.polityKey,
         depth: item.depth,
         needs: [...item.needs],
         errors: [...(previousErrors[item.polityKey] ?? ["Political generation did not produce a valid proposal"])],
       });
+      if (politicalSystemLocks[item.polityKey]) retainedPoliticalSystemLocks[item.polityKey] = clone(politicalSystemLocks[item.polityKey]);
     }
     batchResults.push({
       phase: "generation",
@@ -3964,7 +3977,7 @@ export const generatePoliticalWorldProposalsCore = async ({
   } else if (verifyHistoricalIdentity && !verificationCandidates.length) {
     historicalVerification = { ...historicalVerification, skippedReason: "no generated date-sensitive identity fields" };
   } else if (verifyHistoricalIdentity && !temporalAuthorityVerificationAllowed(plan.scenarioDate, runTimestamp, historyAuthority)) {
-    historicalVerification = { ...historicalVerification, skippedReason: "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology" };
+    historicalVerification = { ...historicalVerification, skippedReason: temporalVerificationSkippedReason(plan.scenarioDate, historyAuthority) };
   }
 
   return {
@@ -3978,7 +3991,6 @@ export const generatePoliticalWorldProposalsCore = async ({
     batches: batchResults,
     diagnostics,
     historicalVerification,
-    retryPoliticalSystemLocksByPolity: retryPoliticalSystemLocks,
     quantitativeLandscapeFastPath: {
       enabled: fastItems.length > 0,
       requested: fastItems.length,
@@ -3994,6 +4006,7 @@ export const generatePoliticalWorldProposalsCore = async ({
     },
     generatedPolities: finalAccepted.length,
     failedPolities: finalFailures.length,
+    politicalSystemLocksByPolity: retainedPoliticalSystemLocks,
   };
 };
 
@@ -4025,7 +4038,7 @@ export const reverifyPoliticalWorldProposalsCore = async ({
       historicalVerification: {
         enabled: false,
         recheckOnly: true,
-        skippedReason: "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology",
+        skippedReason: temporalVerificationSkippedReason(startDate, historyAuthority),
         requested: 0,
         confirmed: 0,
         corrected: 0,

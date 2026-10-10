@@ -176,7 +176,7 @@ body {
   position: absolute;
   width: 8rem;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(235, 235, 238, 0.9), transparent);
+  background: rgba(235, 235, 238, 0.6);
   animation: startupPulse 2.2s ease-in-out infinite;
 }
 
@@ -239,7 +239,7 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.25), transparent);
+  background: rgba(0, 0, 0, 0.12);
   transform: translateX(-100%);
   animation: startupShimmer 1.4s linear infinite;
 }
@@ -498,6 +498,14 @@ button:active:not(:disabled) {
 [data-oh-presence="leaving"] > .oh-loading-screen {
   animation: oh-fade-out 450ms ease both !important;
   pointer-events: none !important;
+}
+
+/* A button that is working (the library's scenario Update, libraryBar.jsx
+   ButtonIcon "working"): its ring turns, the same turn as the logo's, until
+   the work is done. Under reduced motion the rule above stops it and the ring
+   stays as drawn; the button's label says what it is doing either way. */
+.oh-working-ring {
+  animation: oh-logo-spin 0.7s linear infinite;
 }
 
 /* Touch screens (a finger is the main pointer): every control a thumb has to

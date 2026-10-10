@@ -1,0 +1,6 @@
+# Open Historia — what stays out of git under ops/ © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
+# The real settings, with the TURN secret in them.
+.env
+# coturn's TLS certificate and private key, copied in on the server.
+coturn/certs/*
+!coturn/certs/README.md

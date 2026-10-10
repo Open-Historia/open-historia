@@ -15,6 +15,7 @@
 //   * A failure is cached per owner+URL too. A bad old URL must not poison a
 //     later replacement flag for the same stable polity identity.
 
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 
 // Rasterised at 64px and scaled down by icon-size. Comfortably above the largest
@@ -168,7 +169,9 @@ const loadFlagPixels = (url) =>
     image.crossOrigin = "anonymous";
     image.onload = () => resolve(toCircularImageData(image));
     image.onerror = () => reject(new Error(`flag image failed: ${url}`));
-    image.src = url;
+    // The copy that shipped with the game, as a PNG: a canvas cannot size an SVG
+    // that has no width (countryFlags.js bundledFlagUrl).
+    image.src = bundledFlagUrl(url, { raster: true });
   });
 
 // Make sure every owner in `wanted` has its flag on the map, and report which

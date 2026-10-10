@@ -1,6 +1,7 @@
 /*! Open Historia — Fantasy Map Generator driver © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// Runs Azgaar's Fantasy Map Generator (pinned v1.109, vendored at /fmg/) headlessly
+// Runs Azgaar's Fantasy Map Generator (pinned v1.109; the game's own prepared copy,
+// served at /fmg/: scripts/fmg-vendor.mjs says what is in it) headlessly
 // in a hidden same-origin iframe, drives a generation from a few inputs, and pulls
 // out the data fmgImport needs.
 //
@@ -20,10 +21,13 @@
 
 const FMG_PATH = "/fmg/index.html";
 const READY_TIMEOUT_MS = 90000;
+// The most cultures the driver asks FMG for; the panel's Cultures input stops here too.
+export const MAX_CULTURES = 30;
 const MAP_W = 1920;
 const MAP_H = 1080;
-// Synchronous, in-memory heightmap templates (no image load → never hang).
-const SYNC_TEMPLATES = ["continents", "archipelago", "pangea", "mediterranean", "peninsula", "isthmus", "atoll", "highIsland", "lowIsland", "volcano", "shattered", "fractious"];
+// Synchronous, in-memory heightmap templates (no image load → never hang). The
+// Generate panel lists exactly these, after "random".
+export const SYNC_TEMPLATES = ["continents", "archipelago", "pangea", "mediterranean", "peninsula", "isthmus", "atoll", "highIsland", "lowIsland", "volcano", "shattered", "fractious"];
 // For "random" (or an unknown template) pick only from world-scale shapes — skip the
 // tiny-island templates (atoll/volcano/lowIsland) that make poor whole-world basemaps.
 // Deterministic for a given seed so re-running the same seed reproduces the same map.
@@ -33,6 +37,34 @@ const resolveTemplate = (params) => {
   const s = String(params.seed || "").replace(/[^0-9]/g, "");
   const idx = s ? Number(s.slice(-4)) % WORLD_TEMPLATES.length : Math.floor(Math.random() * WORLD_TEMPLATES.length);
   return WORLD_TEMPLATES[idx];
+};
+
+// Whether this build serves the generator. The desktop installers pack it and
+// the local server serves it at /fmg/; a source checkout has it once
+// scripts/fetch-fmg.mjs has run. The web and Android builds have no server and
+// no copy. Where there is none, /fmg/index.html is a 404 or the app's own page,
+// and Generate would load the whole game again in a hidden frame and give up
+// after READY_TIMEOUT_MS — so the Workshop asks once and hides the tab instead.
+//
+// The page must also carry the mark of a PREPARED copy. The generator as its
+// author publishes it reports each visit to his analytics and loads a chat
+// widget and fonts from other hosts; the copy the game ships has that taken out
+// and a policy that allows this origin only. A folder fetched by an older
+// checkout has neither, and is not run. (The same words as PREPARED_MARK in
+// scripts/fmg-vendor.mjs; server/fmgVendor.test.js holds the two together.)
+export const PREPARED_MARK = "open-historia: prepared copy";
+export const isFmgIndexPage = (html) => {
+  const page = String(html || "");
+  return /fantasy map generator/i.test(page) && page.includes(PREPARED_MARK);
+};
+export const checkFmgAvailable = async (fetchImpl = globalThis.fetch) => {
+  try {
+    const res = await fetchImpl(FMG_PATH, { cache: "no-store" });
+    if (!res?.ok) return false;
+    return isFmgIndexPage(await res.text());
+  } catch {
+    return false;
+  }
 };
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -74,7 +106,7 @@ const need = (cond, what) => {
 //    inner inputs; clamped to FMG's 1–100 range (120 silently fails).
 const setup = (win, params) => {
   const states = Math.min(100, Math.max(1, Math.round(Number(params.states) || 12)));
-  const cultures = Math.min(30, Math.max(1, Math.round(Number(params.cultures) || 8)));
+  const cultures = Math.min(MAX_CULTURES, Math.max(1, Math.round(Number(params.cultures) || 8)));
   // Cities: FMG's burgs = one capital per state + `manors` non-capital towns. The
   // panel's count is a TOTAL, so towns = total − capitals (clamped to FMG's 0–999;
   // 1000 = "auto"). 0/blank leaves manors unlocked → FMG auto-scales cities to the map.
@@ -203,7 +235,7 @@ export const generateFmgWorld = async (params = {}, onLog = () => {}) => {
     onLog("Starting the generator…");
     if (!(await waitUntil(win, fmgReady))) {
       if (evalIn(win, "typeof d3!=='undefined'") !== true) {
-        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — it isn't vendored yet. Run the updater (or `node scripts/fetch-fmg.mjs`), then restart the server.");
+        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — this build has no copy of it. In a source checkout, run `node scripts/fetch-fmg.mjs`, then restart the server.");
       }
       throw new Error("FMG scripts didn't finish loading in time.");
     }

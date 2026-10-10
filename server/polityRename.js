@@ -204,6 +204,26 @@ const renamePuppetRow = (row, from, to) => ({
 });
 // The rename in a world: returns { world, from, to } with `from` the key the
 // old name resolved to. Throws when the new name is another polity's.
+// A polity that is also a group (the player leading a group, src/runtime/groups.js
+// playerGroupKey) is one actor under one name: its group is re-keyed with it, the
+// old name kept as a former name, and the area it controls follows.
+const renameGroupKey = (groups, from, to) => {
+  if (!isRecord(groups)) return groups;
+  const own = Object.keys(groups).find((key) => samePolityName(key, from));
+  if (!own) return groups;
+  const out = {};
+  for (const [key, value] of Object.entries(groups)) {
+    if (key !== own) {
+      out[key] = value;
+      continue;
+    }
+    const formerNames = unique([...(Array.isArray(value?.formerNames) ? value.formerNames : []), own])
+      .filter((name) => !samePolityName(name, to))
+      .slice(-12);
+    out[to] = { ...(isRecord(value) ? value : {}), name: to, ...(formerNames.length ? { formerNames } : {}) };
+  }
+  return out;
+};
 export const renamePolityInWorld = (world, fromName, toName) => {
   const from = str(fromName);
   const to = str(toName);
@@ -238,6 +258,11 @@ export const renamePolityInWorld = (world, fromName, toName) => {
     put(field, mapKeys(world?.[field], fromKey, to));
   }
   put("politicalActors", rekeyPoliticalActors(world?.politicalActors, fromKey, to));
+  const groups = renameGroupKey(world?.groups, fromKey, to);
+  if (groups !== world?.groups) {
+    put("groups", groups);
+    put("groupAreas", mapValues(world?.groupAreas, fromKey, to));
+  }
   return { world: next, from: fromKey, to };
 };
 
@@ -263,7 +288,12 @@ export const reconcileMapPolityAuthoringOps = (world, operations) => {
 // The stores the world does not hold. Each returns its input untouched when
 // nothing matched.
 export const renamePolityInColors = (colors, from, to) => mapKeys(colors, from, to);
-export const renamePolityInFlags = (flags, from, to) => mapKeys(flags, from, to);
+// Flags are the exception to the leftover rule above: flags.json holds only
+// authored flags, never a stock palette, so a flag under the new name while the
+// old name has none is this country's own, moved there by the same rename run
+// before (an undo or Intervene applying the turn again). It stays.
+export const renamePolityInFlags = (flags, from, to) => (
+  isRecord(flags) && !Object.keys(flags).some((key) => samePolityName(key, from)) ? flags : mapKeys(flags, from, to));
 export const renamePolityInGame = (game, from, to) =>
   (isRecord(game) && samePolityName(game.country, from) ? { ...game, country: to } : game);
 export const renamePolityInChats = (chats, from, to) =>

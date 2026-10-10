@@ -17,8 +17,8 @@ Open-Historia/Open-historia-scenarios/.github/ISSUE_TEMPLATE/basemap.yml
 
   **One-time setup:** create a label named exactly `basemap` in the hub repo (Issues →
   Labels → New label). A form can only apply a label that already exists; without it the
-  posts submit unlabeled and the editor's Community → Basemaps tab (which queries
-  `labels=basemap`) stays empty.
+  posts submit unlabeled and the editor's Community → Basemaps tab (which lists the
+  hub's posts labelled `basemap`) stays empty.
 
 The existing `scenario.yml` already lives in the hub repo. Its file-drop field also
 accepts the new `.zip` bundle a scenario with a custom basemap now downloads — no change
@@ -70,16 +70,26 @@ Open-Historia-Suggestion: sug-1a2b3c4d
 The author's game counts a comment as a suggestion when it has a `.zip` attachment, and
 either the file name contains "suggestion" or the marker is present
 (`parseSuggestionComment`, `src/runtime/hubPosts.js`). Any other comment is only a
-comment.
+comment. The hub checks every suggestion's file and lists the comments that pass in its
+index; the game keeps and offers only those (`refreshPublishedRecord`), so a suggestion
+shows up a minute or so after it is posted, and one that fails the check never does (the
+hub deletes its comment).
 
 The author's game recognises its own posts by a key that **Publish** writes into the
 `technical` field of `scenario.yml`: the line `Scenario-Key: oh-<16 hex>`, next to
 `Basemap-Hash` / `Flags-Count`. The live form already has that field (its label is
 "Basemap info (auto-filled — leave blank)"). The line only works if the field keeps the
 id `technical` and is not required to be empty. A post made before this version, or one
-whose author cleared the field, carries no key. Its author links it by hand from the
-scenario's Community card (**Link my post**: the post's address or number).
+whose author cleared the field, carries no key, and its author's game cannot follow it:
+a post cannot be linked to a scenario by hand. Publishing the scenario again makes a
+post that carries one.
 
-Everything is read without signing in. GitHub's unauthenticated API allows 60 requests
-an hour: the game reads the scenario list at most once every five minutes, and reads a
-post's comments only when its comment count has moved.
+The author can unlink a post from the scenario's Community card (**Unlink the post**),
+and that is for good: the game never follows that post again, even if it is edited to
+carry the key of a later one.
+
+Everything is read without signing in. The list of posts is the hub's own index
+(`index.json` on the `hub-index` branch, read at most once every five minutes), which
+costs no API request. GitHub's unauthenticated API allows 60 requests an hour, and they
+go to one thing: a post's comments, read only when its comment count has moved or while
+a suggestion on it is still waiting for the hub's check.

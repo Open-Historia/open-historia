@@ -1,19 +1,14 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
+import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
 import { resolveChildPath as resolveWithinDirectory } from "./security.js";
 import {
-  buildOwnerRenameMap,
-  buildPolityMapRefs,
-  migrateChat,
-  migrateEvents,
-  migrateGame,
-  migrateRegions,
-  migrateWorld as migrateOwnerWorld,
+  inheritedMapRefsOf,
+  migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
-  rekeyOwnerMap,
 } from "./ownerMigration.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -31,11 +26,18 @@ import {
 } from "./basemapStore.js";
 import {
   fetchableHubOrigin,
-  hubOriginAfterWrite,
+  hubLinksAfterWrite,
+  hubOriginForUpdate,
+  importedGameScenarioId,
+  missingBasemapOfBundle,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
+  normalizeHubUnlinked,
+  normalizeMissingBasemap,
+  pickHubProvenance,
 } from "./hubProvenance.js";
+import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
 const SCENARIO_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
@@ -428,16 +430,20 @@ const OPTIONAL_JSON_ASSET_FILES = {
 // so it is never copied into new games, embedded in scenario exports, or dragged
 // into the polled details bundle — a snapshot list holds full prior state and can
 // be large. Read/written only through the /api/runtime/json/snapshots endpoint.
+// Kept one file each under RESTORE_POINT_DIR (see storeRestorePoints); the
+// single snapshots.json is where an older install kept them all, read and moved
+// on first use.
 const RUNTIME_ONLY_JSON_ASSET_FILES = {
   snapshots: "storage/snapshots.json",
-  // Derived, read-only projection of snapshots.json: id/round/dates, no state.
-  // The undo counter polled the real thing per turn, parsing 8+ MB for a length.
+  // The restore points' order and id/round/dates, no state. The undo counter
+  // polled the real archive per turn, parsing 8+ MB for a length.
   snapshotsIndex: "storage/snapshots-index.json",
   // What the player's spies have intercepted, keyed by target polity. Its own
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
 };
+const RESTORE_POINT_DIR = "storage/snapshots";
 
 const TURN_COMMIT_ASSET_KEYS = ["actions", "chat", "events", "game", "colors", "world"];
 const TURN_COMMIT_JOURNAL_FILE = "storage/turn-commit-journal.json";
@@ -527,7 +533,6 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "difficulty",
   "language",
   "mapCredit",
-  "notes",
   "ownerCodes",
   "polityOverrides",
   "politicalActors",
@@ -541,6 +546,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "puppets",
   "groups",
   "groupAreas",
+  // The map's region types (runtime/regionTypes.js), which the game draws.
+  "regionTypes",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",
@@ -548,6 +555,9 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "seas",
   "simulationRules",
   "startingTimelineText",
+  // The scenario's pre-history (src/runtime/scenarioPrehistory.js): applied by
+  // the game the first time it is opened, then dropped from its world.
+  "prehistory",
 ];
 
 const COLORS_ASSET_CANDIDATES = [
@@ -602,14 +612,28 @@ const readJsonFile = (targetPath, fallback = null) => {
   }
 };
 
+// Only the small files a person might open and edit by hand are indented. The
+// rest — worlds, events, chat, restore points (8-21 MB on a long game), the
+// turn journal — are written compact: indenting deeply nested state added a
+// large share of whitespace to every write, fsync and parse.
+const INDENTED_JSON_FILES = new Set([
+  "scenario.json",
+  "game-instance.json",
+  "scenario-manifest.json",
+  "game-manifest.json",
+]);
+
+const serializeJsonFile = (targetPath, value) =>
+  (INDENTED_JSON_FILES.has(path.basename(targetPath)) ? JSON.stringify(value, null, 2) : JSON.stringify(value));
+
 const writeJsonFile = (targetPath, value) => {
   ensureDirectory(path.dirname(targetPath));
-  fs.writeFileSync(targetPath, JSON.stringify(value, null, 2), "utf-8");
+  fs.writeFileSync(targetPath, serializeJsonFile(targetPath, value), "utf-8");
   // Any write can change what the catalogs describe, so drop them. This is the
   // one choke point every meta and manifest write goes through — including
   // create and delete, which rewrite the manifest — so hooking it here is what
   // makes the cache safe without touching 43 call sites individually.
-  invalidateCatalogs();
+  invalidateCatalogs(targetPath);
 };
 
 // Turn commits need crash-safe individual file replacement. A temporary file in
@@ -623,7 +647,7 @@ const writeJsonFileAtomic = (targetPath, value) => {
   let fd = null;
   try {
     fd = fs.openSync(tempPath, "w");
-    fs.writeFileSync(fd, JSON.stringify(value, null, 2), "utf-8");
+    fs.writeFileSync(fd, serializeJsonFile(targetPath, value), "utf-8");
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
@@ -638,7 +662,7 @@ const writeJsonFileAtomic = (targetPath, value) => {
     if (fd !== null) fs.closeSync(fd);
     if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
   }
-  invalidateCatalogs();
+  invalidateCatalogs(targetPath);
 };
 
 // ---- Catalog cache ---------------------------------------------------------
@@ -647,19 +671,35 @@ const writeJsonFileAtomic = (targetPath, value) => {
 // it: resolving one runtime asset (the 5s poll for world.json) cost 139 sync
 // file ops and ~43ms of blocked event loop, just to learn which game is active.
 //
-// Cache both, and drop BOTH on any write. Coarse on purpose: writes are rare and
-// a rebuild is cheap, while a stale catalog is a bug that surfaces as "my save
-// vanished". Correctness first — the win is in the reads.
+// Cache both, and drop BOTH on any write: a stale catalog is a bug that surfaces
+// as "my save vanished". Correctness first — the win is in the reads.
+//
+// Writes are not rare during play, though — every chat line, order and turn
+// commit is one — so a rebuild has to be cheap. The expensive part was each
+// game's figures (country, date, round, event and pending-order counts), which
+// parse its game.json, actions.json and events.json: every campaign in the
+// library, after every write. Those are kept per game (readGameFigures), stamped
+// on the three files' size and mtime and forgotten when the store writes into
+// that game, so a rebuild re-reads only the game that changed.
 let gameCatalogCache = null;
 let scenarioCatalogCache = null;
 // Degraded summaries for scenarios a game names but the catalog lacks
 // (getGameScenarioSummary), rebuilt on the catalogs' schedule.
 let missingScenarioSummaryCache = new Map();
+const gameFiguresCache = new Map(); // game id -> { stamp, figures }
 
-const invalidateCatalogs = () => {
+// `writtenPath`, when a write names one, also forgets the figures of the game
+// it lies in.
+const invalidateCatalogs = (writtenPath = null) => {
   gameCatalogCache = null;
   scenarioCatalogCache = null;
   missingScenarioSummaryCache = new Map();
+  if (writtenPath) {
+    const relative = path.relative(GAMES_DIR, writtenPath);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      gameFiguresCache.delete(relative.split(path.sep)[0]);
+    }
+  }
 };
 
 const normalizeId = (rawValue, prefix) => {
@@ -799,12 +839,20 @@ const saveGameManifest = (manifest) => {
 
 // Provenance for scenarios imported straight from the community hub (which post,
 // which exact bundle file, when, and whether it has been edited since), the post
-// the player made of their own scenario, and the suggestions they reviewed:
-// server/hubProvenance.js, shared with the web store.
+// the player made of their own scenario, what they unlinked it from for good,
+// and the suggestions they reviewed: server/hubProvenance.js, shared with the
+// web store.
 
 const normalizePlayCount = (raw) => {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+};
+
+// Only there while a basemap is missing (hubProvenance.js), so every other
+// scenario's record reads as it always has.
+const missingBasemapField = (raw) => {
+  const missingBasemap = normalizeMissingBasemap(raw);
+  return missingBasemap ? { missingBasemap } : {};
 };
 
 const readScenarioMeta = (scenarioId) => {
@@ -829,7 +877,9 @@ const readScenarioMeta = (scenarioId) => {
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
     hubPublished: normalizeHubPublished(raw?.hubPublished),
     hubReviews: normalizeHubReviews(raw?.hubReviews),
+    hubUnlinked: normalizeHubUnlinked(raw?.hubUnlinked),
     id: scenarioId,
+    ...missingBasemapField(raw?.missingBasemap),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -860,17 +910,23 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
     // modification — a rename, an editor apply, a cover change — which keeps the
     // link but marks it edited: an edited copy must stop offering hub updates
     // that would overwrite the player's work, and must still know its original
-    // so the player can suggest their changes back (hubProvenance.js).
-    hubOrigin: hubOriginAfterWrite(current.hubOrigin, updates ?? {}, { touch }),
-    hubPublished: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubPublished")
-      ? normalizeHubPublished(updates.hubPublished)
-      : current.hubPublished,
+    // so the player can suggest their changes back. A write that carries
+    // hubPublished replaces the record of the player's own posts, or clears it
+    // (Unlink). Either Unlink is for good: what it unlinked goes into
+    // hubUnlinked, and no later write puts it back (hubProvenance.js
+    // hubLinksAfterWrite, the one rule for this store and the web store).
+    ...hubLinksAfterWrite(current, updates ?? {}, { touch }),
     hubReviews: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubReviews")
       ? normalizeHubReviews(updates.hubReviews)
       : current.hubReviews,
     id: scenarioId,
     updatedAt: touch ? new Date().toISOString() : current.updatedAt,
   };
+  // null clears it (the basemap arrived); anything else is normalised.
+  delete next.missingBasemap;
+  Object.assign(next, missingBasemapField(
+    Object.prototype.hasOwnProperty.call(updates ?? {}, "missingBasemap") ? updates.missingBasemap : current.missingBasemap,
+  ));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   return next;
@@ -1300,7 +1356,10 @@ const readInstalledBuiltInStamp = () => {
 // Which edition of the built-in's content — its countries' names, colours,
 // claims — a world carries on its map (builtInMap). A new map is a new stamp; the
 // same map with new content is a new revision. 1 when unstamped: the content the
-// map first shipped with.
+// map first shipped with. 2 renamed the countries to their common names. 3 is
+// the same 4,848 regions under the same ids with their borders deep-cleaned
+// (the Workshop's own save-time cleanup at 1.5 km: 106 cracks filled and 59
+// slivers trimmed across 152 regions, none moved by more than 0.6% of its area).
 const builtInRevisionOf = (world) => {
   const value = Number(world?.builtInRevision);
   return Number.isInteger(value) && value > 0 ? value : 1;
@@ -1308,15 +1367,20 @@ const builtInRevisionOf = (world) => {
 const readBuiltInSeedRevision = () => builtInRevisionOf(readJsonFile(path.join(BUILT_IN_SEED_DIR, "world.json"), null));
 const readInstalledBuiltInRevision = () => builtInRevisionOf(readJsonFile(getScenarioJsonPath(DEFAULT_SCENARIO_ID, "world"), null));
 
-// The manifest's byte size for the stock world: how an older install's built-in
+// The manifest's byte sizes for the stock world: how an older install's built-in
 // regions.geojson is recognised as that world (the fetcher wrote it there before
-// the stock map had a home of its own).
-const readStockRegionsBytes = () => {
+// the stock map had a home of its own). The current edition's size, and those
+// of the editions before it (`earlierBytes`): such an install holds the stock
+// world as it was when it was installed, which since the world was
+// deep-cleaned is no longer the file the manifest pins.
+const readStockRegionsSizes = () => {
   const manifest = readJsonFile(MAP_ASSETS_MANIFEST, null);
   const entry = (manifest?.assets ?? []).find(
     (asset) => asset?.path === "server/data/stock/regions.geojson",
   );
-  return Number(entry?.bytes) || null;
+  return [entry?.bytes, ...(Array.isArray(entry?.earlierBytes) ? entry.earlierBytes : [])]
+    .map(Number)
+    .filter((bytes) => bytes > 0);
 };
 
 // Where a scenario without a map of its own gets its geometry. An install that
@@ -1366,8 +1430,7 @@ const listGameIdsOnDisk = () => {
 const retireLegacyBuiltInRegions = () => {
   const legacy = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
   if (!fs.existsSync(legacy)) return null;
-  const stockBytes = readStockRegionsBytes();
-  const isStock = stockBytes !== null && fs.statSync(legacy).size === stockBytes;
+  const isStock = readStockRegionsSizes().includes(fs.statSync(legacy).size);
   if (!isStock) return legacy;
   if (fs.existsSync(STOCK_REGIONS_PATH)) {
     removeFileIfPresent(legacy);
@@ -1433,8 +1496,10 @@ const keepScenarioJsonForGame = (gameId, scenarioId) => {
 
 // The seed carries newer content on the same map — its countries renamed, say.
 // Every campaign keeps its own world, colours, flags and tags and reads only the
-// geometry from here, which a revision never changes, so the built-in is simply
-// brought up to date and its campaigns stay on it. A copy the player edited is
+// geometry from here. A revision keeps every region and its id, which is all a
+// campaign's world is keyed on, so the built-in is simply brought up to date
+// and its campaigns stay on it; the regions' outlines may be tidied (revision 3
+// closed the cracks between them), never redrawn. A copy the player edited is
 // kept, with the campaigns started on it, before the built-in is reseeded.
 const refreshBuiltInContent = (stamp) => {
   const gamesOnBuiltIn = listGameIdsOnDisk().filter(
@@ -1459,6 +1524,10 @@ const seedRegionsBytes = () => {
     return null;
   }
 };
+// The size the seed's map had in its earlier editions on this stamp: before
+// revision 3 cleaned its borders. An install's copy of one of these is this
+// map, where a size is all there is to tell it by (its record lost beside it).
+const BUILT_IN_EARLIER_REGIONS_BYTES = [5544501];
 
 // Once per process while the copy stays whole: the packaged seed cannot change
 // while the server runs, and ensure* runs on the read path (every poll), so the
@@ -1477,8 +1546,8 @@ const restoreSeedMapOverStockWorld = (stamp) => {
   const regionsPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
   if (!fs.existsSync(regionsPath)) return;
   const bytes = fs.statSync(regionsPath).size;
-  const stockBytes = readStockRegionsBytes();
-  if (stockBytes === null || bytes !== stockBytes || bytes === seedRegionsBytes()) return;
+  // Any edition of the stock world: an older install holds the one it came with.
+  if (!readStockRegionsSizes().includes(bytes) || bytes === seedRegionsBytes()) return;
   const dir = getScenarioDirectory(DEFAULT_SCENARIO_ID);
   copySeedFile("regions.geojson", dir);
   for (const coarse of ["regions.coarse.geojson", "regions.coarse.geojson.stamp"]) removeFileIfPresent(path.join(dir, coarse));
@@ -1506,7 +1575,8 @@ const syncBuiltInScenarioFromSeed = () => {
   // campaigns started on it keep in a fork before the built-in is reseeded.
   const regionsPath = getScenarioUploadPath(DEFAULT_SCENARIO_ID, "regionsGeojson");
   const regionsBytes = fs.existsSync(regionsPath) ? fs.statSync(regionsPath).size : null;
-  const holdsSeedMap = regionsBytes !== null && regionsBytes === seedRegionsBytes();
+  const holdsSeedMap = regionsBytes !== null
+    && (regionsBytes === seedRegionsBytes() || BUILT_IN_EARLIER_REGIONS_BYTES.includes(regionsBytes));
   const hasRecord = fs.existsSync(worldPath) || fs.existsSync(getScenarioMetaPath(DEFAULT_SCENARIO_ID));
   const firstRun = !hasRecord && regionsBytes === null;
   const completing = holdsSeedMap && !fs.existsSync(worldPath);
@@ -1734,6 +1804,44 @@ const getGameCatalog = () => {
   return gameCatalogCache;
 };
 
+const fileStamp = (targetPath) => {
+  try {
+    const stat = fs.statSync(targetPath);
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return "-";
+  }
+};
+
+// What the library shows of a game's play: parsed only when one of its three
+// files changed since the last read (see the catalog cache above).
+const readGameFigures = (gameId) => {
+  const gamePath = getGameJsonPath(gameId, "game");
+  const actionsPath = getGameJsonPath(gameId, "actions");
+  const eventsPath = getGameJsonPath(gameId, "events");
+  const stamp = [gamePath, actionsPath, eventsPath].map(fileStamp).join("|");
+  const cached = gameFiguresCache.get(gameId);
+  if (cached?.stamp === stamp) return cached.figures;
+
+  const gameData = readJsonFile(gamePath, {});
+  const actions = readJsonFile(actionsPath, []);
+  const events = readJsonFile(eventsPath, []);
+  const figures = {
+    country: String(gameData?.country ?? "").trim(),
+    currentDate: String(gameData?.gameDate ?? "").trim(),
+    eventCount: Array.isArray(events) ? events.length : 0,
+    pendingActions: Array.isArray(actions)
+      ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
+      : 0,
+    round:
+      Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
+        ? Math.trunc(Number(gameData.round))
+        : 1,
+  };
+  gameFiguresCache.set(gameId, { stamp, figures });
+  return figures;
+};
+
 const buildGameCatalog = () => {
   ensureGameStore();
   const scenarioCatalog = getScenarioCatalog();
@@ -1764,16 +1872,11 @@ const buildGameCatalog = () => {
 
     const meta = readGameMeta(gameId);
     const assetStatus = getGameAssetStatus(gameId);
-    const gameData = readJsonFile(getGameJsonPath(gameId, "game"), {});
-    const actions = readJsonFile(getGameJsonPath(gameId, "actions"), []);
-    const events = readJsonFile(getGameJsonPath(gameId, "events"), []);
+    const figures = readGameFigures(gameId);
     // The same shape as a catalog entry when the scenario is gone, so the
     // library never hands out two spellings of "a scenario".
     const scenario = scenarioLookup.get(meta.scenarioId)
       ?? buildScenarioCatalogEntry(meta.scenarioId, { canDelete: false, missing: true });
-    const pendingActions = Array.isArray(actions)
-    ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
-    : 0;
     const cacheToken = `${gameId}-${meta.updatedAt}`;
     const ownCoverImageUrl = assetStatus.cover
     ? buildGameAssetUrl(gameId, COVER_IMAGE_ASSET_KEY, cacheToken)
@@ -1784,16 +1887,13 @@ const buildGameCatalog = () => {
       assetStatus,
       cacheToken,
       canDelete: true,
-      country: String(gameData?.country ?? "").trim(),
+      country: figures.country,
        coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
-       currentDate: String(gameData?.gameDate ?? "").trim(),
-       eventCount: Array.isArray(events) ? events.length : 0,
+       currentDate: figures.currentDate,
+       eventCount: figures.eventCount,
        ownCoverImageUrl,
-       pendingActions,
-       round:
-       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
-       ? Math.trunc(Number(gameData.round))
-       : 1,
+       pendingActions: figures.pendingActions,
+       round: figures.round,
        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
        // The first client reader of `missing`: pressing Play on a game whose map
        // is not here has to offer to go and get it rather than open a blank world.
@@ -2034,12 +2134,38 @@ const recordGamePlayed = (gameId) => {
   }
 };
 
+// While this computer hosts a shared game, the game it hosts stays the open
+// one. The host's engine window (src/multiplayer/host/engineMain.js) runs the
+// campaign that was open when the hosting began and stamps every turn with its
+// id. Every page this server serves shares the one open game, so a second
+// window on the same computer joining the host's own lobby (it makes a
+// stand-in game and opens it) switched the game under the engine, and from
+// then on each save the host made was refused: "Turn commit belongs to game A,
+// but B is active". The orders, the seats and the round itself were lost.
+//
+// server.js gives the check (it knows whether the engine window is open); it
+// returns the reason the open game may not change, or "".
+let activeGameHold = () => "";
+const setActiveGameHold = (check) => {
+  activeGameHold = typeof check === "function" ? check : () => "";
+};
+// Throws when `nextGameId` would take the place of a game that is held open.
+// Nothing is held when no game is open, or when the open game is the one named.
+const assertActiveGameMayChange = (nextGameId) => {
+  const reason = String(activeGameHold() || "");
+  if (!reason) return;
+  const openGameId = getGameManifest().activeGameId;
+  if (!openGameId || openGameId === nextGameId) return;
+  throw new Error(reason);
+};
+
 const setActiveGame = (gameId) => {
   ensureGameStore();
 
   if (!fs.existsSync(getGameDirectory(gameId))) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  assertActiveGameMayChange(gameId);
 
   const manifest = getGameManifest();
   manifest.activeGameId = gameId;
@@ -2185,18 +2311,35 @@ const createGame = ({
 
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
+  // Refused before anything is on disk: a game made to be opened at once.
+  if (setActive) assertActiveGameMayChange(resolvedGameId);
+
+  // Everything that can refuse the request is resolved before anything is on
+  // disk. A clone used to copy the source's files — game.json included — and
+  // only then look its scenario up, which throws when the scenario is gone; the
+  // half-made directory then listed as a "Modern Day Session" holding a copy
+  // of that campaign. A copy's scenario is looked up the way its source is
+  // (getGameScenarioSummary): a save whose map is missing still clones.
+  let sourceScenario = null;
+  let sourceGame = null;
+  const cloning = Boolean(seedGameId && fs.existsSync(getGameDirectory(seedGameId)));
+  const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
+
+  if (cloning) {
+    sourceGame = getGameSummary(seedGameId);
+  } else {
+    sourceScenario = getScenarioSummary(nextScenarioId);
+  }
+  const scenarioSummary = sourceScenario ?? getGameScenarioSummary(sourceGame.scenarioId);
+  const seedName = sourceGame?.name ?? scenarioSummary.name;
+
+  try {
   ensureDirectory(gameDir);
   ensureDirectory(path.join(gameDir, "storage"));
 
-  let sourceScenario = null;
-  let sourceGame = null;
-
-  if (seedGameId && fs.existsSync(getGameDirectory(seedGameId))) {
-    sourceGame = getGameSummary(seedGameId);
+  if (cloning) {
     seedGameJsonFilesFromGame(resolvedGameId, seedGameId);
   } else {
-    const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
-    sourceScenario = getScenarioSummary(nextScenarioId);
     seedGameJsonFilesFromScenario(resolvedGameId, nextScenarioId);
   }
 
@@ -2215,8 +2358,6 @@ const createGame = ({
   }
 
   const createdAt = new Date().toISOString();
-  const scenarioSummary = sourceScenario ?? getScenarioSummary(sourceGame?.scenarioId ?? DEFAULT_SCENARIO_ID);
-  const seedName = sourceGame?.name ?? scenarioSummary.name;
 
   writeJsonFile(getGameMetaPath(resolvedGameId), {
     features: normalizeFeatureOverrides(features ?? sourceGame?.features),
@@ -2248,6 +2389,10 @@ const createGame = ({
     name: String(name ?? "").trim() || `${seedName} Session`,
                 scenarioId: scenarioSummary.id,
                 coverImageContentType: sourceGame?.coverImageContentType ?? null,
+                // What the source's sender called its scenario: the copy of a
+                // game imported without its map is named by it the same way.
+                importedScenarioName: sourceGame?.importedScenarioName ?? null,
+                importedScenarioOrigin: sourceGame?.importedScenarioOrigin ?? null,
                 subtitle:
                 String(subtitle ?? "").trim() ||
                 sourceGame?.subtitle ||
@@ -2255,6 +2400,12 @@ const createGame = ({
                 DEFAULT_GAME_META.subtitle,
                 updatedAt: createdAt,
   });
+  } catch (error) {
+    // A game directory with a game.json lists as a game, meta or not.
+    fs.rmSync(gameDir, { recursive: true, force: true });
+    invalidateCatalogs();
+    throw error;
+  }
 
   const manifest = getGameManifest();
   manifest.order = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
@@ -2272,13 +2423,11 @@ const createGame = ({
   return getGameDetails(resolvedGameId);
 };
 
-// The hub bookkeeping a scenario write may carry (server/hubProvenance.js):
-// hubOrigin (null unlinks the scenario from the post it was downloaded from),
-// hubPublished (the player's own post) and hubReviews (suggestions reviewed).
-const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
-const pickHubProvenance = (body) =>
-  Object.fromEntries(HUB_PROVENANCE_KEYS.filter((key) => Object.hasOwn(body ?? {}, key)).map((key) => [key, body[key]]));
-
+// The hub bookkeeping a scenario write may carry is picked by
+// server/hubProvenance.js (pickHubProvenance), for this store and the web
+// store alike: hubOrigin only as null, which unlinks the scenario from the post
+// it was downloaded from (a write that tries to link one is refused),
+// hubPublished (the player's own posts) and hubReviews (suggestions reviewed).
 const updateScenario = (scenarioId, body = {}) => {
   const {
     accentColor,
@@ -2337,9 +2486,12 @@ const updateScenario = (scenarioId, body = {}) => {
   // written in the same call if there is one, else what is already on disk. It is
   // needed even for the game write — game.country is an owner reference, and a
   // preset's "ROM" reaches "Roman Empire" only through its polityOverrides.
+  // A worldPatch is merged into the stored world, so that world is the context:
+  // the patch alone carries no polities and no ownerSchema.
   const scenarioWorldContext = () =>
     (world && typeof world === "object" ? world
-      : worldPatch && typeof worldPatch === "object" ? worldPatch
+      : worldPatch && typeof worldPatch === "object"
+        ? { ...readJsonFile(getScenarioJsonPath(scenarioId, "world"), JSON_ASSET_DEFAULTS.world), ...worldPatch }
         : readJsonFile(getScenarioJsonPath(scenarioId, "world"), JSON_ASSET_DEFAULTS.world));
 
   if (game && typeof game === "object") {
@@ -2364,8 +2516,10 @@ const updateScenario = (scenarioId, body = {}) => {
 
   if (world && typeof world === "object") {
     writeJsonFile(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(world));
+    invalidateOwnerSchemaCache("scenario", scenarioId);
   } else if (worldPatch && typeof worldPatch === "object") {
     mergeJsonAsset(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
+    invalidateOwnerSchemaCache("scenario", scenarioId);
   }
 
   if (storage && typeof storage === "object") {
@@ -2401,6 +2555,7 @@ const updateGame = (
     name,
     prompts,
     promptsPatch,
+    scenarioId,
     setActive,
     storage,
     subtitle,
@@ -2413,9 +2568,22 @@ const updateGame = (
   if (!fs.existsSync(getGameDirectory(gameId))) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  // Refused before anything is written: an edit that also opens the game.
+  if (setActive) assertActiveGameMayChange(gameId);
+
+  // Re-pointing a game at another scenario: "Import & play" on a game whose map
+  // this library lacked, once the map is here. Only ever at a scenario this
+  // library holds, checked before anything is written. The imported map may
+  // have been given a different id; dropped until now, so the game went on
+  // naming the id that is not here.
+  const nextScenarioId = scenarioId === undefined ? "" : String(scenarioId ?? "").trim();
+  if (scenarioId !== undefined && (!nextScenarioId || !fs.existsSync(getScenarioMetaPath(nextScenarioId)))) {
+    throw new Error(`Scenario not found: ${nextScenarioId}`);
+  }
 
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
+    ...(nextScenarioId ? { scenarioId: nextScenarioId } : {}),
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
                 archived: typeof archived === "boolean" ? archived : currentMeta.archived,
                 features: features !== undefined ? normalizeFeatureOverrides(features) : currentMeta.features,
@@ -2453,9 +2621,12 @@ const updateGame = (
 
   // See the note in updateScenario: game.country is an owner reference and needs
   // the world to resolve a preset's polity.
+  // A worldPatch is merged into the stored world, so that world is the context:
+  // the patch alone carries no polities and no ownerSchema.
   const gameWorldContext = () =>
     (world && typeof world === "object" ? world
-      : worldPatch && typeof worldPatch === "object" ? worldPatch
+      : worldPatch && typeof worldPatch === "object"
+        ? { ...readJsonFile(getGameJsonPath(gameId, "world"), JSON_ASSET_DEFAULTS.world), ...worldPatch }
         : readJsonFile(getGameJsonPath(gameId, "world"), JSON_ASSET_DEFAULTS.world));
 
   if (game && typeof game === "object") {
@@ -2476,8 +2647,10 @@ const updateGame = (
 
   if (world && typeof world === "object") {
     writeJsonFile(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(world));
+    invalidateOwnerSchemaCache("game", gameId);
   } else if (worldPatch && typeof worldPatch === "object") {
     mergeJsonAsset(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
+    invalidateOwnerSchemaCache("game", gameId);
   }
 
   if (storage && typeof storage === "object") {
@@ -2495,9 +2668,12 @@ const updateGame = (
   return getGameDetails(gameId);
 };
 
-// Soft-delete: move a scenario/game directory into server/data/.trash instead
+// Soft-delete: move a scenario/game directory into <data dir>/.trash instead
 // of unlinking it, so an accidental delete (or, before the traversal fix, a
-// malicious one) is recoverable — the user can restore or empty .trash by hand.
+// malicious one) is recoverable. On desktop the data dir is
+// <userData>/server/data (OH_DATA_DIR), so .trash sits there. listTrash,
+// restoreFromTrash and emptyTrash below are how it is listed, restored and
+// emptied; before them only someone who knew the folder layout could.
 const TRASH_DIR = path.join(SERVER_DATA_DIR, ".trash");
 
 // Synchronous pause for the retry loops below — the delete handler is sync
@@ -2525,6 +2701,7 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       fs.renameSync(sourceDir, dest);
+      markTrashEntry(dest, kind, id);
       return;
     } catch (error) {
       if (!["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) throw error;
@@ -2538,16 +2715,186 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   // alongside delete-sharing handles, and rmSync's own retries ride out the
   // stragglers. The copy lands in .trash first, so the soft-delete contract
   // (recoverable by hand) holds on this path too.
+  let copied = false;
   try {
     fs.cpSync(sourceDir, dest, { recursive: true });
+    copied = true;
     fs.rmSync(sourceDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+    markTrashEntry(dest, kind, id);
   } catch (error) {
+    // A copy that did not finish is not a trash entry (the original is still
+    // whole), and left there it would list, and restore, as half a save.
+    if (!copied) {
+      try {
+        fs.rmSync(dest, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      } catch {
+        // Leave it; the original is intact either way.
+      }
+    }
     throw new Error(
       `Windows is blocking the delete of "${id}" — another program holds its files open ` +
         `(an indexing/sync tool, or a request in flight). Close it or restart the server, ` +
         `then delete again. (${error?.code || renameError?.code || "EPERM"})`,
     );
   }
+};
+
+// What was deleted and when, beside it in its trash entry: the entry's own name
+// is a sanitised id with a collision suffix, and a directory's mtime is not the
+// time it was moved.
+const TRASH_MARKER_FILE = ".deleted.json";
+const TRASH_KINDS = new Set(["scenario", "game"]);
+// How long a deleted game or scenario can be restored before the server
+// deletes it for good at startup (purgeOldTrash). The delete confirmation and
+// the Recently deleted shelf say so.
+const TRASH_KEEP_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const markTrashEntry = (dest, kind, id, at = new Date()) => {
+  try {
+    fs.writeFileSync(
+      path.join(dest, TRASH_MARKER_FILE),
+      JSON.stringify({ deletedAt: at.toISOString(), id: String(id), kind }),
+      "utf-8",
+    );
+  } catch {
+    // Best effort: an unmarked entry is still listed, from its name and mtime.
+  }
+};
+
+const directoryBytes = (dir) => {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const target = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += directoryBytes(target);
+    else if (entry.isFile()) total += fs.statSync(target).size;
+  }
+  return total;
+};
+
+const describeTrashEntry = (entry) => {
+  const dir = path.join(TRASH_DIR, entry);
+  const marker = readJsonFile(path.join(dir, TRASH_MARKER_FILE), null);
+  const kind = TRASH_KINDS.has(marker?.kind) ? marker.kind : entry.split("-")[0];
+  if (!TRASH_KINDS.has(kind)) return null;
+  const id = String(marker?.id ?? "").trim() || entry.slice(kind.length + 1);
+  const meta = readJsonFile(path.join(dir, kind === "game" ? "game-instance.json" : "scenario.json"), {});
+  return {
+    bytes: directoryBytes(dir),
+    deletedAt: String(marker?.deletedAt ?? "").trim() || fs.statSync(dir).mtime.toISOString(),
+    entry,
+    id,
+    kind,
+    name: String(meta?.name ?? "").trim() || id,
+    ...(kind === "game" ? { scenarioId: String(meta?.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID } : {}),
+  };
+};
+
+// One entry that cannot be read is left out, not a failed list.
+const describeTrashEntrySafely = (entry) => {
+  try {
+    return describeTrashEntry(entry);
+  } catch (error) {
+    console.warn(`[trash] ${entry}: ${error.message}`);
+    return null;
+  }
+};
+
+// Everything in .trash, most recently deleted first.
+const listTrash = () => {
+  if (!fs.existsSync(TRASH_DIR)) return [];
+  return fs
+    .readdirSync(TRASH_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => describeTrashEntrySafely(entry.name))
+    .filter(Boolean)
+    .sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
+};
+
+// Puts one entry back under its old id, or the next free one if that id has
+// been taken since. A restored game whose scenario is gone lists and plays the
+// way any such game does.
+const restoreFromTrash = (entry) => {
+  const source = resolveWithinDirectory(TRASH_DIR, String(entry ?? ""), "trash entry");
+  const described = fs.existsSync(source) ? describeTrashEntry(path.basename(source)) : null;
+  if (!described) throw new Error(`Not in the trash: ${entry}`);
+
+  const { kind } = described;
+  if (kind === "game") ensureGameStore();
+  else ensureScenarioStore();
+  const id = ensureUniqueId(described.id, kind);
+  const target = kind === "game" ? getGameDirectory(id) : getScenarioDirectory(id);
+
+  // The same short retry moveDirectoryToTrash makes for a handle held open.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(source, target);
+      break;
+    } catch (error) {
+      if (attempt >= 3 || !["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) throw error;
+      sleepMsSync(150);
+    }
+  }
+  removeFileIfPresent(path.join(target, TRASH_MARKER_FILE));
+
+  if (kind === "game") {
+    invalidateOwnerSchemaCache("game", id);
+    gameFiguresCache.delete(id);
+    const manifest = getGameManifest();
+    manifest.order = [id, ...resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter((other) => other !== id)];
+    saveGameManifest(manifest);
+  } else {
+    invalidateOwnerSchemaCache("scenario", id);
+    const manifest = getScenarioManifest();
+    manifest.order = [id, ...resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter((other) => other !== id)];
+    saveScenarioManifest(manifest);
+  }
+  invalidateCatalogs();
+  return { id, kind, library: getLibraryCatalog() };
+};
+
+// Deletes everything in .trash for good, or only the games or the scenarios
+// (each shelf empties its own kind).
+const emptyTrash = ({ kind = "" } = {}) => {
+  const entries = listTrash().filter((described) => !kind || described.kind === kind);
+  let bytes = 0;
+  for (const described of entries) {
+    fs.rmSync(path.join(TRASH_DIR, described.entry), { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+    bytes += described.bytes;
+  }
+  return { bytes, removed: entries.length };
+};
+
+// Run at startup: deletes for good what was deleted more than TRASH_KEEP_DAYS
+// ago. An entry from before deletes were dated has no marker, and its
+// directory's mtime is when its files last changed, not when it was deleted,
+// so it is dated now instead: its days start today rather than it vanishing
+// on the first start of this version.
+const purgeOldTrash = ({ now = Date.now() } = {}) => {
+  if (!fs.existsSync(TRASH_DIR)) return { bytes: 0, removed: 0 };
+  const cutoff = now - TRASH_KEEP_DAYS * DAY_MS;
+  let bytes = 0;
+  let removed = 0;
+  for (const entry of fs.readdirSync(TRASH_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(TRASH_DIR, entry.name);
+    try {
+      const deletedAt = Date.parse(String(readJsonFile(path.join(dir, TRASH_MARKER_FILE), null)?.deletedAt ?? ""));
+      if (!Number.isFinite(deletedAt)) {
+        const described = describeTrashEntry(entry.name);
+        if (described) markTrashEntry(dir, described.kind, described.id, new Date(now));
+        continue;
+      }
+      if (deletedAt >= cutoff) continue;
+      const size = directoryBytes(dir);
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+      bytes += size;
+      removed += 1;
+    } catch (error) {
+      console.warn(`[trash] could not purge ${entry.name}: ${error.message}`);
+    }
+  }
+  return { bytes, removed };
 };
 
 const deleteScenario = (scenarioId) => {
@@ -2567,6 +2914,7 @@ const deleteScenario = (scenarioId) => {
   }
 
   moveDirectoryToTrash(resolved, "scenario", scenarioId);
+  invalidateOwnerSchemaCache("scenario", scenarioId);
 
   const manifest = getScenarioManifest();
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
@@ -2595,8 +2943,12 @@ const deleteGame = (gameId) => {
   if (!resolved.startsWith(resolvedRoot) || !fs.existsSync(resolved)) {
     throw new Error(`Game not found: ${gameId}`);
   }
+  // Deleting the open game opens the next one: not under a game being hosted.
+  if (getGameManifest().activeGameId === gameId) assertActiveGameMayChange("");
 
   moveDirectoryToTrash(resolved, "game", gameId);
+  invalidateOwnerSchemaCache("game", gameId);
+  gameFiguresCache.delete(gameId);
 
   const manifest = getGameManifest();
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
@@ -2615,6 +2967,11 @@ const deleteGame = (gameId) => {
   return getLibraryCatalog();
 };
 
+// A basemap the player sets or clears themselves (the Workshop, the editor)
+// replaces one the import could not download: that download is no longer
+// wanted, and landing later it would overwrite their choice.
+const BASEMAP_CHOSEN = { missingBasemap: null };
+
 const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "") => {
   ensureScenarioStore();
 
@@ -2629,11 +2986,12 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
   const targetPath = getScenarioUploadPath(scenarioId, assetKey);
   ensureDirectory(path.dirname(targetPath));
   fs.writeFileSync(targetPath, dataBuffer);
+  if (assetKey === "regionsGeojson") prebuildCoarseRegions(targetPath);
   writeScenarioMeta(
     scenarioId,
     assetKey === COVER_IMAGE_ASSET_KEY
     ? { coverImageContentType: normalizeImageContentType(contentType) }
-    : {},
+    : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -2652,7 +3010,7 @@ const removeScenarioAsset = (scenarioId, assetKey) => {
   removeFileIfPresent(getScenarioUploadPath(scenarioId, assetKey));
   writeScenarioMeta(
     scenarioId,
-    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : {},
+    assetKey === COVER_IMAGE_ASSET_KEY ? { coverImageContentType: null } : assetKey === "backgroundData" ? BASEMAP_CHOSEN : {},
   );
   return getScenarioDetails(scenarioId);
 };
@@ -2703,24 +3061,52 @@ const removeGameAsset = (gameId, assetKey) => {
 // the map zoomed out — the country picker draws it at zoom 8 at most. The full
 // file is the stock world's 221 MB (2.6M vertices); the country picker used to
 // download and parse all of it, plus the 55 MB seed, for a map the size of a
-// card. Built once per upload — a size+mtime stamp invalidates it when the
-// regions are replaced — with the far tier's own coarsening, and kept beside
-// the upload as regions.coarse.geojson (a few MB). Never exported or cloned:
-// the bundle and the clone copy only the named asset files.
+// card. Built with the far tier's own coarsening and kept beside the upload as
+// regions.coarse.geojson (a few MB), stamped on the regions file's size+mtime.
+// Never exported or cloned: the bundle and the clone copy only the named asset
+// files.
+//
+// Built where the regions are written — a Workshop save or an upload
+// (uploadScenarioAsset), a scenario import or hub Update
+// (applyScenarioBundleAsset) — rather than inside the first ?coarse=1 request:
+// Apply & Play asks for the coarse copy right after saving, and building it
+// there parsed tens of MB on the event loop while the picker waited. The stamp
+// check stays as the fallback for regions written any other way (the built-in
+// seed, an in-play geometry edit, a file changed by hand).
 const COARSE_REGIONS_FILE = "regions.coarse.geojson";
+const coarseRegionsPathsFor = (sourcePath) => {
+  const coarsePath = path.join(path.dirname(sourcePath), COARSE_REGIONS_FILE);
+  return { coarsePath, stampPath: `${coarsePath}.stamp` };
+};
+const regionsFileStamp = (sourcePath) => {
+  const stat = fs.statSync(sourcePath);
+  return `${stat.size}:${Math.round(stat.mtimeMs)}`;
+};
+
+// `data` is the parsed collection when the caller already holds it.
+const writeCoarseRegions = (sourcePath, data = null) => {
+  const { coarsePath, stampPath } = coarseRegionsPathsFor(sourcePath);
+  const stamp = regionsFileStamp(sourcePath);
+  const collection = data ?? JSON.parse(fs.readFileSync(sourcePath, "utf-8"));
+  fs.writeFileSync(coarsePath, JSON.stringify(coarsenFeatureCollection(collection)), "utf-8");
+  fs.writeFileSync(stampPath, stamp, "utf-8");
+};
+
+// Best effort at write time: a failure leaves the request-time build to try.
+const prebuildCoarseRegions = (sourcePath, data = null) => {
+  try {
+    writeCoarseRegions(sourcePath, data);
+  } catch (error) {
+    console.warn(`[coarse regions] not built for ${sourcePath}: ${error.message}`);
+  }
+};
+
 const resolveScenarioCoarseRegionsAsset = (scenarioId) => {
   const source = resolveScenarioUploadAsset(scenarioId, "regionsGeojson");
-  const stat = fs.statSync(source.sourcePath);
-  const stamp = `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  const coarsePath = path.join(path.dirname(source.sourcePath), COARSE_REGIONS_FILE);
-  const stampPath = `${coarsePath}.stamp`;
+  const { coarsePath, stampPath } = coarseRegionsPathsFor(source.sourcePath);
   const fresh = fs.existsSync(coarsePath) && fs.existsSync(stampPath)
-    && fs.readFileSync(stampPath, "utf-8") === stamp;
-  if (!fresh) {
-    const data = JSON.parse(fs.readFileSync(source.sourcePath, "utf-8"));
-    fs.writeFileSync(coarsePath, JSON.stringify(coarsenFeatureCollection(data)), "utf-8");
-    fs.writeFileSync(stampPath, stamp, "utf-8");
-  }
+    && fs.readFileSync(stampPath, "utf-8") === regionsFileStamp(source.sourcePath);
+  if (!fresh) writeCoarseRegions(source.sourcePath);
   return { sourcePath: coarsePath, contentType: source.contentType };
 };
 
@@ -2828,6 +3214,16 @@ const normalizeRuntimeWorld = (assetKey, data) => {
 // ---------------------------------------------------------------------------
 const ownerSchemaChecked = new Set();
 
+// A check describes the world that was on disk when it ran. Anything that
+// replaces a record's world (a bundle import or hub Update, a whole-world save)
+// or removes the record (whose id a later import may reuse) has to forget it:
+// otherwise a legacy code-keyed world written afterwards is never migrated
+// until the app restarts, and the player owns nothing on the map. The web
+// store clears its migratedRecords for the same case.
+const invalidateOwnerSchemaCache = (kind, id) => {
+  ownerSchemaChecked.delete(`${kind}:${id}`);
+};
+
 const migrateOwnerRecordAtPaths = (label, paths) => {
   const world = readJsonFile(paths.world, null);
   if (!world || !needsOwnerMigration(world)) return false;
@@ -2841,54 +3237,41 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   const events = paths.events && fs.existsSync(paths.events) ? readJsonFile(paths.events, null) : null;
   const chat = paths.chat && fs.existsSync(paths.chat) ? readJsonFile(paths.chat, null) : null;
 
-  const migrationContext = {
-    polityOverrides: world.polityOverrides,
-    countryNameOverrides: meta?.countryNameOverrides,
-    registry: COUNTRY_NAME_REGISTRY,
-    features: regions?.features,
-    ownershipOverrides: world.regionOwnershipOverrides,
-    sovereigntyOverrides: world.regionSovereigntyOverrides,
-    regionClaimants: world.regionClaimants,
-    ownerCodes: world.ownerCodes,
-    colors,
-    flags,
-    tags,
-    units: world.units,
-    countryTags: world.countryTags,
-    internationalReputation: world.internationalReputation,
-    gameCountry: game?.country,
-    inheritedMapRefs: paths.inheritedMapRefs ?? null,
-    deriveMapRefsFromFeatures: paths.deriveMapRefsFromFeatures !== false,
-  };
-  const renames = buildOwnerRenameMap(migrationContext);
-  const mapRefs = buildPolityMapRefs(migrationContext, renames);
   const warn = (message) => console.warn(`[owner-migration] ${label}: ${message}`);
+  // The same resolution the web store runs (server/ownerMigration.js). regionsReadOnly:
+  // a game borrows its scenario's regions purely as resolver context. Writing them
+  // back from here would rewrite another record's map using this record's renames —
+  // the scenario migrates its own map, with its own.
+  const migrated = migrateOwnerRecord({
+    world, game, meta, colors, flags, tags, regions, events, chat,
+    regionsReadOnly: Boolean(paths.regionsReadOnly),
+    registry: COUNTRY_NAME_REGISTRY,
+    inheritedMapRefs: paths.inheritedMapRefs,
+    deriveMapRefsFromFeatures: paths.deriveMapRefsFromFeatures,
+  }, { warn });
+  const { renames } = migrated;
 
-  if (colors) writeJsonFile(paths.colors, rekeyOwnerMap(colors, renames, "colors", warn));
-  if (flags) writeJsonFile(paths.flags, rekeyOwnerMap(flags, renames, "flags", warn));
-  if (tags) writeJsonFile(paths.tags, rekeyOwnerMap(tags, renames, "tags", warn));
-  // regionsReadOnly: a game borrows its scenario's regions purely as resolver
-  // context. Writing them back from here would rewrite another record's map using
-  // this record's renames — the scenario migrates its own map, with its own.
-  if (regions && !paths.regionsReadOnly) writeJsonFile(paths.regions, migrateRegions(regions, renames));
-  if (events) writeJsonFile(paths.events, migrateEvents(events, renames));
-  if (chat) writeJsonFile(paths.chat, migrateChat(chat, renames));
-  if (game) writeJsonFile(paths.game, migrateGame(game, renames));
+  if (migrated.colors) writeJsonFile(paths.colors, migrated.colors);
+  if (migrated.flags) writeJsonFile(paths.flags, migrated.flags);
+  if (migrated.tags) writeJsonFile(paths.tags, migrated.tags);
+  if (migrated.regions) writeJsonFile(paths.regions, migrated.regions);
+  if (migrated.events) writeJsonFile(paths.events, migrated.events);
+  if (migrated.chat) writeJsonFile(paths.chat, migrated.chat);
+  if (migrated.game) writeJsonFile(paths.game, migrated.game);
 
   // Roll-back points hold a full nested copy of world+game+colors+chat+events and
   // are blind-written back over live state on restore, with no marker of their own
   // to catch. Rather than migrate that surface, drop them: a stale restore point
   // would re-inject every code-keyed structure at once, silently.
-  if (paths.snapshots && fs.existsSync(paths.snapshots)) {
+  if (paths.discardSnapshots) {
     try {
-      fs.rmSync(paths.snapshots);
-      warn("discarded roll-back snapshots — they predate the owner rename");
+      if (paths.discardSnapshots()) warn("discarded roll-back snapshots — they predate the owner rename");
     } catch { /* best effort */ }
   }
 
   // World last: it carries the marker, so a crash mid-migration leaves the record
   // unmarked and the next read simply redoes it.
-  writeJsonFile(paths.world, migrateOwnerWorld(world, renames, warn, mapRefs));
+  writeJsonFile(paths.world, migrated.world);
   console.log(`[owner-migration] ${label}: ${renames.size} owner(s) -> ${new Set(renames.values()).size} name(s)`);
   return true;
 };
@@ -2953,12 +3336,7 @@ const ensureGameOwnerSchema = (gameId) => {
     // later conquest could teach the identity resolver that the conquered country's
     // modern GADM code now "means" the conqueror. The scenario migration above has
     // already derived/persisted these refs from the starting political map.
-    const parentWorld = readJsonFile(getScenarioJsonPath(parentId, "world"), {});
-    const inheritedMapRefs = Object.fromEntries(
-      Object.entries(parentWorld?.polityOverrides ?? {})
-        .map(([polityKey, polity]) => [polityKey, polity?.mapRefs])
-        .filter(([, refs]) => Array.isArray(refs?.gadm0) && refs.gadm0.length > 0),
-    );
+    const inheritedMapRefs = inheritedMapRefsOf(readJsonFile(getScenarioJsonPath(parentId, "world"), {}));
 
     migrateOwnerRecordAtPaths(key, {
       world: getGameJsonPath(gameId, "world"),
@@ -2968,7 +3346,7 @@ const ensureGameOwnerSchema = (gameId) => {
       tags: getGameJsonPath(gameId, "tags"),
       events: path.join(getGameDirectory(gameId), "storage", "events.json"),
       chat: path.join(getGameDirectory(gameId), "storage", "chat.json"),
-      snapshots: getGameJsonPath(gameId, "snapshots"),
+      discardSnapshots: () => discardRestorePoints(gameId),
       // From the SCENARIO — the same two inputs the scenario resolved against, so
       // one token cannot mean two things inside one game.
       meta: getScenarioMetaPath(parentId),
@@ -3028,45 +3406,99 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
   return { contentType: "application/json; charset=utf-8", sourcePath };
 };
 
-// What the rollback list shows, minus `state` (~700 KB per entry, up to 12).
-const snapshotIndexEntry = (snap) => ({
-  id: snap?.id ?? "",
-  round: snap?.round ?? null,
-  fromDate: snap?.fromDate ?? "",
-  toDate: snap?.toDate ?? "",
-  capturedAt: snap?.capturedAt ?? "",
-});
-
-const writeSnapshotIndex = (gameId, snapshots, stamp = "") => {
-  const list = Array.isArray(snapshots) ? snapshots : [];
-  const target = getGameJsonPath(gameId, "snapshotsIndex");
-  ensureDirectory(path.dirname(target));
-  writeJsonFile(target, { stamp, entries: list.map(snapshotIndexEntry) });
+// Restore points, one file each (server/restorePoints.js): storage/snapshots/
+// holds them and storage/snapshots-index.json their order, newest first, with
+// id/round/dates and the file each is in. A turn writes the one it adds and
+// deletes the one that falls off the end, where it used to rewrite the whole
+// archive (up to twelve worlds, 8-21 MB); a reader after one restore point
+// (the staged reveal) reads one file.
+//
+// An older install kept them all in storage/snapshots.json. The first read or
+// write moves them into files and deletes it; one that will not parse is
+// renamed out of the way rather than deleted.
+const RESTORE_POINT_INDEX_VERSION = 2;
+const restorePointDirectory = (gameId) => path.join(getGameDirectory(gameId), RESTORE_POINT_DIR);
+// Plain ids only, and none Windows keeps for devices (CON, NUL, COM1…). In
+// lower case: Windows and macOS take "Snap-A" and "snap-a" for one file, so two
+// such ids must reach the planner as the same name to be told apart.
+const restorePointFileFor = (id, attempt) => {
+  const base = /^[A-Za-z0-9_-]{1,80}$/.test(id) && !/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(id) ? id.toLowerCase() : "restore-point";
+  return attempt ? `${base}-${attempt}.json` : `${base}.json`;
 };
 
-// The write path refreshes the index for free; this covers a cold index, a zip
-// import, or a file edited outside the app.
-const ensureSnapshotIndexFresh = (gameId) => {
-  const source = getGameJsonPath(gameId, "snapshots");
-  const indexPath = getGameJsonPath(gameId, "snapshotsIndex");
-  if (!fs.existsSync(source)) {
-    // The owner-rename migration deletes snapshots outright. A surviving index
-    // would advertise turns that cannot be restored, so it goes with them.
-    if (fs.existsSync(indexPath)) {
-      try { fs.rmSync(indexPath); } catch { /* best effort */ }
-    }
-    return;
+const readRestorePointIndex = (gameId) => {
+  const index = readJsonFile(getGameJsonPath(gameId, "snapshotsIndex"), null);
+  // An index of the old kind (a stamp, no files) only described snapshots.json.
+  return index?.version === RESTORE_POINT_INDEX_VERSION && Array.isArray(index.entries) ? index.entries : [];
+};
+
+// Replaces the game's restore points with `list`, writing only those not
+// already stored (`reuse: false` writes them all, for a list from outside).
+const storeRestorePoints = (gameId, list, { reuse = true } = {}) => {
+  const directory = restorePointDirectory(gameId);
+  const { entries, writes } = planRestorePointSlots(readRestorePointIndex(gameId), list, { slotFor: restorePointFileFor, reuse });
+  // The files first, then the index that names them, then whatever it no longer
+  // names (the restore point that fell off the end, or a file a crash left).
+  for (const { slot, snapshot } of writes) writeJsonFileAtomic(path.join(directory, slot), snapshot);
+  writeJsonFileAtomic(getGameJsonPath(gameId, "snapshotsIndex"), { version: RESTORE_POINT_INDEX_VERSION, entries });
+  const named = new Set(entries.map((entry) => entry.slot));
+  let present = [];
+  try { present = fs.readdirSync(directory); } catch { /* no restore points at all */ }
+  for (const name of present) {
+    if (!named.has(name)) fs.rmSync(path.join(directory, name), { force: true, recursive: true });
   }
-  let stamp = "";
+  fs.rmSync(getGameJsonPath(gameId, "snapshots"), { force: true });
+  return entries;
+};
+
+const moveLegacyRestorePoints = (gameId) => {
+  const legacyPath = getGameJsonPath(gameId, "snapshots");
+  if (!fs.existsSync(legacyPath)) return;
+  let list = null;
   try {
-    const stat = fs.statSync(source);
-    stamp = `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  } catch {
+    list = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+  } catch (error) {
+    console.warn(`[restore points] ${gameId}: snapshots.json could not be read: ${error.message}`);
+  }
+  if (!Array.isArray(list)) {
+    // Read as none before too; kept for whoever wants to look at it.
+    try { fs.renameSync(legacyPath, `${legacyPath}.unreadable`); } catch { /* best effort */ }
     return;
   }
-  const cached = readJsonFile(indexPath, null);
-  if (cached?.stamp === stamp && Array.isArray(cached.entries)) return;
-  writeSnapshotIndex(gameId, readJsonFile(source, []), stamp);
+  storeRestorePoints(gameId, list, { reuse: false });
+};
+
+// The index entries, each with its file.
+const readRestorePointEntries = (gameId) => {
+  moveLegacyRestorePoints(gameId);
+  return readRestorePointIndex(gameId);
+};
+
+// Every restore point, newest first. One whose file is gone is left out.
+const readRestorePoints = (gameId) => {
+  const directory = restorePointDirectory(gameId);
+  return readRestorePointEntries(gameId)
+    .map((entry) => readJsonFile(path.join(directory, entry.slot), null))
+    .filter((snap) => snap && typeof snap === "object");
+};
+
+// The file holding one restore point, found by its id, or null.
+const restorePointPath = (gameId, snapshotId) => {
+  const entry = readRestorePointEntries(gameId).find((candidate) => candidate.id && candidate.id === snapshotId);
+  const target = entry ? path.join(restorePointDirectory(gameId), entry.slot) : null;
+  return target && fs.existsSync(target) ? target : null;
+};
+
+// Deletes every restore point a game has, in either layout. True if it had any.
+const discardRestorePoints = (gameId) => {
+  const targets = [
+    getGameJsonPath(gameId, "snapshots"),
+    getGameJsonPath(gameId, "snapshotsIndex"),
+    restorePointDirectory(gameId),
+  ];
+  const had = fs.existsSync(targets[0]) || readRestorePointIndex(gameId).length > 0;
+  for (const target of targets) fs.rmSync(target, { force: true, recursive: true });
+  return had;
 };
 
 const turnCommitJournalPath = (gameId) => path.join(getGameDirectory(gameId), TURN_COMMIT_JOURNAL_FILE);
@@ -3136,11 +3568,20 @@ const recoverPendingTurnCommit = (gameId) => {
 // write to finish. `failAfterAssetIndex` is only a deterministic test seam.
 const writeRuntimeTurnState = (payload, { failAfterAssetIndex = -1 } = {}) => {
   ensureGameStore();
-  const activeGameId = ensureRuntimeWriteGameId();
+  // Checked BEFORE ensureRuntimeWriteGameId, which creates and activates a game
+  // when none is active: a turn stamped for a campaign the player deleted while
+  // it ran must be refused, not first given a new "<scenario> Session" to land
+  // beside.
   const expectedGameId = String(payload?.expectedGameId ?? "").trim();
-  if (expectedGameId && expectedGameId !== activeGameId) {
-    throw new Error(`Turn commit belongs to game "${expectedGameId}", but "${activeGameId}" is active.`);
+  if (expectedGameId) {
+    const currentGameId = getActiveGameId();
+    if (expectedGameId !== currentGameId) {
+      throw new Error(currentGameId
+        ? `Turn commit belongs to game "${expectedGameId}", but "${currentGameId}" is active.`
+        : `Turn commit belongs to game "${expectedGameId}", but no game is active.`);
+    }
   }
+  const activeGameId = ensureRuntimeWriteGameId();
   recoverPendingTurnCommit(activeGameId);
   const assets = canonicalizeTurnCommit(payload);
   const transactionId = `turn-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
@@ -3176,7 +3617,21 @@ const readRuntimeJsonAsset = (assetKey) => {
   const activeGame = getActiveGameSummary();
   if (activeGame?.id) ensureGameOwnerSchema(activeGame.id);
 
-  if (assetKey === "snapshotsIndex" && activeGame?.id) ensureSnapshotIndexFresh(activeGame.id);
+  // One file each, assembled here (storeRestorePoints).
+  if (assetKey === "snapshots" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: readRestorePoints(activeGame.id),
+      sourcePath: restorePointDirectory(activeGame.id),
+    };
+  }
+  if (assetKey === "snapshotsIndex" && activeGame?.id) {
+    return {
+      contentType: "application/json; charset=utf-8",
+      data: publicRestorePointIndex(readRestorePointEntries(activeGame.id)),
+      sourcePath: getGameJsonPath(activeGame.id, "snapshotsIndex"),
+    };
+  }
 
   const scenario = getActiveRuntimeScenarioSummary();
 
@@ -3400,17 +3855,10 @@ const writeRuntimeJsonAsset = (assetKey, value, { readBack = true } = {}) => {
     canonical = canonicalizeColorKeys(value, activeWorld());
   }
 
-  const targetPath = getGameJsonPath(activeGameId, assetKey);
-  writeJsonFile(targetPath, canonical);
-  // From the array already in hand, so a turn never reparses to stay in step.
-  if (assetKey === "snapshots") {
-    try {
-      const stat = fs.statSync(targetPath);
-      writeSnapshotIndex(activeGameId, canonical, `${stat.size}:${Math.round(stat.mtimeMs)}`);
-    } catch {
-      // A missing index just means the next read rebuilds it.
-    }
-  }
+  // Restore points go one file each: the turn's new one is written, the rest
+  // are already there.
+  if (assetKey === "snapshots") storeRestorePoints(activeGameId, canonical);
+  else writeJsonFile(getGameJsonPath(activeGameId, assetKey), canonical);
   writeGameMeta(activeGameId, {});
   return readBack ? readRuntimeJsonAsset(assetKey) : null;
 };
@@ -3658,7 +4106,11 @@ const exportScenarioBundle = (scenarioId) => {
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson"),
       // The custom map background travels with the scenario (always embedded, like
       // the geometry) so a shared/imported custom map isn't blank.
-      backgroundData: buildScenarioBundleAsset(scenarioId, "backgroundData"),
+      // A basemap still missing travels as the reference it arrived as, so the
+      // next import tries the download too.
+      backgroundData: !fs.existsSync(getScenarioUploadPath(scenarioId, "backgroundData")) && summary.missingBasemap
+        ? { ...summary.missingBasemap.reference }
+        : buildScenarioBundleAsset(scenarioId, "backgroundData"),
     },
     data: {
       actions: cloneJson(details.data.actions),
@@ -3726,6 +4178,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
   }
   assertBundleHasBasicMap(bundle.data, bundle.assets);
 
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
+
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
@@ -3769,7 +4225,10 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     applyScenarioBundleAsset(scenarioId, assetKey, assetValue);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // A community basemap the game could not download is kept as its reference,
+  // so opening the scenario later can try again (src/runtime/missingBasemap.js).
+  const missingBasemap = missingBasemapOfBundle(bundle);
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), ...(missingBasemap ? { missingBasemap } : {}) });
 
   if (setSelected) {
     setSelectedScenario(scenarioId);
@@ -3804,9 +4263,11 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
       // Binary, or a bundle written before JSON assets stopped being base64'd.
       const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
       fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
+      if (assetKey === "regionsGeojson") prebuildCoarseRegions(getScenarioUploadPath(scenarioId, assetKey));
     } else {
       // A JSON asset that travelled as JSON (geometry, a vector basemap).
       fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), JSON.stringify(assetValue.data ?? {}), "utf-8");
+      if (assetKey === "regionsGeojson") prebuildCoarseRegions(getScenarioUploadPath(scenarioId, assetKey), assetValue.data ?? {});
     }
     return;
   }
@@ -3822,7 +4283,10 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
 // id, so their link survives) and createdAt; the name, description, world, and
 // assets all come from the new bundle, and every uploadable asset the bundle
 // doesn't carry is cleared. The new hubOrigin is stamped last, so the card's
-// Update button reverts to New Game once the catalog refreshes.
+// Update button reverts to New Game once the catalog refreshes. It renews the
+// link the scenario has and never makes one: a scenario that is not a copy of
+// the bundle's post (its player unlinked it, or it never was one) is refused
+// before anything is written (hubProvenance.js hubOriginForUpdate).
 const updateScenarioFromBundle = (scenarioId, bundle) => {
   ensureScenarioStore();
 
@@ -3832,6 +4296,10 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   if (!isScenarioBundleSchema(bundle.schema)) {
     throw new Error("Unsupported scenario bundle schema.");
   }
+
+  // A file that declares its map's projection is laid out here, once
+  // (mapProjection.js); any other bundle passes through untouched.
+  bundle = layOutScenarioBundle(bundle);
   if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
@@ -3840,7 +4308,7 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   const scenario = bundle.scenario && typeof bundle.scenario === "object" ? bundle.scenario : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const assets = bundle.assets && typeof bundle.assets === "object" ? bundle.assets : {};
-  const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
+  const hubOrigin = hubOriginForUpdate(readScenarioMeta(scenarioId).hubOrigin, bundle.hubOrigin);
 
   const metaPatch = {};
   for (const key of ["accentColor", "name", "subtitle", "description", "eyebrow", "heroTitle", "heroSubtitle"]) {
@@ -3854,6 +4322,18 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   }
   writeScenarioMeta(scenarioId, metaPatch);
 
+  // A community basemap the game could not download arrives as its reference
+  // (resolveScenarioBundleBackground). Keep the basemap this scenario already
+  // has, and the world's note of what kind it is, rather than wipe a working
+  // basemap over a failed download.
+  const keepBackground = assets.backgroundData?.mode === "communityRef";
+  const world = { ...(data.world ?? {}) };
+  if (keepBackground) {
+    const currentBackground = readJsonFile(getScenarioJsonPath(scenarioId, "world"), {})?.background;
+    if (currentBackground) world.background = currentBackground;
+    else delete world.background;
+  }
+
   updateScenario(scenarioId, {
     game: data.game ?? {},
     prompts: data.prompts ?? {},
@@ -3863,15 +4343,51 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
       chat: data.chat ?? [],
       events: data.events ?? [],
     },
-    world: data.world ?? {},
+    world,
   });
 
   for (const assetKey of Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)) {
+    if (keepBackground && assetKey === "backgroundData") continue;
     applyScenarioBundleAsset(scenarioId, assetKey, assets[assetKey]);
   }
 
-  writeScenarioMeta(scenarioId, hubOrigin ? { hubOrigin } : {});
+  // The new version's basemap reference while it is still missing, so the
+  // download is tried again and the copy keeps offering Update; cleared when
+  // this version brought its basemap.
+  writeScenarioMeta(scenarioId, { ...(hubOrigin ? { hubOrigin } : {}), missingBasemap: missingBasemapOfBundle(bundle) });
 
+  return getScenarioDetails(scenarioId);
+};
+
+// A basemap payload as background.json holds it: { dataUrl } for an image,
+// { geojson } for a vector map. Mirrored by the web store.
+const basemapPayloadOf = (payload) => {
+  if (typeof payload?.dataUrl === "string" && /^data:image\//i.test(payload.dataUrl)) return { dataUrl: payload.dataUrl };
+  if (payload?.geojson && typeof payload.geojson === "object" && !Array.isArray(payload.geojson)) return { geojson: payload.geojson };
+  throw new Error("That basemap has no image or map in it.");
+};
+
+// The community basemap an import or Update could not download
+// (meta.missingBasemap), downloaded since: the game tries again when the
+// scenario is opened (src/runtime/missingBasemap.js). The world takes the
+// background description of the version that referenced it. Not an edit: a
+// downloaded copy stays unedited and keeps following its post.
+const restoreScenarioBasemap = (scenarioId, payload) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioMetaPath(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  const { missingBasemap } = readScenarioMeta(scenarioId);
+  if (!missingBasemap) throw new Error("This scenario is not waiting for a basemap.");
+  const data = basemapPayloadOf(payload);
+
+  const targetPath = getScenarioUploadPath(scenarioId, "backgroundData");
+  ensureDirectory(path.dirname(targetPath));
+  fs.writeFileSync(targetPath, JSON.stringify(data), "utf-8");
+  const worldPath = getScenarioJsonPath(scenarioId, "world");
+  const background = missingBasemap.background ?? readJsonFile(worldPath, {})?.background ?? {};
+  mergeJsonAsset(worldPath, { background: { ...background, kind: data.geojson ? "vector" : "image" } }, JSON_ASSET_DEFAULTS.world);
+  writeScenarioMeta(scenarioId, { missingBasemap: null }, { touch: false });
   return getScenarioDetails(scenarioId);
 };
 
@@ -3951,11 +4467,14 @@ const exportGameBundle = (gameId) => {
   const scenario = getGameScenarioSummary(game.scenarioId);
   const data = {};
 
+  // A game with no file of its own for an optional key leaves it out, so the
+  // importer falls back to the scenario's (web twin: the same rule). Exported as
+  // {}, it became the imported game's own file and hid the scenario's colours,
+  // flags or tags.
   for (const assetKey of GAME_BUNDLE_DATA_KEYS) {
-    data[assetKey] = readJsonFile(
-      getGameJsonPath(gameId, assetKey),
-      cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {}),
-    );
+    const filePath = getGameJsonPath(gameId, assetKey);
+    if (OPTIONAL_GAME_BUNDLE_KEYS.has(assetKey) && !fs.existsSync(filePath)) continue;
+    data[assetKey] = readJsonFile(filePath, cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {}));
   }
 
   // Stats definitions are scenario-authored while the source scenario exists.
@@ -4058,9 +4577,12 @@ const importGameBundle = (bundle) => {
   const meta = bundle.game && typeof bundle.game === "object" ? bundle.game : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const ref = bundle.scenarioRef && typeof bundle.scenarioRef === "object" ? bundle.scenarioRef : {};
-  const scenarioId = String(ref.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID;
+  const requestedScenarioId = String(ref.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID;
+  // A map the sender says is a hub file is this library's copy of that file,
+  // never merely whatever holds the same id here (hubProvenance.js).
+  const scenarioId = importedGameScenarioId({ ...ref, scenarioId: requestedScenarioId }, getScenarioCatalog().scenarios);
 
-  const gameId = ensureUniqueId(meta.name || scenarioId || "game", "game");
+  const gameId = ensureUniqueId(meta.name || requestedScenarioId || "game", "game");
   const gameDir = getGameDirectory(gameId);
   ensureDirectory(gameDir);
   ensureDirectory(path.join(gameDir, "storage"));
@@ -4100,6 +4622,7 @@ const importGameBundle = (bundle) => {
       cloneJson(value ?? JSON_ASSET_DEFAULTS[assetKey] ?? {}),
     );
   }
+  invalidateOwnerSchemaCache("game", gameId);
 
   const manifest = getGameManifest();
   manifest.order = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
@@ -4113,17 +4636,64 @@ const importGameBundle = (bundle) => {
 
 // Restore points move as text on the CLIENT side, so the browser never parses
 // them. The server is not the memory-constrained end, so here they are ordinary
-// JSON: the route parses the body, this writes it.
+// JSON: the route parses the body, this writes it (one file each, as a turn
+// does; every one is written, since they come from another game).
 const readGameSnapshots = (gameId) => {
   ensureGameStore();
   getGameSummary(gameId);
-  return readJsonFile(getGameJsonPath(gameId, "snapshots"), []);
+  return readRestorePoints(gameId);
 };
 
 const writeGameSnapshots = (gameId, snapshots) => {
   ensureGameStore();
   getGameSummary(gameId);
-  writeJsonFile(getGameJsonPath(gameId, "snapshots"), Array.isArray(snapshots) ? snapshots : []);
+  storeRestorePoints(gameId, Array.isArray(snapshots) ? snapshots : [], { reuse: false });
+  return { ok: true };
+};
+
+// One of the active game's restore points, by id: the file to send, or null.
+// The staged reveal wants one world, not the archive of twelve.
+const resolveRuntimeRestorePoint = (snapshotId) => {
+  ensureGameStore();
+  const activeGame = getActiveGameSummary();
+  if (!activeGame?.id) return null;
+  // The rename migration discards restore points that predate it.
+  ensureGameOwnerSchema(activeGame.id);
+  return restorePointPath(activeGame.id, String(snapshotId ?? ""));
+};
+
+// A time skip that finished while another game was open, kept for this one
+// until the player applies or discards it (src/Game/AI/parkedTurn.js). By game
+// id, because it is written while ANOTHER game is the active one. One per game;
+// not in the bundle, a copy or an export: it belongs to this game's round, and
+// is dropped by the game that reads it once that round has passed.
+const PARKED_TURN_FILE = "storage/parked-turn.json";
+const getGameParkedTurnPath = (gameId) => path.join(getGameDirectory(gameId), PARKED_TURN_FILE);
+
+const readGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  const value = readJsonFile(getGameParkedTurnPath(gameId), null);
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+};
+
+const writeGameParkedTurn = (gameId, parkedTurn) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  if (!parkedTurn || typeof parkedTurn !== "object" || Array.isArray(parkedTurn)) {
+    throw new Error("A kept turn must be an object.");
+  }
+  if (String(parkedTurn.campaignId ?? "") !== gameId) {
+    throw new Error(`This kept turn belongs to another game: ${parkedTurn.campaignId}`);
+  }
+  writeJsonFileAtomic(getGameParkedTurnPath(gameId), parkedTurn);
+  return { ok: true };
+};
+
+const removeGameParkedTurn = (gameId) => {
+  ensureGameStore();
+  getGameSummary(gameId);
+  fs.rmSync(getGameParkedTurnPath(gameId), { force: true });
   return { ok: true };
 };
 
@@ -4132,36 +4702,45 @@ export {
   createScenario,
   deleteGame,
   deleteScenario,
+  emptyTrash,
   ensureGameStore,
   ensureScenarioStore,
   exportGameBundle,
   exportScenarioBundle,
-  getActiveGameSummary,
   getGameCatalog,
   getGameDetails,
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
-  getSelectedScenarioSummary,
   importGameBundle,
   importScenarioBundle,
+  listTrash,
+  purgeOldTrash,
+  restoreFromTrash,
+  restoreScenarioBasemap,
+  TRASH_KEEP_DAYS,
   updateScenarioFromBundle,
   readGameSnapshots,
+  readGameParkedTurn,
   readRuntimeJsonAsset,
+  resolveRuntimeRestorePoint,
   resolveRuntimeGeojsonAsset,
   removeGameAsset,
+  removeGameParkedTurn,
   removeScenarioAsset,
   resolveGameUploadAsset,
   resolveScenarioCoarseRegionsAsset,
   resolveScenarioUploadAsset,
   resolveRuntimeBinaryAsset,
   setActiveGame,
+  setActiveGameHold,
   setSelectedScenario,
   updateGame,
   updateScenario,
   uploadGameAsset,
   uploadScenarioAsset,
   writeGameSnapshots,
+  writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
   recoverPendingTurnCommit,

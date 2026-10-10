@@ -498,9 +498,10 @@ export const assessRecentWorldConsequenceLiveness = ({
 };
 
 // Fix 07 — an active high-pressure process may be quiet, but it may not vanish
-// from causal simulation for months at a time. 35 days forces a fresh endogenous
-// reappraisal; 70 days adds an objective anti-stasis backstop. Neither threshold
-// is an event quota or a demand for territorial movement.
+// from causal simulation for months at a time. STAGNATION_REAPPRAISAL_DAYS
+// forces a fresh endogenous reappraisal; STAGNATION_BACKSTOP_DAYS adds an
+// objective anti-stasis backstop. Neither threshold is an event quota or a
+// demand for territorial movement.
 const HIGH_PRESSURE_STAGNATION_THRESHOLD = 55;
 const STAGNATION_REAPPRAISAL_DAYS = 21;
 const STAGNATION_BACKSTOP_DAYS = 45;
@@ -812,8 +813,6 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
     nextReviewDate: status === "resolved" ? "" : normalizeString(entry.nextReviewDate),
     state: truncate(entry.state || entry.summary || entry.description, 520),
     ...(entry.canonicalIdentity === true ? { canonicalIdentity: true } : {}),
-    drivers: [...new Set(normalizeArray(entry.drivers).map(normalizeString).filter(Boolean))].slice(0, 8),
-    constraints: [...new Set(normalizeArray(entry.constraints).map(normalizeString).filter(Boolean))].slice(0, 8),
     sourceEventIds: [...new Set(normalizeArray(entry.sourceEventIds).map(normalizeString).filter(Boolean))].slice(0, 16),
     createdRound: Math.max(0, Math.trunc(Number(entry.createdRound) || 0)),
     updatedRound: Math.max(0, Math.trunc(Number(entry.updatedRound) || 0)),
@@ -1007,7 +1006,7 @@ const activeCanonicalWarForStoryline = (storyline, worldLike) => {
   return null;
 };
 
-const coalesceWorldStorylines = (worldLike) => {
+export const coalesceWorldStorylines = (worldLike) => {
   const world = worldLike && typeof worldLike === "object" ? worldLike : {};
   const normalized = normalizeArray(world?.storylines)
     .map(normalizeStorylineForDirector)
@@ -1052,30 +1051,18 @@ const coalesceWorldStorylines = (worldLike) => {
     const startedDates = group
       .map((entry) => normalizeString(entry?.startedDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const lastVisibleDates = group
       .map((entry) => normalizeString(entry?.lastVisibleEventDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const sourceEventIds = [...new Set(
       group.flatMap((entry) => normalizeArray(entry?.sourceEventIds))
         .map(normalizeString)
         .filter(Boolean),
     )].slice(-16);
-
-    const drivers = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.drivers))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
-
-    const constraints = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.constraints))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
 
     const createdRounds = group
       .map((entry) => Math.max(0, Math.trunc(Number(entry?.createdRound) || 0)))
@@ -1091,8 +1078,6 @@ const coalesceWorldStorylines = (worldLike) => {
       )],
       startedDate: startedDates[0] || freshest?.startedDate,
       lastVisibleEventDate: lastVisibleDates.at(-1) || "",
-      drivers,
-      constraints,
       sourceEventIds,
       createdRound: createdRounds.length
         ? Math.min(...createdRounds)
@@ -1119,11 +1104,16 @@ const coalesceWorldStorylines = (worldLike) => {
   };
 };
 
+// A storyline's title as it is compared: the letters, marks and digits of
+// every script, case, accents and punctuation folded away. Folded to a-z0-9, a
+// title in Cyrillic, Arabic or Chinese had no key at all: two processes of one
+// kind among the same participants were one storyline whatever each was
+// called. An ASCII title keeps the key it had.
 const pregameStorylineTitleKey = (value) => normalizeString(value)
   .toLocaleLowerCase()
   .normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -1132,6 +1122,15 @@ const pregameStorylineSourceContains = (superset, required) => {
   return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
 };
 
+// Which storyline on record a Round-Zero fact is. Unlike a war or an agreement
+// (resolvePregameWarBaselineMatch, resolvePregameAgreementBaselineMatch), a
+// storyline under another title is NOT read as a restatement of the one on
+// record: kind, participants and date do not say which process it is. Two
+// crises of one country in one year are two crises, and a gas dispute among the
+// same two governments is not their border talks. So another title stays an
+// ambiguity, as does a title that fits more than one record. Both are marked
+// `ambiguous`, which lets the caller leave that one fact out on its last
+// attempt instead of losing the whole Round-Zero answer.
 export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero storyline resolver requires a candidate." };
   const kind = normalizeString(candidate.processKind || candidate.kind).toLowerCase();
@@ -1146,9 +1145,9 @@ export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate =
   const dateCompatible = (entry) => !date || !normalizeString(entry.startedDate) || normalizeString(entry.startedDate) === date;
   const possible = candidates.filter(dateCompatible);
   const exact = possible.filter((entry) => pregameStorylineTitleKey(entry.title) === title);
-  if (exact.length > 1) return { match: null, error: "Round-Zero storyline identity matches multiple canonical processes." };
+  if (exact.length > 1) return { match: null, ambiguous: true, error: "Round-Zero storyline identity matches multiple canonical processes." };
   if (exact.length === 1) return { match: exact[0], error: "" };
-  if (possible.length) return { match: null, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
+  if (possible.length) return { match: null, ambiguous: true, error: "Round-Zero storyline identity is ambiguous: the same kind/participants/date already exist under a different canonical title." };
   return { match: null, error: "" };
 };
 
@@ -1265,7 +1264,7 @@ export const mergePregameStorylineBaselines = ({ world = {}, records = [] } = {}
   };
 };
 
-const recentEventEligibleForInitiative = (event, originDate) => {
+export const recentEventEligibleForInitiative = (event, originDate) => {
   if (!event || typeof event !== "object") return false;
 
   const originParsed = parseIsoDate(originDate);
@@ -1298,7 +1297,7 @@ const recentEventEligibleForInitiative = (event, originDate) => {
   return false;
 };
 
-const storylineStagnationAgeDays = (storyline, referenceDate) => {
+export const storylineStagnationAgeDays = (storyline, referenceDate) => {
   if (!storyline || parseIsoDate(referenceDate) == null) return 0;
 
   const anchor =
@@ -1318,7 +1317,7 @@ const storylineStagnationAgeDays = (storyline, referenceDate) => {
 // the process, not time since the last visible card. This prevents an active war
 // that honestly remains quiet from being selected on every one-day jump forever.
 // The 45-day objective anti-stasis backstop still uses visible-stagnation age.
-const storylineReviewAgeDays = (storyline, referenceDate) => {
+export const storylineReviewAgeDays = (storyline, referenceDate) => {
   if (!storyline || parseIsoDate(referenceDate) == null) return 0;
   const anchor =
     parseIsoDate(storyline.lastUpdatedDate) != null
@@ -1355,8 +1354,8 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
   if (!nextReview) {
     score += storyline.status === "active" ? 12 : 3;
   } else if (parseIsoDate(nextReview) != null && parseIsoDate(targetDate) != null) {
-    if (nextReview <= originDate) score += 16;
-    else if (nextReview <= targetDate) score += 11;
+    if (parseIsoDate(originDate) != null && compareIso(nextReview, originDate) <= 0) score += 16;
+    else if (compareIso(nextReview, targetDate) <= 0) score += 11;
   }
 
   // Starvation bonus: a lower-ranked but still unresolved process gradually
@@ -1385,13 +1384,14 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
   return score;
 };
 
-const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
+export const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
   if (!storyline || storyline.status === "resolved") return false;
 
-  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after ~35 days
-  // since its last semantic review regardless of numerical pressure. This is hidden
-  // simulation attention, not a demand for a battle/event. Non-war storylines keep
-  // the existing high-pressure visible-stagnation override.
+  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after
+  // STAGNATION_REAPPRAISAL_DAYS since its last semantic review regardless of
+  // numerical pressure. This is hidden simulation attention, not a demand for a
+  // battle/event. Non-war storylines keep the existing high-pressure
+  // visible-stagnation override.
   const stagnationAgeAtHorizon = storylineStagnationAgeDays(storyline, targetDate);
   const reviewAgeAtHorizon = storylineReviewAgeDays(storyline, targetDate);
   const activeWar = Boolean(activeCanonicalWarForStoryline(storyline, world));
@@ -1501,7 +1501,7 @@ const selectStorylineAttention = (world, originDate, targetDate) => {
   };
 };
 
-const recommendedReviewDays = (pressure, momentum, status, { activeWar = false } = {}) => {
+export const recommendedReviewDays = (pressure, momentum, status, { activeWar = false } = {}) => {
   if (status === "resolved") return 0;
 
   // Pressure is unresolved seriousness; momentum is the rate of meaningful change.
@@ -1560,7 +1560,12 @@ const looksLikeStorylineStateProse = (value) => {
 
 const parseStorylineRecord = (line, index = 0) => {
   const text = normalizeString(line);
-  if (!text) return null;
+  // Fields joined by the separator make a record, so a line with none is not
+  // one. It is prose a model wrote where records go, a heading or "No
+  // changes." (nativeWarLedger.js has the report this comes from). Read as a
+  // record it had an id and no status, and a strict pass refused the whole
+  // answer over it.
+  if (!text || !text.includes(STORYLINE_RECORD_SEPARATOR)) return null;
 
   // Format:
   // id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventIndexesCSV~state
@@ -1656,7 +1661,11 @@ const parseStorylineRecord = (line, index = 0) => {
   };
 };
 
-export const decodeWorldStorylineUpdates = (value) => {
+// The cap is per model answer. A merged turn (every segment's records, plus
+// motion repairs and engine seeds) passes { limit: Infinity }: each answer in
+// it was held to the cap already, and cutting the whole turn to one answer's
+// worth dropped every later segment's records.
+export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDATES_PER_JUMP } = {}) => {
   // Internal/back-compat callers may already provide object records.
   if (Array.isArray(value)) {
     return value
@@ -1672,14 +1681,14 @@ export const decodeWorldStorylineUpdates = (value) => {
         };
       })
       .filter(Boolean)
-      .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+      .slice(0, limit);
   }
 
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => parseStorylineRecord(line, index))
     .filter(Boolean)
-    .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+    .slice(0, limit);
 };
 
 const STORYLINE_LINK_STOPWORDS = new Set([
@@ -1689,12 +1698,16 @@ const STORYLINE_LINK_STOPWORDS = new Set([
   "republic", "state", "states", "process", "current", "continues", "continued",
 ]);
 
+// The letters, marks and digits of any script. Kept to a-z and 0-9, a
+// storyline and an event written in Russian or Arabic shared no words however
+// plainly one advanced the other, and only an actor the event named in a
+// structured field could link them. English text reads as it always did.
 const storylineLinkText = (value) =>
   normalizeString(value)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -2177,9 +2190,10 @@ export const findWorldStorylineAntiStasisIssues = (
     originDate = "",
     stopDate = "",
     world = null,
+    limit,
   } = {},
 ) => {
-  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates, { limit });
   const updateById = new Map(
     updates
       .map((entry) => [normalizeString(entry?.id), entry])
@@ -2289,7 +2303,7 @@ export const findSkipStorylineMotionIssues = ({
 } = {}) => {
   const skipEvents = normalizeArray(events);
   const lastUpdateById = new Map();
-  for (const update of decodeWorldStorylineUpdates(storylineUpdates)) {
+  for (const update of decodeWorldStorylineUpdates(storylineUpdates, { limit: Infinity })) {
     const id = normalizeString(update?.id);
     if (id) lastUpdateById.set(id, update);
   }
@@ -2302,7 +2316,7 @@ export const findSkipStorylineMotionIssues = ({
   }));
   return findWorldStorylineAntiStasisIssues(
     { events: skipEvents, storylineUpdates: netUpdates },
-    { existingStorylines, selectedStorylines, originDate, stopDate, world },
+    { existingStorylines, selectedStorylines, originDate, stopDate, world, limit: Infinity },
   );
 };
 
@@ -2756,6 +2770,7 @@ export const applyWorldStorylineUpdates = ({
   events = [],
   stopDate = "",
   round = 0,
+  limit,
   // Round Zero may know that a process is already active without knowing its
   // historical start date. Ordinary turn application can still fall back to
   // the accounting horizon, but bootstrap callers must be able to preserve
@@ -2780,7 +2795,7 @@ export const applyWorldStorylineUpdates = ({
     }
   }
 
-  const decodedUpdates = decodeWorldStorylineUpdates(updates);
+  const decodedUpdates = decodeWorldStorylineUpdates(updates, { limit });
   const appliedIds = [];
 
   for (let index = 0; index < decodedUpdates.length; index += 1) {
@@ -2802,7 +2817,7 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = related
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const earliestVisible = relatedDates[0] || "";
     const newestVisible = relatedDates.at(-1) || "";
 
@@ -2871,8 +2886,6 @@ export const applyWorldStorylineUpdates = ({
         activeWar,
       }),
       state: normalizeString(raw?.state) || prior?.state || title,
-      drivers: normalizeArray(prior?.drivers),
-      constraints: normalizeArray(prior?.constraints),
       sourceEventIds,
       createdRound: prior?.createdRound || Math.max(0, Math.trunc(Number(round) || 0)),
       updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
@@ -2897,13 +2910,13 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = normalizeArray(related)
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const newestVisible = relatedDates.at(-1) || "";
     if (!newestVisible) continue;
 
     const priorVisible = normalizeString(prior?.lastVisibleEventDate);
     const nextVisible =
-      parseIsoDate(priorVisible) == null || newestVisible > priorVisible
+      parseIsoDate(priorVisible) == null || compareIso(newestVisible, priorVisible) > 0
         ? newestVisible
         : priorVisible;
 
@@ -3098,494 +3111,16 @@ const selectBoundedCandidates = (rankedCandidates, limit) => {
   return selected;
 };
 
-const runWorldDirectorSelfTests = () => {
-  const fixtureWorld = {
-    wars: [
-      {
-        id: "polish-war-of-independence",
-        status: "active",
-        sideA: ["Poland"],
-        sideB: ["Russian Empire"],
-      },
-      {
-        id: "austro-serbian-war",
-        status: "active",
-        sideA: ["Austria-Hungary"],
-        sideB: ["Kingdom of Serbia"],
-      },
-    ],
-    storylines: [
-      {
-        id: "storyline-polish-war-of-independence",
-        kind: "war",
-        title: "War of Polish Independence",
-        participants: ["Poland", "Russian Empire"],
-        status: "active",
-        pressure: 85,
-        momentum: 30,
-        startedDate: "1915-04-18",
-        accountedThroughDate: "1916-03-13",
-        lastUpdatedDate: "1916-03-13",
-        state: "Older canonical-id copy.",
-        sourceEventIds: ["polish-a"],
-      },
-      {
-        id: "storyline-polish-independence",
-        kind: "war",
-        title: "War of Polish Independence",
-        participants: ["Poland", "Russian Empire"],
-        status: "active",
-        pressure: 72,
-        momentum: 18,
-        startedDate: "1915-04-18",
-        accountedThroughDate: "1916-04-12",
-        lastUpdatedDate: "1916-04-12",
-        state: "Newer duplicate-id copy.",
-        sourceEventIds: ["polish-b"],
-      },
-      {
-        id: "storyline-july-crisis",
-        kind: "war",
-        title: "Austro-Serbian War",
-        participants: ["Austria-Hungary", "Kingdom of Serbia"],
-        status: "active",
-        pressure: 68,
-        momentum: 20,
-        startedDate: "1914-06-28",
-        accountedThroughDate: "1916-05-12",
-        lastUpdatedDate: "1916-05-12",
-        state: "Freshest Austro-Serbian state.",
-        sourceEventIds: ["serbia-a"],
-      },
-      {
-        id: "storyline-austro-serbian-war",
-        kind: "war",
-        title: "Austro-Serbian War",
-        participants: ["Austria-Hungary", "Kingdom of Serbia"],
-        status: "active",
-        pressure: 80,
-        momentum: 25,
-        startedDate: "1914-07-28",
-        accountedThroughDate: "1916-03-13",
-        lastUpdatedDate: "1916-03-13",
-        state: "Older canonical-id Austro-Serbian copy.",
-        sourceEventIds: ["serbia-b"],
-      },
-    ],
-  };
-
-  const merged = coalesceWorldStorylines(fixtureWorld);
-  const polish = merged.storylines.find((entry) =>
-    entry.id === "storyline-polish-war-of-independence"
-  );
-  const serbia = merged.storylines.find((entry) =>
-    entry.id === "storyline-austro-serbian-war"
-  );
-
-  const cases = [
-    {
-      name: "semantic duplicate wars collapse",
-      pass: merged.storylines.length === 2 && merged.mergedDuplicateCount === 2,
-      detail: `${merged.storylines.length} storyline(s), ${merged.mergedDuplicateCount} duplicate(s) merged`,
-    },
-    {
-      name: "canonical war storyline id survives newer alias",
-      pass:
-        polish?.id === "storyline-polish-war-of-independence" &&
-        polish?.state === "Newer duplicate-id copy." &&
-        normalizeArray(polish?.sourceEventIds).includes("polish-a") &&
-        normalizeArray(polish?.sourceEventIds).includes("polish-b"),
-      detail: polish?.id || "",
-    },
-    {
-      name: "canonical Austro-Serbian id keeps freshest state",
-      pass:
-        serbia?.id === "storyline-austro-serbian-war" &&
-        serbia?.state === "Freshest Austro-Serbian state.",
-      detail: serbia?.id || "",
-    },
-    {
-      name: "360-day event is not current initiative evidence",
-      pass: !recentEventEligibleForInitiative(
-        { date: "1915-04-18" },
-        "1916-04-12",
-      ),
-      detail: "1915-04-18 → 1916-04-12",
-    },
-    {
-      name: "30-day storyline event remains current initiative evidence",
-      pass: recentEventEligibleForInitiative(
-        {
-          date: "1916-03-13",
-          importance: "minor",
-          storylineIds: ["storyline-test"],
-          impacts: {},
-        },
-        "1916-04-12",
-      ),
-      detail: "1916-03-13 storyline-linked",
-    },
-    {
-      name: "minor no-impact narrative card is not a causal seed",
-      pass: !recentEventEligibleForInitiative(
-        {
-          date: "1916-01-29",
-          importance: "minor",
-          notable: false,
-          playerRelated: false,
-          kind: "world",
-          storylineIds: [],
-          impacts: {},
-        },
-        "1916-04-12",
-      ),
-      detail: "minor + no impacts + no storyline",
-    },
-    {
-      name: "minor structured event remains a causal seed",
-      pass: recentEventEligibleForInitiative(
-        {
-          date: "1916-03-20",
-          importance: "minor",
-          notable: false,
-          storylineIds: [],
-          impacts: { markerOps: [{ op: "build" }] },
-        },
-        "1916-04-12",
-      ),
-      detail: "minor + persistent impact",
-    },
-  ];
-
-  const stagnantHighPressure = {
-    id: "storyline-motion-test",
-    kind: "war",
-    title: "Motion Test War",
-    participants: ["Poland", "Russian Empire"],
-    status: "active",
-    pressure: 78,
-    momentum: 20,
-    startedDate: "1916-01-01",
-    accountedThroughDate: "1916-06-11",
-    lastUpdatedDate: "1916-06-11",
-    lastVisibleEventDate: "1916-04-20",
-    nextReviewDate: "1916-09-01",
-    state: "A high-pressure stalemate remains unchanged.",
-  };
-
-  cases.push({
-    name: "21-day high-pressure stagnation overrides later review date",
-    pass: storylineNeedsAttentionWithin(
-      stagnantHighPressure,
-      "1916-06-11",
-      "1916-07-11",
-    ),
-    detail: `stagnation ${storylineStagnationAgeDays(stagnantHighPressure, "1916-07-11")}d`,
-  });
-
-  const stagnantError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "45-day high-pressure anti-stasis rejects copy-forward",
-    pass: /anti-stasis backstop/i.test(stagnantError),
-    detail: stagnantError || "unexpectedly accepted",
-  });
-
-  const repairIssues = findWorldStorylineAntiStasisIssues(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      stopDate: "1916-07-11",
-    },
-  );
-
-  const nonFatalStagnantError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 78,
-        momentum: 20,
-        eventIndexes: [],
-        state: "A high-pressure stalemate remains unchanged.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-    },
-  );
-
-  cases.push({
-    name: "45-day anti-stasis is detectable without invalidating whole pass",
-    pass: repairIssues.length === 1 && repairIssues[0]?.id === stagnantHighPressure.id && nonFatalStagnantError === "",
-    detail: `${repairIssues.length} repair issue(s); validation ${nonFatalStagnantError || "accepted"}`,
-  });
-
-  const missingSelectedCandidate = {
-    events: [],
-    storylineUpdates: [],
-  };
-  const missingSelectedStrictError = validateWorldStorylinePayload(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-    },
-  );
-  const missingSelectedRepairableError = validateWorldStorylinePayload(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-      enforceAntiStasis: false,
-      enforceSelectedCoverage: false,
-    },
-  );
-  const missingSelectedIssues = findWorldStorylineAntiStasisIssues(
-    missingSelectedCandidate,
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "missing native-attention update becomes local repair instead of whole-pass failure",
-    pass:
-      /must include native-attention storyline/i.test(missingSelectedStrictError) &&
-      missingSelectedRepairableError === "" &&
-      missingSelectedIssues.length === 1 &&
-      missingSelectedIssues[0]?.kind === "missing-update" &&
-      missingSelectedIssues[0]?.id === stagnantHighPressure.id,
-    detail:
-      `strict=${missingSelectedStrictError || "accepted"}; ` +
-      `repairable=${missingSelectedRepairableError || "accepted"}; ` +
-      `issues=${missingSelectedIssues.map((issue) => `${issue.kind}:${issue.id}`).join(", ") || "none"}`,
-  });
-
-  const evolvedError = validateWorldStorylinePayload(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...stagnantHighPressure,
-        pressure: 74,
-        momentum: 28,
-        eventIndexes: [],
-        state: "The front remains intact, but both commands reorganize and operational tempo begins to recover.",
-      }],
-    },
-    {
-      existingStorylines: [stagnantHighPressure],
-      selectedStorylines: [stagnantHighPressure],
-      deferredStorylines: [],
-      originDate: "1916-06-11",
-      stopDate: "1916-07-11",
-    },
-  );
-
-  cases.push({
-    name: "45-day backstop accepts objective hidden evolution",
-    pass: evolvedError === "",
-    detail: evolvedError || "pressure/momentum changed",
-  });
-
-  const lowPressureActiveWar = {
-    id: "storyline-polish-war-of-independence",
-    kind: "war",
-    title: "War of Polish Independence",
-    participants: ["Poland", "Russian Empire"],
-    status: "active",
-    pressure: 65,
-    momentum: 25,
-    startedDate: "1915-04-18",
-    accountedThroughDate: "1916-12-08",
-    lastUpdatedDate: "1916-12-08",
-    lastVisibleEventDate: "1916-11-20",
-    nextReviewDate: "1917-04-07",
-    state: "Winter positions hold while the active war remains unresolved.",
-  };
-
-  cases.push({
-    name: "21-day active-war review overrides pressure cliff",
-    pass: storylineNeedsAttentionWithin(
-      lowPressureActiveWar,
-      "1917-01-07",
-      "1917-02-06",
-      fixtureWorld,
-    ),
-    detail: `review age ${storylineReviewAgeDays(lowPressureActiveWar, "1917-02-06")}d at pressure ${lowPressureActiveWar.pressure}`,
-  });
-
-  const lowPressureWarAntiStasis = findWorldStorylineAntiStasisIssues(
-    {
-      events: [],
-      storylineUpdates: [{
-        ...lowPressureActiveWar,
-        pressure: 65,
-        momentum: 25,
-        eventIndexes: [],
-        state: lowPressureActiveWar.state,
-      }],
-    },
-    {
-      existingStorylines: [lowPressureActiveWar],
-      selectedStorylines: [lowPressureActiveWar],
-      stopDate: "1917-02-06",
-      world: fixtureWorld,
-    },
-  );
-
-  cases.push({
-    name: "45-day active-war anti-stasis ignores pressure cliff",
-    pass:
-      lowPressureWarAntiStasis.length === 1 &&
-      lowPressureWarAntiStasis[0]?.activeWar === true,
-    detail: `${lowPressureWarAntiStasis.length} issue(s) at pressure ${lowPressureActiveWar.pressure}`,
-  });
-
-  const lowPressureNonWar = {
-    ...lowPressureActiveWar,
-    id: "storyline-domestic-control",
-    kind: "politics",
-    title: "Domestic Control Test",
-    participants: ["Poland"],
-    nextReviewDate: "1917-04-07",
-  };
-
-  cases.push({
-    name: "non-war pressure 65 enters high-pressure review cadence",
-    pass: storylineNeedsAttentionWithin(
-      lowPressureNonWar,
-      "1917-01-07",
-      "1917-02-06",
-      fixtureWorld,
-    ),
-    detail: "pressure 65 is now above the 55 high-pressure guard",
-  });
-
-  cases.push({
-    name: "active-war persisted review cadence caps at 21 days",
-    pass: recommendedReviewDays(65, 25, "active", { activeWar: true }) === 21,
-    detail: `${recommendedReviewDays(65, 25, "active", { activeWar: true })}d`,
-  });
-
-  const deferredQuietCandidate = {
-    events: [{
-      title: "Independent material event",
-      description: "A separate development occurs elsewhere.",
-      impacts: {},
-    }],
-    storylineUpdates: [
-      {
-        id: "storyline-selected-test",
-        status: "active",
-        pressure: 72,
-        momentum: 24,
-        startedDate: "1916-01-01",
-        kind: "war",
-        title: "Selected Test War",
-        participants: ["Poland", "Russian Empire"],
-        eventIndexes: [0],
-        state: "A material development changes the selected process.",
-      },
-      {
-        id: "storyline-deferred-quiet-test",
-        status: "active",
-        pressure: 35,
-        momentum: 15,
-        startedDate: "1915-01-01",
-        kind: "diplomacy",
-        title: "Deferred Quiet Test",
-        participants: ["German Empire", "British Empire"],
-        eventIndexes: [],
-        state: "The quiet detente remains unchanged.",
-      },
-    ],
-  };
-  const quietSalvage = stripQuietDeferredStorylineUpdates(
-    deferredQuietCandidate,
-    [{
-      id: "storyline-deferred-quiet-test",
-      status: "active",
-      pressure: 35,
-      momentum: 15,
-      title: "Deferred Quiet Test",
-    }],
-  );
-  const remainingQuietSalvageUpdates = decodeWorldStorylineUpdates(
-    deferredQuietCandidate.storylineUpdates,
-  );
-
-  cases.push({
-    name: "final-attempt salvage strips only quiet deferred bookkeeping",
-    pass:
-      quietSalvage.strippedIds.length === 1 &&
-      quietSalvage.strippedIds[0] === "storyline-deferred-quiet-test" &&
-      remainingQuietSalvageUpdates.length === 1 &&
-      remainingQuietSalvageUpdates[0]?.id === "storyline-selected-test",
-    detail: `${quietSalvage.strippedIds.join(", ") || "none"} stripped`,
-  });
-
-  const passed = cases.every((entry) => entry.pass);
-  console.table(cases);
-  console.info(
-    `[OH Native World Director self-test] ${passed ? "PASS" : "FAIL"} — ` +
-    `${cases.filter((entry) => entry.pass).length}/${cases.length}`,
-  );
-  return { passed, cases };
-};
-
 const installDebugApi = () => {
   if (typeof globalThis === "undefined") return;
 
+  // No self-test here: the director's regression cases run under node --test
+  // (nativeWorldDirector.storylines.test.js), not in every player's bundle.
   globalThis.__OH_NATIVE_WORLD_DIRECTOR__ = {
     version: WORLD_DIRECTOR_VERSION,
     last: () => lastAnalysis
       ? JSON.parse(JSON.stringify(lastAnalysis))
       : null,
-    selfTest: () => runWorldDirectorSelfTests(),
   };
 };
 
@@ -3597,10 +3132,6 @@ export const buildWorldInitiativeContext = (
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
     playerFocus = "",
-    // The scenario's "Puppet states" feature, handed down rather than read:
-    // this module runs in a worker and in node tests, so it stays clear of the
-    // browser runtime (see the same argument in nativeDiplomaticDirector.js).
-    puppetStates = true,
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3655,7 +3186,6 @@ export const buildWorldInitiativeContext = (
     playerPolity: normalizeString(bundle?.game?.country),
     selectedStorylines: storylineAttention.selected,
     maxActors: 8,
-    puppetStates,
   });
 
   const canonicalStorylineId = (value) => {
@@ -3856,8 +3386,6 @@ export const buildWorldInitiativeContext = (
     const detail = [
       storyline.participants.length ? `participants: ${storyline.participants.join(", ")}` : "",
       storyline.state ? `state: ${storyline.state}` : "",
-      storyline.drivers.length ? `drivers: ${storyline.drivers.join("; ")}` : "",
-      storyline.constraints.length ? `constraints: ${storyline.constraints.join("; ")}` : "",
       visibleAge == null ? "no visible event yet" : `last visible event ${visibleAge} day(s) before this jump`,
       atBackstop
         ? `MUST MOVE THIS PERIOD: ${stagnationAge} days with no visible development by the stop date; it must ${describeAntiStasisObjectiveRule()}.`
@@ -3905,6 +3433,11 @@ export const buildWorldInitiativeContext = (
     ...(crisisLines.length ? ["", "Instability the record says may be turning into a crisis:", ...crisisLines] : []),
     "",
     `Conflict risk in this world right now: ${conflictRiskPosture.label}. ${conflictRiskPosture.guidance}.`,
+    // The breadth repair is told this too, but it is its own request and is
+    // skipped while requests are saved; this line reaches every skip for free.
+    ...(consequenceSignal.level === "low"
+      ? [`Recent history is busy but thin on real outcomes: ${consequenceSignal.consequentialCount} of the last ${consequenceSignal.eventCount} events in about ${consequenceSignal.lookbackDays} days changed what anyone can do next. Check first whether a pressure already in the record has matured into a real outcome (a vote, a resignation or appointment, a strike settled, a capability completed, an escalation or a climb-down); where none has, write ordinary history and do not invent drama.`]
+      : []),
     "",
     "Economic baselines (a strained state can still borrow, tax or print, at a price):",
     economicAttention.length

@@ -4,8 +4,6 @@ import assert from "node:assert/strict";
 import {
   applyPoliticalWorldPipelineCore,
   buildPoliticalWorldPipelineDiagnosticCore,
-  generatePoliticalWorldPipelineCore,
-  resumePoliticalWorldPipelineGeopoliticsCore,
 } from "./politicalWorldPipelineCore.js";
 
 const scenarioDate = "2067-04-19";
@@ -76,60 +74,6 @@ const geopoliticalResult = {
   modelCalls: 3,
 };
 
-test("unified pipeline stages politics then governing alignment before geopolitical generation without mutating input world", async () => {
-  const world = { politicalActors: { byPolity: {} }, sentinel: { untouched: true } };
-  let alignmentSawStagedPolitics = false;
-  let geopoliticsSawAlignment = false;
-
-  const result = await generatePoliticalWorldPipelineCore({
-    scenarioDate,
-    polities: [{ polityKey }],
-    politicalActors: world.politicalActors,
-    world,
-    generatePolitics: async () => politicsResult,
-    generateGoverningAlignment: async ({ politicalActors }) => {
-      alignmentSawStagedPolitics = politicalActors.byPolity[polityKey]?.parties?.[0]?.id === "civic-league";
-      return alignmentResult;
-    },
-    generateGeopolitics: async ({ world: stagedWorld }) => {
-      geopoliticsSawAlignment = stagedWorld.politicalActors.byPolity[polityKey]?.government?.rulingPartyIds?.[0] === "civic-league";
-      return geopoliticalResult;
-    },
-  });
-
-  assert.equal(result.complete, true, JSON.stringify(result.blockingErrors));
-  assert.equal(alignmentSawStagedPolitics, true);
-  assert.equal(geopoliticsSawAlignment, true);
-  assert.deepEqual(world, { politicalActors: { byPolity: {} }, sentinel: { untouched: true } }, "Generate must remain review-only");
-});
-
-test("unified pipeline fails closed before later phases when Political Actor generation has failures", async () => {
-  let alignmentCalled = false;
-  let geopoliticsCalled = false;
-  const failedPolitics = {
-    ...politicsResult,
-    proposals: [],
-    failures: [{ polityKey, errors: ["provider omitted polity"] }],
-    generatedPolities: 0,
-    failedPolities: 1,
-  };
-
-  const result = await generatePoliticalWorldPipelineCore({
-    scenarioDate,
-    polities: [{ polityKey }],
-    politicalActors: { byPolity: {} },
-    world: { politicalActors: { byPolity: {} } },
-    generatePolitics: async () => failedPolitics,
-    generateGoverningAlignment: async () => { alignmentCalled = true; return alignmentResult; },
-    generateGeopolitics: async () => { geopoliticsCalled = true; return geopoliticalResult; },
-  });
-
-  assert.equal(result.complete, false);
-  assert.equal(result.blockingErrors.length, 1);
-  assert.equal(alignmentCalled, false);
-  assert.equal(geopoliticsCalled, false);
-});
-
 test("Apply Political World revalidates both political stages and commits through one final geopolitical application", () => {
   const pipeline = {
     schemaVersion: 1,
@@ -194,67 +138,4 @@ test("combined diagnostic retains all three phase results and uses staged politi
   assert.equal(diagnostic.politics.accepted, 1);
   assert.equal(diagnostic.governingAlignment.accepted, 1);
   assert.equal(diagnostic.geopolitics.ok, true);
-});
-
-
-test("geopolitical resume reuses clean staged politics and governing alignment without regenerating either stage", async () => {
-  const priorResult = {
-    schemaVersion: 1,
-    kind: "political-world-pipeline-result",
-    scenarioDate,
-    generatedAt: "2026-09-07T00:00:03Z",
-    allowEntityExpansion: false,
-    politics: politicsResult,
-    governingAlignment: alignmentResult,
-    geopolitics: { ...geopoliticalResult, blockingErrors: ["old failure"] },
-    blockingErrors: ["old failure"],
-    complete: false,
-  };
-  let geopoliticalCalls = 0;
-  let sawStagedAlignment = false;
-  const resumed = await resumePoliticalWorldPipelineGeopoliticsCore({
-    scenarioDate,
-    polities: [{ polityKey }],
-    politicalActors: { byPolity: {} },
-    world: { politicalActors: { byPolity: {} }, untouched: true },
-    priorResult,
-    generateGeopolitics: async ({ world }) => {
-      geopoliticalCalls += 1;
-      sawStagedAlignment = world.politicalActors.byPolity[polityKey]?.government?.rulingPartyIds?.[0] === "civic-league";
-      return geopoliticalResult;
-    },
-  });
-
-  assert.equal(geopoliticalCalls, 1);
-  assert.equal(sawStagedAlignment, true);
-  assert.equal(resumed.complete, true);
-  assert.deepEqual(resumed.blockingErrors, []);
-  assert.equal(resumed.politics, politicsResult);
-  assert.equal(resumed.governingAlignment, alignmentResult);
-});
-
-test("unified legacy pipeline propagates one history-authority contract through politics, alignment and geopolitics", async () => {
-  const historyAuthority = {
-    referenceAllowed: true,
-    referenceAuthority: "pre-divergence-only",
-    cutoffDate: "2050-01-01",
-    cutoffInclusive: false,
-  };
-  const seen = [];
-  const result = await generatePoliticalWorldPipelineCore({
-    scenarioDate,
-    historyAuthority,
-    polities: [{ polityKey }],
-    politicalActors: { byPolity: {} },
-    world: { politicalActors: { byPolity: {} } },
-    generatePolitics: async (args) => { seen.push(["politics", args.historyAuthority]); return politicsResult; },
-    generateGoverningAlignment: async (args) => { seen.push(["alignment", args.historyAuthority]); return alignmentResult; },
-    generateGeopolitics: async (args) => { seen.push(["geopolitics", args.historyAuthority]); return geopoliticalResult; },
-  });
-  assert.equal(result.complete, true, JSON.stringify(result.blockingErrors));
-  assert.deepEqual(seen, [
-    ["politics", historyAuthority],
-    ["alignment", historyAuthority],
-    ["geopolitics", historyAuthority],
-  ]);
 });

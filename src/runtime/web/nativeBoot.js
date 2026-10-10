@@ -7,17 +7,16 @@
 // confirmed by tapping the app icon.
 //
 // This replaces it there (and only there). A boot screen is up while the library
-// is seeded — and, on a build that still streams its map from a content node,
-// while the node is found — then the app goes straight into the game. The
-// website keeps its home page — a browser tab genuinely is arriving from nowhere
-// and has a download to offer; an installed app does not. The Android app since
-// 2026-09 has the whole world inside the APK, so its screen only waits on the
-// seeding and says so.
+// is seeded, then the app goes straight into the game. The website keeps its
+// home page — a browser tab genuinely is arriving from nowhere and has a
+// download to offer; an installed app does not. The app has the whole world
+// inside the APK, so its screen only waits on the seeding and says so.
 //
 // Deliberately free of imports, including Vite's `import.meta.env`, so it stays
-// loadable outside a bundler and its policy can be tested. The connection itself
-// is handed in by index.js rather than imported: nodeConnect.js reads
-// import.meta.env at module scope and cannot be loaded by `node --test`.
+// loadable outside a bundler and its policy can be tested (bootTexts.js, its
+// text, is import-free for the same reason).
+
+import { bootText, bootTranslated } from "./bootTexts.js";
 
 const BOOT_ID = "oh-native-boot";
 
@@ -26,29 +25,18 @@ const BOOT_ID = "oh-native-boot";
 // connection starting, so seeding time counts toward it.
 export const MIN_VISIBLE_MS = 500;
 
-// The boot screen must never be the reason a player cannot reach their games. A
-// node probe already has its own 4s timeout, but the directory fetch in front of
-// it does not, and a captive portal can hang a request indefinitely. Past this the
-// screen comes down regardless; the connection keeps going and simply settles
-// behind the game, which is what the heartbeat does for the rest of the session.
-export const CONNECT_DEADLINE_MS = 8000;
+// The boot screen must never be the reason a player cannot reach their games.
+// Past this it comes down whatever has or has not been reported to it.
+export const BOOT_DEADLINE_MS = 8000;
 
 // Capacitor injects window.Capacitor before the bundle runs. Same signal router.js
 // uses to pick native HTTP, and homePage.js to skip the browser-only demo notice.
 export const isNativeApp = () => typeof window !== "undefined" && Boolean(window.Capacitor);
 
-// The one line under the wordmark. `null` is "still working"; everything else is a
-// settled connection, including the origin fallback, which is a real answer and not
-// an error — the game is perfectly playable on it.
-export const bootStatusText = (connection) => {
-  if (!connection) return "Finding the closest community node…";
-  if (connection.local) return "Everything is on this device";
-  if (connection.origin) return "Connected to the main server";
-  const parts = [connection.id || "a community node"];
-  if (connection.region) parts.push(connection.region);
-  if (Number.isFinite(connection.latency)) parts.push(`${connection.latency} ms`);
-  return `Connected · ${parts.join(" · ")}`;
-};
+// The one line under the wordmark: what the app is doing while the library is
+// seeded, and what is true once it is. The map is inside the APK, so there is
+// no connection to report.
+export const bootStatusText = (ready) => bootText(ready ? "bootLocal" : "bootPreparing");
 
 // #131315 is the <meta name="theme-color"> and the launcher background behind
 // drawable/splash.png, so the native splash hands over to this with no seam — the
@@ -94,12 +82,12 @@ const css = `
 // Paints the boot screen immediately and returns a handle. Synchronous on purpose:
 // it is called before the library is seeded so the phone shows something within a
 // frame of the WebView loading, rather than a white gap where the native splash was.
-// `local` is the Android app with the map inside the APK: nothing is being
-// looked for, so the first line says what is actually happening.
-export const showNativeBoot = ({ local = false } = {}) => {
-  if (typeof document === "undefined") return { settle: () => {} };
+// The player's language pack arrives a moment after the first paint; `relabel`
+// redraws the line in it (index.js calls it once the pack is loaded).
+export const showNativeBoot = () => {
+  if (typeof document === "undefined") return { settle: () => {}, relabel: () => {} };
   const existing = document.getElementById(BOOT_ID);
-  if (existing) return { settle: () => {} }; // already up; do not stack two
+  if (existing) return { settle: () => {}, relabel: () => {} }; // already up; do not stack two
 
   const style = document.createElement("style");
   style.textContent = css;
@@ -107,7 +95,9 @@ export const showNativeBoot = ({ local = false } = {}) => {
 
   const status = document.createElement("div");
   status.className = "oh-boot-status";
-  status.textContent = local ? "Getting the world ready…" : bootStatusText(null);
+  let settled = false; // true once the library is seeded and the game can show
+  const statusText = () => bootStatusText(settled);
+  status.textContent = statusText();
 
   const track = document.createElement("div");
   track.className = "oh-boot-track";
@@ -138,16 +128,22 @@ export const showNativeBoot = ({ local = false } = {}) => {
   };
 
   // Nothing below is allowed to leave the screen up for ever.
-  const deadline = setTimeout(remove, CONNECT_DEADLINE_MS);
+  const deadline = setTimeout(remove, BOOT_DEADLINE_MS);
 
   return {
-    // Called once with the settled connection (or null if it failed outright).
-    settle: (connection) => {
+    // Called once, when the game behind the screen is ready to be seen.
+    settle: () => {
       clearTimeout(deadline);
       if (removed) return; // the deadline already let the player through
-      status.textContent = bootStatusText(connection);
+      settled = true;
+      status.textContent = statusText();
       const waited = Date.now() - shownAt;
       setTimeout(remove, Math.max(0, MIN_VISIBLE_MS - waited));
+    },
+    relabel: () => {
+      if (removed) return;
+      status.textContent = statusText();
+      if (bootTranslated()) root.setAttribute("data-no-translate", "");
     },
   };
 };

@@ -6,8 +6,8 @@ import path from 'node:path'
 
 // The big map binaries live in public/ so the dev server and the Express server can
 // serve them off disk, but NEITHER build serves them from the bundle: the desktop
-// streams them via /api/runtime/pmtiles/:assetKey, and the website fetches them from
-// the content nodes, hash-verified against the signed manifest.
+// streams them via /api/runtime/pmtiles/:assetKey, and a web build carries its own
+// pinned copies, which scripts/stage-map-assets.mjs lays into the output AFTER this.
 //
 // Vite copies publicDir wholesale and offers no partial exclude, so it duplicated
 // ~160MB into dist/ and — worse — made `npm run build:site` emit a site Cloudflare
@@ -17,10 +17,11 @@ import path from 'node:path'
 // are gitignored and arrive from the map-data Release at first launch, so CI and a
 // fresh clone build fine and the deploy failure looks random. Dropping them after
 // the copy is the fix; "remember to delete them before deploying" is not.
-// Never wanted in EITHER build: nothing loads a pmtiles archive from the bundle.
-// The desktop streams them off disk via /api/runtime/pmtiles/:assetKey and the
-// website fetches them from the content nodes, hash-verified. Copying them in only
-// broke the Pages deploy at its 25 MiB-per-file limit.
+// A developer's copies are never wanted in EITHER build. The desktop streams its
+// archives off disk via /api/runtime/pmtiles/:assetKey. A web build carries the
+// pinned z8 archives under the same names, laid in after the build by
+// scripts/stage-map-assets.mjs; whatever happens to sit in public/ must not go
+// in their place (a z10 archive would break the Pages deploy at its 25 MiB a file).
 const PMTILES = [
   'assets/regions.pmtiles',
   'assets/countries.pmtiles',
@@ -32,12 +33,15 @@ const PMTILES = [
 // — so dropping them there makes /assets/regions-seed.geojson fall through to the
 // SPA fallback, answer with index.html, and the editor open with zero regions.
 //
-// The web build resolves them from VITE_OH_PMTILES_URL instead (see
-// regionImport.js), so it never reads them from the bundle — and it must not carry
-// them: regions-seed.geojson is 52.8MB at z8 and Pages rejects any file over 25MiB.
+// A web build must not carry THESE copies: a developer's public/ holds the
+// desktop's (regions-seed.geojson is 55 MB at z8, and Pages rejects any file
+// over 25 MiB). It carries its own, web-sized ones, which scripts/stage-map-assets.mjs
+// lays into the output after this from the pinned map-data release
+// (scripts/map-assets.web.json), under the same names.
 const EDITOR_SEEDS = [
   'assets/regions-seed.geojson',
   'assets/cities-seed.json',
+  'assets/default-regions.geojson',
 ]
 
 // The Android bundle drops both sets as well: mobile/scripts/stage-www.mjs lays
@@ -128,8 +132,8 @@ export default defineConfig(({ mode }) => ({
     // a plain truthiness check.
     'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web' || mode === 'android'),
     // The Android app is the web build with everything on the device: the map
-    // under /assets instead of a content node, native file saving, native HTTP
-    // for a model on the LAN. A second compile-time literal, so those branches
+    // inside the APK (the website carries the same files under its own /assets),
+    // native file saving, native HTTP for a model on the LAN. A second compile-time literal, so those branches
     // are stripped from the website exactly as the web ones are from desktop.
     'import.meta.env.VITE_OH_NATIVE': JSON.stringify(mode === 'android'),
   },
@@ -159,6 +163,12 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     rollupOptions: {
+      // The game, and the hidden page a desktop host runs a shared game's
+      // engine in (engine.html, src/multiplayer/host/engineMain.js).
+      input: {
+        main: 'index.html',
+        engine: 'engine.html',
+      },
       output: {
         // Explicit entries so the split is stable across builds rather than
         // incidental. The AI stack reaches the graph only through

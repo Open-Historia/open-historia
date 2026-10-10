@@ -7,7 +7,6 @@ import {
   buildFocusContext,
   combineFocusBounds,
   deriveEventFocusBounds,
-  findNameMentions,
   mergeFeatureParts,
   resolvePolityBounds,
   tileGeometryParts,
@@ -128,54 +127,50 @@ test("an invented polity focuses the regions it actually holds", () => {
   near(deriveEventFocusBounds(event, makeContext(world)), [[-10.2, 51.4], [-6.0, 54.2]]);
 });
 
-// ---- Group B: text fallback no longer matches substrings -------------------
+// ---- Group B: an event's words never move the camera ------------------------
+// The camera used to read the title and the description for any name the map
+// has. Whole-word matching kept "Mali" out of "Somalia"; it could do nothing
+// for a word that IS a place's name. The owner's case: a scout tribe caught a
+// lot of salmon, and the camera flew to the region called Salmon.
 
-test("Somalia does not drag the camera to Mali", () => {
-  const event = { title: "Drought in Somalia", description: "Herders move south." };
-  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.SOM);
+test("an event that merely mentions a place's name leaves the camera alone", () => {
+  for (const event of [
+    { title: "Drought in Somalia", description: "Herders move south." },
+    { title: "Ukraine loses Donetsk", description: "The front collapses." },
+    { title: "Marches across Northern Ireland", description: "Belfast tenses." },
+    { title: "A scout tribe lands a great catch of Kerry salmon", description: "The smokehouses of Connacht work through the night." },
+  ]) {
+    assert.equal(deriveEventFocusBounds(event, context), null, event.title);
+  }
 });
 
-test("Nigeria is not read as Niger", () => {
-  const event = { title: "Elections in Nigeria", description: "A new coalition forms." };
-  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.NGA);
-});
-
-test("Romania is not read as Oman", () => {
-  const event = { title: "Romania joins the pact", description: "Bucharest signs." };
-  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.ROU);
-});
-
-test("Papua New Guinea beats the Guinea inside it", () => {
-  const event = { title: "Unrest in Papua New Guinea", description: "Port Moresby responds." };
-  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.PNG);
-});
-
-test("Northern Ireland is not read as Ireland", () => {
-  const mentions = findNameMentions(
-    "Marches across Northern Ireland",
-    [context.polityIndex, context.regionIndex],
-  );
-  assert.deepEqual(mentions.map((match) => match.token), ["GBR.2_1"]);
-});
-
-test("an event about Northern Ireland does not focus the Republic", () => {
-  const event = { title: "Marches across Northern Ireland", description: "Belfast tenses." };
+test("the places an event names with their kind are where the camera goes", () => {
+  const event = {
+    title: "Marches across Northern Ireland",
+    description: "Dublin watches.",
+    places: [{ kind: "region", name: "Northern Ireland", regionId: "GBR.2_1" }],
+  };
   near(deriveEventFocusBounds(event, context), REGION_BOXES["GBR.2_1"]);
 });
 
-test("a named region inside a named country wins over the whole country", () => {
-  const event = { title: "Ukraine loses Donetsk", description: "The front collapses." };
-  near(deriveEventFocusBounds(event, context), REGION_BOXES["UKR.5_1"]);
+test("a named city, building, unit or sea is the point the engine found for it", () => {
+  const event = { title: "A summit", description: "", places: [{ kind: "city", name: "Kyiv", lng: 30.5, lat: 50.45 }] };
+  near(deriveEventFocusBounds(event, context), [[29.9, 50.0], [31.1, 50.9]]);
 });
 
-test("an ambiguous region name never localises anything", () => {
-  const event = { title: "Storms hit Georgia", description: "Power is out." };
+test("a named country is the land it holds", () => {
+  const event = { title: "A budget passes", description: "", places: [{ kind: "country", name: "Romania" }] };
+  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.ROU);
+});
+
+test("a place still in the model's words, which no engine found, is no place", () => {
+  const event = { title: "A summit", description: "", places: ["city: Kyiv, country: Ukraine", "Donetsk"] };
   assert.equal(deriveEventFocusBounds(event, context), null);
 });
 
-test("the title outranks the description", () => {
-  const event = { title: "Ireland mobilises", description: "Somalia and Nigeria watch." };
-  near(deriveEventFocusBounds(event, context), [[-10.2, 51.4], [-6.0, 54.2]]);
+test("the sides of an event's fighting frame it when nothing nearer does", () => {
+  const event = { title: "Skirmishes", description: "", combatants: ["Romania"] };
+  near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.ROU);
 });
 
 // ---- Group C: impacts outrank prose ---------------------------------------
@@ -208,6 +203,48 @@ test("a transfer we cannot place falls back to the polities that fought over it"
   };
 
   near(deriveEventFocusBounds(event, context), COUNTRY_BOXES.SOM);
+});
+
+test("a captured or contested region pins that region, not the country at war", () => {
+  const capture = {
+    title: "Ukraine loses ground",
+    description: "",
+    impacts: {
+      regionControlOps: [{ op: "control", regionId: "UKR.5_1", fromCode: "Ukraine", toCode: "Somalia" }],
+      polityChanges: [{ code: "Ukraine", name: "Ukraine" }],
+    },
+  };
+  near(deriveEventFocusBounds(capture, context), REGION_BOXES["UKR.5_1"]);
+
+  const contest = {
+    title: "Fighting in the south",
+    description: "",
+    impacts: { regionControlOps: [{ op: "contest", regionId: "UKR.9_1", actorCode: "Somalia", fromCode: "Ukraine" }] },
+  };
+  near(deriveEventFocusBounds(contest, context), REGION_BOXES["UKR.9_1"]);
+});
+
+test("a claim pins the claimed region", () => {
+  const event = {
+    title: "Somalia makes a claim",
+    description: "",
+    impacts: { regionClaims: [{ regionId: "IRL.7_1", claimantCode: "Somalia" }] },
+  };
+
+  near(deriveEventFocusBounds(event, context), REGION_BOXES["IRL.7_1"]);
+});
+
+test("a group spreading into regions frames those regions", () => {
+  const event = {
+    title: "The movement grows",
+    description: "",
+    impacts: { groupOps: [{ op: "take", name: "Western Front", regionIds: ["IRL.4_1", "IRL.7_1"] }] },
+  };
+  near(deriveEventFocusBounds(event, context), [[-10.2, 51.4], [-6.0, 54.2]]);
+
+  // A streamed card's looser shape names the same place.
+  const loose = { title: "A cell appears", description: "", impacts: { groupOps: [{ op: "create", group: "Cell", regionId: "UKR.5_1" }] } };
+  near(deriveEventFocusBounds(loose, context), REGION_BOXES["UKR.5_1"]);
 });
 
 test("unit and marker coordinates focus the spot the event names", () => {

@@ -61,6 +61,25 @@ test("a check that fails costs only its own changes, and the event stands as wri
     assert.equal(events[0].impacts.markerOps?.length, 1, "the structure still lands");
 });
 
+// The player's Cancel is not a failed check. Each Director catches every failure
+// of its own analysis and carries on, so it is handed the signal too: a turn
+// cancelled while one is being asked ends there instead of going on to be
+// written without that Director's changes.
+test("a turn cancelled while a Director is asked stops, and no later Director is asked", async () => {
+    const controller = new AbortController();
+    let askedAfter = 0;
+    const cancelled = async () => {
+        controller.abort();
+        throw new DOMException("Timeline jump cancelled.", "AbortError");
+    };
+    const later = async () => { askedAfter += 1; return { payload: { eventOrders: [] } }; };
+    await assert.rejects(
+        consequences({ analyze: { units: cancelled, territory: null, structures: later }, signal: controller.signal }),
+        { name: "AbortError" },
+    );
+    assert.equal(askedAfter, 0);
+});
+
 test("the territory changes are resolved against the map after the territory check", async () => {
     let resolved = null;
     await consequences({

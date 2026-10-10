@@ -1,9 +1,6 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import {
@@ -13,14 +10,21 @@ import {
     getPrimedScenarioRegionCatalog,
     loadCountryNames,
     loadRegionCatalog,
-    loadRollbackSnapshotCount,
+    loadRollbackSnapshot,
+    loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, heldSkipToRerun, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { HELD_TURN, NO_RESPONSE_BODY_NOTE, discardHeldTurn } from "../AI/simulationStatus.js";
+import { undoableTurns } from "../../runtime/turnCommit.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, retryHeldPlayerEvents, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { HELD_TURN, PARKED_TURN_STALE_NOTE, discardHeldTurn, discardParkedTurn, getHeldTurn, getParkedTurn, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { checksHeldError } from "../AI/turnChecks.js";
+import { describePlayerTurnFailures } from "../AI/playerTurnFailures.js";
+import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
+import { AI_REQUEST_CONTROL_EVENT } from "../AI/aiRequestControl.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { describeRequestActivity, formatElapsedClock, requestActivity } from "../AI/requestActivity.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -29,7 +33,9 @@ import { documentsForEvent } from "../../runtime/reportDelivery.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
-import { normalizeMarkdown } from "./markdownText.js";
+import { describeReceiptForPlayer } from "../../runtime/applicationReceipt.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import { isAuthoredEvent } from "../../runtime/translationRules.js";
 import { normalizeEventQuote } from "../../runtime/eventQuote.js";
 import { playerFacingJumpError } from "./jumpErrorCopy.js";
 import { filedFateLabel, normalizeFiledEvents } from "../../runtime/filedEvents.js";
@@ -52,10 +58,27 @@ import { getUnitById, setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMapSettingValue, useMotionSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
-import { normalizeGroupOp } from "../../runtime/groups.js";
+import {
+    MAP_CHANGE_KIND_LABELS,
+    SHOW_EVENT_ON_TIMELINE,
+    buildLiveTurnRecord,
+    captureRevealCarry,
+    describeEventMapChanges,
+    eventDisclosureKey,
+    findTurnIndexOfEvent,
+    findTurnSnapshot,
+    resolvePolityName,
+    resolveRegionName,
+    resolveRevealCarry,
+    revealNeedsStaging,
+    shownTurnIndex,
+    turnRecordId,
+} from "./turnReveal.js";
+import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
+import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 dayjs.extend(advancedFormat);
 
@@ -120,13 +143,13 @@ const ensureTimelineStyles = () => {
 
 // An event description is written in paragraphs now, and a model that separates
 // them with a single newline used to have them glued back into one block:
-// CommonMark treats a lone newline as a space. remark-breaks makes it a real
-// break, remark-gfm gets the rest of the vocabulary a model reaches for, and
-// normalizeMarkdown repairs the <br>/<b> tags it writes instead of markdown -
-// the same three the advisor and the chat have always had (markdown.jsx). The
-// card keeps its own stylesheet rather than borrowing .oh-md, which is sized for
-// a side panel.
-const EVENT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+// CommonMark treats a lone newline as a space. So event bodies and documents go
+// through the shared renderer (markdown.jsx) like every other model text:
+// remark-breaks makes a lone newline a real break, remark-gfm gets the rest of
+// the vocabulary a model reaches for (tables), normalizeMarkdown repairs the
+// <br>/<b> tags it writes instead of markdown, and links open in the system
+// browser. `bare`: the card keeps its own stylesheet (.timeline-markdown) rather
+// than borrowing .oh-md, which is sized for a side panel.
 const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     useEffect(() => {
         ensureTimelineStyles();
@@ -265,94 +288,8 @@ const formatRange = (fromDate, toDate) => {
     return `${formatDate(fromDate)} -> ${formatDate(toDate)}`;
 };
 
-const resolvePolityName = (code, polityLookup) => {
-    if (!code) {
-        return "";
-    }
-
-    return polityLookup.get(code) || code;
-};
-
-const resolveRegionName = (transfer, regionLookup) => {
-    if (!transfer) {
-        return "";
-    }
-
-    return transfer.regionName || regionLookup.get(transfer.regionId)?.name || transfer.regionId || "";
-};
-
-// Every change an event made to the map, in words — what the "N map changes"
-// pill opens into. Transfers and control moves name the region and both sides,
-// polity changes say what happened to the country, unit and structure ops say
-// what was raised, moved or built: the impacts' own vocabulary, read out.
-const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup = new Map() } = {}) => {
-    const impacts = event?.impacts ?? {};
-    const polity = (code) => resolvePolityName(code, polityLookup) || "";
-    const region = (entry) => resolveRegionName(entry, regionLookup) || "a region";
-    const unitName = (id) => getUnitById(id)?.name || `unit ${id}`;
-    const note = (text) => (text ? ` — ${text}` : "");
-    const lines = [];
-    for (const transfer of impacts.regionTransfers ?? []) {
-        lines.push({ kind: "territory", text: `${region(transfer)}: ${polity(transfer.fromCode) || "unowned"} → ${polity(transfer.toCode) || "unowned"}${transfer.wholeCountry ? " (whole country)" : ""}${note(transfer.note)}` });
-    }
-    for (const op of impacts.regionControlOps ?? []) {
-        if (op?.op === "contest") lines.push({ kind: "control", text: `${region(op)}: contested by ${polity(op.actorCode)}, held by ${polity(op.fromCode) || "no one"}${note(op.note)}` });
-        else if (op?.op === "control") lines.push({ kind: "control", text: `${region(op)}: control passes from ${polity(op.fromCode) || "no one"} to ${polity(op.toCode)}${note(op.note)}` });
-        else if (op?.op === "clear_contest") lines.push({ kind: "control", text: `${region(op)}: ${op.clearAll ? "every contest settled" : `${polity(op.claimantCode)} no longer contests it`}${note(op.note)}` });
-    }
-    for (const claim of impacts.regionClaims ?? []) {
-        lines.push({ kind: "claim", text: `${region(claim)}: ${claim.drop ? `${polity(claim.claimantCode)} drops its claim` : `claimed by ${polity(claim.claimantCode)}`}${note(claim.note)}` });
-    }
-    // Groups (runtime/groups.js): read through the normalizer, so a streamed
-    // card's "erase" reads as the dissolve it is.
-    for (const raw of impacts.groupOps ?? []) {
-        const op = normalizeGroupOp(raw);
-        if (!op) continue;
-        const names = op.regionIds.map((id) => regionLookup.get(id)?.name || id);
-        const where = names.length > 4 ? `${names.slice(0, 4).join(", ")} and ${names.length - 4} more` : names.join(", ");
-        if (op.op === "create") lines.push({ kind: "group", text: `${op.name}: a new group${where ? `, controlling ${where}` : ""}${note(op.note)}` });
-        else if (op.op === "dissolve") lines.push({ kind: "group", text: `${op.name}: erased, with the area it controlled${note(op.note)}` });
-        else if (op.op === "release") lines.push({ kind: "group", text: `${op.name} ${where ? `loses control of ${where}` : "loses its whole area"}${note(op.note)}` });
-        else if (op.op === "take") lines.push({ kind: "group", text: `${where || "No region"}: controlled by ${op.name}${note(op.note)}` });
-        else lines.push({ kind: "group", text: `${op.newName ? `${op.name} is now ${op.newName}` : `${op.name}: changed`}${where ? `, taking ${where}` : ""}${note(op.note)}` });
-    }
-    for (const change of impacts.polityChanges ?? []) {
-        const verb = { create: "created", rename: "renamed", dissolve: "dissolved", restore: "restored", update: "updated" }[change.operation] || "updated";
-        const name = change.name || polity(change.code) || "a polity";
-        const details = [];
-        if (change.operation === "rename" && change.code && change.name && change.code !== change.name) details.push(`was ${polity(change.code)}`);
-        if (change.color) details.push(`colour ${change.color}`);
-        if (change.reputation != null && change.reputation !== "") details.push(`reputation ${change.reputation}`);
-        if (change.intelligence != null && change.intelligence !== "") details.push(`intelligence ${change.intelligence}`);
-        if (Array.isArray(change.tags) && change.tags.length) details.push(`tags ${change.tags.join(", ")}`);
-        lines.push({ kind: "polity", text: `${name}: ${verb}${details.length ? ` (${details.join("; ")})` : ""}${note(change.note)}` });
-    }
-    for (const op of impacts.unitOps ?? []) {
-        if (op?.op === "spawn") lines.push({ kind: "unit", text: `${op.unit?.name || "A formation"} raised — ${op.unit?.type || "unit"} of ${polity(op.unit?.ownerCode) || "an unknown owner"}${note(op.unit?.note)}` });
-        else if (op?.op === "move") lines.push({ kind: "unit", text: `${unitName(op.unitId)} moves${op.regionId ? ` to ${op.regionId}` : ""}${op.posture ? ` (${op.posture})` : ""}${note(op.note)}` });
-        else if (op?.op === "strength") lines.push({ kind: "unit", text: `${unitName(op.unitId)}: strength ${op.strength}%${note(op.note)}` });
-        else if (op?.op === "remove") lines.push({ kind: "unit", text: `${unitName(op.unitId)} removed${note(op.note)}` });
-    }
-    for (const op of impacts.markerOps ?? []) {
-        if (op?.op === "build") lines.push({ kind: "structure", text: `${op.marker?.name || "A structure"} built${op.marker?.kind ? ` (${op.marker.kind})` : ""}${op.marker?.ownerCode ? ` by ${polity(op.marker.ownerCode)}` : ""}${note(op.marker?.note)}` });
-        else if (op?.op === "remove") lines.push({ kind: "structure", text: `${op.name || op.markerId || "A structure"} removed${note(op.note)}` });
-        else if (op?.op === "rename") lines.push({ kind: "structure", text: `${op.name || op.markerId} renamed ${op.newName}${note(op.note)}` });
-        else if (op?.op === "update") lines.push({ kind: "structure", text: `${op.name || op.markerId} updated` });
-        else if (op?.op === "population") lines.push({ kind: "structure", text: `${op.name || op.markerId}: population changed` });
-    }
-    // Two ops that read the same are one change to the player. Events written
-    // before the unit director stopped adding a second move for a unit already
-    // moved (nativeUnitDirector.js opKey) carry both, a few hundred metres apart.
-    const seen = new Set();
-    return lines.filter((line) => {
-        const key = `${line.kind}\u0000${line.text}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-};
-
-const getEventMapChangeCount = (event) => describeEventMapChanges(event).length;
+// A unit an operation names by id only, by the name the map has for it.
+const unitNameById = (id) => getUnitById(id)?.name || "";
 
 const collectEventTags = (event, { polityLookup, regionLookup }) => {
     const labels = new Set();
@@ -527,7 +464,9 @@ const focusMapOnBounds = (mapRef, bounds) => {
 const filterPlannedActions = (actions) =>
 normalizeActions(actions).filter((action) => action.status === "planned");
 
-const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) => {
+// Built only for a turn the Events panel shows: the newest, or an older one
+// the player turned back to with the header's ‹ ›.
+const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
     if (!entry) {
         return null;
     }
@@ -543,23 +482,6 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
     const fromDate = fallbackStartDate || toDate;
     const events = (entry.eventIds ?? []).map((eventId) => eventLookup.get(eventId)).filter(Boolean);
     const plannedActions = filterPlannedActions(entry.plannedActions || entry.actions);
-    const mapChangeCount = events.reduce((sum, event) => sum + getEventMapChangeCount(event), 0);
-    const tags = new Set();
-
-    for (const action of plannedActions) {
-        for (const invitee of action?.invitees ?? []) {
-            if (invitee) {
-                tags.add(invitee);
-            }
-        }
-    }
-
-    for (const event of events) {
-        for (const label of collectEventTags(event, lookups)) {
-            tags.add(label);
-        }
-    }
-
     const primaryEvent = events.find((event) => String(event.importance).toLowerCase() === "major") || events[0];
 
     return {
@@ -567,8 +489,7 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         eventCount: events.length,
         events,
         fromDate,
-        id: `${entry.toDate || entry.date || index}-${index}`,
-        mapChangeCount,
+        id: turnRecordId(entry, index),
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
@@ -578,22 +499,18 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         // Written but kept off the timeline (runtime/filedEvents.js).
         filedEvents: normalizeFiledEvents(entry.filedEvents),
         rangeLabel: formatRange(fromDate, toDate),
+        // What the engine dropped or changed of the answer (applicationReceipt.js);
+        // only the newest turn keeps its notes.
+        receipt: entry.receipt || null,
         round: entry.round || 0,
         source: entry.source || "ai",
         summary: entry.summary || "",
-        tags: Array.from(tags).slice(0, 10),
         title:
         primaryEvent?.title ||
         (plannedActions[0]?.title ? `Turn centered on ${plannedActions[0].title}` : `Round ${entry.round || Math.max(1, (game?.round || 1) - index)}`),
         toDate,
     };
 };
-
-// The turn as it is being written, in the shape buildTurnRecord makes, so the
-// Events panel gives a skip in progress the same cards, chips and reveal it
-// gives a finished one (AI/streamedEvents.js). The id is fixed for the length of
-// the skip: the panel keys its filter and its scroll on it.
-const LIVE_TURN_RECORD_ID = "live-turn";
 
 // A copy, because this is the running game's own world and
 // applyEventImpactsToWorld is handed a snapshot everywhere else.
@@ -604,105 +521,6 @@ const cloneWorldForStaging = (world) => {
     } catch {
         return null;
     }
-};
-
-// A field on the shape that is rarely read, computed the first time it is.
-const onFirstRead = (target, key, compute) => {
-    let value;
-    let read = false;
-    Object.defineProperty(target, key, {
-        configurable: true,
-        enumerable: true,
-        get() {
-            if (!read) {
-                value = compute();
-                read = true;
-            }
-            return value;
-        },
-    });
-};
-
-// The card for one streamed event, made once and kept. Cached against the event
-// it came from: the list is rebuilt on every arrival but its entries are the
-// same objects, and a fresh copy each time threw away the memo in every visible
-// EventCard, sending deriveEventLinks back through the place catalog for the
-// whole skip.
-//
-// The id is always the counter's, never the model's. A model may write its own
-// id and may repeat it, and two cards keyed alike is exactly the reconciliation
-// bug this panel must not have. The real ids arrive with the written turn.
-const liveEventCards = new WeakMap();
-let liveEventSeq = 0;
-
-// The lists the cards, the camera and the map staging walk. A streamed event's
-// are whatever the model typed, and `?? []` does not save an iteration from a
-// non-array: that throws in a render and blanks the panel. Dropped here once.
-const LIVE_EVENT_LISTS = [
-    "regionTransfers", "regionControlOps", "regionClaims", "polityChanges",
-    "unitOps", "markerOps", "createdChats", "projectOps", "groupOps",
-];
-
-const liveEventCard = (event) => {
-    if (!event || typeof event !== "object") return event;
-    let card = liveEventCards.get(event);
-    if (!card) {
-        liveEventSeq += 1;
-        card = { ...event, id: `${LIVE_TURN_RECORD_ID}-${liveEventSeq}` };
-        for (const key of ["tags", "combatants"]) {
-            if (card[key] !== undefined && !Array.isArray(card[key])) card[key] = [];
-        }
-        const impacts = card.impacts && typeof card.impacts === "object" && !Array.isArray(card.impacts)
-            ? { ...card.impacts }
-            : {};
-        for (const key of LIVE_EVENT_LISTS) {
-            if (impacts[key] !== undefined && !Array.isArray(impacts[key])) impacts[key] = [];
-        }
-        card.impacts = impacts;
-        liveEventCards.set(event, card);
-    }
-    return card;
-};
-
-const buildLiveTurnRecord = ({ events, fromDate, toDate, round, lookups }) => {
-    // Filtered before anything reads a field off one: this record is built on
-    // every arriving event, and a throw here takes the whole panel down blank.
-    const numbered = events.filter((event) => event && typeof event === "object").map(liveEventCard);
-    const primaryEvent = numbered.find((event) => String(event.importance).toLowerCase() === "major") || numbered[0];
-
-    const record = {
-        date: toDate || fromDate,
-        eventCount: numbered.length,
-        events: numbered,
-        fallbackReason: "",
-        fromDate,
-        id: LIVE_TURN_RECORD_ID,
-        mode: "jump",
-        plannedActions: [],
-        rangeLabel: formatRange(fromDate, toDate),
-        rawResponse: "",
-        round,
-        source: "ai",
-        summary: "",
-        title: primaryEvent?.title || "",
-        toDate,
-    };
-
-    // Both cost a pass over every event and every impact on it, and this record
-    // is rebuilt on every arrival, so computing them eagerly was quadratic for
-    // two fields the Events panel never reads. They belong to the history list,
-    // which never sees a live record.
-    onFirstRead(record, "tags", () => {
-        const tags = new Set();
-        for (const event of numbered) {
-            for (const label of collectEventTags(event, lookups)) tags.add(label);
-        }
-        return Array.from(tags).slice(0, 10);
-    });
-    onFirstRead(record, "mapChangeCount", () => (
-        numbered.reduce((sum, event) => sum + getEventMapChangeCount(event), 0)
-    ));
-    return record;
 };
 
 const MetricPill = ({ children, icon = null, tone = "default", onClick = null, active = false }) => {
@@ -790,7 +608,10 @@ const ghostButtonStyle = {
 
 // What an event is about, as chips that fly the map there (eventFocus.js
 // deriveEventLinks). One glyph per kind, the same family as the map's own.
-const LINK_GLYPHS = { polity: "⚑", region: "⌖", unit: "⛊", structure: "▣" };
+// A chip is only ever a place the event named with its kind, something its
+// operations changed or a polity its structured fields name: a word in its
+// text that happens to be a place's name is not one.
+const LINK_GLYPHS = { polity: "⚑", region: "⌖", city: "●", unit: "⛊", structure: "▣", sea: "≈" };
 
 const LinkPill = ({ link, onFocus }) => (
     <button
@@ -837,21 +658,16 @@ const EventDocument = ({ report }) => {
         {report.visibleTo === null ? "Published" : "Our government's"}{report.dateline ? ` · ${report.dateline}` : ""} {open ? "▴" : "▾"}
         </span>
         </button>
+        {/* Model-written like the description above it, and it is here that
+            line structure matters most: a dateline, a salutation, numbered
+            articles. */}
         {open && (
-            <div className="timeline-markdown" style={{ borderTop: "1px solid rgba(251,191,36,0.12)", color: "rgba(228,228,231,0.84)", fontSize: "0.74rem", lineHeight: 1.55, padding: "0.55rem 0.8rem 0.7rem" }}>
-            <ReactMarkdown>{report.body}</ReactMarkdown>
-            </div>
+            <Markdown bare className="timeline-markdown" style={{ borderTop: "1px solid rgba(251,191,36,0.12)", color: "rgba(228,228,231,0.84)", fontSize: "0.74rem", lineHeight: 1.55, padding: "0.55rem 0.8rem 0.7rem" }}>
+            {report.body}
+            </Markdown>
         )}
         </div>
     );
-};
-
-// What a card is opened by, rather than which card it is. A streamed event's id
-// changes when the turn is written, so a card keyed by id would close at exactly
-// the moment the live panel must not. The headline survives that crossing.
-const eventDisclosureKey = (event) => {
-    const title = String(event?.title ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-    return title || String(event?.id ?? "");
 };
 
 // openMapChanges/onToggleMapChanges let the panel hold the disclosure instead of
@@ -914,9 +730,10 @@ const FiledEventsSection = ({ events }) => {
             <FiledNote fate={event.fate} note={event.note} />
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.75rem 1rem 0.85rem" }}>
             {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
-            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
-            {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
-            <EventQuotation quote={event.quote} compact />
+            {/* The AI wrote these in the player's language: the interface translator leaves them alone. */}
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
+            {event.description && <div data-no-translate style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            <div data-no-translate><EventQuotation quote={event.quote} compact /></div>
             </div>
             </div>
         ))}
@@ -942,6 +759,10 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     const heldAbove = typeof onToggleMapChanges === "function";
     const showMapChanges = heldAbove ? Boolean(openMapChanges) : ownMapChanges;
     const toggleMapChanges = () => (heldAbove ? onToggleMapChanges() : setOwnMapChanges((open) => !open));
+    // The AI writes its events in the player's language: the interface
+    // translator leaves them alone. A scenario's own events are content, and
+    // are translated (runtime/translator.js).
+    const written = isAuthoredEvent(event) ? undefined : "";
     // A streamed card the engine's own checks will keep off the timeline, marked
     // while the model is still writing (AI/gameplay.js markStreamedEvents).
     const filed = event.filed && typeof event.filed === "object" ? event.filed : null;
@@ -949,7 +770,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     return (
         <div
         style={{
-            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+            background: "rgba(255,255,255,0.045)",
             border: filed ? "1px dashed rgba(255,255,255,0.14)" : "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
@@ -1000,21 +821,21 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             <div style={{ color: "#bfdbfe", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>What changed on the map</div>
             {mapChanges.map((change, index) => (
                 <div key={`${event.id}-change-${index}`} style={{ color: "rgba(228,228,231,0.86)", display: "flex", fontSize: "0.74rem", gap: "0.45rem", lineHeight: 1.45 }}>
-                <span style={{ color: "rgba(191,219,254,0.7)", flexShrink: 0, fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.04em", minWidth: "4.4rem", paddingTop: "0.12rem", textTransform: "uppercase" }}>{change.kind}</span>
+                <span style={{ color: "rgba(191,219,254,0.7)", flexShrink: 0, fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.04em", minWidth: "4.4rem", paddingTop: "0.12rem", textTransform: "uppercase" }}>{MAP_CHANGE_KIND_LABELS[change.kind] || change.kind}</span>
                 <span>{change.text}</span>
                 </div>
             ))}
             </div>
         )}
 
-        <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        <div data-no-translate={written} style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
         {event.title}
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
-            <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
-            </div>
+            <Markdown bare className="timeline-markdown" written={written !== undefined} style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            {event.description}
+            </Markdown>
         )}
         <EventQuotation quote={event.quote} />
 
@@ -1062,6 +883,55 @@ const InteractiveOfferStrip = () => {
             <button type="button" className="oh-tap-row" onClick={letPass} disabled={passing} title="Let the moment pass as it happened — free" style={{ ...ghostButtonStyle, opacity: passing ? 0.6 : 1, padding: "0.4rem 0.75rem" }}>
                 {passing ? "Letting it pass…" : "Let it pass"}
             </button>
+        </div>
+    );
+};
+
+// What the engine did not take, or changed, of the skip's answer
+// (runtime/applicationReceipt.js): a capture an event narrated that never
+// reached the map, an event kept off the timeline. The next skip's prompt reads
+// the same record; here it is folded away under the turn, and costs nothing.
+// Each note is its player sentence (runtime/receiptPlayerNotes.js), which the
+// language packs translate, under the name of the event it concerns, which
+// they leave be. A note saved before those sentences existed is the engine's
+// own English, and is left untranslated too.
+const EngineChangesNote = ({ receipt }) => {
+    const [open, setOpen] = useState(false);
+    const summary = useMemo(() => describeReceiptForPlayer(receipt), [receipt]);
+    if (!summary) return null;
+    return (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", marginTop: "0.75rem", overflow: "hidden" }}>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={() => setOpen((value) => !value)}
+        title="Why something an event describes may be missing from the map or the timeline"
+        style={{ alignItems: "center", background: "none", border: "none", color: "rgba(228,228,231,0.78)", cursor: "pointer", display: "flex", font: "inherit", fontSize: "0.72rem", fontWeight: 700, gap: "0.45rem", padding: "0.55rem 0.75rem", textAlign: "left", width: "100%" }}
+        >
+        <span style={{ flex: 1, minWidth: 0 }}>{summary.count === 1 ? "What the engine changed: 1 note" : `What the engine changed: ${summary.count} notes`}</span>
+        <span aria-hidden="true">{open ? "\u25B4" : "\u25BE"}</span>
+        </button>
+        {open && (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "grid", gap: "0.55rem", padding: "0.6rem 0.8rem 0.75rem" }}>
+            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"What the engine left out of this time skip's answer, or changed, before it reached the map and the timeline."}</div>
+            {summary.groups.map((group) => (
+                <div key={group.kind} style={{ display: "grid", gap: "0.25rem" }}>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.7rem", fontWeight: 700 }}>{group.title}</div>
+                <ul style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
+                {group.notes.map((note, index) => (
+                    <li key={`${group.kind}-${index}`}>
+                    {note.event && <div data-no-translate style={{ color: "rgba(255,255,255,0.8)", fontWeight: 600 }}>{note.event}</div>}
+                    {note.engine ? <div data-no-translate>{note.text}</div> : <div>{note.text}</div>}
+                    </li>
+                ))}
+                </ul>
+                </div>
+            ))}
+            {summary.omitted > 0 && (
+                <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem" }}>{summary.omitted === 1 ? "1 more note was left out for length." : `${summary.omitted} more notes were left out for length.`}</div>
+            )}
+            </div>
+        )}
         </div>
     );
 };
@@ -1189,8 +1059,15 @@ const PanelChrome = ({
 // day and, until this line, no way to see them going.
 const RequestsTodayCaption = () => {
     const [day, setDay] = useState(() => requestDay());
+    // Held as state, like the day: a value read from storage while rendering is
+    // one the compiler keeps from the first render, so this line went on saying
+    // what a skip cost under the setting it was first drawn with.
+    const [saving, setSaving] = useState(() => savingRequests());
     useEffect(() => {
-        const refresh = () => setDay(requestDay());
+        const refresh = () => {
+            setDay(requestDay());
+            setSaving(savingRequests());
+        };
         window.addEventListener("ai:request-budget", refresh);
         const timer = setInterval(refresh, 60000);
         return () => {
@@ -1198,7 +1075,11 @@ const RequestsTodayCaption = () => {
             clearInterval(timer);
         };
     }, []);
-    const cost = describeJumpCost({ saveRequests: savingRequests() });
+    // A skip is one request; function calling is what can add to it (Settings →
+    // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
+    // That switch is on unless it was turned off.
+    const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
+    const cost = describeJumpCost({ lookups: !saving && lookupsOn });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
     const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
@@ -1209,9 +1090,15 @@ const RequestsTodayCaption = () => {
         >
             <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today
             <br />
-            {cost.capped
-                ? <>a skip uses <span data-no-translate>{cost.min}</span>, at most <span data-no-translate>{cost.max}</span>{segmented ? ", plus one per extra segment" : ""}</>
-                : <>a skip can use twenty or more</>}
+            {/* A whole line, one string, in an element of its own, so a language
+                pack translates the sentence and not its pieces (docs/i18n.md). */}
+            <span>
+                {cost.lookups
+                    ? (segmented
+                        ? `a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment`
+                        : `a skip uses 1 request, at most ${cost.max} when the model looks things up`)
+                    : (segmented ? "a skip uses 1 request, plus one per extra segment" : "a skip uses 1 request")}
+            </span>
             {day.lastJump ? <> · the last used <span data-no-translate>{day.lastJump.used}</span></> : null}
         </div>
     );
@@ -1255,47 +1142,109 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
     );
 };
 
+// What the open request is doing, in the words the row shows under the phase
+// (AI/requestActivity.js names the three states).
+const REQUEST_ACTIVITY_TEXTS = {
+    waiting: "Waiting for the model to answer…",
+    thinking: "The model is thinking…",
+    writing: "The model is writing its answer…",
+};
+// Added once the request has been open a minute: by then a player who does not
+// know a thinking model can take ten is reaching for Cancel.
+const REQUEST_STILL_OPEN_TEXT = "Still working: a slow model can take several minutes. The request is still open.";
+
+// What the row adds to the phase's name: how long the skip has run, and what
+// its open request is doing. Both are read off the clock, so they are state the
+// row's own timer refreshes, never values worked out while rendering.
+const readSkipProgress = (startedAt) => ({
+    elapsed: startedAt ? formatElapsedClock(Date.now() - startedAt) : "",
+    request: requestActivity.current(),
+});
+
 // What the skip is doing, and the way out. The same row in both panels, so
 // switching between them does not look like two different states of the game.
-const SkipProgressRow = ({ label, onCancel }) => (
-    <div
-    style={{
-        alignItems: "center",
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "12px",
-        color: "rgba(255,255,255,0.75)",
-        display: "flex",
-        fontSize: "0.76rem",
-        gap: "0.55rem",
-        justifyContent: "center",
-        padding: "0.68rem 0.8rem",
-    }}
-    >
-    <SpinnerRing size={15} />
-    <span>{label || "Simulating…"}</span>
-    {onCancel && (
-        <button
-        type="button"
-        className="oh-tap-row"
-        onClick={onCancel}
+//
+// A skip is mostly one long request, and a spinner beside an unchanging line
+// reads as a hung one: players cancelled skips that were minutes from landing.
+// So the row also counts the time since the skip began (`startedAt`, held by
+// the widget: the row is mounted afresh whenever the player changes panel) and
+// says, on a second line, what the open request is doing. The second line is
+// absent while the skip is doing its own work between requests.
+//
+// The clock ticks in here, once a second and whenever the request changes
+// state, so the panel around the row is not rendered again for it.
+const SkipProgressRow = ({ label, onCancel, startedAt = 0 }) => {
+    const [progress, setProgress] = useState(() => readSkipProgress(startedAt));
+    useEffect(() => {
+        const refresh = () => setProgress(readSkipProgress(startedAt));
+        const timer = setInterval(refresh, 1000);
+        const stopListening = requestActivity.subscribe(refresh);
+        return () => {
+            clearInterval(timer);
+            stopListening();
+        };
+    }, [startedAt]);
+    const activity = progress.request ? REQUEST_ACTIVITY_TEXTS[progress.request.state] : "";
+
+    return (
+        <div
         style={{
-            background: "rgba(220,38,38,0.18)",
-            border: "1px solid rgba(248,113,113,0.5)",
-            borderRadius: "8px",
-            color: "#fecaca",
-            cursor: "pointer",
-            fontSize: "0.74rem",
-            fontWeight: 600,
-            marginLeft: "0.2rem",
-            padding: "0.28rem 0.7rem",
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: "12px",
+            color: "rgba(255,255,255,0.75)",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: "0.76rem",
+            gap: "0.4rem",
+            padding: "0.68rem 0.8rem",
         }}
         >
-        Cancel
-        </button>
-    )}
-    </div>
-);
+        {/* The label may wrap and the clock and Cancel may not: on a phone the
+            row is under 280 px wide, and Cancel must stay on it. */}
+        <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "center" }}>
+        <span style={{ display: "flex", flexShrink: 0 }}><SpinnerRing size={15} /></span>
+        <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{label || "Simulating…"}</span>
+        {/* Its own element: a number that changes every second is never text to translate. */}
+        {progress.elapsed && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+            {progress.elapsed}
+            </span>
+        )}
+        {onCancel && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={onCancel}
+            style={{
+                background: "rgba(220,38,38,0.18)",
+                border: "1px solid rgba(248,113,113,0.5)",
+                borderRadius: "8px",
+                color: "#fecaca",
+                cursor: "pointer",
+                flexShrink: 0,
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                marginLeft: "0.2rem",
+                padding: "0.28rem 0.7rem",
+                whiteSpace: "nowrap",
+            }}
+            >
+            Cancel
+            </button>
+        )}
+        </div>
+        {/* Each sentence in an element of its own, so each is looked up whole
+            in the player's language. */}
+        {activity && (
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", lineHeight: 1.45, textAlign: "center" }}>
+            <span>{activity}</span>
+            {progress.request.stillWorking && <> <span>{REQUEST_STILL_OPEN_TEXT}</span></>}
+            </div>
+        )}
+        </div>
+    );
+};
 
 // A HELD turn, not a failed one: generated, NOT written, waiting on the
 // player (AI/simulationStatus.js HELD_TURN). Amber rather than red for that
@@ -1339,6 +1288,26 @@ const HELD_NOTICE = Object.freeze({
     },
 });
 
+// The turn already held for the open campaign, as its notice. The widget is
+// mounted afresh for each campaign, and a turn held in this one outlives a
+// visit to another: its notice is put back from the hold itself
+// (AI/simulationStatus.js), with the message it was held with when the hold
+// kept one, else said again from what the hold carries.
+const heldTurnMessage = (kind, hold) => {
+    if (hold.message) return hold.message;
+    if (kind === HELD_TURN.segment) return "A segment of this jump failed.";
+    if (kind === HELD_TURN.board) return "The Projects & Operations board did not update.";
+    if (kind === HELD_TURN.events) return describePlayerTurnFailures(hold.failures);
+    return checksHeldError(hold.state?.checks?.failures?.()).message;
+};
+const heldTurnOnOpen = () => {
+    for (const kind of Object.values(HELD_TURN)) {
+        const hold = getHeldTurn(kind);
+        if (hold) return { kind, message: heldTurnMessage(kind, hold), failures: hold.failures ?? null, retries: 0 };
+    }
+    return null;
+};
+
 // What failed, for a turn held on the player's events: each refused event with
 // why, and each order that got no outcome.
 const HeldFailureList = ({ failures }) => {
@@ -1349,7 +1318,7 @@ const HeldFailureList = ({ failures }) => {
         <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {events.map((event) => (
             <li key={`event-${event.title}`}>
-            <span style={{ fontWeight: 600 }}>{event.title}</span>
+            <span data-no-translate style={{ fontWeight: 600 }}>{event.title}</span>
             <span style={{ color: "rgba(253,230,138,0.72)" }}> — {event.reason}</span>
             </li>
         ))}
@@ -1481,20 +1450,32 @@ const TimelineSkipPanel = ({
     onClose,
     onDeclineModeSuggestion,
     onDiscardHeld,
+    isApplyingParked = false,
+    onApplyParked,
+    onDiscardParked,
+    parkedHeld = false,
     onJump,
     onRetryHeld,
     onRetryWholeSkip,
     onUndo,
     progressLabel,
+    progressStartedAt = 0,
     sceneInProgress = false,
     topOffset,
     undoCount,
 }) => {
     const [customValue, setCustomValue] = useState("");
     const [customUnit, setCustomUnit] = useState("days");
+    // A turn is being made: a skip, or the retry of a held one. The retry
+    // raises only its own flag, and everything here used to ask isLoading
+    // alone, so the skips, Auto-jump, Go and Undo all stayed live through a
+    // retry that can take minutes: a skip started then ran a second turn from
+    // the same pre-jump world, both spent requests, and the later write
+    // replaced the earlier.
+    const busy = isLoading || isRetryingHeld;
     // Time stands still while an interactive event is being played: the skips
     // wait for it to end or be set aside, as the engine does.
-    const blocked = isLoading || sceneInProgress;
+    const blocked = busy || sceneInProgress;
     const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
     const runCustomJump = () => {
         const amount = Number(customValue);
@@ -1569,15 +1550,15 @@ const TimelineSkipPanel = ({
             <button
             type="button"
             className="oh-tap-row"
-            disabled={isLoading}
-            onClick={() => { if (!isLoading) onUndo(); }}
+            disabled={busy}
+            onClick={() => { if (!busy) onUndo(); }}
             style={{
                 background: "rgba(180,83,9,0.18)",
                 border: "1px solid rgba(245,158,11,0.5)",
                 borderRadius: "10px",
                 color: "#fcd9a8",
-                cursor: isLoading ? "default" : "pointer",
-                opacity: isLoading ? 0.7 : 1,
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.7 : 1,
                 padding: "0.38rem 0",
                 textAlign: "center",
                 width: "12.5rem",
@@ -1728,8 +1709,16 @@ const TimelineSkipPanel = ({
         <RequestsTodayCaption />
         </div>
 
-        {/* The events are in the Events panel; this is for a player who came back to cancel. */}
-        {isLoading && <SkipProgressRow label={progressLabel} onCancel={onCancel} />}
+        {/* The events are in the Events panel; this is for a player who came back to cancel.
+            A held turn's retry shows it too: it can run for minutes, and its
+            Cancel is the skip's (the notice below offers the same one). */}
+        {isLoading && (
+            <SkipProgressRow
+            label={progressLabel || (isRetryingHeld ? (HELD_NOTICE[held?.kind]?.retrying ?? "") : isApplyingParked ? "Applying the time skip…" : "")}
+            onCancel={onCancel}
+            startedAt={progressStartedAt}
+            />
+        )}
 
         {error && (
             <div
@@ -1744,6 +1733,71 @@ const TimelineSkipPanel = ({
             }}
             >
             {error}
+            </div>
+        )}
+
+        {/* A KEPT skip: it finished while another campaign was open, so it was
+            not written there, and it was kept for this one with everything it
+            cost. Amber like the held turns below, because nothing is lost and
+            nothing is written yet; Apply writes it without asking the model
+            again, Discard throws it away. */}
+        {parkedHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>A time skip finished while another campaign was open, so nothing from it has been saved yet.</div>
+            <div>Apply it to write it into this campaign without asking the model again, or discard it.</div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onApplyParked}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isApplyingParked ? "Applying the time skip…" : "Apply the time skip"}
+                </button>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isApplyingParked}
+                onClick={onDiscardParked}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isApplyingParked ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isApplyingParked ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the time skip
+                </button>
+            </div>
             </div>
         )}
 
@@ -1829,6 +1883,58 @@ const TimelineSkipPanel = ({
     );
 };
 
+// The Events panel's header line with the ‹ › between the kept turns: the
+// round, then the dates it spans, each its own string. The newest turn is on
+// the right, as on a timeline.
+const turnPickerButtonStyle = (enabled) => ({
+    alignItems: "center",
+    background: "none",
+    border: "none",
+    borderRadius: "6px",
+    color: enabled ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.2)",
+    cursor: enabled ? "pointer" : "default",
+    display: "inline-flex",
+    font: "inherit",
+    fontSize: "0.95rem",
+    justifyContent: "center",
+    lineHeight: 1,
+    padding: "0.1rem 0.35rem",
+});
+
+const TurnPicker = ({ index, count, onOlder, onNewer, round, rangeLabel }) => {
+    const canOlder = index < count - 1;
+    const canNewer = index > 0;
+    return (
+        <span style={{ alignItems: "center", display: "inline-flex", flexWrap: "wrap", gap: "0.2rem", maxWidth: "100%" }}>
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canOlder ? onOlder : undefined}
+        disabled={!canOlder}
+        aria-label="Show the previous turn"
+        title="Show the previous turn"
+        style={turnPickerButtonStyle(canOlder)}
+        >
+        {"‹"}
+        </button>
+        {round > 0 && <span>{`Round ${round}`}</span>}
+        {round > 0 && rangeLabel && <span aria-hidden="true">{"·"}</span>}
+        {rangeLabel && <span>{rangeLabel}</span>}
+        <button
+        type="button"
+        className="oh-tap"
+        onClick={canNewer ? onNewer : undefined}
+        disabled={!canNewer}
+        aria-label="Show the next turn"
+        title="Show the next turn"
+        style={turnPickerButtonStyle(canNewer)}
+        >
+        {"›"}
+        </button>
+        </span>
+    );
+};
+
 const TimelineHistoryPanel = ({
     isOpen,
     onRevealNextEvent,
@@ -1846,7 +1952,7 @@ const TimelineHistoryPanel = ({
     // moved. The cards and the reveal are a finished turn's, but everything that
     // acts on a written turn waits for it to land.
     live = false,
-    // { label, onCancel } while the skip runs.
+    // { label, onCancel, startedAt } while the skip runs.
     progress = null,
     record,
     topOffset,
@@ -1855,16 +1961,18 @@ const TimelineHistoryPanel = ({
     // validated self (eventDisclosureKey).
     openMapChanges = null,
     onToggleMapChanges = null,
+    // { index, count, onOlder, onNewer }: the header's ‹ › between the kept
+    // turns, index 0 the newest; null hides it.
+    turnPicker = null,
+    // { eventId, seq }: a card another panel asked to be shown.
+    focusRequest = null,
     warning,
-    // { failed: [polity], state: "idle" | "working" }: agents whose report did
-    // not come back after the turn was written (AI/gameplay.js
-    // refreshSpyIntercepts), with the retry that asks them again.
-    agentReports = null,
-    onRetryAgentReports = null,
     // The newest turn's restore point could not be saved (a very large save,
     // or storage full): there is no Rollback for it, and the player is told why.
     restorePointMissing = false,
 }) => {
+    // An older turn, reread whole: it opens at its first event, not its last.
+    const pastTurn = Boolean(turnPicker && turnPicker.index > 0);
     // Category filter chips (ported from the abdulrahman-2005 fork): only the
     // categories present on this turn's events appear; null = no filter. Older
     // events without tags are always shown. The choice is keyed by the record,
@@ -1890,7 +1998,8 @@ const TimelineHistoryPanel = ({
     ? filteredEvents.slice(0, Math.min(visibleEventCount, totalEvents))
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
-    const lastVisibleEventRef = React.useRef(null);
+    const scrollAnchorRef = React.useRef(null);
+    const scrollAnchorIndex = pastTurn ? 0 : visibleEvents.length - 1;
     // The reveal buttons pin a compact minHeight inline, which the finger-sized
     // .oh-tap-row cannot beat; on a touch screen it is left to the class.
     const isTouch = useTouchPrimary();
@@ -1932,25 +2041,69 @@ const TimelineHistoryPanel = ({
     };
 
     useEffect(() => {
-        if (!isOpen || !lastVisibleEventRef.current) {
+        if (!isOpen || !scrollAnchorRef.current) {
             return;
         }
 
-        lastVisibleEventRef.current.scrollIntoView({
+        scrollAnchorRef.current.scrollIntoView({
             behavior: "smooth",
             block: "start",
         });
     }, [isOpen, record?.id, visibleEvents.length]);
+
+    // A card another panel asked for (focusRequest): scrolled to and marked
+    // for a moment once it is on screen, once per request. Declared after the
+    // scroll above so its scroll is the one that lands.
+    const listRef = React.useRef(null);
+    const handledFocusRef = React.useRef(0);
+    const [markedEventId, setMarkedEventId] = useState("");
+    const focusId = focusRequest?.eventId || "";
+    const focusInRecord = Boolean(focusId) && (record?.events ?? []).some((event) => event?.id === focusId);
+    const focusOnScreen = focusInRecord && visibleEvents.some((event) => event.id === focusId);
+    useEffect(() => {
+        if (!isOpen || !focusInRecord || handledFocusRef.current === focusRequest.seq) return;
+        if (!focusOnScreen) {
+            // Hidden by a category filter: lift it, and come back once it shows.
+            if (categoryFilter) setCategoryChoice({ recordId: record.id, tag: null });
+            return;
+        }
+        handledFocusRef.current = focusRequest.seq;
+        const card = Array.from(listRef.current?.querySelectorAll("[data-event-id]") ?? [])
+            .find((node) => node.dataset.eventId === focusId);
+        card?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setMarkedEventId(focusId);
+    }, [categoryFilter, focusId, focusInRecord, focusOnScreen, focusRequest?.seq, isOpen, record?.id]);
+    useEffect(() => {
+        if (!markedEventId) return undefined;
+        const timer = setTimeout(() => setMarkedEventId(""), 2600);
+        return () => clearTimeout(timer);
+    }, [markedEventId]);
 
     return (
         <PanelChrome
         eyebrow=""
         isOpen={isOpen}
         onClose={onClose}
-        subtitle={record?.rangeLabel || ""}
+        subtitle={turnPicker && record ? (
+            <TurnPicker
+            index={turnPicker.index}
+            count={turnPicker.count}
+            onOlder={turnPicker.onOlder}
+            onNewer={turnPicker.onNewer}
+            round={record.round}
+            rangeLabel={record.rangeLabel || ""}
+            />
+        ) : (record?.rangeLabel || "")}
         title="Events"
         topOffset={topOffset}
         >
+        {/* The shared markdown sheet: tables in an event body or a document. */}
+        <MarkdownStyleInjector />
+        {pastTurn && (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.75rem" }}>
+            This is an earlier turn, shown in full. The map shows the world as it is now.
+            </div>
+        )}
         {restorePointMissing && (
             <div
             style={{
@@ -1965,45 +2118,6 @@ const TimelineHistoryPanel = ({
             }}
             >
             This turn could not be saved as a restore point, so it cannot be rolled back. The turn itself is saved. If this keeps happening, the save may be too large or the storage full.
-            </div>
-        )}
-        {agentReports?.failed?.length > 0 && (
-            <div
-            style={{
-                background: "rgba(120,53,15,0.24)",
-                border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: "12px",
-                color: "#fde68a",
-                fontSize: "0.76rem",
-                lineHeight: "1.5",
-                marginBottom: "0.75rem",
-                padding: "0.75rem 0.85rem",
-            }}
-            >
-            Your agent{agentReports.failed.length === 1 ? "" : "s"} in {agentReports.failed.join(", ")} did not report this turn: the request failed. The turn itself is saved.
-            {typeof onRetryAgentReports === "function" && (
-                <div style={{ marginTop: "0.6rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={agentReports.state === "working"}
-                onClick={onRetryAgentReports}
-                style={{
-                    background: "rgba(251,191,36,0.1)",
-                    border: "1px solid rgba(251,191,36,0.3)",
-                    borderRadius: "8px",
-                    color: "#fde68a",
-                    cursor: agentReports.state === "working" ? "default" : "pointer",
-                    fontSize: "0.72rem",
-                    fontWeight: 600,
-                    opacity: agentReports.state === "working" ? 0.6 : 1,
-                    padding: "0.4rem 0.7rem",
-                }}
-                >
-                {agentReports.state === "working" ? "Asking the agents again…" : "Retry the reports"}
-                </button>
-                </div>
-            )}
             </div>
         )}
         {warning && (
@@ -2089,7 +2203,7 @@ const TimelineHistoryPanel = ({
             // Mid-skip an empty list just means the first event has not arrived.
             live ? null : <EmptyPanelState text="No world events were recorded for this time skip." />
         ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {categoryChips.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
                 {categoryChips.map((tag) => {
@@ -2118,12 +2232,21 @@ const TimelineHistoryPanel = ({
                 </div>
             )}
             {visibleEvents.map((event, index) => {
-                const isLastVisible = index === visibleEvents.length - 1;
+                const isScrollAnchor = index === scrollAnchorIndex;
 
                 const openKey = eventDisclosureKey(event);
 
                 return (
-                    <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
+                    <div
+                    key={event.id}
+                    ref={isScrollAnchor ? scrollAnchorRef : null}
+                    data-event-id={event.id}
+                    style={{
+                        borderRadius: "16px",
+                        boxShadow: markedEventId === event.id ? "0 0 0 2px rgba(43,193,243,0.75)" : "0 0 0 2px rgba(43,193,243,0)",
+                        transition: "box-shadow 0.4s ease",
+                    }}
+                    >
                     {/* No "Show on map" footer: the camera already flies to
                         every event as it is revealed. The offered interactive
                         event carries its offer instead. */}
@@ -2187,11 +2310,12 @@ const TimelineHistoryPanel = ({
                             lineHeight: 1.4,
                         }}
                         >
+                        {/* One whole sentence per count, the date read as the event
+                            cards read it ("Mar 1, 218 BC"), never the stored text. */}
                         <span>
-                            Stop the round after <strong>{visibleEvents[visibleEvents.length - 1]?.title}</strong>? The
-                            {" "}{totalEvents - visibleEvents.length} event{totalEvents - visibleEvents.length === 1 ? "" : "s"} not yet revealed
-                            will be discarded — they never happen — and the date becomes {visibleEvents[visibleEvents.length - 1]?.date}.
-                            You can still undo the round afterwards.
+                            {totalEvents - visibleEvents.length === 1
+                                ? `Stop the round after "${visibleEvents[visibleEvents.length - 1]?.title}"? The 1 event not yet revealed will be discarded — it never happens — and the date becomes ${formatDate(visibleEvents[visibleEvents.length - 1]?.date)}. You can still undo the round afterwards.`
+                                : `Stop the round after "${visibleEvents[visibleEvents.length - 1]?.title}"? The ${totalEvents - visibleEvents.length} events not yet revealed will be discarded — they never happen — and the date becomes ${formatDate(visibleEvents[visibleEvents.length - 1]?.date)}. You can still undo the round afterwards.`}
                         </span>
                         <div style={{ display: "flex", gap: "0.4rem" }}>
                             <button
@@ -2241,10 +2365,11 @@ const TimelineHistoryPanel = ({
         {!live && record && totalEvents === 0 && (record.filedEvents?.length ?? 0) > 0 && (
             <div style={{ marginTop: "0.75rem" }}><FiledEventsSection events={record.filedEvents} /></div>
         )}
+        {!live && record?.receipt && <EngineChangesNote receipt={record.receipt} />}
         {/* Under the cards, so the list reads as a finished turn's would. */}
         {progress && (
             <div style={{ marginTop: totalEvents > 0 ? "0.75rem" : 0 }}>
-            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} />
+            <SkipProgressRow label={progress.label} onCancel={progress.onCancel} startedAt={progress.startedAt} />
             </div>
         )}
         </PanelChrome>
@@ -2260,6 +2385,10 @@ const DateWidget = ({
     // transition (main.jsx).
     dockStyle = null,
     topOffset = "0.5rem",
+    // Opens and closes the player's country drawer (main.jsx). On a phone the
+    // country badge is hidden, so the name and date here are what opens it.
+    onToggleCountry = null,
+    countryOpen = false,
 }) => {
     // Shared store rather than three local copies on a 5s poll of their own.
     const gameData = useRuntimeState("game");
@@ -2287,6 +2416,10 @@ const DateWidget = ({
     // A phase of the skip as it starts: "Writing 1 month of events… (part 2 of 3)".
     const showSkipPhase = ({ label, detail } = {}) =>
         setJumpProgress(label ? `${label}…${detail ? ` (${detail})` : ""}` : "");
+    // When the skip or retry now running began, for the clock in its progress
+    // row; 0 while none is. Held here because the row is not: it is shown in two
+    // panels and mounted afresh whenever the player moves between them.
+    const [progressStartedAt, setProgressStartedAt] = useState(0);
     // The skip's events as the model writes them (AI/streamedEvents.js): the
     // request already streamed, nothing was reading it. A preview, before the
     // validators sort, clamp and screen; the list goes when the turn does.
@@ -2315,11 +2448,15 @@ const DateWidget = ({
     // the tries for the turn currently held — without it a failed retry
     // re-renders the identical message and reads as a dead button, which is
     // exactly how it read in testing.
-    const [held, setHeld] = useState(null);
+    // The widget is mounted afresh for each campaign, and a turn held in this one
+    // outlives a visit to another: its notice is put back from the hold itself,
+    // with the message it was held with (heldTurnOnOpen).
+    const [held, setHeld] = useState(heldTurnOnOpen);
     // Agents whose report failed after the turn was written (with Save AI
     // requests off each asks on its own, after the write): told, with a retry.
-    const [agentReports, setAgentReports] = useState({ failed: [], state: "idle" });
-    // The newest turn could not be saved as a restore point (restorePointSaved).
+    // The newest turn could not be saved as a restore point (restorePointSaved):
+    // a turn written without one (AI/gameplay.js captureRollbackSnapshot) cannot
+    // be undone, and the Events page says so with the turn.
     const [restorePointMissing, setRestorePointMissing] = useState(false);
     const [isRetryingHeld, setIsRetryingHeld] = useState(false);
     // A turn held by an error, keeping the count when the same kind holds it again.
@@ -2330,17 +2467,45 @@ const DateWidget = ({
         failures: heldError.playerFailures ?? null,
         retries: current?.kind === heldError.heldKind ? current.retries : 0,
     }));
+    // A time skip that finished while another campaign was open, kept for this
+    // one (AI/gameplay.js loadParkedTurn): set means it waits for the player to
+    // apply or discard it. Nothing of it has been written.
+    const [parkedHeld, setParkedHeld] = useState(() => Boolean(getParkedTurn()));
+    const [isApplyingParked, setIsApplyingParked] = useState(false);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
     // never interrupts one.
     const [modeSuggestion, setModeSuggestion] = useState(null);
+    // The evidence can settle on any call to that endpoint (a Game Master
+    // request, suggestions, a stat sheet), not only a skip, and main.jsx says so
+    // with ai:structured-mode-suggestion. Until the player answers, every call
+    // there walks down the ladder again and pays for the failed rungs, so the
+    // offer comes at once when no turn is running, else when the running one
+    // ends — never in the middle of one.
+    const [modeEvidence, setModeEvidence] = useState(0);
+    const turnRunning = isLoading || isRetryingHeld || isApplyingParked;
+    useEffect(() => {
+        const noted = () => setModeEvidence((count) => count + 1);
+        window.addEventListener("ai:structured-mode-suggestion", noted);
+        return () => window.removeEventListener("ai:structured-mode-suggestion", noted);
+    }, []);
+    useEffect(() => {
+        if (modeEvidence && !turnRunning) setModeSuggestion(getStructuredModeSuggestion());
+    }, [modeEvidence, turnRunning]);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
+    // What the open request had got to when Cancel was pressed, for the log line
+    // the cancel writes: by the time the cancel has unwound, the request is closed.
+    const cancelledRequestRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
     // How many turns can be undone (a restore point is captured at the start of
     // each turn). The index, not the snapshots: the full list carries every
-    // prior world.
+    // prior world. Only the unbroken run back from the last turn counts
+    // (runtime/turnCommit.js): past a turn that saved none, an Undo would take
+    // back more than one turn, and the engine refuses it. Re-read whenever the
+    // round changes — after a jump or undo — and when a restore point is saved.
+    const loadRollbackSnapshotCount = async () => undoableTurns(await loadRollbackSnapshotIndex(), { round: gameData?.round || 1 });
     const [undoCount, setUndoCount] = useRestorePointReading(loadRollbackSnapshotCount, 0, [gameData?.round]);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
@@ -2349,7 +2514,10 @@ const DateWidget = ({
     // letters.
     const touch = useTouchPrimary();
     const stackCountry = isMobile || touch;
-    const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
+    const countryButton = isMobile && typeof onToggleCountry === "function";
+    const CountryStack = countryButton ? "button" : "div";
+    // The player's switch, or the system's reduced-motion setting.
+    const disableEventCamera = useMotionSetting(MAP_SETTING_KEYS.disableEventCamera);
 
     useEffect(() => {
         ensureTimelineStyles();
@@ -2404,21 +2572,22 @@ const DateWidget = ({
     useEffect(() => {
         const handleRolledBack = () => {
             setFallbackWarning("");
-            setAgentReports({ failed: [], state: "idle" });
             setRestorePointMissing(false);
         };
         window.addEventListener("oh:rolled-back", handleRolledBack);
         return () => window.removeEventListener("oh:rolled-back", handleRolledBack);
     }, []);
 
-    // Pre-game history: a fresh game (round 1, no events, no turns) whose
-    // scenario wrote a "World Before Round One" briefing gets its backstory
-    // generated once, the first time the player actually enters it. Waits out
-    // the main menu so tokens are never spent on a game the player is only
-    // hovering past; every other guard (busy lock, still-the-same-game check,
-    // the done-marker) lives in maybeGeneratePregameHistory itself. The menu
-    // state is a dependency because nothing else re-renders this when the
-    // player finally enters the game.
+    // Pre-game history: a fresh game (round 1, no events, no turns) gets its
+    // backstory once, the first time the player actually enters it — its
+    // scenario's own pre-history (runtime/scenarioPrehistory.js), or, for a
+    // scenario made before scenarios kept one, generated from its "World
+    // Before Round One" briefing. Waits out the main menu so tokens are never
+    // spent on a game the player is only hovering past; every other guard
+    // (busy lock, still-the-same-game check, the done-marker) lives in
+    // maybeGeneratePregameHistory itself. The menu state is a dependency
+    // because nothing else re-renders this when the player finally enters the
+    // game.
     const mainMenuOpen = useMainMenuOpen();
     const pregameAttemptedRef = React.useRef(false);
     useEffect(() => {
@@ -2429,7 +2598,7 @@ const DateWidget = ({
             (Number(gameData.round) || 1) === 1 &&
             (events?.length ?? 0) === 0 &&
             (worldState.simulationHistory?.length ?? 0) === 0;
-        if (!fresh || !String(worldState.startingTimelineText ?? "").trim()) {
+        if (!fresh || (!String(worldState.startingTimelineText ?? "").trim() && !prehistoryHasContent(worldState.prehistory))) {
             return;
         }
         if (isMainMenuOpen()) {
@@ -2454,7 +2623,11 @@ const DateWidget = ({
     }
 
     function togglePanel(panelName) {
-        if (isLoading && panelName !== "skip") {
+        // While a skip runs, only its own panels: the Timeline, and the Events
+        // panel a watched skip streams into, so the player can go back to it
+        // after looking for Cancel. (The guard is from before live skips: «
+        // did nothing for the whole of one.)
+        if (isLoading && panelName !== "skip" && !(panelName === "history" && skipInFlight)) {
             return;
         }
 
@@ -2471,7 +2644,18 @@ const DateWidget = ({
     // retryDirective: a whole skip run again from a turn held on the player's
     // events, telling the model what failed the first time.
     const runJump = async (days, mode = "jump", { retryDirective = "" } = {}) => {
-        if (!gameData || days == null || isLoading) {
+        // A held turn's retry holds the controller too: a skip started under it
+        // would run a second turn from the same pre-jump world, and the later
+        // write would replace the earlier. The panel greys the buttons out
+        // (`busy`); this is the backstop behind them.
+        if (!gameData || days == null || isLoading || jumpAbortRef.current) {
+            return;
+        }
+        // A shared game's rounds are the host's (multiplayer/): each ends on the
+        // host's timer, or sooner when enough players are ready.
+        if (inSharedGame()) {
+            setPanel("skip");
+            setError("In a shared game the host's timer ends each round, or enough players pressing Ready on the round bar at the top.");
             return;
         }
 
@@ -2506,8 +2690,8 @@ const DateWidget = ({
         setSkipInFlight(live);
         setJumpProgress("");
         setStreamedEvents([]);
-        // A carry the last turn never consumed, because a skip landing on the
-        // same date leaves the record's identity unchanged, must not reach this one.
+        // A carry the last turn never consumed (a failed or cancelled skip
+        // leaves the newest record where it was) must not reach this one.
         revealCarryRef.current = null;
         if (live) {
             setOpenMapChanges(new Set());
@@ -2523,7 +2707,7 @@ const DateWidget = ({
         // simulateTimelineJump abandons any held turn when it starts, so a notice
         // left on screen would offer buttons with nothing behind them.
         setHeld(null);
-        setAgentReports({ failed: [], state: "idle" });
+        setParkedHeld(false);
         setRestorePointMissing(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
@@ -2532,12 +2716,14 @@ const DateWidget = ({
         // that took eleven seconds are different bugs, and the wall-clock
         // timestamps are the only way to tell them apart after the fact.
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         logDebugEvent("turn", `Timeline ${mode === "auto" ? "auto-jump" : "jump"} started: ${days} day(s) from ${gameData.gameDate || "unknown"}.`, {
             round: gameData.round ?? 0,
         });
 
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             // No onEvents with the setting off: nothing streams anywhere.
             const onEvents = live ? showStreamedEvents : undefined;
@@ -2558,7 +2744,6 @@ const DateWidget = ({
             // Not for a fallback turn: the canned period is not the round that
             // was on screen, so it is read from the beginning.
             if (result.generation?.source !== "fallback") carryLiveReveal();
-            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
@@ -2593,22 +2778,19 @@ const DateWidget = ({
             }
             // What the turn actually DID to the world, in detailed mode. This is
             // the entry that answers the most common report there is — "the
-            // event said my army took the province but the border never moved" —
-            // because a turn that narrates a capture with zero region transfers
-            // shows up here as `regionTransfers: 0` beside an event list that
-            // clearly describes one. Titles and counts, not event prose: the
-            // prose is in the player's own screenshot, and it is the part of a
-            // log they are least comfortable posting.
+            // event said my army took the province but the border never moved".
+            // Every impact array is counted (EVENT_IMPACT_KEYS): a wartime capture
+            // or occupation is a de-facto control op, not a legal transfer, so a
+            // correct occupation turn shows `regionControlOps` beside
+            // `regionTransfers: 0`, and only a turn whose events describe a
+            // capture with both at zero moved nothing. Titles and counts, not
+            // event prose: the prose is in the player's own screenshot, and it is
+            // the part of a log they are least comfortable posting.
             const changeCount = (impactKey) => turnEvents
                 .reduce((total, event) => total + (event?.impacts?.[impactKey]?.length ?? 0), 0);
             logDebugEvent("turn", `Turn ${result.game?.round ?? 0} world changes.`, {
                 events: turnEvents.map((event) => event?.title || "(untitled)"),
-                regionTransfers: changeCount("regionTransfers"),
-                polityChanges: changeCount("polityChanges"),
-                unitOps: changeCount("unitOps"),
-                markerOps: changeCount("markerOps"),
-                projectOps: changeCount("projectOps"),
-                createdChats: changeCount("createdChats"),
+                ...Object.fromEntries(EVENT_IMPACT_KEYS.map((key) => [key, changeCount(key)])),
                 units: result.world?.units?.length ?? 0,
                 pendingUnitOrders: result.world?.pendingUnitOrders?.length ?? 0,
                 projects: result.world?.projects?.length ?? 0,
@@ -2623,7 +2805,10 @@ const DateWidget = ({
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
-                logDebugEvent("turn", "Turn cancelled by the player.");
+                // With how long it had run and what its open request had
+                // received: a report of skips "failing" that were in fact
+                // cancelled a minute or two into a slow answer reads at a glance.
+                logDebugEvent("turn", `Turn cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}.`);
             } else if (jumpError?.heldKind) {
                 // Not a failed turn: it is generated and HELD unwritten — on a
                 // segment that did not come back, the board, or a failed check —
@@ -2640,6 +2825,7 @@ const DateWidget = ({
             setIsLoading(false);
             setSkipInFlight(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             setStreamedEvents([]);
             setLiveStageBase(null);
             // Between turns, never during one. If the ladder has learned
@@ -2648,8 +2834,120 @@ const DateWidget = ({
         }
     };
 
-    const cancelJump = () => {
-        jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    // Only refs inside, so one function for the life of the widget: the Cancel
+    // buttons and the listener below share it.
+    const cancelJump = useCallback(() => {
+        const controller = jumpAbortRef.current;
+        // A second press while the first unwinds has nothing left to read.
+        if (!controller || controller.signal.aborted) return;
+        // Read before the abort: it closes the request this is taken from.
+        cancelledRequestRef.current = requestActivity.current();
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    }, []);
+
+    // "Cancel all AI requests" (Settings → AI requests) stops a skip, or a held
+    // turn's retry, the way its own Cancel does. On its own the stop reaches only
+    // the request in flight (AI/aiRequestControl.js): the skip's signal stayed
+    // live, so a single-request skip took the failure for a model that would not
+    // answer and wrote its canned turn, and a longer one went on to make its
+    // next request after the player had asked for all of them to stop. Every
+    // press counts, with a request in flight or between two of them.
+    useEffect(() => {
+        const stopWithTheRest = (event) => {
+            if (event?.detail && "cancelled" in event.detail) cancelJump();
+        };
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, stopWithTheRest);
+    }, [cancelJump]);
+
+    // A skip that finished while another campaign was open was kept for this one,
+    // in memory and in the campaign's store (AI/gameplay.js loadParkedTurn), and
+    // is offered here when this campaign's widget comes up, after a restart too:
+    // the player applies or discards it. One this campaign has moved on from is
+    // dropped, and said so.
+    useEffect(() => {
+        let current = true;
+        void loadParkedTurn().then((kept) => {
+            if (!current) return;
+            if (kept?.discarded) {
+                setParkedHeld(false);
+                setError(PARKED_TURN_STALE_NOTE);
+                setPanel("skip");
+            } else if (kept) {
+                setParkedHeld(true);
+                setPanel("skip");
+            } else {
+                setParkedHeld(false);
+            }
+        }).catch((loadError) => {
+            console.warn("[timeline] the kept skip could not be loaded.", loadError);
+        });
+        return () => {
+            current = false;
+        };
+    // Once, when this campaign's widget comes up: it is mounted afresh for each.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Write the kept skip. Nothing is generated or asked again (AI/gameplay.js
+    // applyParkedTurn), and it lands like any skip. Busy like a skip, for the
+    // same reasons as a held turn's retry below.
+    const applyHeldParked = async () => {
+        if (isApplyingParked || isLoading || jumpAbortRef.current) return;
+        setIsApplyingParked(true);
+        setIsLoading(true);
+        setError("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await applyParkedTurn({ signal: controller.signal });
+            setParkedHeld(false);
+            if (!result) return;
+            setRestorePointMissing(result.restorePointSaved === false);
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            logDebugEvent("turn", `Kept skip applied in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (parkedError) {
+            if (controller.signal.aborted || parkedError?.name === "AbortError") {
+                // Cancelled. Still kept when nothing was written (applyParkedTurn
+                // puts it back), so the notice stays while it is.
+                setParkedHeld(Boolean(getParkedTurn()));
+                logDebugEvent("turn", "Applying the kept skip was cancelled.");
+            } else if (parkedError?.heldKind) {
+                // Held now, like any skip (at the board, or on a check): one
+                // notice at a time.
+                setParkedHeld(false);
+                holdFrom(parkedError);
+            } else {
+                setParkedHeld(Boolean(getParkedTurn()));
+                setError(parkedError.message || "Failed to apply the time skip that finished while another campaign was open.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsApplyingParked(false);
+            setIsLoading(false);
+            setModeSuggestion(getStructuredModeSuggestion());
+        }
+    };
+
+    // Throw the kept skip away. Nothing of it was ever written.
+    const discardHeldParked = async () => {
+        setParkedHeld(false);
+        // Released at once, as the other discards are, so the campaign is not
+        // busy for a tick while the lazy module loads; the stored copy follows.
+        discardParkedTurn();
+        try {
+            await discardKeptTurn();
+        } catch (discardError) {
+            console.warn("[timeline] the kept skip could not be discarded.", discardError);
+        }
     };
 
     // Finish the held turn by re-running only what failed: the one segment
@@ -2658,12 +2956,17 @@ const DateWidget = ({
     // difference between seconds and minutes. `withoutFailedChecks` (checks
     // only) takes the turn as the failed checks left it, asking no check again.
     // keep (a turn held on the player's events): the turn lands as it is.
+    //
+    // Busy like a skip (isLoading): it writes a turn like one, so the skips,
+    // Auto-jump and Undo wait for it, and its Cancel is the skip's.
     const retryHeld = async ({ withoutFailedChecks = false, keep = false } = {}) => {
-        if (isRetryingHeld || !held) return;
+        // Never beside a skip, an undo or another retry: it writes a turn too.
+        if (isRetryingHeld || isLoading || jumpAbortRef.current || !held) return;
         const { kind } = held;
         // A segment retry writes the rest of the round, so it streams like a jump.
         const live = kind === HELD_TURN.segment && getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents);
         setIsRetryingHeld(true);
+        setIsLoading(true);
         if (!withoutFailedChecks && !keep) setHeld((current) => (current ? { ...current, retries: current.retries + 1 } : current));
         setJumpProgress("");
         if (kind === HELD_TURN.segment) {
@@ -2680,8 +2983,10 @@ const DateWidget = ({
             setPanel("history");
         }
         const startedAt = Date.now();
+        setProgressStartedAt(startedAt);
         const controller = new AbortController();
         jumpAbortRef.current = controller;
+        cancelledRequestRef.current = null;
         try {
             const options = { signal: controller.signal, onProgress: showSkipPhase };
             const result = kind === HELD_TURN.segment
@@ -2693,7 +2998,6 @@ const DateWidget = ({
                         : await retryPendingChecksJump({ ...options, withoutFailedChecks });
             if (kind === HELD_TURN.segment) carryLiveReveal();
             else setVisibleEventCount(1);
-            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
@@ -2703,12 +3007,13 @@ const DateWidget = ({
                 round: result.game?.round ?? 0,
                 events: result.events?.length ?? 0,
             });
+            // The turn is written: its events, as a skip that lands shows them.
             setPanel("history");
         } catch (retryError) {
             if (controller.signal.aborted || retryError?.name === "AbortError") {
                 // Cancelled. The turn is still held and still unwritten, so leave
                 // the notice up rather than implying it was resolved.
-                logDebugEvent("turn", `Retry of the held turn (${kind}) cancelled; the turn is still held.`);
+                logDebugEvent("turn", `Retry of the held turn (${kind}) cancelled by the player after ${Math.round((Date.now() - startedAt) / 1000)} s; ${describeRequestActivity(cancelledRequestRef.current)}. The turn is still held.`);
             } else if (retryError?.heldKind) {
                 // Held again — by the same thing, or by what comes after it (the
                 // segments finished and the board or a check holds it now). One
@@ -2724,12 +3029,16 @@ const DateWidget = ({
         } finally {
             jumpAbortRef.current = null;
             setIsRetryingHeld(false);
+            setIsLoading(false);
             setJumpProgress("");
+            setProgressStartedAt(0);
             if (kind === HELD_TURN.segment) {
                 setSkipInFlight(false);
                 setStreamedEvents([]);
                 setLiveStageBase(null);
             }
+            // Between turns, as after a skip.
+            setModeSuggestion(getStructuredModeSuggestion());
         }
     };
 
@@ -2771,25 +3080,14 @@ const DateWidget = ({
         setModeSuggestion(null);
     };
 
-    const retryFailedAgentReports = async () => {
-        if (agentReports.state === "working" || !agentReports.failed.length) return;
-        setAgentReports((current) => ({ ...current, state: "working" }));
-        try {
-            const { failed } = await retryAgentReports({ targets: agentReports.failed });
-            setAgentReports({ failed: failed.map((entry) => entry.target), state: "idle" });
-            logDebugEvent("turn", `Agents' reports asked again: ${failed.length ? `${failed.length} still failed` : "all in"}.`);
-        } catch (retryError) {
-            setAgentReports((current) => ({ ...current, state: "idle" }));
-            setError(retryError.message || "The agents could not be asked again.");
-        }
-    };
-
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
     // which lives in the history panel — yanking that panel away mid-undo would
     // hide the very thing the player just acted on. The Timeline panel's own
     // undo button still switches, since that is where it is already looking.
     const runUndo = async ({ stayOnHistory = false } = {}) => {
-        if (isLoading || undoCount <= 0) {
+        // Never under a skip or a retry still running: it would write its turn
+        // on top of the one this rolls back to.
+        if (isLoading || jumpAbortRef.current || undoCount <= 0) {
             return false;
         }
 
@@ -2838,7 +3136,7 @@ const DateWidget = ({
     // the panel then shows the shorter turn, fully revealed.
     const runIntervene = async () => {
         const keep = Math.max(1, visibleEventCount);
-        if (isLoading || !canInterveneTurn) return false;
+        if (isLoading || jumpAbortRef.current || !canInterveneTurn) return false;
         setIsLoading(true);
         setError("");
         setFallbackWarning("");
@@ -2850,6 +3148,7 @@ const DateWidget = ({
                     kept: result.kept,
                     dropped: result.dropped,
                 });
+                setRestorePointMissing(result.bundle?.restorePointSaved === false);
                 setGameData(result.bundle.game);
                 setEvents(result.bundle.events);
                 setWorldState(result.bundle.world);
@@ -2881,23 +3180,75 @@ const DateWidget = ({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
-    const historyRecords = useMemo(() => {
+    // The newest turn alone: this runs on every world write, and an older turn
+    // is built only while the player has turned back to it (below).
+    const latestTurnRecord = useMemo(() => {
         const rawHistory = worldState?.simulationHistory ?? [];
-        return rawHistory
-        .map((entry, index) => buildTurnRecord({
-            entry,
-            index,
+        return buildTurnRecord({
+            entry: rawHistory[0],
+            index: 0,
             history: rawHistory,
             eventLookup,
             game: gameData,
-            lookups,
-        }))
-        .filter(Boolean);
-    }, [eventLookup, gameData, lookups, worldState]);
-
-    const latestTurnRecord = historyRecords[0] || null;
-    const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
-    ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
+        });
+    }, [eventLookup, gameData, worldState]);
+    // The turn picker in the panel's header: which of the kept turns is shown,
+    // 0 for the newest (turnReveal.js shownTurnIndex). An older turn is shown
+    // whole and read only: no reveal, no staging, no camera, no undo.
+    const [turnChoice, setTurnChoice] = useState({ latestId: null, index: 0 });
+    const keptTurnCount = worldState?.simulationHistory?.length ?? 0;
+    const turnIndex = skipInFlight ? 0 : shownTurnIndex(turnChoice, latestTurnRecord?.id ?? null, keptTurnCount);
+    const olderTurnRecord = useMemo(() => {
+        if (turnIndex <= 0) return null;
+        const rawHistory = worldState?.simulationHistory ?? [];
+        return buildTurnRecord({
+            entry: rawHistory[turnIndex],
+            index: turnIndex,
+            history: rawHistory,
+            eventLookup,
+            game: gameData,
+        });
+    }, [eventLookup, gameData, turnIndex, worldState]);
+    const showTurn = (index) => setTurnChoice({ latestId: latestTurnRecord?.id ?? null, index });
+    // Closing the panel puts it back on the newest turn for next time.
+    useEffect(() => {
+        if (openPanel !== "history") setTurnChoice((choice) => (choice.index ? { latestId: null, index: 0 } : choice));
+    }, [openPanel]);
+    // Another panel asking for one event (SHOW_EVENT_ON_TIMELINE, turnReveal.js;
+    // the Stats panel's war cards): open on the kept turn that holds it, with
+    // the newest turn's reveal carried through it, and let the panel scroll to
+    // it and mark it. `seq` makes a second ask for the same event a new one.
+    const [focusRequest, setFocusRequest] = useState({ eventId: "", seq: 0 });
+    const showEventRef = React.useRef(null);
+    useEffect(() => {
+        showEventRef.current = (eventId) => {
+            // As « does: while something runs, only a skip being watched opens it.
+            if (isLoading && !skipInFlight) return;
+            const index = findTurnIndexOfEvent(worldState?.simulationHistory, eventId);
+            if (index < 0) return;
+            setPanel("history");
+            // Mid-skip the panel is the turn being written; it only opens.
+            if (skipInFlight) return;
+            showTurn(index);
+            if (index === 0) {
+                const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+                const through = ids.indexOf(eventId) + 1;
+                if (through > visibleEventCount) {
+                    setVisibleEventCount(through);
+                    unseenEvents.markSeenThrough(ids, through);
+                }
+            }
+            setFocusRequest((previous) => ({ eventId, seq: previous.seq + 1 }));
+        };
+    });
+    useEffect(() => {
+        const onShowEvent = (event) => showEventRef.current?.(String(event?.detail?.eventId ?? "").trim());
+        window.addEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+        return () => window.removeEventListener(SHOW_EVENT_ON_TIMELINE, onShowEvent);
+    }, []);
+    const shownWrittenRecord = olderTurnRecord ?? latestTurnRecord;
+    const persistedFallbackWarning = shownWrittenRecord?.source === "fallback"
+    ? `Turn generated by fallback: ${shownWrittenRecord.fallbackReason || "structured AI output was unavailable"}`
     : "";
     // Built even with no events yet, so a skip that has not produced its first
     // does not leave the previous turn on screen as if it were this one.
@@ -2907,15 +3258,16 @@ const DateWidget = ({
             fromDate: liveRange.from,
             toDate: liveRange.to,
             round: (gameData?.round || 0) + 1,
-            lookups,
+            rangeLabel: formatRange(liveRange.from, liveRange.to),
         })
-        : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round, lookups]);
-    const displayRecord = liveTurnRecord ?? latestTurnRecord;
+        : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round]);
+    const displayRecord = liveTurnRecord ?? shownWrittenRecord;
     const totalVisibleEvents = displayRecord?.events?.length || 0;
     // The newest revealed event, written turn or not: the camera follows the
-    // live reveal for the same reason the map stages along with it.
+    // live reveal for the same reason the map stages along with it. Not on an
+    // older turn being reread: the map shows the world as it is now.
     const activeVisibleEvent =
-    openPanel === "history" && totalVisibleEvents > 0
+    openPanel === "history" && totalVisibleEvents > 0 && !olderTurnRecord
     ? displayRecord.events[Math.min(Math.max(visibleEventCount, 1), totalVisibleEvents) - 1]
     : null;
 
@@ -2987,10 +3339,11 @@ const DateWidget = ({
                 ["Player's queued actions this round", actionsList],
                 ["Most recent prior events", recentEvents],
                 [
-                    // A transport failure has no response to show, so do not label
-                    // the note that explains that as one — it sent readers hunting
-                    // for a parsing bug when the real cause was the provider config.
-                    record.rawResponse === NO_RESPONSE_BODY_NOTE
+                    // A transport failure or an empty answer has no model text to
+                    // show, so do not label the note that explains that as rejected
+                    // text — it sent readers hunting for a parsing bug when the real
+                    // cause was the provider.
+                    isResponseBodyNote(record.rawResponse)
                         ? "Model response"
                         : "Raw model response that was rejected (failed to parse or to validate)",
                     // Every fallback now fills this in — with the raw text when
@@ -3025,21 +3378,9 @@ const DateWidget = ({
     useEffect(() => { streamedEventsRef.current = streamedEvents; }, [streamedEvents]);
     // Set the moment a watched skip lands, read once by the effect below.
     const revealCarryRef = React.useRef(null);
+    // Which events were uncovered, not how many (turnReveal.js).
     const carryLiveReveal = () => {
-        const streamed = streamedEventsRef.current;
-        if (!streamed.length) {
-            revealCarryRef.current = null;
-            return;
-        }
-        const revealed = Math.min(Math.max(1, visibleEventCountRef.current), streamed.length);
-        revealCarryRef.current = {
-            revealed,
-            streamed: streamed.length,
-            // Which events were uncovered, not how many: the engine can drop one
-            // and write a scripted beat in above it, so counting would restore a
-            // different stretch of the round than the player walked through.
-            keys: streamed.slice(0, revealed).map((event) => eventDisclosureKey(event)).filter(Boolean),
-        };
+        revealCarryRef.current = captureRevealCarry(streamedEventsRef.current, visibleEventCountRef.current);
     };
 
     // The last written turn's count, not the panel's, which mid-skip is the turn
@@ -3060,17 +3401,9 @@ const DateWidget = ({
         // Except for the turn just watched being written: making the player press
         // "Next event" back to where they were is the jolt this exists to avoid.
         if (carried && ids.length) {
-            // The furthest event they reached, found again. Everything before it
-            // stays walked past, including a beat the engine wrote in among them.
-            const written = latestTurnRecord?.events ?? [];
-            const wanted = new Set(carried.keys);
-            let furthest = -1;
-            written.forEach((event, index) => {
-                if (wanted.has(eventDisclosureKey(event))) furthest = index;
-            });
-            // None of them survived, so this is not the round they were reading:
-            // carrying the count would uncover a turn they have never seen.
-            const keep = Math.min(ids.length, furthest >= 0 ? furthest + 1 : 1);
+            // The furthest event they reached, found again; one event when none
+            // of them survived, since this is then not the round they were reading.
+            const keep = Math.max(1, Math.min(ids.length, resolveRevealCarry(carried, latestTurnRecord?.events)));
             unseenEvents.markSeenThrough(ids, keep);
             setVisibleEventCount(keep);
             // The engine screens the payload and the curator drops events, so a
@@ -3088,6 +3421,30 @@ const DateWidget = ({
         setVisibleEventCount(Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, skipInFlight]);
+
+    // A shared game's round is resolved by the host and reaches this page as a
+    // new view (multiplayer/). The Events panel opens on it, as it does on a
+    // skip this page ran itself; and once the player has read the round
+    // through, the host is told, so planning begins when everyone has.
+    const openPanelOnRoundRef = React.useRef(null);
+    openPanelOnRoundRef.current = () => setPanel("history");
+    useEffect(() => {
+        const onLanded = () => { if (inSharedGame()) openPanelOnRoundRef.current?.(); };
+        window.addEventListener(SHARED_ROUND_LANDED, onLanded);
+        return () => window.removeEventListener(SHARED_ROUND_LANDED, onLanded);
+    }, []);
+    const toldHostRevealedRef = React.useRef("");
+    useEffect(() => {
+        const id = latestTurnRecord?.id || "";
+        if (!inSharedGame() || skipInFlight || !id || toldHostRevealedRef.current === id) return;
+        // What is still unseen is the record's own (runtime/unseenEvents.js),
+        // not this render's count, which is the round before's for one render.
+        const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
+        if (unseenEvents.unseenInTurn(ids).size > 0) return;
+        toldHostRevealedRef.current = id;
+        void requestFromHost("revealed", { round: Number(latestTurnRecord?.round) || 0 });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [latestTurnRecord?.id, writtenEventCount, visibleEventCount, skipInFlight]);
 
     // Half of what the camera needs to turn the names an event carries
     // ("Ireland", "Donetsk") into a place on the map: the half that only moves
@@ -3151,17 +3508,20 @@ const DateWidget = ({
     const documentPlayer = gameData?.country;
     const cardLookups = useMemo(() => ({
         ...lookups,
+        unitName: unitNameById,
         eventLinks: (event) => deriveEventLinks(event, currentFocusContext(), {
-            unitName: (id) => getUnitById(id)?.name || "",
+            unitName: unitNameById,
         }),
         focusLink: (bounds) => focusMapOnBounds(mapRef, bounds),
         eventDocuments: (event) => documentsForEvent(documentReports, event?.id, documentPlayer),
     }), [lookups, currentFocusContext, mapRef, documentReports, documentPlayer]);
 
-    // The camera follows EVERY revealed event — impacts pin the exact spot,
-    // otherwise the polities the event involves do, and its own words are the
-    // last resort. Opt out via the "Disable camera movement during events" map
-    // setting.
+    // The camera follows a revealed event to where it happened: its impacts
+    // pin the exact spot, then the places it names with their kind, then the
+    // polities its structured fields involve. Never its words: an event that
+    // gives none of these leaves the camera where it is (eventFocus.js). Opt
+    // out via the "Disable camera movement during events" map
+    // setting (or Reduce motion, or the system's reduced-motion setting).
     useEffect(() => {
         if (!activeVisibleEvent || disableEventCamera) {
             return;
@@ -3223,33 +3583,50 @@ const DateWidget = ({
     // open and the base is missing — a one-shot load at record time raced the
     // session boot (snapshots briefly read empty) and staging silently never
     // engaged for that turn.
+    //
+    // Only while there is something left to reveal, and only once the snapshot
+    // index says the archive holds this turn; then only that one restore point
+    // is read (loadRollbackSnapshot), not the archive of up to twelve whole
+    // worlds, which was read (and on a miss read again on every open) for a
+    // turn already seen whole, after a reload, or one no restore point spans.
+    // The index is a few hundred bytes, so an index miss is simply asked again
+    // next time (it can read empty at boot); a restore point that turns out
+    // not to hold the turn's world is remembered.
+    const needsStaging = revealNeedsStaging(latestTurnRecord, visibleEventCount);
+    const stagingMissRef = React.useRef("");
     useEffect(() => {
         const record = latestTurnRecord;
         // Not mid-skip: the snapshot that would load belongs to the turn before.
-        if (skipInFlight || openPanel !== "history" || !record || !(record.events?.length > 0)) {
+        // Nor while an older turn is reread: it is not staged.
+        if (skipInFlight || openPanel !== "history" || !record || !needsStaging || turnIndex > 0) {
             return undefined;
         }
         if (stagedBase.recordId === record.id && stagedBase.world) {
             return undefined;
         }
+        if (stagingMissRef.current === record.id) {
+            return undefined;
+        }
         let cancelled = false;
-        loadRollbackSnapshots()
-            .then((snapshots) => {
-                if (cancelled) return;
-                const match = (snapshots || []).find(
-                    (snap) => snap?.fromDate === record.fromDate && snap?.toDate === record.toDate && snap?.state?.world,
-                );
-                // A copy of the one world staged: the list is the shared archive
-                // (gameplay.js loadRollbackSnapshots), never to be written into.
-                if (match) setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
-            })
-            .catch(() => {
-                /* no snapshot — reveal without staging */
-            });
+        (async () => {
+            const entry = findTurnSnapshot(await loadRollbackSnapshotIndex(), record);
+            if (!entry || cancelled) return;
+            const match = await loadRollbackSnapshot(entry.id);
+            if (cancelled) return;
+            if (!match?.state?.world || !findTurnSnapshot([match], record)) {
+                stagingMissRef.current = record.id;
+                return;
+            }
+            // A copy of the one world staged: the restore point may be the
+            // shared archive's (loadRollbackSnapshot), never to be written into.
+            setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
+        })().catch(() => {
+            /* no snapshot — reveal without staging */
+        });
         return () => {
             cancelled = true;
         };
-    }, [latestTurnRecord?.id, openPanel, skipInFlight, stagedBase.recordId]);
+    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId, turnIndex]);
 
     useEffect(() => {
         // No snapshot needed while the skip writes: the world has not moved, so
@@ -3286,6 +3663,7 @@ const DateWidget = ({
         const stagingActive =
             !skipInFlight &&
             openPanel === "history" &&
+            !olderTurnRecord &&
             record &&
             stagedBase.recordId === record.id &&
             stagedBase.world &&
@@ -3317,7 +3695,7 @@ const DateWidget = ({
         });
         setWorldStateOverride(stagedWorld);
         setUnitsOverride(stagedWorld.units ?? [], stagedWorld.pendingUnitOrders ?? []);
-    }, [latestTurnRecord, liveStageBase, liveTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
+    }, [latestTurnRecord, liveStageBase, liveTurnRecord, olderTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
 
     // Never leave a stale override behind when this widget unmounts.
     useEffect(
@@ -3345,12 +3723,17 @@ const DateWidget = ({
         onClose={() => setPanel(null)}
         onDeclineModeSuggestion={declineModeSuggestion}
         onDiscardHeld={discardHeld}
+        isApplyingParked={isApplyingParked}
+        onApplyParked={applyHeldParked}
+        onDiscardParked={discardHeldParked}
+        parkedHeld={parkedHeld}
         onJump={(days) => runJump(days, "jump")}
         onRetryHeld={retryHeld}
         onRetryWholeSkip={retryWholeSkip}
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
+        progressStartedAt={progressStartedAt}
         sceneInProgress={sceneInProgress}
         topOffset={topOffset}
         undoCount={undoCount}
@@ -3361,29 +3744,39 @@ const DateWidget = ({
         onRevealAll={revealAllEvents}
         lookups={cardLookups}
         onClose={() => setPanel(null)}
-        buildDebugIncident={buildFallbackIncident}
+        // Everything that acts on a turn acts on the newest one, so none of it
+        // is offered over an older turn being reread.
+        buildDebugIncident={olderTurnRecord ? null : buildFallbackIncident}
         // A fallback turn is usually a turn the player wants gone; the undo it
         // needs already exists over in the Timeline panel, so this just saves
         // the trip. Same restore point, same code path.
         // Nothing is written mid-skip, so there is no turn to roll back and no round to stop.
-        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight}
+        // Nor while a held turn's retry runs: it is about to write one.
+        canRollbackTurn={undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
-        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight}
+        canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight && !isRetryingHeld && !olderTurnRecord}
         onIntervene={runIntervene}
         // The last written turn's offer, never on a skip still being written:
         // that skip replaces it.
-        offeredInteractiveId={!skipInFlight && shownOffer ? shownOffer.id : ""}
+        offeredInteractiveId={!skipInFlight && !olderTurnRecord && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
-        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
+        progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump, startedAt: progressStartedAt } : null}
         record={displayRecord}
         topOffset={topOffset}
-        visibleEventCount={visibleEventCount}
+        visibleEventCount={olderTurnRecord ? totalVisibleEvents : visibleEventCount}
+        // Not while a skip is written, and only once there is a turn to go back to.
+        turnPicker={!liveTurnRecord && keptTurnCount > 1 ? {
+            index: turnIndex,
+            count: keptTurnCount,
+            onOlder: () => showTurn(Math.min(keptTurnCount - 1, turnIndex + 1)),
+            onNewer: () => showTurn(Math.max(0, turnIndex - 1)),
+        } : null}
+        focusRequest={liveTurnRecord ? null : focusRequest}
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
-        warning={fallbackWarning || persistedFallbackWarning}
-        agentReports={agentReports}
-        onRetryAgentReports={retryFailedAgentReports}
-        restorePointMissing={restorePointMissing}
+        warning={(olderTurnRecord ? "" : fallbackWarning) || persistedFallbackWarning}
+        // The newest turn's own, like the live warning: not over an older turn.
+        restorePointMissing={restorePointMissing && !olderTurnRecord}
         />
 
         <div
@@ -3429,13 +3822,18 @@ const DateWidget = ({
             // On a touch screen the country sits over the date: the buttons are
             // finger-sized, and side by side the name was cut down to its first
             // few letters.
-            <div style={stackCountry
-                ? { alignItems: "center", display: "flex", flexDirection: "column", gap: "0.1rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }
-                : { alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}
+            <CountryStack
+            {...(countryButton ? { type: "button", onClick: onToggleCountry, "aria-expanded": countryOpen } : null)}
+            style={{
+                ...(stackCountry
+                    ? { alignItems: "center", display: "flex", flexDirection: "column", gap: "0.1rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }
+                    : { alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }),
+                ...(countryButton ? { background: "none", border: 0, color: "inherit", cursor: "pointer", font: "inherit", padding: 0 } : null),
+            }}
             >
             <span
             style={{
-                color: "rgba(147,197,253,0.88)",
+                color: countryButton && countryOpen ? "#bfdbfe" : "rgba(147,197,253,0.88)",
                 fontSize: isMobile ? "0.68rem" : "0.8rem",
                 fontWeight: 700,
                 letterSpacing: "0.05em",
@@ -3453,7 +3851,7 @@ const DateWidget = ({
             <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: isMobile ? "0.82rem" : "0.95rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
             {displayDate}
             </span>
-            </div>
+            </CountryStack>
         ) : (
             <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
             {displayDate}
