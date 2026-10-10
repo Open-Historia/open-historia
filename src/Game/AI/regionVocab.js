@@ -138,9 +138,15 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   }
   // A power in play gets its regions in full: a model told to copy names
   // exactly cannot annex a region it was never shown, and the top powers of a
-  // turn are what the turn moves. 120 per power covers every Ukraine-sized
-  // holding on the built-in world; 480 in all is about ten kilobytes.
-  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : 120;
+  // turn are what the turn moves. A power that is listed is listed WHOLE.
+  // There used to be a limit of 120 regions a power, taken by the alphabet:
+  // the United States holds 285 on the built-in world, its list stopped at
+  // "Houston", and a model asked to free Puerto Rico, which it was never
+  // shown, handed over the British Virgin Islands (a 45-skip test,
+  // 2026-10-09). A caller may still pass `ownerCap`. What bounds the prompt is
+  // `focusTotalCap`: once that many regions are listed, the powers still
+  // waiting go to the roster by name and size.
+  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : Infinity;
   const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 480;
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
