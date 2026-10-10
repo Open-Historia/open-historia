@@ -227,7 +227,9 @@ Also used for `autoJumpForward`. This is the largest task.
 | `clearActions` | boolean | Were queued player actions resolved | **yes** |
 | `diplomaticOutreach` | `createdChatSchema[]` | Polities reaching out on their own initiative, not tied to any event | no |
 
-`eventSchema` (`:322`): `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+
+`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stays under its 28,000-character guard (27,985); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
 
 There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 

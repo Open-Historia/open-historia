@@ -7,6 +7,7 @@ import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from
 import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventPlaces } from "./eventPlaces.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
@@ -3066,10 +3067,14 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
+  // The places the event said it is about, as the engine found them on the
+  // map (runtime/eventPlaces.js): what its card links to.
+  const places = normalizeEventPlaces(entry.places);
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
     description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    ...(places.length ? { places } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts, entry),
     importance: normalizeOptionalString(entry.importance) || "minor",

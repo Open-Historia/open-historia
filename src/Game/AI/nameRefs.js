@@ -13,7 +13,7 @@
 //   city: Atlanta            a town the map marks
 //   sea: Black Sea           open water
 //   unit: 3rd Infantry Division
-//   structure: Camp Humphreys
+//   structure: Camp Humphreys   (also written "building: Camp Humphreys")
 //
 // and a place inside another reads outward, each part with its kind:
 //
@@ -39,7 +39,7 @@ const KIND_WORDS = Object.freeze({
     city: ["city", "town", "capital", "port", "village"],
     sea: ["sea", "ocean", "waters"],
     unit: ["unit", "formation"],
-    structure: ["structure", "base", "facility", "installation", "marker"],
+    structure: ["structure", "building", "base", "facility", "installation", "marker"],
     group: ["group", "faction"],
 });
 const KIND_OF_WORD = new Map(Object.entries(KIND_WORDS).flatMap(([kind, words]) => words.map((word) => [word, kind])));

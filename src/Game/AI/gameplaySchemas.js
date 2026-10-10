@@ -981,8 +981,11 @@ const compactJumpImpactSchema = (schema) => ({
 
 // The lean jump impacts (see "The jump's impacts" above): everything but the
 // board, and the families listed here without their nested descriptions, which
-// the skip's live records explain instead ([Groups] and its lever).
+// the skip's live records explain instead ([Groups] and its lever; the
+// Structures rule of [Every Event Carries Its Consequences]). Beta compacts
+// the same two.
 const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
+  "markerOps",
   "groupOps",
 ]);
 
@@ -1037,20 +1040,32 @@ const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
   properties: {
-    id: textSchema("Optional stable event identifier."),
-    date: textSchema("In-game date on which the event occurs."),
+    // These say what the field is in as few words as say it: the jump's
+    // schema is held to a size (projectOpSchema.test.js), and `places` below
+    // took the room they gave up.
+    id: textSchema("Optional stable event id."),
+    date: textSchema("In-game date of the event."),
     title: textSchema("The headline: one sentence saying what happened."),
     description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
-    importance: textSchema("Importance label, normally minor or major."),
+    importance: textSchema("Importance, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
+    // Where the event happens, for its card's links and the camera
+    // (AI/eventPlaces.js). Each entry carries its kind; the long form of the
+    // rule is in the skip's own rules, so this only says what the field is.
+    places: {
+      type: "array",
+      description: "Where it happens, each with its kind: \"city: Kharkiv, country: Ukraine\", \"region: Crimea\", \"building: Camp Humphreys\". Map places only.",
+      maxItems: 4,
+      items: { type: "string" },
+    },
     notable: {
       type: "boolean",
-      description: "Whether this event is important enough to stop an automatic jump.",
+      description: "Whether it is important enough to stop an automatic jump.",
     },
     playerRelated: {
       type: "boolean",
-      description: "Whether the event directly concerns the player polity.",
+      description: "Whether it directly concerns the player polity.",
     },
     warId: textSchema(
       "Canonical world.wars id for this event when it declares/joins/ends a war or depicts actual combat. Blank for non-war events.",

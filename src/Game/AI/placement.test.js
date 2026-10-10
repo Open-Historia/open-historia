@@ -712,7 +712,10 @@ test("the map's gazetteer works each name out once", () => {
     // nothing it remembers outlives the units and structures it was read from.
     const pass = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
     assert.equal(pass.match(/buildPlacementGazetteer\(/g)?.length, 1);
-    assert.ok(pass.includes("gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);"));
+    // The map's names are the ones its caller already read, when it read them
+    // (a turn's validation reads them once for the placements, the captures
+    // and the events' places), and its own otherwise.
+    assert.ok(pass.includes("gazetteer = buildPlacementGazetteer(await (lookupContext ?? lazyLookupContext({ world }))(), world);"));
 });
 
 test("the placing pass tells the reader whose thing it is", () => {
