@@ -36,7 +36,7 @@ import { DEFAULT_PROJECTION, FREEFORM, convertBounds, convertDisplayPoint, moveP
 // A detailed map (doc.metadata.tiledBasemap) is a Mercator tile archive the
 // editor cannot move (docs/adr/0005): converting would move the regions and
 // the basemap under it and leave it where it was, out of line with both.
-export const DETAILED_MAP_CONVERSION_MESSAGE = "This map has a detailed map, which is always drawn in the Mercator projection and cannot be converted with the rest of the map. To change the projection, remove the detailed map first: in Basemap → My Maps, pick a basemap without one.";
+export const DETAILED_MAP_CONVERSION_MESSAGE = "This map has a detailed map, which is always drawn in the Mercator projection and cannot be converted with the rest of the map. To change the projection, take the detailed map off first: Remove detailed map, in Basemap → My Maps → Your detailed maps. The basemap under it stays.";
 // The other way round: a detailed map put on a map already in another
 // projection would lie under regions drawn for that one.
 export const DETAILED_MAP_PROJECTION_MESSAGE = "A detailed map is always drawn in the Mercator projection, and this map is in another one. To use a detailed map, convert the map back to Mercator first (Projection, in the bottom bar).";

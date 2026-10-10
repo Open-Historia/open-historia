@@ -328,6 +328,9 @@ const BasemapPicker = ({
   // scenario's own, and the detailed map it names.
   hasOwnMap = false,
   detailedMap = null,
+  // Takes the scenario's detailed map off, keeping the basemap under it
+  // (MapEditor removeDetailedMap). Offered only while it has one.
+  onRemoveDetailedMap = null,
 }) => {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
@@ -633,6 +636,20 @@ const BasemapPicker = ({
               </div>
               <div>
                 <div style={rowTitle}>Your detailed maps</div>
+                {!browse && detailedMap && onRemoveDetailedMap && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                    <button
+                      type="button"
+                      style={tabBtn(false)}
+                      onClick={() => { onRemoveDetailedMap(); onClose(); }}
+                    >
+                      Remove detailed map
+                    </button>
+                    <div style={{ ...dim, padding: 0 }}>
+                      Takes {detailedMap.name || "the detailed map"} off this scenario. Its basemap stays, and the detailed map stays here for other scenarios.
+                    </div>
+                  </div>
+                )}
                 {loading ? (
                   <div style={dim}>Loading…</div>
                 ) : !mine.some((bm) => bm.kind === "tiled") ? (

@@ -393,6 +393,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
   };
 
+  // Take the scenario's detailed map off. The basemap drawn under it (the
+  // custom background on screen) stays, so the scenario keeps its map, and the
+  // projection can be converted again (projectionConvert.js).
+  const removeDetailedMap = () => {
+    d.patchMetadata({ tiledBasemap: null });
+    setCustomBgId(null);
+  };
+
   // Upload a new basemap: apply it now AND save it to the library for reuse.
   // Answers what the picker then tells the author, both of which used to go
   // unsaid: { sessionOnly: true } for a GeoTIFF or PMTiles background, which is
@@ -1830,6 +1838,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
         hasOwnMap={Boolean(customBg)}
         detailedMap={d.doc?.metadata?.tiledBasemap || null}
+        onRemoveDetailedMap={removeDetailedMap}
       />
 
       <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />

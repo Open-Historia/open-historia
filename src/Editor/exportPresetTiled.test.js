@@ -6,7 +6,7 @@
 // must be one.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DETAILED_MAP_NEEDS_BASIC_MAP, buildBackgroundForGame } from "./exportPreset.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP, buildBackgroundForGame, scenarioHasOwnMap } from "./exportPreset.js";
 
 const DRAWN = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [0, 0] } }] } };
 
@@ -25,4 +25,13 @@ test("a detailed map with no basemap drawn is refused, so no scenario is ever em
 test("an old download link, size or only-map flag on the choice is never written into the scenario", () => {
   const { background } = buildBackgroundForGame(DRAWN, { hash: "a".repeat(64), name: "Mine", bytes: 5, hubUrl: "https://github.com/x/y/releases/download/v1/a.pmtiles", onlyMap: true });
   assert.deepEqual(background.tiled, { hash: "a".repeat(64), name: "Mine" });
+});
+
+// Remove detailed map (MapEditor removeDetailedMap) clears the name and keeps
+// the drawing: the scenario still has its own map, now without the detailed one.
+test("with its detailed map removed a scenario keeps the basemap drawn under it", () => {
+  const { background, backgroundData } = buildBackgroundForGame(DRAWN, null);
+  assert.deepEqual(background, { kind: "vector" });
+  assert.deepEqual(backgroundData, { geojson: DRAWN.geojson });
+  assert.equal(scenarioHasOwnMap({ metadata: { customBackground: DRAWN, tiledBasemap: null } }), true);
 });
