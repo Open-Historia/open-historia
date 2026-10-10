@@ -46,7 +46,7 @@ test("the game map and Settings both follow the rule", () => {
   const settings = fs.readFileSync(new URL("../Game/GameUI/settings.jsx", import.meta.url), "utf8");
   // In a game the pick is switched off, shown as the scenario's own, and says
   // why. The main menu's Settings are for every game, so there it stays on.
-  assert.match(settings, /const ownMap = forGame && Boolean\(background\?\.kind\);/);
+  assert.match(settings, /const ownMap = forGame && hasOwnMap\(background\);/);
   assert.match(settings, /const choices = ownMap \? \[\] : /);
   assert.match(settings, /const shown = basemapOverrideFor\(value, \{ scenarioHasOwnMap: ownMap, allowedBasemaps: allowed \}\);/);
   assert.match(settings, /value=\{shown\} disabled=\{off\}/);

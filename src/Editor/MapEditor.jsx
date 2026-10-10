@@ -58,7 +58,8 @@ import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } 
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { DETAILED_MAP_NEEDS_BASIC_MAP, buildGameSeed, gameCityToFeature, scenarioHasOwnMap } from "./exportPreset.js";
+import { ownMapHash } from "./ownMapHash.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature, scenarioHasOwnMap } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -359,7 +360,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       const current = normalizeBackground(customBg);
       const hasBasicMap = (fallback?.features?.length > 0) || (current?.kind === "vector" && current.geojson?.features?.length > 0);
       if (!hasBasicMap) {
-        window.alert(DETAILED_MAP_NEEDS_BASIC_MAP);
+        window.alert(DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE);
         return;
       }
       if (fallback?.features?.length > 0) {
@@ -450,6 +451,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
   const mapHasDetailedMap = hasDetailedMap(d.doc);
+  // The saved own map's checksum, for the Maps window's "In use" mark
+  // (ownMapHash.js): taken again only when that background changes.
+  const savedBackground = d.doc?.metadata?.customBackground ?? null;
+  const [savedOwnMapHash, setSavedOwnMapHash] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    ownMapHash(savedBackground).then((hash) => { if (alive) setSavedOwnMapHash(hash); }).catch(() => { if (alive) setSavedOwnMapHash(null); });
+    return () => { alive = false; };
+  }, [savedBackground]);
   // Regions, cities, units and basemap, each by its own rule
   // (projectionConvert.js). The basemap is made ready first: redrawing a
   // picture is the one step that can fail, and nothing has moved if it does.
@@ -1836,8 +1846,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
         onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
         scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
-        hasOwnMap={Boolean(customBg)}
         detailedMap={d.doc?.metadata?.tiledBasemap || null}
+        ownMapHash={savedOwnMapHash}
         onRemoveDetailedMap={removeDetailedMap}
       />
 

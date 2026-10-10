@@ -1,6 +1,6 @@
 /*! Open Historia — custom map background loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useEffect, useRef, useState } from "react";
-import { JSON_URLS, getPmtilesArchive, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, getPmtilesArchive, hasOwnMap, readJson } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import {
   fetchOfficialBasemaps,
@@ -45,7 +45,7 @@ export function useCustomBackground() {
   useEffect(() => subscribeTiledBasemaps(() => setLibraryVersion((v) => v + 1)), []);
 
   const namedTiledBasemap = wantsScenarioTerrain(terrainSetting) ? scenarioTiledBasemap(bgDescriptor) : null;
-  const bgKey = bgDescriptor?.kind ? `${JSON.stringify(bgDescriptor)}|${namedTiledBasemap ? `tiled:${libraryVersion}` : "painted"}` : "";
+  const bgKey = hasOwnMap(bgDescriptor) ? `${JSON.stringify(bgDescriptor)}|${namedTiledBasemap ? `tiled:${libraryVersion}` : "painted"}` : "";
   const basemap = worldBasemap || null;
 
   useEffect(() => {

@@ -6,7 +6,7 @@
 // must be one.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DETAILED_MAP_NEEDS_BASIC_MAP, buildBackgroundForGame, scenarioHasOwnMap } from "./exportPreset.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildBackgroundForGame, scenarioHasOwnMap } from "./exportPreset.js";
 
 const DRAWN = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [0, 0] } }] } };
 
@@ -18,7 +18,7 @@ test("an official map is named by id and version over the drawing on screen", ()
 
 test("a detailed map with no basemap drawn is refused, so no scenario is ever empty sea without it", () => {
   for (const drawing of [null, { kind: "vector", geojson: { type: "FeatureCollection", features: [] } }, { kind: "image", dataUrl: "data:," }]) {
-    assert.throws(() => buildBackgroundForGame(drawing, { hash: "a".repeat(64), name: "Mine" }), (error) => error.message === DETAILED_MAP_NEEDS_BASIC_MAP);
+    assert.throws(() => buildBackgroundForGame(drawing, { hash: "a".repeat(64), name: "Mine" }), (error) => error.message === DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE);
   }
 });
 

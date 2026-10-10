@@ -324,10 +324,11 @@ const BasemapPicker = ({
   allowedBasemaps,
   onAllowedBasemapsChange,
   scenarioHasOwnMap = false,
-  // What is on screen, for the "In use" mark (basemapInUse.js): a map of the
-  // scenario's own, and the detailed map it names.
-  hasOwnMap = false,
+  // For the "In use" mark (basemapInUse.js), beside scenarioHasOwnMap: the
+  // detailed map the scenario names, and its own map's checksum
+  // (ownMapHash.js).
   detailedMap = null,
+  ownMapHash = null,
   // Takes the scenario's detailed map off, keeping the basemap under it
   // (MapEditor removeDetailedMap). Offered only while it has one.
   onRemoveDetailedMap = null,
@@ -399,7 +400,10 @@ const BasemapPicker = ({
 
   if (!open) return null;
 
-  const inUse = basemapInUse({ builtinId: currentBasemap, hasOwnMap, libraryId: currentCustomId, detailedMap });
+  const inUse = basemapInUse({ builtinId: currentBasemap, hasOwnMap: scenarioHasOwnMap, libraryId: currentCustomId, detailedMap, ownMapHash });
+  const painted = mine.filter((bm) => bm.kind !== "tiled");
+  // The scenario's own map when no card in Your basemaps holds it.
+  const showOwnMapCard = !browse && inUse.ownMapCard(painted);
 
   // What Your basemaps already holds, so a post installed before says so
   // instead of offering to download its whole payload again (the store would
@@ -611,11 +615,14 @@ const BasemapPicker = ({
                 <div style={rowTitle}>Your basemaps</div>
                 {loading ? (
                   <div style={dim}>Loading…</div>
-                ) : !mine.some((bm) => bm.kind !== "tiled") ? (
+                ) : !painted.length && !showOwnMapCard ? (
                   <div style={dim}>No basemaps of your own yet. Use “⬆ Add basemap or detailed map” to add a picture or a painted map (.png, .jpg, .geojson…); it stays here so you can reuse it on any scenario.</div>
                 ) : (
                   <div style={rowScroll}>
-                    {mine.filter((bm) => bm.kind !== "tiled").map((bm) => (
+                    {showOwnMapCard && (
+                      <BasemapCard key="own-map" title="This scenario's own map" active badge="not in Your basemaps" />
+                    )}
+                    {painted.map((bm) => (
                       <BasemapCard
                         key={bm.id}
                         title={bm.name}

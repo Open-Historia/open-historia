@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import url from "url";
 import { resolveChildPath } from "./security.js";
+import { hashPayload } from "./basemapHash.js";
 import { hashFile, inspectTiledArchive } from "./tiledBasemaps.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -131,14 +132,11 @@ export const findBasemapIdByHash = (hash) => {
   return id && fs.existsSync(metaPath(id)) ? id : null;
 };
 
-// Hash the payload so identical basemaps dedupe. Always compute it server-side:
-// trusting a client-supplied hash (even shape-checked) let a caller store a
-// basemap under an arbitrary hash and poison the dedup index, so a later
-// genuine upload that hashed to the same value was silently discarded.
-const hashPayload = (payload) => {
-  const canonical = payload?.dataUrl ?? JSON.stringify(payload?.geojson ?? payload ?? null);
-  return crypto.createHash("sha256").update(String(canonical)).digest("hex");
-};
+// Hash the payload so identical basemaps dedupe (basemapHash.js). Always
+// compute it server-side: trusting a client-supplied hash (even shape-checked)
+// let a caller store a basemap under an arbitrary hash and poison the dedup
+// index, so a later genuine upload that hashed to the same value was silently
+// discarded.
 
 // Where a download or upload lands before it is checked: inside the library's
 // own folder, so moving a finished archive into place is a rename, not a copy.

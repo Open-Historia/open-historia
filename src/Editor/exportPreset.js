@@ -19,6 +19,7 @@ import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
+import { hasOwnMap } from "../runtime/assets.js";
 import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
@@ -215,16 +216,13 @@ export const gameCityToFeature = (f, id) => {
 // 0006). The vector drawing on screen is its basemap, and a scenario on a
 // detailed map must have one: a player who does not download the detailed map,
 // or whose game cannot show it, still gets a map, never empty sea.
-export const DETAILED_MAP_NEEDS_BASIC_MAP =
-  "This scenario needs a basemap first: it is what players see if they don't download the detailed map.\n\n"
-  + "In Basemap → My Maps, pick one of Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then choose the detailed map again.\n\n"
-  + "(A detailed map that comes with its own basemap uses that one automatically.)";
+export const DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE = "This scenario needs a basemap first: it is what players see if they don't download the detailed map.\n\nIn Basemap → My Maps, pick one of Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then choose the detailed map again.\n\n(A detailed map that comes with its own basemap uses that one automatically.)";
 export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
   if (tiledBasemap?.id || tiledBasemap?.hash) {
     const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
     const drawn = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) && bg.geojson.features.length > 0;
-    if (!drawn) throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP);
+    if (!drawn) throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE);
     return {
       background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
       backgroundData: { geojson: bg.geojson },
@@ -256,7 +254,7 @@ export const buildBackgroundForGame = (customBackground, tiledBasemap = null) =>
 // world.background): then the player's built-in Basemap pick never replaces it
 // (runtime/assets.js basemapOverrideFor), so the list of built-in maps players
 // may switch to has no effect.
-export const scenarioHasOwnMap = (doc) => Boolean(buildBackgroundForGame(doc?.metadata?.customBackground).background);
+export const scenarioHasOwnMap = (doc) => hasOwnMap(buildBackgroundForGame(doc?.metadata?.customBackground).background);
 
 // Every country the stock world already knows by name. An owner in here is a real
 // GADM country the game can name, colour and flag on its own; an owner outside it

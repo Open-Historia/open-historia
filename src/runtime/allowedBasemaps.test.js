@@ -5,7 +5,7 @@
 // world allows none: the player's pick of, say, Satellite is ignored there.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ESRI_BASEMAPS, allowedBuiltinBasemaps, isAllowedBasemapOverride, normalizeAllowedBasemaps } from "./assets.js";
+import { ESRI_BASEMAPS, allowedBuiltinBasemaps, decodeAllowedBasemaps, hasOwnMap, isAllowedBasemapOverride, normalizeAllowedBasemaps } from "./assets.js";
 import { buildGameSeed, scenarioHasOwnMap } from "../Editor/exportPreset.js";
 
 test("no choice made: every built-in map is allowed, as before", () => {
@@ -46,4 +46,24 @@ test("the Map Editor knows when the scenario has a map of its own", () => {
   assert.equal(scenarioHasOwnMap({ metadata: { customBackground: { kind: "plain" } } }), true);
   // A detailed map always sits on a drawn basemap of its own.
   assert.equal(scenarioHasOwnMap({ metadata: { customBackground: drawn, tiledBasemap: { id: "got-world", version: 1 } } }), true);
+});
+
+// World state carries the list as one string, so an unchanged list keeps its
+// identity between polls (useWorldState.js); the game and Settings read it back
+// the same way.
+test("the allowed list is read back from world state the one way", () => {
+  assert.equal(decodeAllowedBasemaps(null), null);
+  assert.equal(decodeAllowedBasemaps(undefined), null);
+  assert.deepEqual(decodeAllowedBasemaps(""), []);
+  assert.deepEqual(decodeAllowedBasemaps("topo,imagery"), ["topo", "imagery"]);
+});
+
+// One test of "a map of its own", on the scenario's world.background, for the
+// game, Settings and the Map Editor alike.
+test("a scenario has a map of its own when its background names a kind", () => {
+  assert.equal(hasOwnMap(null), false);
+  assert.equal(hasOwnMap({}), false);
+  assert.equal(hasOwnMap({ kind: "vector" }), true);
+  assert.equal(hasOwnMap({ kind: "image" }), true);
+  assert.equal(hasOwnMap({ kind: "plain" }), true);
 });

@@ -38,3 +38,23 @@ test("the scenario's detailed map is in use, whether named by official id or by 
   // A painted basemap is never the detailed map.
   assert.equal(official.library({ ...mine, official: { id: "got-world" } }), false);
 });
+
+test("reopened, the scenario's own map is found in Your basemaps by its checksum", () => {
+  // Nothing picked this session: the card holding the same map is in use.
+  const inUse = basemapInUse({ builtinId: "ocean", hasOwnMap: true, ownMapHash: "h1" });
+  const same = { id: "bm-7", kind: "image", contentHash: "h1" };
+  assert.equal(inUse.library(same), true);
+  assert.equal(inUse.library({ id: "bm-8", kind: "image", contentHash: "h2" }), false);
+  assert.equal(inUse.ownMapCard([same, mine]), false, "its card says so; no extra card");
+});
+
+test("an own map that is in no library card gets a card of its own", () => {
+  const inUse = basemapInUse({ builtinId: "ocean", hasOwnMap: true, ownMapHash: "h1", detailedMap: { id: "got-world" } });
+  // GoT: its drawing is in no card; its detailed map is.
+  assert.equal(inUse.ownMapCard([westeros, mine]), true);
+  assert.equal(inUse.library(westeros), true);
+  // A detailed map is never the own map's card, even with the same checksum.
+  assert.equal(inUse.ownMapCard([{ ...westeros, contentHash: "h1" }]), true);
+  // On a built-in basemap there is no own map to show.
+  assert.equal(basemapInUse({ builtinId: "ocean" }).ownMapCard([mine]), false);
+});

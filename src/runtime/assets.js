@@ -130,6 +130,13 @@ export const normalizeAllowedBasemaps = (value) => (Array.isArray(value)
 export const allowedBuiltinBasemaps = (allowed) => (allowed == null
   ? ESRI_BASEMAPS
   : ESRI_BASEMAPS.filter((basemap) => allowed.includes(basemap.id)));
+// The list as world state carries it (one comma-joined string, so an unchanged
+// list keeps its identity between polls: useWorldState.js), read back.
+export const decodeAllowedBasemaps = (key) => (key == null ? null : String(key).split(",").filter(Boolean));
+// Whether a scenario has a map of its own: a world.background of any kind (a
+// picture, a drawn map, the plain sea of a flat sheet). The game, Settings and
+// the Map Editor (exportPreset.js scenarioHasOwnMap) all ask this.
+export const hasOwnMap = (background) => Boolean(background?.kind);
 export const isAllowedBasemapOverride = (id, allowed) => isBuiltinBasemapId(id) && (allowed == null || allowed.includes(id));
 // The player's basemap pick (Settings > Map) as it applies to the scenario on
 // screen: a built-in basemap's id, or "" for the scenario's own. It replaces a

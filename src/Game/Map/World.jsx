@@ -18,6 +18,7 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   basemapOverrideFor,
+  decodeAllowedBasemaps,
   esriTileTemplate,
   resolveBasemapId,
 } from "../../runtime/assets.js";
@@ -630,7 +631,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
   // The player's pick counts only on a scenario without a map of its own, and
   // only if the scenario allows that built-in map (chosen in the Map Editor).
-  const allowedBasemaps = worldAllowedBasemaps == null ? null : worldAllowedBasemaps.split(",").filter(Boolean);
+  const allowedBasemaps = decodeAllowedBasemaps(worldAllowedBasemaps);
   const validBasemapOverride = basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared, allowedBasemaps });
   const useScenarioBackground = !validBasemapOverride;
   const effectiveCustomBg = useScenarioBackground ? customBg : null;

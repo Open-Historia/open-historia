@@ -106,7 +106,7 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { allowedBuiltinBasemaps, basemapOverrideFor, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { allowedBuiltinBasemaps, basemapOverrideFor, decodeAllowedBasemaps, hasOwnMap, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
@@ -342,8 +342,8 @@ const ChatLanguageSelector = () => {
 // Settings are for every game, so there every built-in map is offered.
 const BasemapField = ({ value, forGame, onChange }) => {
     const { background, allowedBasemaps: allowedKey } = useWorldBackground();
-    const ownMap = forGame && Boolean(background?.kind);
-    const allowed = !forGame || allowedKey == null ? null : allowedKey.split(",").filter(Boolean);
+    const ownMap = forGame && hasOwnMap(background);
+    const allowed = forGame ? decodeAllowedBasemaps(allowedKey) : null;
     const choices = ownMap ? [] : allowedBuiltinBasemaps(allowed);
     const shown = basemapOverrideFor(value, { scenarioHasOwnMap: ownMap, allowedBasemaps: allowed });
     const off = choices.length === 0;

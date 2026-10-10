@@ -347,7 +347,7 @@ Tabs:
 Ten token-free ESRI/ArcGIS presets (`EDITOR_BASEMAPS`): `ocean` (default), `imagery`, `streets`, `topo`, `terrain`, `shaded`, `natgeo`, `physical`, `light-gray`, `dark-gray`. XYZ template via `esriXyzUrl(service)`; picker previews use the z0 whole-world tile (`esriPreviewUrl`).
 
 ### Custom backgrounds (`customBackground.js`, `BasemapPicker.jsx`)
-Uploaded via the **Basemap: …** button (bottom bar) → `BasemapPicker` overlay ("Built-in maps" / "Your basemaps" / Community). The card marked **✓ In use** is the map the scenario is drawn on (`basemapInUse.js`): a built-in basemap only while the scenario has no map of its own, else the basemap just picked from Your basemaps, and the detailed map the scenario names. `loadBackgroundFile` dispatches by extension (`BACKGROUND_ACCEPT`):
+Uploaded via the **Basemap: …** button (bottom bar) → `BasemapPicker` overlay ("Built-in maps" / "Your basemaps" / Community). The card marked **✓ In use** is the map the scenario is drawn on (`basemapInUse.js`): a built-in basemap only while the scenario has no map of its own; else the Your basemaps card holding its own map (the one just picked, or, when the scenario is opened again, the one whose checksum matches its saved background: `ownMapHash.js`, the library's own checksum in `server/basemapHash.js`), or a **This scenario's own map** card when no card holds it; and the detailed map the scenario names. `loadBackgroundFile` dispatches by extension (`BACKGROUND_ACCEPT`):
 
 | Format | Result kind | Persisted? |
 |---|---|---|
