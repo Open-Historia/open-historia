@@ -4,8 +4,10 @@
 // the scenario starts on ticked; the others can be had later by picking them in
 // Settings → Map. One detailed map, the starting one, keeps the plain offer
 // (TiledBasemapOffer.jsx, atInstall).
-// `offers`: { id, version, name, bytes, starting, have? } (scenarioTerrain.js
-// tiledBasemapOffer, a missing map or a needed update).
+// A game's Settings → Map shows the same list, with its own `title` and
+// `intro`.
+// `offers`: { id, version, name, bytes, starting, have?, ticked? }
+// (detailedMapOffers.js); ticked at first: `ticked`, else the starting one.
 import React, { useEffect, useRef, useState } from "react";
 import { formatBytes, installOfficialBasemap } from "../../runtime/tiledBasemaps.js";
 
@@ -30,8 +32,10 @@ const button = {
 };
 const keyOf = (offer) => `${offer.id}@${offer.version}`;
 
-export default function DetailedMapsInstallOffer({ offers, onDone }) {
-  const [ticked, setTicked] = useState(() => new Set(offers.filter((offer) => offer.starting).map(keyOf)));
+const DEFAULT_INTRO = "Large terrain maps, sharp up close. Tick the ones to download now; you can get the others later by picking them in Settings → Map. Without one, you see the drawn map under it. Each downloads once, and every scenario on it shares it.";
+
+export default function DetailedMapsInstallOffer({ offers, onDone, title = "This scenario has detailed maps", intro = DEFAULT_INTRO }) {
+  const [ticked, setTicked] = useState(() => new Set(offers.filter((offer) => offer.ticked ?? offer.starting).map(keyOf)));
   const [downloading, setDownloading] = useState(null); // { name, percent }
   const [error, setError] = useState("");
   const controllerRef = useRef(null);
@@ -82,10 +86,8 @@ export default function DetailedMapsInstallOffer({ offers, onDone }) {
   }
   return (
     <div role="status" aria-live="polite" style={panel}>
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>This scenario has detailed maps</div>
-      <div style={{ opacity: 0.8, marginBottom: 10 }}>
-        Large terrain maps, sharp up close. Tick the ones to download now; you can get the others later by picking them in Settings → Map. Without one, you see the drawn map under it. Each downloads once, and every scenario on it shares it.
-      </div>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
+      <div style={{ opacity: 0.8, marginBottom: 10 }}>{intro}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
         {offers.map((offer) => (
           <label key={keyOf(offer)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>

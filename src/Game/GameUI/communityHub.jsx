@@ -44,10 +44,9 @@ import {
   hubCopyStatus,
 } from "../../runtime/hubPosts.js";
 import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
-import { fetchOfficialBasemaps, findOfficialBasemap, findOfficialEntry } from "../../runtime/tiledBasemaps.js";
-import { tiledBasemapOffer } from "../Map/scenarioTerrain.js";
 import TiledBasemapOffer from "../Map/TiledBasemapOffer.jsx";
 import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
+import { detailedMapOffers, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
 import { scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 
 // Reading the hub (the post list, a post's bundle, a post's comments) lives in
@@ -498,16 +497,7 @@ const describeScenarioTiledBasemap = (bundle) => {
 const installOffersFor = async (bundle) => {
   if (import.meta.env.VITE_OH_WEB) return { offers: [], count: 0 }; // the browser version shows the drawn maps
   const named = detailedMapsOf(bundle);
-  const detailed = named.filter((map) => map.detailed?.id);
-  if (!detailed.length) return { offers: [], count: named.length };
-  const list = await fetchOfficialBasemaps();
-  const offers = await Promise.all(detailed.map(async (map) => {
-    const installed = await findOfficialBasemap(map.detailed.id);
-    const { missing, update } = tiledBasemapOffer({ named: { ...map.detailed, name: map.name }, installed, official: findOfficialEntry(list, map.detailed.id) });
-    const offer = missing && !missing.unavailable ? missing : update?.needed ? update : null;
-    return offer ? { ...offer, starting: map.starting } : null;
-  }));
-  return { offers: offers.filter(Boolean), count: named.length };
+  return { offers: detailedMapOffers(await lookUpDetailedMaps(named)), count: named.length };
 };
 
 // onPlay(scenario) opens the library's country picker for a scenario already

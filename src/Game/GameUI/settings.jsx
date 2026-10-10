@@ -109,7 +109,9 @@ import { uiString } from "../../runtime/translator.js";
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
-import { fetchOfficialBasemaps, findOfficialBasemap, findOfficialEntry, findTiledBasemap, formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
+import { formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
+import { detailedMapOffers, detailedMapsDownloadLine, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
+import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
@@ -348,33 +350,30 @@ const BASEMAP_OPTION_LABELS = {
     detailedToDownload: "{{name}} (detailed map, {{size}} to download)",
     detailedNotHere: "{{name}} (detailed map, not on this device)",
 };
-// Whether this device has each of the scenario's detailed maps, and the size
-// of one it does not: { [pick]: { have, bytes } }.
-const useDetailedMapStatus = (maps) => {
-    const detailed = maps.filter((map) => map.kind === "detailed");
-    const key = JSON.stringify(detailed.map((map) => [map.pick, map.detailed]));
-    const [status, setStatus] = useState({});
+// Each of the scenario's detailed maps looked up on this device and the
+// official list (Map/detailedMapOffers.js), again whenever the library
+// changes; [] until then, and always in the browser version, which shows the
+// drawn maps and never downloads one.
+const useDetailedMapLookups = (maps) => {
+    const key = JSON.stringify(maps.filter((map) => map.kind === "detailed"));
+    const [lookups, setLookups] = useState([]);
     const [libraryVersion, setLibraryVersion] = useState(0);
     useEffect(() => subscribeTiledBasemaps(() => setLibraryVersion((v) => v + 1)), []);
     useEffect(() => {
-        const wanted = JSON.parse(key);
-        // The browser version shows the drawn maps; it never downloads one.
-        if (!wanted.length || import.meta.env.VITE_OH_WEB) return undefined;
+        const detailed = JSON.parse(key);
+        if (!detailed.length || import.meta.env.VITE_OH_WEB) return undefined;
         let cancelled = false;
-        (async () => {
-            const list = await fetchOfficialBasemaps().catch(() => null);
-            const entries = await Promise.all(wanted.map(async ([pick, named]) => {
-                const installed = named.id ? await findOfficialBasemap(named.id) : await findTiledBasemap(named.hash);
-                const official = named.id && list ? findOfficialEntry(list, named.id) : null;
-                const latest = official?.versions?.[official.versions.length - 1] || null;
-                return [pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
-            }));
-            if (!cancelled) setStatus(Object.fromEntries(entries));
-        })();
+        lookUpDetailedMaps(detailed).then((found) => { if (!cancelled) setLookups(found); }, () => {});
         return () => { cancelled = true; };
     }, [key, libraryVersion]);
-    return status;
+    return lookups;
 };
+// Whether this device has each one, and the size of one it does not:
+// { [pick]: { have, bytes } }.
+const detailedMapStatus = (lookups) => Object.fromEntries(lookups.map(({ map, installed, official }) => {
+    const latest = official?.versions?.[official.versions.length - 1] || null;
+    return [map.pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
+}));
 const GameBasemapField = () => {
     const { background, basemap, allowedBasemaps, ownBasemaps } = useWorldBackground();
     const { gamePick, setGamePick, defaultBasemap, useDefault } = useGameBasemapPick();
@@ -384,7 +383,10 @@ const GameBasemapField = () => {
         allowedBasemaps: decodeAllowedBasemaps(allowedBasemaps),
         ownBasemaps: decodeOwnBasemaps(ownBasemaps),
     }), [background, basemap, allowedBasemaps, ownBasemaps]);
-    const status = useDetailedMapStatus(maps);
+    const lookups = useDetailedMapLookups(maps);
+    const status = useMemo(() => detailedMapStatus(lookups), [lookups]);
+    const offers = useMemo(() => detailedMapOffers(lookups, { optionalUpdates: true }), [lookups]);
+    const [downloading, setDownloading] = useState(false);
     // What the game shows, whether detailed maps are on or off here.
     const shown = basemapShownFor({ maps, gamePick, defaultBasemap, useDefault });
     const only = maps.length === 1;
@@ -425,6 +427,24 @@ const GameBasemapField = () => {
                     ? "This scenario has one map."
                     : "The maps this scenario offers. Your pick is kept for this game only, and applies at once."}
             </div>
+            {offers.length > 0 && (
+                downloading ? (
+                    <div style={{ marginTop: 10 }}>
+                        <DetailedMapsInstallOffer
+                            // The map on screen ticked, else the starting one.
+                            offers={offers.map((offer) => ({ ...offer, ticked: offers.some((other) => other.pick === shown.pick) ? offer.pick === shown.pick : offer.starting }))}
+                            title="Download detailed maps"
+                            intro="Large terrain maps, sharp up close. Each downloads once, and every scenario on it shares it. Your basemap pick stays as it is."
+                            onDone={() => setDownloading(false)}
+                        />
+                    </div>
+                ) : (
+                    <div style={{ ...helperStyle, display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+                        <span data-no-translate style={{ flex: 1 }}>{detailedMapsDownloadLine(offers, uiString)}</span>
+                        <button type="button" style={smallButtonStyle} onClick={() => setDownloading(true)}>Download…</button>
+                    </div>
+                )
+            )}
         </div>
     );
 };
