@@ -20,6 +20,7 @@
 
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, builtinBasemapChoices } from "../runtime/assets.js";
 import { STARTING_DRAWN_PICK } from "../runtime/basemapPick.js";
+import { canonicalJson } from "../runtime/scenarioChanges.js";
 import { editorBasemapById } from "./basemaps.js";
 import { normalizeEditorOwnBasemaps } from "./ownBasemaps.js";
 import { DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits } from "./projectionConvert.js";
@@ -130,6 +131,11 @@ const firstDrawn = (state, { except = null } = {}) => {
   return state.own.find((entry) => entry.id !== except && isDrawn(entry.background))?.id ?? null;
 };
 
+// Whether two pictures or drawn maps hold the same thing.
+const sameBackground = (a, b) => Boolean(a && b) && a.kind === b.kind && (a.kind === "image"
+  ? a.dataUrl === b.dataUrl
+  : canonicalJson(a.geojson ?? null) === canonicalJson(b.geojson ?? null));
+
 export const addBuiltinMap = (metadata, id) => {
   const state = stateOf(metadata);
   if (!ESRI_BASEMAPS.some((basemap) => basemap.id === id)) return refused("That is not one of the built-in maps.");
@@ -153,7 +159,10 @@ export const addOwnMap = (metadata, entry) => {
   }
   const [own] = normalizeEditorOwnBasemaps([entry]);
   if (!own) return refused("It has no picture or drawn map in it.");
-  if (!state.own.some((existing) => existing.id === own.id)) state.own = [...state.own, own];
+  // A map the scenario has already, by what it holds (a Your basemaps card
+  // of the starting map's drawing, say), is not added twice.
+  const has = [state.customBackground, ...state.own.map((existing) => existing.background)].some((background) => sameBackground(background, own.background));
+  if (!has && !state.own.some((existing) => existing.id === own.id)) state.own = [...state.own, own];
   return patchOf(state);
 };
 

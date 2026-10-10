@@ -170,3 +170,10 @@ test("making the drawn map under a detailed starting map the starting one, with 
   const base = { basemap: "ocean" };
   assert.deepEqual(apply(base, makeStartingMap(base, "start:drawn", { scenarioName: "Westeros" })), apply(base, makeStartingMap(base, "start")));
 });
+
+test("adding a picture or drawn map the scenario already has, by what it holds, adds nothing", () => {
+  const base = { customBackground: WESTEROS, ownBasemaps: [{ id: "essos", name: "Essos", background: ESSOS }] };
+  // The starting map's drawing saved to Your basemaps, its card then clicked.
+  assert.deepEqual(view(apply(base, addOwnMap(base, { id: "lib-westeros", name: "Westeros map", background: drawn(1) }))), view(base));
+  assert.deepEqual(view(apply(base, addOwnMap(base, { id: "lib-essos", name: "Essos again", background: drawn(2) }))), view(base));
+});
