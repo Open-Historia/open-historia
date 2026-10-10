@@ -178,3 +178,21 @@ test("pending player accession applications expose a native withdraw-application
   assert.match(source, /type: "cancel-application"/);
   assert.match(source, /canCancelApplication=/);
 });
+
+// issue 849: the invitation picker left out everyone in `members`, observers among them.
+test("the invitation picker lists governments represented below the status on offer, marked with what they hold", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  assert.match(source, /institutionInvitablePolities\(selectedRow\?\.institution, allPolities, inviteStatus\)/);
+  assert.match(source, /<PolityMultiPicker value=\{inviteTarget\} onChange=\{setInviteTarget\} polities=\{invitePolities\} notes=\{inviteNotes\}/);
+  assert.match(source, /data-polity-picker-note="true"/);
+  assert.match(source, /MEMBER_STATUS_LABELS = \{ member: "Member", observer: "Observer", participant: "Participant", associate: "Associate", candidate: "Candidate" \}/);
+  // The old filter, which is what hid them.
+  assert.doesNotMatch(source, /allPolities\.filter\(\(name\) => !list\(institution\.members\)/);
+});
+
+test("a government represented below full membership is offered Request membership, and not observer status again", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  assert.match(source, /const playerMayRise = institutionMayRequestMembership\(selectedRow\?\.institution, playerCountry\);/);
+  assert.match(source, /\{\(!selectedRow\.member \|\| playerMayRise\) && lower\(institution\.status\) !== "dissolved" && <div data-institution-accession-controls="true"/);
+  assert.match(source, /\{!selectedRow\.member && list\(institution\?\.charter\?\.lifecycle\?\.accession\?\.allowedStatuses\)\.includes\("observer"\) && <button/);
+});
