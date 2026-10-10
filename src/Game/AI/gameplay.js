@@ -4,6 +4,8 @@ import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -1444,6 +1446,29 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
     : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
 };
 
+// Groups (runtime/groups.js) as the model reads them: each exact name, what it
+// is, and the regions it controls, by name with the id a groupOps entry copies.
+// Empty when the world has none, so a game without groups pays nothing.
+//
+// A release names the region ids it gives up, and lookups are off while Save AI
+// requests is on (the default), so the ids a release may name are shown here:
+// GROUP_REGIONS_IN_PROMPT shared among the groups, never fewer than twelve each.
+// A group larger than its share ends "+N more" (list_regions with a group when
+// lookups are on).
+const GROUP_REGIONS_IN_PROMPT = 400;
+const buildGroupsContext = async (worldLike) => {
+  if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
+  const world = normalizeWorldState(worldLike);
+  const count = Object.keys(world.groups).length;
+  if (!count) return "";
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const names = new Map(catalog.map((region) => [region.id, region.name]));
+  return describeGroupsForPrompt(world, {
+    regionName: (id) => names.get(id) || id,
+    maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
+  });
+};
+
 const buildGameMasterStorylineContext = (worldLike) => {
   const world = normalizeWorldState(worldLike);
   const storylines = normalizeArray(world.storylines)
@@ -1560,6 +1585,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
+  variables.groupsContext = await buildGroupsContext(bundle.world);
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1596,6 +1622,7 @@ const JUMP_LEVERS = [
   "Everything you change rides on an event's impacts, and no event's text may claim a change its impacts do not make. The output function describes each field; these need a word more:",
   "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"stats\":{\"leader\":\"\",\"government\":\"\",\"stability\":0-100,\"<any other field that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A country's figures move only through stats — just the fields that changed — and that includes who leads: when a leader falls, dies, resigns or is voted out, the successor goes in stats.leader (with government and stability when those moved too), or the stat sheet keeps the old name. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
+  "• groupOps {\"op\":\"create | update | dissolve | take | release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"<what it is and wants>\",\"color\":\"#RRGGBB\",\"regionIds\":[\"region: <name>\"],\"note\":\"\"}; create founds a group (with its first regions if it holds any), take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it.",
   "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
@@ -1614,8 +1641,8 @@ const JUMP_LEVERS = [
 const FOLDED_SKIP_CONSEQUENCES = [
   "[Every Event Carries Its Consequences]",
   "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states.",
-  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) and takes ground is written as that control entry's toCode, under its exact name: the engine founds it with that ground, and what it gains or loses afterwards is a control entry like any other. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
-  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a side attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it, under that side's exact name as ownerCode, and move it in later events as the front moves.",
+  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) is a group: the first event that has it holding ground founds it with that ground (groupOps create), a town it captures is a groupOps take, and a town a government wins back from it is a groupOps release. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
+  "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a power or a group attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it (a group's formation carries the group's exact name as ownerCode), and move it in later events as the front moves.",
   "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
   "• Orders. An event that gives one of the player's orders its outcome lists that order's id in actionIds.",
   "• The board. An event that moved one of the player's projects or operations carries its projectOps, as [Projects & Operations] says.",
@@ -2010,8 +2037,7 @@ const buildPlacementGazetteer = (context, world) => {
   const lookUpFor = (name, exactOnly, country, prefer, kind = "") => {
     const key = fold(name);
     if (!key) return null;
-    // A sea is not in the gazetteer's own names: placement.js reads it from the
-    // map's seas. (nameRefs.js also reads the kind "group"; nothing here has groups.)
+    // A sea is not in the gazetteer's own names: placement.js reads it from the map's seas.
     if (kind === "sea" || kind === "group") return null;
     const unit = !kind || kind === "unit" ? units.find((entry) => fold(entry.id) === key || fold(entry.name) === key) : null;
     if (unit) return { kind: "unit", name: unit.name, point: [unit.lng, unit.lat] };
@@ -2582,6 +2608,14 @@ const jumpDifficultyDirective = (difficulty) => {
   return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
 };
 
+// Groups (runtime/groups.js): the rule and the current areas, on every jump,
+// because the world may found one at any time.
+const buildJumpGroupsBlock = (groupsContext) => [
+  "[Groups]",
+  "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.",
+  normalizeString(groupsContext) || "No groups exist yet.",
+].join("\n");
+
 // The belligerents of the wars under way that have no formation on the map,
 // as a block for the time skip: each is to be given one by the next event of
 // its fighting. "" when every side of every war is drawn, or there is no war.
@@ -2627,6 +2661,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  blocks.push(buildJumpGroupsBlock(variables.groupsContext));
 
   // What is in motion: storylines, pressures, economies and the diplomatic
   // slice (nativeWorldDirector.js), built per segment.
@@ -3037,6 +3072,9 @@ So use the wider picture to choose the sender and the moment — never to give t
   // every narrated place must have its own operation.
   if (taskKey === "gameMaster") {
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    if (normalizeString(variables.groupsContext)) {
+      systemPrompt = `${systemPrompt}\n\n[Groups]\nActors that are not countries, each controlling an area of regions that stay their countries'. Their exact names, what each is, and where it controls (groupOps creates, changes, erases them and moves their areas):\n${normalizeString(variables.groupsContext)}`;
+    }
   }
 
   if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
@@ -4181,7 +4219,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
   "regionTransfers", "regionClaims", "regionControlOps", "polityChanges",
-  "createdChats", "unitOps", "markerOps", "spyOps", "actionIds",
+  "createdChats", "unitOps", "markerOps", "spyOps", "groupOps", "actionIds",
 ];
 const eventCarriesOwnConsequence = (event) =>
   OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
@@ -5195,6 +5233,13 @@ const resolveRegionTransfers = async (containers, world, {
       if (typeof claim.regionId === "string") claim.regionId = plainRegionRef(claim.regionId).text;
       if (typeof claim.regionName === "string") claim.regionName = plainRegionRef(claim.regionName).text;
     }
+    for (const op of normalizeArray(impacts?.groupOps)) {
+      if (!op || typeof op !== "object") continue;
+      for (const key of ["regionIds", "regions"]) {
+        if (Array.isArray(op[key])) op[key] = op[key].map((token) => (typeof token === "string" ? plainRegionRef(token).text : token));
+      }
+      if (typeof op.regionId === "string") op.regionId = plainRegionRef(op.regionId).text;
+    }
   }
 
   const worldState = normalizeWorldState(world);
@@ -5657,12 +5702,13 @@ const resolveRegionTransfers = async (containers, world, {
   // town back from rebels who are no power on this map, so the losing side is
   // unknown, or is the winner itself, and the operation was dropped. It is
   // read for what it says instead. The town is its government's again: any
-  // contest on it is cleared. Where the winner is someone other than the
+  // contest on it is cleared, and a group holding it lets it go (groupReleases,
+  // handed back to the caller). Where the winner is someone other than the
   // holder the map shows, it is an ordinary capture from that holder. A contest
   // written the wrong way round, with the map's holder as the challenger, is
   // turned about. Only control operations are read this way: a legal transfer
-  // still needs its losing side named. (A side the map does not know that
-  // TAKES ground is founded by receiving it: collectFoundedPolities below.)
+  // still needs its losing side named.
+  const groupReleases = [];
   for (const container of containers) {
     for (const transfer of normalizeArray(container?.impacts?.regionTransfers)) {
       const op = normalizeString(transfer?.op).toLowerCase();
@@ -5682,9 +5728,11 @@ const resolveRegionTransfers = async (containers, world, {
       if (!holder) continue;
       const otherHolds = Boolean(other) && canonicalOwnerKey(other) === ownerKeyOf(named.id);
       if (op === "control" && other && otherHolds) {
+        groupReleases.push({ container, regionId: named.id, group: fromUnknown ? from : "" });
         Object.assign(transfer, { op: "clear_contest", regionId: named.id, fromCode: holder, toCode: holder, claimantCode: fromUnknown ? from : "", clearAll: true, __hadRealToCode: false });
       } else if (op === "control" && other && !sameSide && ownerIsKnown(other)) {
         // Won from the side the map does not show, on ground the map gives to a third.
+        groupReleases.push({ container, regionId: named.id, group: from });
         transfer.fromCode = holder;
       } else if (op === "contest" && fromUnknown && otherHolds) {
         Object.assign(transfer, { fromCode: holder, actorCode: from, toCode: from });
@@ -5692,6 +5740,9 @@ const resolveRegionTransfers = async (containers, world, {
         Object.assign(transfer, { fromCode: holder, toCode: holder, claimantCode: normalizeString(transfer.claimantCode) || from });
       }
     }
+  }
+  for (const { container, regionId, group } of groupReleases) {
+    (container.impacts.__groupReleases ??= []).push({ regionId, group });
   }
   // resolveRegionControlOps proxies an op with no owner at all under this
   // sentinel; the ownership rules below judge it, not the name check.
@@ -6200,6 +6251,47 @@ const resolveRegionTransfers = async (containers, world, {
     }
     impacts.regionClaims = kept;
   }
+
+  // A group's area names regions the way a claim does — an exact id, or a plain
+  // name — and, like a claim, moves no border, so a region that matches nothing
+  // is dropped with a note instead of costing a retry. A release whose every
+  // region was dropped is dropped whole: an empty list means "release all".
+  for (const { impacts, path } of containers) {
+    const ops = normalizeArray(impacts?.groupOps);
+    if (ops.length === 0) continue;
+    const kept = [];
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const list = Array.isArray(op.regionIds) ? op.regionIds
+        : Array.isArray(op.regions) ? op.regions
+          : op.regionId ? [op.regionId] : [];
+      const resolved = [];
+      for (const token of list) {
+        const id = normalizeString(token);
+        if (byId.has(id)) {
+          resolved.push(id);
+          continue;
+        }
+        const aliased = byAliasId.get(id) ?? [];
+        const named = byName.get(regionKey(token)) ?? [];
+        const matches = aliased.length === 1 ? aliased : named;
+        if (matches.length === 1) {
+          resolved.push(matches[0].id);
+          continue;
+        }
+        console.warn(
+          `[ai] ${path}.groupOps dropped region "${id}" for ${normalizeString(op.name)}: ` +
+            "no single map region matches that id or name.",
+        );
+      }
+      if (list.length > 0 && resolved.length === 0 && normalizeGroupOp(op)?.op === "release") continue;
+      delete op.regions;
+      delete op.regionId;
+      op.regionIds = [...new Set(resolved)];
+      kept.push(op);
+    }
+    impacts.groupOps = kept;
+  }
   // The foundings this pass decided, as create entries on the first event that
   // named each polity (the collector skipped names the payload already declares).
   // Prepended, so a model's own later entry for the same name still lands on top
@@ -6263,6 +6355,17 @@ const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly =
     if (foundedHere.length) targetImpacts.polityChanges = [...foundedHere, ...normalizeArray(targetImpacts.polityChanges)];
 
 
+    // A town a government took back from a side the map does not show
+    // (resolveRegionTransfers): the group holding it there, if one is, lets it go.
+    const worldGroups = normalizeWorldState(world);
+    for (const { regionId, group } of normalizeArray(proxyContainers[index]?.impacts?.__groupReleases)) {
+      const holding = normalizeString(worldGroups.groupAreas?.[regionId])
+        || Object.keys(worldGroups.groups ?? {}).find((name) => name.toLowerCase() === normalizeString(group).toLowerCase())
+        || "";
+      if (!holding) continue;
+      targetImpacts.groupOps = [...normalizeArray(targetImpacts.groupOps), { op: "release", name: holding, regionIds: [regionId], note: "Retaken by its government." }];
+    }
+
     targetImpacts.regionControlOps = normalizeArray(proxyContainers[index]?.impacts?.regionTransfers)
       .map((entry) => {
         const next = { ...entry };
@@ -6307,6 +6410,29 @@ const validateExactApprovedRegionClaims = (containers) => {
     const regionId = normalizeString(claim?.regionId);
     if (!regionId || !exactIds.has(regionId)) {
       return `${path}.regionClaims[${claimIndex}].regionId "${regionId || "(blank)"}" is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved claim.`;
+    }
+  }
+  return "";
+};
+
+// The same guard for groups' areas: Apply takes the previewed ids as they are.
+const validateExactApprovedGroupAreas = (containers) => {
+  const entries = [];
+  for (const { impacts, path } of containers) {
+    for (const [opIndex, op] of normalizeArray(impacts?.groupOps).entries()) {
+      for (const regionId of normalizeArray(op?.regionIds)) entries.push({ regionId: normalizeString(regionId), opIndex, path });
+    }
+  }
+  if (entries.length === 0) return "";
+
+  const exactCatalog = getPrimedScenarioRegionCatalog() ?? [];
+  if (!Array.isArray(exactCatalog) || exactCatalog.length === 0) {
+    return "Approved group areas cannot be revalidated because the compact scenario region catalog is not primed; regenerate the GM preview after the map finishes loading.";
+  }
+  const exactIds = new Set(exactCatalog.map((region) => normalizeString(region?.id)).filter(Boolean));
+  for (const { regionId, opIndex, path } of entries) {
+    if (!regionId || !exactIds.has(regionId)) {
+      return `${path}.groupOps[${opIndex}].regionIds has "${regionId || "(blank)"}", which is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved group area.`;
     }
   }
   return "";
@@ -6564,6 +6690,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
+    const exactGroupError = validateExactApprovedGroupAreas(containers);
+    if (exactGroupError) return exactGroupError;
   }
   // Reluctance guard (strict attempt only): events that NARRATE a capture while
   // the whole payload ships ZERO regionTransfers are the recurring field report
@@ -14122,6 +14250,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     "unitOps",
     "markerOps",
     "projectOps",
+    "groupOps",
   ]) {
     if (normalizeArray(impacts[field]).length > 0) return true;
   }

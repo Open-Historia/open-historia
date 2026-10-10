@@ -51,6 +51,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
+import { normalizeGroupOp } from "../../runtime/groups.js";
 
 dayjs.extend(advancedFormat);
 
@@ -298,6 +299,19 @@ const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup
     }
     for (const claim of impacts.regionClaims ?? []) {
         lines.push({ kind: "claim", text: `${region(claim)}: ${claim.drop ? `${polity(claim.claimantCode)} drops its claim` : `claimed by ${polity(claim.claimantCode)}`}${note(claim.note)}` });
+    }
+    // Groups (runtime/groups.js): read through the normalizer, so a streamed
+    // card's "erase" reads as the dissolve it is.
+    for (const raw of impacts.groupOps ?? []) {
+        const op = normalizeGroupOp(raw);
+        if (!op) continue;
+        const names = op.regionIds.map((id) => regionLookup.get(id)?.name || id);
+        const where = names.length > 4 ? `${names.slice(0, 4).join(", ")} and ${names.length - 4} more` : names.join(", ");
+        if (op.op === "create") lines.push({ kind: "group", text: `${op.name}: a new group${where ? `, controlling ${where}` : ""}${note(op.note)}` });
+        else if (op.op === "dissolve") lines.push({ kind: "group", text: `${op.name}: erased, with the area it controlled${note(op.note)}` });
+        else if (op.op === "release") lines.push({ kind: "group", text: `${op.name} ${where ? `loses control of ${where}` : "loses its whole area"}${note(op.note)}` });
+        else if (op.op === "take") lines.push({ kind: "group", text: `${where || "No region"}: controlled by ${op.name}${note(op.note)}` });
+        else lines.push({ kind: "group", text: `${op.newName ? `${op.name} is now ${op.newName}` : `${op.name}: changed`}${where ? `, taking ${where}` : ""}${note(op.note)}` });
     }
     for (const change of impacts.polityChanges ?? []) {
         const verb = { create: "created", rename: "renamed", dissolve: "dissolved", restore: "restored", update: "updated" }[change.operation] || "updated";
@@ -612,7 +626,7 @@ let liveEventSeq = 0;
 // non-array: that throws in a render and blanks the panel. Dropped here once.
 const LIVE_EVENT_LISTS = [
     "regionTransfers", "regionControlOps", "regionClaims", "polityChanges",
-    "unitOps", "markerOps", "createdChats", "projectOps",
+    "unitOps", "markerOps", "createdChats", "projectOps", "groupOps",
 ];
 
 const liveEventCard = (event) => {

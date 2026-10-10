@@ -15,6 +15,7 @@
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
 import { readNameRef } from "./nameRefs.js";
+import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
@@ -77,12 +78,14 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "list_regions",
     description:
       "The regions one power currently holds, by name. Use the exact power name from list_powers. Paged: "
-      + "pass offset to continue. Copy the names EXACTLY into regionTransfers / regionControlOps / regionClaims, each as \"region: <name>\".",
-    schema: object("Which power.", {
+      + "pass offset to continue. Copy the names EXACTLY into regionTransfers / regionControlOps / regionClaims, each as \"region: <name>\". "
+      + "Or pass group instead of owner for every region a group controls, with each region's owner: the names a groupOps entry lists.",
+    schema: object("Which power, or which group.", {
       owner: text("The power's exact name."),
+      group: text("Instead of owner: a group's exact name."),
       offset: integer("First region to return (default 0)."),
       limit: integer("How many to return (default 200, max 300)."),
-    }, ["owner"]),
+    }),
   },
   {
     name: "find_region",
@@ -98,7 +101,7 @@ export const LOOKUP_TOOLS = Object.freeze([
   {
     name: "region_info",
     description:
-      "One region in full: exact name, controller, legal sovereign, claimants, cities inside it, and its "
+      "One region in full: exact name, controller, legal sovereign, claimants, the group controlling it if any, cities inside it, and its "
       + "neighbouring regions with their owners (who could reach it, whose land it borders).",
     schema: object("Which region.", { region: text("The region's name (from list_regions / find_region); with its owner in brackets where two powers hold one of that name.") }, ["region"]),
   },
@@ -257,6 +260,24 @@ export const LOOKUP_DIRECTIVE = [
 // Context: the indexes the executor answers from. Built once per task by the
 // caller from the bundle, the rendered region catalog and the cities.
 // ---------------------------------------------------------------------------
+
+// The group (runtime/groups.js) whose area holds a region, with what it is.
+const groupOf = (context, regionId) => {
+  const name = clean(context.world?.groupAreas?.[regionId]);
+  const record = name ? context.world?.groups?.[name] : null;
+  if (!record) return {};
+  const description = clean(record.description).slice(0, 400);
+  return { controlledByGroup: { name, ...(description ? { description } : {}) } };
+};
+
+// The world's groups and the regions each controls, as rows of this map. An
+// area row this map does not render is left out rather than named by its id.
+const groupsOnMap = (context) => {
+  const groups = normalizeGroups(context.world?.groups);
+  const areas = groupRegions(normalizeGroupAreas(context.world?.groupAreas, groups));
+  const rowsOf = (name) => array(areas[name]).map((id) => context.byId.get(clean(id))).filter(Boolean);
+  return { groups, rowsOf };
+};
 
 const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
 
@@ -705,13 +726,24 @@ export const executeLookup = (context, name, args = {}) => {
       return { count: powers.length, powers: powers.slice(0, 250) };
     }
     case "list_regions": {
+      const paged = (rows, brief) => {
+        const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
+        const limit = clampInt(a.limit, 1, 300, 200);
+        const page = rows.slice(offset, offset + limit).map(brief);
+        return { total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      };
+      // A group's area, which crosses countries: each region with its owner, the
+      // names a groupOps release lists.
+      if (clean(a.group) && !clean(a.owner)) {
+        const { groups, rowsOf } = groupsOnMap(context);
+        const group = findGroupKey(groups, a.group);
+        if (!group) return { error: `No group named "${clean(a.group)}". Names are exact.`, groups: Object.keys(groups) };
+        return { group, ...paged(rowsOf(group), regionBrief) };
+      }
+      if (!clean(a.owner)) return { error: "owner (a power's exact name) or group (a group's exact name) is required." };
       const owner = context.resolveOwner(a.owner);
       if (!owner) return unknownPower(context, a.owner);
-      const rows = context.ownerRows.get(owner) ?? [];
-      const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
-      const limit = clampInt(a.limit, 1, 300, 200);
-      const page = rows.slice(offset, offset + limit).map((row) => ({ name: row.name }));
-      return { owner, total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      return { owner, ...paged(context.ownerRows.get(owner) ?? [], (row) => ({ name: row.name })) };
     }
     case "find_region": {
       const query = clean(a.name);
@@ -758,6 +790,7 @@ export const executeLookup = (context, name, args = {}) => {
         ...regionBrief(row),
         sovereign: row.sovereign || row.owner || "unowned",
         claimants: array(context.claimants[row.id]).map(clean).filter(Boolean),
+        ...groupOf(context, row.id),
         cities: context.citiesInRegion(row).slice(0, 12).map((city) => ({ name: city.name, population: city.population, ...(city.capital ? { capital: city.capital } : {}) })),
         neighbours: context.neighboursOf(row).slice(0, 24).map(regionBrief),
       };
@@ -1071,7 +1104,12 @@ export const executeLookup = (context, name, args = {}) => {
       for (const [id, depth] of distance) {
         const row = context.byId.get(id);
         const owner = row.owner || "unowned";
-        (byOwner[owner] ??= []).push({ name: row.name, steps: depth, ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}) });
+        const group = clean(context.world?.groupAreas?.[row.id]);
+        (byOwner[owner] ??= []).push({
+          name: row.name, steps: depth,
+          ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}),
+          ...(group && context.world?.groups?.[group] ? { controlledByGroup: group } : {}),
+        });
       }
       for (const list of Object.values(byOwner)) list.sort((x, y) => x.steps - y.steps || x.name.localeCompare(y.name));
       return { centre: regionBrief(centre), steps, regions: distance.size, byOwner };

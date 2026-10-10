@@ -297,6 +297,7 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   for (const field of [
     "regionTransfers",
     "regionClaims",
+    "groupOps",
     "regionControlOps",
     "polityChanges",
     "createdChats",
@@ -594,6 +595,7 @@ const countImpactSignals = (event) => {
   for (const key of [
     "regionTransfers",
     "regionClaims",
+    "groupOps",
     "regionControlOps",
     "polityChanges",
     "unitOps",

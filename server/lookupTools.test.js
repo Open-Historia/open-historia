@@ -381,3 +381,34 @@ test("two regions of one name are told apart by their owner, never guessed", () 
   assert.equal(executeLookup(ctx, "region_info", { region: "Georgia (United States)" }).owner, "United States");
   assert.equal(executeLookup(ctx, "region_info", { region: "region: Georgia (Georgia)" }).owner, "Georgia");
 });
+
+test("list_regions with a group: its whole area with each region's owner, paged; map_around names the group", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      groups: { "Kharkiv Partisans": { description: "Irregulars." } },
+      groupAreas: { "ukr-kharkiv": "Kharkiv Partisans", "rus-belgorod": "Kharkiv Partisans" },
+    },
+    player: "Ukraine",
+  });
+  const area = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans" });
+  assert.equal(area.group, "Kharkiv Partisans");
+  assert.equal(area.total, 2);
+  assert.deepEqual(area.regions, [
+    { name: "Kharkiv", owner: "Ukraine" },
+    { name: "Belgorod", owner: "Russian Federation" },
+  ]);
+  const page = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", limit: 1 });
+  assert.equal(page.next, 1);
+  assert.deepEqual(executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", offset: 1 }).regions.map((region) => region.name), ["Belgorod"]);
+  assert.match(executeLookup(ctx, "list_regions", { group: "Kharkov Partisans" }).error, /No group named/);
+  assert.match(executeLookup(ctx, "list_regions", {}).error, /required/);
+  // owner wins when both are given.
+  assert.equal(executeLookup(ctx, "list_regions", { owner: "Ukraine", group: "Kharkiv Partisans" }).owner, "Ukraine");
+
+  const around = executeLookup(ctx, "map_around", { regionId: "ukr-kharkiv" });
+  assert.equal(around.byOwner.Ukraine[0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal(around.byOwner["Russian Federation"][0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal("controlledByGroup" in executeLookup(ctx, "map_around", { regionId: "ukr-zap" }).byOwner["Russian Federation"][0], false);
+});

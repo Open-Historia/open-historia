@@ -815,6 +815,29 @@ const projectOpSchema = {
   additionalProperties: false,
 };
 
+// Groups (runtime/groups.js): actors that are not countries, each controlling an
+// area of regions it does not own. One object discriminated by op, like
+// projectOpSchema — the friendliest shape for Gemini and for small local models.
+const groupOpSchema = {
+  type: "object",
+  description: "One change to a group — an actor that is not a country (a terrorist organisation, a cartel, a militia, a zombie outbreak) — or to the regions it controls.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["create", "update", "dissolve", "take", "release"],
+      description: "create a group; update its description, colour or name; dissolve it (the group and its area are erased); take regions into its area; release regions from it (all of them when regionIds is empty).",
+    },
+    name: nonEmptyTextSchema("The group's exact name (a new one for create)."),
+    newName: textSchema("update only: the group's new name."),
+    description: textSchema("What the group is and does: for create, or when it changes."),
+    color: textSchema("#RRGGBB tint for its area; optional."),
+    regionIds: stringArraySchema("The regions it takes (create/take) or releases, each by NAME as the map spells it: \"region: Aleppo\"."),
+    note: textSchema("Brief reason."),
+  },
+  required: ["op", "name"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -875,6 +898,13 @@ const impactsSchema = {
         + "changed hands is regionTransfers.",
       items: regionClaimSchema,
     },
+    groupOps: {
+      type: "array",
+      description:
+        "Groups - actors that are not countries - founded, changed, erased, or taking or losing control of regions. "
+        + "The regions stay their countries'; a group's area is drawn over them.",
+      items: groupOpSchema,
+    },
     projectOps: {
       type: "array",
       description:
@@ -899,12 +929,7 @@ const impactsSchema = {
 // which is exactly how the attached ops get applied. The game master keeps the
 // full impacts object, since a direct "make this happen" command is one call
 // with no separate pass to hand the work to.
-const jumpImpactsSchema = {
-  ...impactsSchema,
-  properties: Object.fromEntries(
-    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
-  ),
-};
+// (jumpImpactsSchema itself is defined below, after the helper it uses.)
 
 // ---- The folded time skip -------------------------------------------------------
 // A skip is ONE request (requestBudget.js): no second request checks its events
@@ -952,6 +977,25 @@ const compactJumpImpactSchema = (schema) => ({
   ...stripNestedSchemaDescriptions(schema),
   ...(schema?.description ? { description: schema.description } : {}),
 });
+
+// The lean jump impacts (see "The jump's impacts" above): everything but the
+// board, and the families listed here without their nested descriptions, which
+// the skip's live records explain instead ([Groups] and its lever).
+const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
+  "groupOps",
+]);
+
+const jumpImpactsSchema = {
+  ...impactsSchema,
+  properties: Object.fromEntries(
+    Object.entries(impactsSchema.properties)
+      .filter(([key]) => key !== "projectOps")
+      .map(([key, schema]) => [
+        key,
+        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
+      ]),
+  ),
+};
 
 const foldedProjectOpsSchema = compactJumpImpactSchema({
   type: "array",
@@ -3374,6 +3418,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
+  "groupOps",
   "unitOps",
   "markerOps",
   "projectOps",
@@ -3420,6 +3465,7 @@ const normalizeEventShape = (entry) => {
       regionTransfers: ["transfers", "territoryChanges"],
       regionControlOps: ["controlOps", "controlChanges"],
       regionClaims: ["claims"],
+      groupOps: ["groups", "groupOperations"],
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],

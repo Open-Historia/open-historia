@@ -2871,6 +2871,12 @@ const LibraryTopBar = () => {
         polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
           ? world.polityOverrides
           : {},
+        // The scenario's groups, and which group's area each region is in
+        // (runtime/groups.js): the Workshop stamps the areas onto its regions.
+        groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
+        groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
+          ? world.groupAreas
+          : null,
         background,
         // The map's projection (server/mapProjection.js), which the Workshop
         // shows, converts and saves back.
@@ -2976,6 +2982,10 @@ const LibraryTopBar = () => {
         basemap: seed.world?.basemap ?? null,
         // The starting units placed in the Workshop (world.units, source "scenario").
         units: seed.world?.units ?? [],
+        // The groups and their areas: the Workshop opened with the world's, so
+        // what it saves is the whole of them.
+        ...(seed.world?.groups ? { groups: seed.world.groups, groupAreas: seed.world.groupAreas ?? {} } : {}),
+
       },
       game: {
         ...currentGame,

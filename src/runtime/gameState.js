@@ -1,5 +1,6 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { applyGroupOps, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
@@ -175,6 +176,13 @@ export const WORLD_DEFAULTS = {
   // bakes in again. A region disputed anew leaves the list. See
   // settleRegionClaims.
   settledRegionClaims: [],
+  // Groups: actors that are not countries — a terrorist organisation, a cartel,
+  // a zombie outbreak — keyed by exact name, each with a description (what the
+  // AI is told it is) and a colour (runtime/groups.js). A group owns no land;
+  // groupAreas says which regions it CONTROLS (region id -> group name, one
+  // group per region), drawn outlined and tinted over the countries' colours.
+  groups: {},
+  groupAreas: {},
   regionOwnershipOverrides: {},
   // Legal sovereignty where it differs from the polity administering a region
   // (an occupation). Sparse: normal territory has no row. Written by legal
@@ -2969,6 +2977,7 @@ const normalizeEventImpacts = (value, event = null) => {
     return {
       actionIds: [],
       createdChats: [],
+      groupOps: [],
       markerOps: [],
       polityChanges: [],
       projectOps: [],
@@ -2984,6 +2993,9 @@ const normalizeEventImpacts = (value, event = null) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    // Groups the event creates, changes or erases, and the regions they take or
+    // lose (runtime/groups.js).
+    groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
@@ -3510,6 +3522,9 @@ export const normalizeWorldState = (world) => {
 
   // Settled disputes: unique region ids, none of them disputed again — a live
   // claimant list is the region's state and wins.
+  const groups = normalizeGroups(nextWorld.groups);
+  const groupAreas = normalizeGroupAreas(nextWorld.groupAreas, groups);
+
   const settledRegionClaims = [...new Set(
     normalizeArray(nextWorld.settledRegionClaims).map((regionId) => normalizeOptionalString(regionId)),
   )].filter((regionId) => regionId && !Object.prototype.hasOwnProperty.call(regionClaimants, regionId));
@@ -3630,6 +3645,8 @@ export const normalizeWorldState = (world) => {
     polityOverrides,
     regionClaimants,
     settledRegionClaims,
+    groups,
+    groupAreas,
     regionOwnershipOverrides,
     regionSovereigntyOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
@@ -4580,6 +4597,14 @@ export const applyEventImpactsToWorld = ({
       // The polity is keyed by its new name now: this event's unit and structure
       // ops, and every later event, must resolve either name to the new key.
       resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+    }
+
+    // Groups after the land has moved, so a group can take what the same event
+    // just changed hands.
+    if (event.impacts.groupOps?.length) {
+      const applied = applyGroupOps(nextWorld, event.impacts.groupOps);
+      nextWorld.groups = applied.groups;
+      nextWorld.groupAreas = applied.groupAreas;
     }
 
     if (event.impacts.unitOps?.length) {

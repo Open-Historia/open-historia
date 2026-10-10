@@ -15,6 +15,7 @@ import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { mergeCityMarkers } from "./cityMarkers.js";
 
+
 // The official editor ships a handful of region "types" carrying render +
 // gameplay settings. We seed the two core ones (Land / Coastal); users add more.
 export const DEFAULT_TYPES = [
@@ -103,6 +104,10 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // mirrors world.polityOverrides instead of the old editor rule that
     // "a country exists because a region contains its display name".
     polities: {},
+    // Groups (runtime/groups.js): name -> { name, description, color }. A region
+    // in a group's area carries the group's name as its `group`; the export
+    // writes world.groups and world.groupAreas (exportPreset.js).
+    groups: {},
   };
 };
 
@@ -419,6 +424,11 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, features: typeof updater === "function" ? updater(d.features) : updater }));
     setSaveStatus("dirty");
   }, []);
+  const setGroups = useCallback((updater) => {
+    setDoc((d) => ({ ...d, groups: typeof updater === "function" ? updater(d.groups || {}) : (updater || {}) }));
+    setSaveStatus("dirty");
+  }, []);
+
   const setUnits = useCallback((updater) => {
     setDoc((d) => ({ ...d, units: typeof updater === "function" ? updater(d.units || []) : (updater || []) }));
     setSaveStatus("dirty");
@@ -455,6 +465,8 @@ export const useMapDocument = (initial) => {
     setFeatures,
     units: doc.units || [],
     setUnits,
+    groups: doc.groups || {},
+    setGroups,
     metadata: doc.metadata,
     basemap: doc.metadata.basemap,
     setBasemap,

@@ -213,6 +213,7 @@ Shown whenever ≥1 region is selected. Writes go straight through `api.setRegio
 | **Type** | `{ typeId }` | `— mixed —` shown when a multi-selection disagrees. |
 | **Polity** (owner) | `{ owner: key \| null }` | Free text over the polity registry, backed by a `<datalist>` of existing polities (registry entries plus `listOwners()`), shown by display name. An existing polity is matched by its stable key or display name without regard to case and its key is stored unchanged, so "france" cannot fork a second France. **A name nobody has yet becomes a new polity** — `upsertPolity` writes the same record the Polities panel creates (`name`, `code`, `aliases`, `status`) and the selection is assigned to it — but only on **Enter** or the **Create “…”** button that appears under the field; leaving the field assigns only an existing match, and Escape reverts, so a half-typed name never mints a one-province country by accident. Blanking the field offers **Make unowned**. |
 | **Disputed by** (claimants) | `{ claimants }` | `TagField` of country names. Any claimant makes the region render **striped** (owner colour + each claimant's), here and in-game. |
+| **Controlled by group** | `{ group }` | Which group's area the regions are in (§24b), or none. The group's tint shows on the region at once; **Groups…** opens the Groups panel. |
 | **Colour** | `setColorOverride(owner, rgb)` | Only shown with an owner. **Reset** appears when an override exists (`colorOverrides[owner]`). |
 | **Flag** | opens `FlagPicker` via `onOpenFlagPicker(owner)` | Renders current flag thumbnail. |
 | **Tags** | `setTags(owner, next)` | `TagField` with `TAG_SUGGESTIONS`; free vocabulary. |
@@ -431,6 +432,7 @@ Save robustness:
 | `stats` | `{ ownedRegions, owners, customGeometry }`. |
 | `world.regionOwnershipOverrides` | `{regionId: ownerName}`. |
 | `world.polityOverrides` | `{name:{name,aliases:[],color:'#hex',note:'',verbatim?}}`. |
+| `world.groups` / `world.groupAreas` | The groups (§24b) and which region each controls — the registry, plus any group a region names that the registry lacks (default colour). Regions carry no `group` in the regions file: the world is the whole truth. |
 | `world.units` | Starting units (`buildUnitsForGame`, §9b), `[]` when none. |
 | `world.customRegions` | `hasCustomGeometry \|\| Boolean(background)`. |
 | `world.background` / `world.basemap` | Light background descriptor / chosen ESRI basemap id. |
@@ -474,6 +476,10 @@ When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`)
 
 ---
 
+## 20b. Groups round-trip
+
+`libraryBar.jsx` hands the Workshop the scenario world's `groups` and `groupAreas`; the map's loaders stamp each region's `group` from the areas, or clear it (`loadRegions`, `reseedWorldWithOwners` in `OlMap.jsx`), so the world is the whole truth about them. The save writes them back into the scenario's world (`exportPreset.js`), and a document keeps its groups with the rest of what it saves.
+
 ## 21. Document migration (`documentMigration.js`)
 
 `migrateDocumentOwners(doc)` runs on every **open** (`MapEditor.openDoc`, `:245`). A doc is legacy while `ownerSchema < OWNER_SCHEMA`. Migration rekeys `colorOverrides`/`flags`/`tags` and every region `owner` from GADM code → name via `COUNTRY_NAMES` (`rekeyOwnerMap`), strips region `country`, and stamps `ownerSchema = OWNER_SCHEMA`. It lives in the editor (not the store) because a document is the one path where legacy owners can enter a scenario already wearing a "migrated" badge (an applied doc inherits the target's `ownerSchema`, so the store's migration would never run). No-op once migrated — safe to call every open.
@@ -498,6 +504,10 @@ The editor was split into a standalone repo (`Open-Historia/open-historia-map-ed
 - Region geometry is verified in-app; a headless WebGL context can't pixel-check the game map.
 
 Related: [World state](world-state.md) (`world.json` fields the seed writes — `regionOwnershipOverrides`, `polityOverrides`, `customRegions`, `countryTags`).
+
+## 24b. Groups (`GroupsPanel.jsx`)
+
+A group — a terrorist organisation, a cartel, a militia, a zombie outbreak — controls an area of regions without owning them (`src/runtime/groups.js`). The **Groups: N** chip opens the panel: every group in the document (and any a region names that the registry lacks) with its colour and region count; **Create** (with a selection, the new group takes it); per group, its name (a rename re-keys the record and every region in its area as one undo step, `retagGroup`), **What it is (the AI is told this)**, a **Tint colour** (a palette of ten, or any colour), **Select its regions**, **Add the selection**, **Remove the selection**, and **Erase group** (two clicks: the group and its area). The region inspector's **Controlled by group** sets it per selection. On the Workshop's map a group's regions get its tint over their owner's colour (`olStyle.js`) and its whole area an outline in its colour (`OlMap.jsx` `rebuildGroupOutlines`, a beat after any region change): cut by the game's own code (`vnext/groupAreas.js`) over a topology of the members alone, so the Workshop shows the outline the game will draw.
 
 ## 24. Scenario Workshop: polities, topology, province import
 

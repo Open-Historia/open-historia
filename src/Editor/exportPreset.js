@@ -15,6 +15,7 @@
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
+import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -128,6 +129,7 @@ const cityTier = (f) => {
 const buildCitiesForGame = (features) => ({
   type: "FeatureCollection",
   features: (features || [])
+
     .filter((f) => Array.isArray(f.coord) && f.coord.length === 2 && f.coord[0] != null && f.coord[1] != null)
     .map((f) => ({
       type: "Feature",
@@ -137,6 +139,7 @@ const buildCitiesForGame = (features) => ({
         population: f.population || 0,
         capital: (f.tags || []).includes("capital") ? "primary" : "",
         tier: cityTier(f),
+
       },
     })),
 });
@@ -232,6 +235,23 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
 
+  // Groups (runtime/groups.js): the registry, with any group a region names that
+  // the registry lacks (still a group to the game, in its default colour), and
+  // which group's area each region is in. They live in the world alone: the
+  // regions file carries no `group`.
+  const groupRegistry = { ...(doc.groups && typeof doc.groups === "object" && !Array.isArray(doc.groups) ? doc.groups : {}) };
+  const groupAreaRows = {};
+  for (const feature of regionsFC?.features || []) {
+    const props = feature.properties || {};
+    const id = props.id != null ? String(props.id) : feature.id != null ? String(feature.id) : "";
+    const group = String(props.group || "").trim();
+    if (!id || !group) continue;
+    groupAreaRows[id] = group;
+    if (!findGroupKey(groupRegistry, group)) groupRegistry[group] = { name: group };
+  }
+  const groups = normalizeGroups(groupRegistry);
+  const groupAreas = normalizeGroupAreas(groupAreaRows, groups);
+
   // Scenario Workshop / owner schema 4: region ownership is a stable
   // polity KEY. The visible/current name belongs to the polity registry and may
   // change without re-keying a single region.
@@ -293,8 +313,12 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
     polityOverrides,
+    // The groups and the areas they control (above).
+    groups,
+    groupAreas,
     // The starting units the author placed (Units panel / Unit tool).
     units: buildUnitsForGame(doc.units),
+
     // A custom background replaces Earth, so it must also hide the stock modern
     // political overlay (country fills, borders, "Russia"/"France" labels) — those
     // are gated on customRegions in the game, so force it on whenever there's a
