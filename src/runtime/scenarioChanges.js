@@ -26,6 +26,7 @@ import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
 import { bundleProjection, convertScenarioBundle, layOutScenarioBundle, normalizeImageBounds, normalizeProjection } from "../../server/mapProjection.js";
+import { normalizeAllowedBasemaps, normalizeOwnBasemaps } from "./assets.js";
 import {
   buildOwnerRenameMap,
   buildPolityMapRefs,
@@ -554,6 +555,38 @@ const metaOf = (scenario) => {
 // change makes the author's canon current too (suggestionApply.js).
 const canonContextOf = (world) => (isCurrentCanonWorld(world) ? world.canonContext ?? null : null);
 
+// The scenario's other basemaps of its own (world.ownBasemaps, payloads in the
+// ownBasemapsData asset), by id: each told apart by its kind and a hash of its
+// payload, as the main basemap is. One whose payload is not in the file is
+// left out rather than read as a map with nothing on it.
+const ownBasemapsOf = (list, data) => new globalThis.Map(normalizeOwnBasemaps(list).flatMap((own) => {
+  const payload = isRecord(data) ? data[own.id] : null;
+  const body = own.kind === "image"
+    ? (typeof payload?.dataUrl === "string" && payload.dataUrl ? { dataUrl: payload.dataUrl } : null)
+    : (isRecord(payload?.geojson) ? { geojson: payload.geojson } : null);
+  return body ? [[own.id, { name: own.name, kind: own.kind, hash: hashText(canonicalJson(body)), data: body }]] : [];
+}));
+
+// The detailed map a scenario names (world.background.tiled, docs/adr/0006,
+// with its fill ramp; the Map Editor's doc.metadata.tiledBasemap), or null. It
+// is apart from the basemap: optional, drawn on top of it, and the basemap is
+// told apart without it. An official map is the id and the version it needs,
+// the author's own the checksum of its file; the name is only how it is shown.
+export const detailedMapView = (tiled) => {
+  if (!isRecord(tiled)) return null;
+  const id = clean(tiled.id);
+  const hash = clean(tiled.hash).toLowerCase();
+  if (!id && !hash) return null;
+  return {
+    ...(id ? { id, version: Math.max(1, Math.round(Number(tiled.version) || 1)) } : { hash }),
+    name: clean(tiled.name),
+    ...(Array.isArray(tiled.fillOpacity) ? { fillOpacity: tiled.fillOpacity } : {}),
+  };
+};
+export const detailedMapKey = (view) => (view
+  ? canonicalJson({ id: view.id ?? "", version: view.version ?? 0, hash: view.hash ?? "", fillOpacity: view.fillOpacity ?? null })
+  : "");
+
 export const buildScenarioSnapshot = (bundle) => {
   const legacyOwners = isRecord(bundle?.data?.world) && needsOwnerMigration(bundle.data.world);
   const source = isRecord(bundle) ? migrateBundleOwners(bundle) : {};
@@ -605,6 +638,13 @@ export const buildScenarioSnapshot = (bundle) => {
       background: world.background?.kind && backgroundData
         ? { kind: clean(world.background.kind), hash: hashText(canonicalJson(backgroundData)), data: backgroundData, ...(backgroundBounds ? { bounds: backgroundBounds } : {}) }
         : null,
+      // The maps players may switch to: the built-in ones ticked, and the
+      // scenario's other basemaps of its own (runtime/assets.js).
+      allowedBasemaps: normalizeAllowedBasemaps(world.allowedBasemaps),
+      ownBasemaps: ownBasemapsOf(world.ownBasemaps, bundleAssetJson(assets.ownBasemapsData)),
+      detailedMap: detailedMapView(isRecord(world.background?.tiled)
+        ? { ...world.background.tiled, ...(Array.isArray(world.background.fillOpacity) ? { fillOpacity: world.background.fillOpacity } : {}) }
+        : null),
     },
   };
 };
@@ -1169,6 +1209,38 @@ const diffMapFields = (base, next, changes) => {
         : null,
     });
   }
+  diffBasemapChoices(base, next, changes);
+  // The detailed map on its own, apart from the basemap under it: one may be
+  // put on, swapped or taken off without the basemap changing.
+  const detailedFrom = base.map.detailedMap ?? null;
+  const detailedTo = next.map.detailedMap ?? null;
+  if (detailedMapKey(detailedFrom) !== detailedMapKey(detailedTo)) {
+    changes.push({ id: "map:detailedMap", area: "map", kind: "detailed-map", from: detailedFrom, to: detailedTo });
+  }
+};
+
+// The maps players may switch to. The built-in list is compared as written:
+// null (the default) and [] (none) are not the same choice.
+const ownBasemapView = ({ name, kind, hash }) => ({ name, kind, hash });
+const diffBasemapChoices = (base, next, changes) => {
+  const allowedFrom = base.map.allowedBasemaps ?? null;
+  const allowedTo = next.map.allowedBasemaps ?? null;
+  if (JSON.stringify(allowedFrom) !== JSON.stringify(allowedTo)) {
+    changes.push({ id: "map:allowedBasemaps", area: "map", kind: "allowed-basemaps", from: allowedFrom, to: allowedTo });
+  }
+  const before = base.map.ownBasemaps ?? new globalThis.Map();
+  const after = next.map.ownBasemaps ?? new globalThis.Map();
+  for (const [key, entry] of after) {
+    const was = before.get(key);
+    if (!was) {
+      changes.push({ id: `own-basemap-add:${key}`, area: "map", kind: "own-basemap-add", key, to: entry });
+    } else if (canonicalJson(ownBasemapView(was)) !== canonicalJson(ownBasemapView(entry))) {
+      changes.push({ id: `own-basemap-change:${key}`, area: "map", kind: "own-basemap-change", key, from: ownBasemapView(was), to: entry });
+    }
+  }
+  for (const [key, entry] of before) {
+    if (!after.has(key)) changes.push({ id: `own-basemap-remove:${key}`, area: "map", kind: "own-basemap-remove", key, from: ownBasemapView(entry) });
+  }
 };
 
 // The changes that turn `baseBundle` into `nextBundle`, details first, then the
@@ -1276,6 +1348,10 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   const puppets = (byKind["puppet-add"] ?? 0) + (byKind["puppet-remove"] ?? 0) + (byKind["puppet-change"] ?? 0);
   if (puppets) lines.push(`${plural(puppets, "puppet state change", "puppet state changes")}`);
   if (byKind.background) lines.push("New basemap");
+  const ownBasemaps = (byKind["own-basemap-add"] ?? 0) + (byKind["own-basemap-remove"] ?? 0) + (byKind["own-basemap-change"] ?? 0);
+  if (ownBasemaps) lines.push(`${plural(ownBasemaps, "change to the other basemaps", "changes to the other basemaps")}`);
+  if (byKind["allowed-basemaps"]) lines.push("Built-in maps players can switch to changed");
+  if (byKind["detailed-map"]) lines.push("Detailed map changed");
   if (byKind.projection) lines.push("Map projection changed");
   if (byKind["map-field"]) lines.push(`${plural(byKind["map-field"], "map setting changed", "map settings changed")}`);
   return lines.length > maxLines ? [...lines.slice(0, maxLines - 1), `…and ${lines.length - maxLines + 1} more`] : lines;

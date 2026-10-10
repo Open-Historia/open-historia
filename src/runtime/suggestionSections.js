@@ -15,7 +15,11 @@ export const REVIEW_SECTIONS = [
   { id: "units", kinds: ["unit-add", "unit-remove", "unit-change"] },
   { id: "features", kinds: ["marker-add", "marker-remove", "marker-change"] },
   { id: "puppets", kinds: ["puppet-add", "puppet-remove", "puppet-change"] },
-  { id: "settings", kinds: ["projection", "map-field", "background"] },
+  // The basemap and the maps players may switch to, and apart from them the
+  // detailed map, which is optional and drawn on top of the basemap.
+  { id: "basemaps", kinds: ["background", "allowed-basemaps", "own-basemap-add", "own-basemap-remove", "own-basemap-change"] },
+  { id: "detailedMap", kinds: ["detailed-map"] },
+  { id: "settings", kinds: ["projection", "map-field"] },
 ];
 
 export const sectionOfChange = (change) => REVIEW_SECTIONS.find((section) => section.kinds.includes(change?.kind))?.id ?? "settings";

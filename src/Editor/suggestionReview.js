@@ -17,9 +17,12 @@
 import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
-import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { canonicalJson, cityTierOf, detailedMapKey, detailedMapView, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
-import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, hasDetailedMap, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
+import { normalizeEditorOwnBasemaps } from "./ownBasemaps.js";
+import { normalizeAllowedBasemaps } from "../runtime/assets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -154,6 +157,21 @@ const backgroundOf = (saved) => {
   backgroundHashes.set(saved, fingerprint);
   return fingerprint;
 };
+// One of the scenario's other basemaps (ownBasemaps.js) as the diff tells it
+// apart: its name, and its basemap's kind and hash.
+const ownBasemapOf = (doc, key) => normalizeEditorOwnBasemaps(doc?.metadata?.ownBasemaps).find((own) => own.id === key) ?? null;
+const sameOwnBasemap = (own, entry) => {
+  const fingerprint = backgroundOf(own?.background);
+  return Boolean(fingerprint && entry) && clean(own.name) === clean(entry.name) && fingerprint.kind === clean(entry.kind) && fingerprint.hash === entry.hash;
+};
+// What a suggested basemap of the scenario's own is in the document.
+const ownBasemapEntry = (key, to) => {
+  const background = to?.kind === "image" && to.data?.dataUrl ? { kind: "image", dataUrl: to.data.dataUrl }
+    : to?.kind === "vector" && to.data?.geojson ? { kind: "vector", geojson: to.data.geojson } : null;
+  return background ? { id: key, name: clean(to.name) || "Basemap", background } : null;
+};
+// Whether a basemap is a drawn one, which a detailed map needs under it.
+const isDrawnBasemap = (saved) => saved?.kind === "vector" && Array.isArray(saved.geojson?.features) && saved.geojson.features.length > 0;
 const puppetView = (row) => row ? {
   overlord: clean(row.overlord), puppet: clean(row.puppet), kind: clean(row.kind) || "satellite",
   secrecy: row.secrecy === "covert" ? "covert" : "open", loyalty: Math.round(Number(row.loyalty) || 0), status: clean(row.status) || "active",
@@ -348,6 +366,34 @@ export const mapChangeStatus = (change, ctx, { renames = {}, cache = null } = {}
       if (matches(change.to)) return "applied";
       return matches(change.from) ? "open" : "conflict";
     }
+    case "allowed-basemaps": {
+      const current = JSON.stringify(normalizeAllowedBasemaps(ctx.doc?.metadata?.allowedBasemaps));
+      if (current === JSON.stringify(normalizeAllowedBasemaps(change.to))) return "applied";
+      return current === JSON.stringify(normalizeAllowedBasemaps(change.from)) ? "open" : "conflict";
+    }
+    case "own-basemap-add": {
+      if (!change.to) return "missing";
+      const current = ownBasemapOf(ctx.doc, change.key);
+      if (!current) return "open";
+      return sameOwnBasemap(current, change.to) ? "applied" : "conflict";
+    }
+    case "own-basemap-remove": {
+      const current = ownBasemapOf(ctx.doc, change.key);
+      if (!current) return "applied";
+      return sameOwnBasemap(current, change.from) ? "open" : "conflict";
+    }
+    case "own-basemap-change": {
+      if (!change.to) return "missing";
+      const current = ownBasemapOf(ctx.doc, change.key);
+      if (!current) return "missing";
+      if (sameOwnBasemap(current, change.to)) return "applied";
+      return sameOwnBasemap(current, change.from) ? "open" : "conflict";
+    }
+    case "detailed-map": {
+      const current = detailedMapKey(detailedMapView(ctx.doc?.metadata?.tiledBasemap));
+      if (current === detailedMapKey(change.to)) return "applied";
+      return current === detailedMapKey(change.from) ? "open" : "conflict";
+    }
     default:
       return "open";
   }
@@ -384,6 +430,18 @@ export const changeDependencies = (change, changes, ctx) => {
   const projection = projectionChangeOf(changes);
   if (projection && projection.id !== change.id && PLACED_KINDS.has(change.kind)
     && !sameProjection(ctx.doc?.metadata?.projection, projection.to)) needed.push(projection.id);
+  // A detailed map goes on a drawn basemap in the Mercator projection: the
+  // suggestion's own basemap and projection come with it. And a map is only
+  // converted once its detailed map is off (projectionConvert.js).
+  if (change.kind === "detailed-map" && change.to) {
+    const background = changes.find((entry) => entry.kind === "background");
+    if (background && !isDrawnBasemap(ctx.doc?.metadata?.customBackground)) needed.push(background.id);
+    if (projection && !sameProjection(ctx.doc?.metadata?.projection, projection.to)) needed.push(projection.id);
+  }
+  if (change.kind === "projection" && hasDetailedMap(ctx.doc)) {
+    const takeOff = changes.find((entry) => entry.kind === "detailed-map" && !entry.to);
+    if (takeOff) needed.push(takeOff.id);
+  }
   for (const key of polities) {
     if (ctx.doc?.polities?.[key]) continue;
     const adding = changes.find((entry) => (entry.kind === "polity-add" && entry.key === key) || (entry.kind === "polity-rename" && entry.to === key));
@@ -715,6 +773,36 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       ctx.setBackground?.(saved);
       return () => ctx.setBackground?.(before);
     }
+    case "allowed-basemaps": {
+      const before = ctx.doc?.metadata?.allowedBasemaps ?? null;
+      d.patchMetadata({ allowedBasemaps: normalizeAllowedBasemaps(change.to) });
+      return () => d.patchMetadata({ allowedBasemaps: before });
+    }
+    case "own-basemap-add":
+    case "own-basemap-change":
+    case "own-basemap-remove": {
+      const before = normalizeEditorOwnBasemaps(ctx.doc?.metadata?.ownBasemaps);
+      let next = before.filter((own) => own.id !== change.key);
+      if (change.kind !== "own-basemap-remove") {
+        const entry = ownBasemapEntry(change.key, change.to);
+        if (!entry) return null;
+        const at = before.findIndex((own) => own.id === change.key);
+        next = at < 0 ? [...before, entry] : before.map((own) => (own.id === change.key ? entry : own));
+      }
+      d.patchMetadata({ ownBasemaps: next.length ? next : null });
+      return () => d.patchMetadata({ ownBasemaps: before.length ? before : null });
+    }
+    case "detailed-map": {
+      // Named only, as the Maps window names it (MapEditor
+      // selectLibraryBasemap); the basemap under it is a change of its own.
+      const before = ctx.doc?.metadata?.tiledBasemap ?? null;
+      const to = change.to;
+      const next = to
+        ? { ...(to.id ? { id: to.id, version: to.version } : { hash: to.hash }), name: to.name, ...(Array.isArray(to.fillOpacity) ? { fillOpacity: to.fillOpacity } : {}) }
+        : null;
+      d.patchMetadata({ tiledBasemap: next });
+      return () => d.patchMetadata({ tiledBasemap: before });
+    }
     default:
       return null;
   }
@@ -723,11 +811,26 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
 // ---- accepting a list, and what a save records --------------------------------
 
 // The projection first, then countries and groups: the rest of a suggestion's
-// changes may need them.
-const APPLY_ORDER = ["projection", "polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
+// changes may need them. A detailed map taken off goes before the projection,
+// which cannot convert a map with one; one put on goes after the basemap it
+// lies on.
+const APPLY_ORDER = ["projection", "polity-add", "polity-rename", "group-add", "polity-change", "group-change", "background", "detailed-map"];
 const applyRank = (change) => {
+  if (change.kind === "detailed-map" && !change.to) return -1;
   const index = APPLY_ORDER.indexOf(change.kind);
   return index < 0 ? APPLY_ORDER.length : index;
+};
+
+// Why a batch that puts a detailed map on cannot be accepted, or null: the map
+// would be in another projection than Mercator, or have no drawn basemap under
+// it, once the rest of the batch is in.
+const detailedMapRefusal = (order, ctx) => {
+  if (!order.some((change) => change.kind === "detailed-map" && change.to)) return null;
+  const projection = order.find((change) => change.kind === "projection");
+  if (!detailedMapFits(projection ? projection.to : ctx.doc?.metadata?.projection)) return DETAILED_MAP_PROJECTION_MESSAGE;
+  const background = order.find((change) => change.kind === "background");
+  const drawn = background ? background.to?.kind === "vector" && Boolean(background.to?.data?.geojson?.features?.length) : isDrawnBasemap(ctx.doc?.metadata?.customBackground);
+  return drawn ? null : DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE;
 };
 
 // The order a list of changes is accepted in: countries and groups first, and
@@ -757,9 +860,11 @@ export const planAccept = (list, ctx, { changes = [], accepted = new Set() } = {
 // `refused` says why.
 export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set(), renames = {} } = {}) => {
   const order = planAccept(list, ctx, { changes, accepted });
-  if (hasDetailedMap(ctx.doc) && order.some((change) => change.kind === "projection")) {
-    return { accepted: [], undoers: new globalThis.Map(), renames: { ...renames }, refused: DETAILED_MAP_CONVERSION_MESSAGE };
-  }
+  const takesDetailedMapOff = order.some((change) => change.kind === "detailed-map" && !change.to);
+  const refused = hasDetailedMap(ctx.doc) && !takesDetailedMapOff && order.some((change) => change.kind === "projection")
+    ? DETAILED_MAP_CONVERSION_MESSAGE
+    : detailedMapRefusal(order, ctx);
+  if (refused) return { accepted: [], undoers: new globalThis.Map(), renames: { ...renames }, refused };
   const localRenames = { ...renames };
   const undoers = new globalThis.Map();
   const ids = [];
@@ -798,10 +903,13 @@ export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set()
 
 // Why an accepted change cannot be undone now, or null. Undoing a change of
 // projection converts the map back, which a map that has since been given a
-// detailed map cannot take (projectionConvert.js).
-export const undoRefusal = (change, ctx) => (
-  change?.kind === "projection" && hasDetailedMap(ctx?.doc) ? DETAILED_MAP_CONVERSION_MESSAGE : null
-);
+// detailed map cannot take (projectionConvert.js); undoing a change of detailed
+// map puts the old one back, which a map since moved out of Mercator cannot.
+export const undoRefusal = (change, ctx) => {
+  if (change?.kind === "projection" && hasDetailedMap(ctx?.doc)) return DETAILED_MAP_CONVERSION_MESSAGE;
+  if (change?.kind === "detailed-map" && change.from && !detailedMapFits(ctx?.doc?.metadata?.projection)) return DETAILED_MAP_PROJECTION_MESSAGE;
+  return null;
+};
 
 // How a change stands once the author's decisions are counted: theirs, else
 // accepted when the map already has it and rejected when what it changes is

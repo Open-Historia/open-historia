@@ -11,6 +11,7 @@
 //     suggestion.json       { schema, id, createdAt, scenario, by, note, changes[] }
 //     files/cover.<ext>     a suggested cover image, when there is one
 //     files/background.json a suggested basemap, when there is one
+//     files/own-basemaps/<id>.json  another basemap of the scenario's own, added or changed
 
 import { zipBundle, unzipBundle, looksLikeZip } from "./bundleZip.js";
 import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment } from "./scenarioChanges.js";
@@ -50,6 +51,7 @@ export const KNOWN_KINDS = new Set([
   "marker-add", "marker-remove", "marker-change",
   "puppet-add", "puppet-remove", "puppet-change",
   "map-field", "background", "projection",
+  "allowed-basemaps", "own-basemap-add", "own-basemap-remove", "own-basemap-change", "detailed-map",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 // A Politics change names the ledger it goes into and the entry, both of
@@ -61,6 +63,11 @@ const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 // only a Politics part this build writes.
 // An entry (a Politics record, a pre-history event) becomes an object key too.
 const safeEntryKey = (entry) => entry === undefined || entry === null || (typeof entry === "string" && !UNSAFE_KEYS.has(entry));
+// One of the scenario's other basemaps is named by an id that becomes a key of
+// the author's own list and the name of a file in the .zip.
+const OWN_BASEMAP_KINDS = new Set(["own-basemap-add", "own-basemap-remove", "own-basemap-change"]);
+const validOwnBasemapKey = (key) => typeof key === "string" && /^[\w-]{1,40}$/.test(key) && !UNSAFE_KEYS.has(key);
+const ownBasemapFile = (key) => `files/own-basemaps/${key}.json`;
 const validPoliticsChange = (change) => POLITICS_FIELDS.includes(change.field)
   && (change.within === undefined || POLITICS_LEDGERS.has(change.within))
   && safeEntryKey(change.entry);
@@ -72,7 +79,10 @@ const validChange = (change) => isRecord(change)
   && (change.kind !== "politics" || validPoliticsChange(change))
   && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && safeEntryKey(change.entry)))
   && (change.kind !== "borders" || Array.isArray(change.regions))
-  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"));
+  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"))
+  && (!OWN_BASEMAP_KINDS.has(change.kind) || validOwnBasemapKey(change.key))
+  && (change.kind !== "allowed-basemaps" || change.to === null || (Array.isArray(change.to) && change.to.every((id) => typeof id === "string")))
+  && (change.kind !== "detailed-map" || change.to === null || isRecord(change.to));
 
 export const normalizeSuggestion = (raw) => {
   if (!isRecord(raw) || raw.schema !== SUGGESTION_SCHEMA) {
@@ -144,6 +154,12 @@ export const buildSuggestionZip = async (suggestion) => {
       const { data, ...to } = change.to;
       return { ...change, to: { ...to, file } };
     }
+    if ((change.kind === "own-basemap-add" || change.kind === "own-basemap-change") && change.to?.data) {
+      const file = ownBasemapFile(change.key);
+      files[file] = JSON.stringify(change.to.data);
+      const { data, ...to } = change.to;
+      return { ...change, to: { ...to, file } };
+    }
     return change;
   });
   files["suggestion.json"] = JSON.stringify({ ...suggestion, changes });
@@ -173,9 +189,11 @@ export const readSuggestionFile = async (input) => {
       const { file, ...to } = change.to;
       const base64 = await zip.base64(file);
       changes.push(base64 ? { ...change, to: { ...to, base64 } } : { ...change, to: null, missingFile: true });
-    } else if (change?.kind === "background" && typeof change.to?.file === "string") {
+    } else if ((change?.kind === "background" || ((change?.kind === "own-basemap-add" || change?.kind === "own-basemap-change") && validOwnBasemapKey(change.key)))
+      && typeof change.to?.file === "string") {
       const { file, ...to } = change.to;
-      const data = await zip.text(file);
+      // Read from where this build writes it, whatever the file names.
+      const data = await zip.text(change.kind === "background" ? file : ownBasemapFile(change.key));
       let parsed = null;
       try { parsed = data ? JSON.parse(data) : null; } catch { parsed = null; }
       changes.push(parsed ? { ...change, to: { ...to, data: parsed } } : { ...change, to: null, missingFile: true });
