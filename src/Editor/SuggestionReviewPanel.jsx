@@ -39,6 +39,7 @@ import {
   inSuggestedProjection,
   mapChangeStatus,
   sectionOfChange,
+  undoRefusal,
 } from "./suggestionReview.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -127,6 +128,11 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
   const undo = useCallback((change) => {
     if (decisions.accepted.has(change.id)) {
       if (!undoers.current.has(change.id)) return;
+      const refused = undoRefusal(change, ctxRef.current);
+      if (refused) {
+        window.alert(refused);
+        return;
+      }
       undoers.current.get(change.id)();
       undoers.current.delete(change.id);
       if (change.kind === "polity-rename") {

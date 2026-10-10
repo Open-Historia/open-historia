@@ -18,7 +18,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { acceptMapChanges, applyMapChange, undoRefusal, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
 import { DETAILED_MAP_CONVERSION_MESSAGE, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
@@ -472,6 +472,18 @@ test("on a map with a detailed map a change of projection is refused before anyt
   assert.deepEqual(result.accepted, []);
   assert.deepEqual(calls, []);
   assert.equal(JSON.stringify(state.doc), before, "nothing was accepted");
+});
+
+test("an accepted change of projection is not undone once the map has a detailed map", () => {
+  // Accepted, then a detailed map picked: undoing would convert the map under
+  // it, which no other path allows (projectionConvert.js).
+  const { ctx, d } = projectionSetup();
+  const change = { id: "map:projection", area: "map", kind: "projection", from: { type: "equirectangular" }, to: { type: "mercator" }, bounds: null };
+  assert.equal(undoRefusal(change, ctx), null);
+  d.patchMetadata({ tiledBasemap: { id: "got-world", version: 1 } });
+  assert.equal(undoRefusal(change, ctx), DETAILED_MAP_CONVERSION_MESSAGE);
+  // Any other change undoes as before.
+  assert.equal(undoRefusal({ ...change, kind: "polity-add" }, ctx), null);
 });
 
 test("a change of projection is the Workshop's own conversion, and Undo converts back", () => {

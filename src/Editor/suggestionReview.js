@@ -19,7 +19,7 @@ import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
-import { DETAILED_MAP_CONVERSION_MESSAGE, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -757,7 +757,7 @@ export const planAccept = (list, ctx, { changes = [], accepted = new Set() } = {
 // `refused` says why.
 export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set(), renames = {} } = {}) => {
   const order = planAccept(list, ctx, { changes, accepted });
-  if (ctx.doc?.metadata?.tiledBasemap && order.some((change) => change.kind === "projection")) {
+  if (hasDetailedMap(ctx.doc) && order.some((change) => change.kind === "projection")) {
     return { accepted: [], undoers: new globalThis.Map(), renames: { ...renames }, refused: DETAILED_MAP_CONVERSION_MESSAGE };
   }
   const localRenames = { ...renames };
@@ -795,6 +795,13 @@ export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set()
   }
   return { accepted: ids, undoers, renames: localRenames };
 };
+
+// Why an accepted change cannot be undone now, or null. Undoing a change of
+// projection converts the map back, which a map that has since been given a
+// detailed map cannot take (projectionConvert.js).
+export const undoRefusal = (change, ctx) => (
+  change?.kind === "projection" && hasDetailedMap(ctx?.doc) ? DETAILED_MAP_CONVERSION_MESSAGE : null
+);
 
 // How a change stands once the author's decisions are counted: theirs, else
 // accepted when the map already has it and rejected when what it changes is

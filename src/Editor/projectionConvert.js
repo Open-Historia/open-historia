@@ -40,6 +40,8 @@ export const DETAILED_MAP_CONVERSION_MESSAGE = "This map has a detailed map, whi
 // The other way round: a detailed map put on a map already in another
 // projection would lie under regions drawn for that one.
 export const DETAILED_MAP_PROJECTION_MESSAGE = "A detailed map is always drawn in the Mercator projection, and this map is in another one. To use a detailed map, convert the map back to Mercator first (Projection, in the bottom bar).";
+// Whether the map names a detailed map (doc.metadata.tiledBasemap).
+export const hasDetailedMap = (doc) => Boolean(doc?.metadata?.tiledBasemap);
 export const detailedMapFits = (projection) => normalizeProjection(projection).type === DEFAULT_PROJECTION;
 export const planBasemapChange = ({ from, to, background = null, keepPicture = false, detailedMap = false }) => {
   const source = normalizeProjection(from);

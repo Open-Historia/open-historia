@@ -49,7 +49,7 @@ import FlagPicker from "./FlagPicker.jsx";
 import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import ProjectionPanel from "./ProjectionPanel.jsx";
-import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, hasDetailedMap, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
 import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
@@ -449,7 +449,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [projectionBusy, setProjectionBusy] = useState(false);
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
-  const hasDetailedMap = Boolean(d.doc?.metadata?.tiledBasemap);
+  const mapHasDetailedMap = hasDetailedMap(d.doc);
   // Regions, cities, units and basemap, each by its own rule
   // (projectionConvert.js). The basemap is made ready first: redrawing a
   // picture is the one step that can fail, and nothing has moved if it does.
@@ -468,7 +468,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
         return [X * EARTH, Y * EARTH];
       };
-      const plan = planBasemapChange({ from, to, background: customBg, keepPicture, detailedMap: hasDetailedMap });
+      const plan = planBasemapChange({ from, to, background: customBg, keepPicture, detailedMap: mapHasDetailedMap });
       if (plan.kind === "blocked") {
         setProjectionError(plan.reason);
         return;
@@ -1606,7 +1606,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           hasPicture={customBg?.kind === "image"}
           busy={projectionBusy}
           error={projectionError}
-          blocked={hasDetailedMap ? DETAILED_MAP_CONVERSION_MESSAGE : ""}
+          blocked={mapHasDetailedMap ? DETAILED_MAP_CONVERSION_MESSAGE : ""}
           onConvert={convertProjection}
           onView={(patch) => {
             // { globe } or { wrap }: written only when switched off.
