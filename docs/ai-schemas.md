@@ -100,7 +100,7 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 
 | Field | Type | Meaning | Req? |
 |---|---|---|---|
-| `regionId` | string | The region's **name** as the map spells it, written `region: <name>`; `country: <name>` is the whole of a country's land. Never an id (one that arrives is still read; see `nameRefs.js`) | **yes** |
+| `regionId` | string | The region's **name** as the map spells it, written `region: <name>`; `country: <name>` is the whole of a country's land, or of a territory or dependency of that name (`country: Puerto Rico`, `country: Greenland`; see `namedAreas.js`). Never an id (one that arrives is still read; see `nameRefs.js`) | **yes** |
 | `regionName` | string | Human-readable name, when known | no |
 | `fromCode` | string | Previous owner polity code — lets the resolver locate the region | no |
 | `toCode` | string | New owner polity code | **yes** |

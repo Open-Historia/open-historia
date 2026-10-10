@@ -26,6 +26,7 @@ import {
     homeWaters,
     nearestSea,
     pointInGeometry,
+    regionWithinContainer,
     resolvePlacement,
     resolveRegionPlacement,
 } from "./placement.js";
@@ -50,11 +51,13 @@ const placementPass = (gazetteer) => new Function(
     "normalizeArray", "normalizeString", "lazyLookupContext", "buildPlacementGazetteer", "obstaclesOf", "spaceOut", "FOOTPRINT_KM",
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
     "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
+    "regionWithinContainer",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
     noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
+    regionWithinContainer,
 );
 
 // What gameplay.js's gazetteer offers the pass, over a list of regions.
@@ -244,4 +247,31 @@ test("the Black Sea Fleet squadron from the log is put to sea off Russia's coast
     assert.equal(event.impacts.unitOps.length, 1, "the formation the event raised is on the map");
     assert.equal(event.impacts.unitOps[0].unit.type, "naval");
     assert.equal(warn.mock.callCount(), 0);
+});
+
+// A 45-skip test (2026-10-09): a division ordered home to "Fort Stewart,
+// Georgia, United States" with regionId "Savannah". The built-in map has no
+// Fort Stewart and no American region called Georgia (they are named for
+// their cities), so the phrase came down to the United States as a whole and
+// the division stood 1,600 km from Georgia, while the region the model had
+// also named is the one Fort Stewart stands in.
+const division = { id: "u-1", name: "1st Division", type: "infantry", ownerCode: "Longland", lng: 5, lat: 5 };
+const marchHome = async (regionId) => {
+    const gazetteer = continent(LONGLAND);
+    const op = { op: "move", unitId: "u-1", at: "Fort Nowhere, Midshire, Longland", regionId };
+    await place(gazetteer, [op], { world: { units: [division] } });
+    return { op, region: gazetteer.regionAt([op.toLng, op.toLat]) };
+};
+
+test("an address the map answers only with its country goes to the region the operation names there", async () => {
+    for (let run = 0; run < 2; run += 1) {
+        const { op, region } = await marchHome(run ? "East" : "Centre");
+        assert.equal(region?.id, run ? "e" : "c", `${op.toLng},${op.toLat}`);
+        assert.equal(op.regionId, run ? "e" : "c");
+    }
+});
+
+test("a region field naming another power's region does not take the address out of its country", async () => {
+    const { region } = await marchHome("West");
+    assert.equal(region?.owner, "Longland");
 });
