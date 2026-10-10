@@ -66,7 +66,7 @@ import {
   buildBoardPassDirective,
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
-import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -3091,6 +3091,23 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      // A time skip's answer ends with its riders, the agents' reports and the
+      // history fold, each of which fails open by itself. One that broke the
+      // JSON, or was cut off when the answer ran out of room, must not cost the
+      // turn written in full before it: the answer is read again without them
+      // (jsonSalvage.js parseWithoutTrailingFields). Asking again would be a
+      // second request for a turn already in hand.
+      if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
+        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD]);
+        if (rescued) {
+          parsed = rescued.value;
+          console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
+          logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: the answer's ${rescued.dropped.join(" and ")} could not be read (broken or cut off) and ${rescued.dropped.length === 1 ? "was" : "were"} left out; the turn before ${rescued.dropped.length === 1 ? "it" : "them"} is kept.`, {
+            responseChars: rawText.length,
+            tail: rawText.slice(-240),
+          }, { problem: true });
+        }
+      }
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.

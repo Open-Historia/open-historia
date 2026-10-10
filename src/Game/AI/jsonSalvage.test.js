@@ -10,6 +10,7 @@ import {
   ANSWER_SENTINEL_DIRECTIVE,
   extractJsonPayload,
   parseLooseJson,
+  parseWithoutTrailingFields,
   repairLooseJson,
   stripBeforeSentinel,
   unwrapMimickedToolCall,
@@ -260,4 +261,84 @@ test("well-formed JSON is never rewritten: the repair is only tried after a stri
 
 test("an answer cut off mid-object is still not an answer", () => {
   assert.equal(parseLooseJson('{events: [{title: "A war", impacts: {unitOps: [{op: "move"'), null, "a shortened turn is never applied as the whole one");
+});
+
+// ---------------------------------------------------------------------------
+// The long text at the end of a time skip's answer. A skip is one request, and
+// it carries the agents' reports and the history document's fold last: the
+// longest free text in the answer, and what an answer that runs out of room
+// loses. Neither may cost the turn written in full before it.
+
+// Built from character codes, so no escape here depends on how this file was
+// written out.
+const BACKSLASH = String.fromCharCode(92);
+const LINE_BREAK = String.fromCharCode(10);
+const TAB = String.fromCharCode(9);
+const TURN_EVENTS = [
+  { date: "2016-01-05", title: "A depot opens", description: "A depot opens at the railhead.", impacts: { unitOps: [{ op: "move", unitId: "u1", at: "Denver" }] } },
+  { date: "2016-01-09", title: "Talks stall", description: "Talks stall in Geneva." },
+];
+const TURN = `{"events":${JSON.stringify(TURN_EVENTS)},"stopDate":"2016-01-31","summary":"A quiet month.","warUpdates":""`;
+const REPORTS = ',"agentReports":[{"agent":"agent_1","exchanges":[]}]';
+const RIDERS = ["agentReports", "history"];
+
+test("a line break or a tab written straight into a string is read as the text it is", () => {
+  const written = `${TURN}${REPORTS},"history":{"summary":"S","document":"2015 to 2016${LINE_BREAK}${LINE_BREAK}${TAB}The corridor opened."}}`;
+  assert.throws(() => JSON.parse(written), "not JSON as written");
+  const parsed = extractJsonPayload(written);
+  assert.equal(parsed.events.length, 2);
+  assert.equal(parsed.history.document, `2015 to 2016${LINE_BREAK}${LINE_BREAK}${TAB}The corridor opened.`, "the same text, with its breaks");
+  // With a quote copied in bare as well: both repairs together.
+  const both = extractJsonPayload(`${TURN},"history":{"summary":"S","document":"The "Northern" line.${LINE_BREAK}It opened."}}`);
+  assert.equal(both.history.document, `The "Northern" line.${LINE_BREAK}It opened.`);
+  // An escape that was written is left exactly as it was.
+  const escaped = `${TURN},"history":{"summary":"S","document":"One${BACKSLASH}nTwo"}}`;
+  assert.deepEqual(extractJsonPayload(escaped), JSON.parse(escaped));
+  // Outside a string a line break is only layout, and stays that.
+  assert.equal(repairLooseJson(`{${LINE_BREAK}  "a": 1${LINE_BREAK}}`), `{${LINE_BREAK}  "a": 1${LINE_BREAK}}`);
+});
+
+test("an answer broken or cut off inside a rider keeps the turn before it", () => {
+  // Cut off in the history document: the reports before it are complete.
+  const inHistory = `${TURN}${REPORTS},"history":{"summary":"S","document":"2015 to 2016${BACKSLASH}nThe corridor ope`;
+  assert.equal(extractJsonPayload(inHistory), null, "not readable as it stands");
+  const first = parseWithoutTrailingFields(inHistory, RIDERS);
+  assert.deepEqual(first.dropped, ["history"]);
+  assert.deepEqual(first.value.events, TURN_EVENTS, "every event, whole");
+  assert.equal(first.value.stopDate, "2016-01-31");
+  assert.equal(first.value.agentReports.length, 1, "and the reports that were finished");
+  assert.equal("history" in first.value, false);
+
+  // Broken by a bare quote, then cut off.
+  const brokenThenCut = parseWithoutTrailingFields(`${TURN}${REPORTS},"history":{"summary":"S","document":"The "Northern" corridor ope`, RIDERS);
+  assert.deepEqual(brokenThenCut.dropped, ["history"]);
+
+  // Cut off in the reports: nothing after them was begun.
+  const inReports = parseWithoutTrailingFields(`${TURN},"agentReports":[{"agent":"agent_1","exchanges":[{"counterpart":"Fra`, RIDERS);
+  assert.deepEqual(inReports.dropped, ["agentReports"]);
+  assert.deepEqual(inReports.value.events, TURN_EVENTS);
+  assert.equal("agentReports" in inReports.value, false);
+
+  // A report that talks about "history": the key is found by where it stands,
+  // not by the word.
+  const talkative = parseWithoutTrailingFields(`${TURN},"agentReports":[{"agent":"agent_1","exchanges":[{"counterpart":"France","messages":[{"speaker":"Russia","text":"We spoke of the "history": of it`, RIDERS);
+  assert.deepEqual(talkative.dropped, ["agentReports"]);
+});
+
+test("a turn cut off before its riders is never closed and applied", () => {
+  // The rule balancedJsonCandidates keeps: a turn lands as it was written or
+  // not at all. Only what comes AFTER the whole turn may be let go.
+  assert.equal(parseWithoutTrailingFields(`{"events":${JSON.stringify(TURN_EVENTS)},"stopDate":"2016-01-31","summary":"A quiet mon`, RIDERS), null, "cut off in the summary");
+  assert.equal(parseWithoutTrailingFields(`{"events":[${JSON.stringify(TURN_EVENTS[0])},{"date":"2016-01-09","title":"Talks st`, RIDERS), null, "cut off in the events");
+  // An event that happens to name a rider does not make one.
+  const named = `{"events":[{"date":"2016-01-05","title":"History","description":"The word ${BACKSLASH}"history${BACKSLASH}": appears, and agentReports too."}],"stopDate":"2016-01-31","summary":"S."${REPORTS},"history":{"summary":"S","document":"broken "quote`;
+  const rescued = parseWithoutTrailingFields(named, RIDERS);
+  assert.deepEqual(rescued.dropped, ["history"]);
+  assert.equal(rescued.value.events.length, 1);
+  assert.equal(rescued.value.agentReports.length, 1);
+  // Nothing to cut, nothing returned: an answer without riders that does not
+  // parse is simply not an answer, and one that parses is never passed here.
+  assert.equal(parseWithoutTrailingFields(`{"events":[],"stopDate":"2016-01-31","summary":"S"`, RIDERS), null);
+  assert.equal(parseWithoutTrailingFields("no object here", RIDERS), null);
+  assert.equal(parseWithoutTrailingFields(`${TURN}${REPORTS}}`, []), null, "and no riders named means none to drop");
 });
