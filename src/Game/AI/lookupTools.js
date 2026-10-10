@@ -15,6 +15,8 @@
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
 import { readNameRef } from "./nameRefs.js";
+import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
@@ -441,6 +443,8 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
       id,
       name: clean(region.name) || id,
       owner: ownerOf(region),
+      // The country it belongs to by geography, whoever holds it (namedAreas.js).
+      base: baseCountryOf(region, toCountryName),
       sovereign: clean(sovereignty[id]) || "",
       aliases: array(region.aliases).map(clean).filter(Boolean),
       geometry: region.geometry ?? null,
@@ -471,6 +475,21 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     for (const alias of array(record?.aliases)) declareOwner(alias, label);
   }
   const resolveOwner = (token) => ownerByFold.get(foldRegionKey(token)) ?? "";
+  // A territory or dependency by its own name (namedAreas.js): the regions that
+  // belong to it by geography, whoever holds them. Built when first asked for.
+  let areaIndex = null;
+  const areaNamed = (token) => {
+    areaIndex ??= buildAreaIndex(rows.map((row) => ({ ...row, country: row.base, countryCode: "" })), { fold: foldRegionKey });
+    const area = findArea(areaIndex, token, { toName: toCountryName, fold: foldRegionKey });
+    return area ? { name: area.name, rows: area.regions.map((region) => byId.get(region.id)).filter(Boolean) } : null;
+  };
+  // What a power holds beyond its own country, as [{ name, rows }]: an area that
+  // is not its own and that no polity of the game is named after.
+  const territoriesOf = (owner) => splitTerritories(ownerRows.get(owner) ?? [], {
+    ownerKey: foldRegionKey(owner),
+    isPolity: (key) => ownerByFold.has(key),
+    fold: foldRegionKey,
+  }).territories.map((territory) => ({ name: territory.name, rows: territory.regions }));
   // Polities in the present that hold no region of this map: a government in
   // exile, a landless country from the Countries tab, the polity of a player who
   // leads a group. Each by the label resolveOwner answers with, so a name
@@ -549,7 +568,7 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
     .filter((event) => event && typeof event === "object");
 
   return {
-    rows, byId, ownerRows, landless, resolveOwner, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
+    rows, byId, ownerRows, landless, resolveOwner, areaNamed, territoriesOf, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
     ...(groups ? {} : { groupsOff: true }),
@@ -1075,7 +1094,18 @@ export const executeLookup = (context, name, args = {}) => {
       if (!clean(a.owner)) return { error: "owner (a power's exact name) or group (a group's exact name) is required." };
       const owner = context.resolveOwner(a.owner);
       if (!owner) return unknownPower(context, a.owner);
-      return { owner, ...paged(context.ownerRows.get(owner) ?? [], (row) => ({ name: row.name })) };
+      // A territory the power holds is named beside its regions, since its name
+      // is what stands for all of it in an operation (namedAreas.js).
+      const territories = context.territoriesOf(owner);
+      const territoryOf = new Map(territories.flatMap((territory) => territory.rows.map((row) => [row.id, territory.name])));
+      return {
+        owner,
+        ...paged(context.ownerRows.get(owner) ?? [], (row) => ({ name: row.name, ...(territoryOf.has(row.id) ? { territory: territoryOf.get(row.id) } : {}) })),
+        ...(territories.length ? {
+          territories: territories.map((territory) => ({ name: territory.name, regions: territory.rows.length })),
+          note: "A territory is written \"country: <its name>\" and means every region of it this power holds.",
+        } : {}),
+      };
     }
     case "find_region": {
       const query = clean(a.name);
