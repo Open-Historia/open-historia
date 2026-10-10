@@ -415,3 +415,13 @@ test("T6 a power the map names differently from its regions' country has no terr
   const text = buildRegionOwnershipText(catalog, {}, { focusCodes: ["Czech Republic"] });
   assert.match(text, /^- Czech Republic \[2 regions\]: Brno, Ostrava$/m);
 });
+
+test("a power that is listed is listed whole: no limit of 120 regions a power", () => {
+  // The United States holds 285 regions on the built-in world. Its list used to
+  // stop at the 120th by the alphabet, and a region past it could not be named.
+  const big = Array.from({ length: 285 }, (_, index) => ({ id: `USA.${index}`, name: `Region ${String(index).padStart(3, "0")}`, countryCode: "USA" }));
+  const text = buildRegionOwnershipText(big, {}, { focusCodes: ["United States"] });
+  assert.match(text, /Region 000/);
+  assert.match(text, /Region 284/);
+  assert.equal(text.includes("more)"), false, "nothing is left out of a listed power");
+});
