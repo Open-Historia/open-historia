@@ -406,6 +406,32 @@ test("an address is the last reading: grammar after a comma still means what it 
     assert.match(place("Fort Nowhere").error, /is called "Fort Nowhere"/, "no comma, no address");
 });
 
+test("an address asks the map for the same names several times over", () => {
+    // Why the gazetteer answers each name once (the next test): one phrase the
+    // map does not have is read several ways, and each way asks again.
+    const asked = [];
+    const counting = { ...gazetteer, find: (name, options) => { asked.push(`${options?.exact ? "=" : "~"}${name}`); return gazetteer.find(name, options); } };
+    const result = resolvePlacement("near Fort Nowhere, Elsewhere", counting, { home: "Westmark" });
+    assert.match(result.error, /is called/);
+    assert.ok(asked.length > new Set(asked).size + 3, `${asked.length} lookups for ${new Set(asked).size} different questions`);
+});
+
+test("the map's gazetteer works each name out once", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const buildPlacementGazetteer = "), source.indexOf("const resolvePlacements = async"));
+    // The lookup itself, then the door in front of it: keyed by the name as it
+    // was written and by whether only the map's own spelling will do.
+    assert.ok(body.includes("const lookUp = (name, exactOnly) => {"));
+    assert.ok(body.includes("const lookedUp = new Map();"));
+    assert.ok(body.includes("const memoKey = `${exactOnly ? \"=\" : \"~\"}${String(name ?? \"\")}`;"));
+    assert.ok(body.includes("if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));"));
+    // One gazetteer per placing pass, built from the world that pass reads, so
+    // nothing it remembers outlives the units and structures it was read from.
+    const pass = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.equal(pass.match(/buildPlacementGazetteer\(/g)?.length, 1);
+    assert.ok(pass.includes("gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);"));
+});
+
 test("the placing pass tells the reader whose thing it is", () => {
     const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
     const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
