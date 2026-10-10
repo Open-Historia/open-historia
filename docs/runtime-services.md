@@ -306,7 +306,8 @@ Small localStorage-backed settings read reactively instead of threaded as props 
 
 | `MAP_SETTING_KEYS` key | localStorage key | Default | Read with | Effect |
 |---|---|---|---|---|
-| `basemapStyle` | `map_basemap_style` | empty (the scenario's basemap) | `getMapSettingValue` / `useMapSettingValue` | A built-in ESRI basemap id, or `own:<id>` for another basemap of the scenario's own, replaces the scenario's basemap on this device, only where the scenario offers that map (`basemapOverrideFor`) |
+| `defaultBasemap` | `map_basemap_default` | empty (`DEFAULT_BASEMAP_ID` when turned on) | `getMapSettingValue` / `useMapSettingValue` | The player's default basemap (main menu Settings → Map): a built-in ESRI basemap id every game starts on wherever its scenario offers it, while `defaultBasemapOn` is on (`basemapShownFor`, `runtime/basemapPick.js`) |
+| `defaultBasemapOn` | `map_basemap_default_on` | off | `getMapSetting` / `useMapSetting` | **Use my default basemap**. A game's own pick (`map_basemap_pick:<gameId>`, set in that game's Settings → Map, never shared in multiplayer: `Map/useBasemapPick.js`) still wins. The one device-wide pick before picks were per game, `map_basemap_style`, is moved here once (`migrateBasemapSettings`): a built-in id becomes the default, turned on; an `own:<id>` pick is dropped |
 | `labelFont` | `map_label_font` | empty (the scenario's font, itself Georgia by default) | `getMapSettingValue` / `useMapSettingValue` | A font family overrides the scenario's country-label font on this device |
 | `hideCountryLabels` | `map_hide_country_labels` | off | `getMapSetting` / `useMapSetting` | Hide country name labels |
 | `disableIdleRotation` | `map_disable_idle_rotation` | off | `getMapSetting` / `useMapSetting` | Stop the idle globe spin |

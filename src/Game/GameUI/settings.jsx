@@ -1,5 +1,5 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
@@ -72,9 +72,8 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
-import ScenarioDetailedMapSetting from "../Map/ScenarioDetailedMapSetting.jsx";
 // The Map Editor's basemap window, opened here to browse, download and manage
 // maps without opening the editor. Loaded on first use: it brings the editor's
 // file readers with it.
@@ -107,7 +106,10 @@ import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtim
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { uiString } from "../../runtime/translator.js";
-import { basemapOverrideFor, builtinBasemapChoices, decodeAllowedBasemaps, decodeOwnBasemaps, hasOwnMap, isBuiltinBasemapId, ownBasemapIdOf, ownBasemapPick } from "../../runtime/assets.js";
+import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
+import { useGameBasemapPick } from "../Map/useBasemapPick.js";
+import { fetchOfficialBasemaps, findOfficialBasemap, findOfficialEntry, findTiledBasemap, formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
 import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import {
     APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
@@ -334,49 +336,133 @@ const ChatLanguageSelector = () => {
     );
 };
 
-// The Basemap pick, which replaces a scenario's basemap on this device with
-// another its author offers: one of the built-in maps they ticked in the Map
-// Editor (world.allowedBasemaps; on a scenario with a map of its own, none
-// until they tick some), or another basemap of the scenario's own
-// (world.ownBasemaps). With nothing offered the pick is switched off and says
-// why. What was picked stays stored for the scenarios it applies to. The main
-// menu's Settings are for every game, so there every built-in map is offered.
+// The Basemap pick of the game on screen: one of the scenario's maps
+// (CONTEXT.md, docs/adr/0007; runtime/basemapPick.js), by name, the starting
+// map first. Kept for this game only, on this device (Map/useBasemapPick.js).
+// A detailed map the player does not have says what it costs to download;
+// picked, the map shows the drawn map under it and offers the download.
 const BASEMAP_GROUP_LABELS = { own: "This scenario's maps", builtin: "Built-in maps" };
-const BasemapField = ({ value, forGame, onChange }) => {
-    const { background, allowedBasemaps: allowedKey, ownBasemaps: ownKey } = useWorldBackground();
-    const ownMap = forGame && hasOwnMap(background);
-    const allowed = forGame ? decodeAllowedBasemaps(allowedKey) : null;
-    const own = forGame ? decodeOwnBasemaps(ownKey) : [];
-    const choices = builtinBasemapChoices(allowed, { scenarioHasOwnMap: ownMap });
-    const shown = basemapOverrideFor(value, { scenarioHasOwnMap: ownMap, allowedBasemaps: allowed, ownBasemaps: own });
-    const off = choices.length === 0 && own.length === 0;
-    // The select holds map names (data-no-translate), so the DOM translator
-    // never reads its group labels: they are looked up here.
-    const builtinOptions = choices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>);
+const BASEMAP_OPTION_LABELS = {
+    starting: "{{name}} (starting map)",
+    detailed: "{{name}} (detailed map)",
+    detailedToDownload: "{{name}} (detailed map, {{size}} to download)",
+    detailedNotHere: "{{name}} (detailed map, not on this device)",
+};
+// Whether this device has each of the scenario's detailed maps, and the size
+// of one it does not: { [pick]: { have, bytes } }.
+const useDetailedMapStatus = (maps) => {
+    const detailed = maps.filter((map) => map.kind === "detailed");
+    const key = JSON.stringify(detailed.map((map) => [map.pick, map.detailed]));
+    const [status, setStatus] = useState({});
+    const [libraryVersion, setLibraryVersion] = useState(0);
+    useEffect(() => subscribeTiledBasemaps(() => setLibraryVersion((v) => v + 1)), []);
+    useEffect(() => {
+        const wanted = JSON.parse(key);
+        if (!wanted.length) return undefined;
+        let cancelled = false;
+        (async () => {
+            const list = await fetchOfficialBasemaps().catch(() => null);
+            const entries = await Promise.all(wanted.map(async ([pick, named]) => {
+                const installed = named.id ? await findOfficialBasemap(named.id) : await findTiledBasemap(named.hash);
+                const official = named.id && list ? findOfficialEntry(list, named.id) : null;
+                const latest = official?.versions?.[official.versions.length - 1] || null;
+                return [pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
+            }));
+            if (!cancelled) setStatus(Object.fromEntries(entries));
+        })();
+        return () => { cancelled = true; };
+    }, [key, libraryVersion]);
+    return status;
+};
+const GameBasemapField = () => {
+    const { background, basemap, allowedBasemaps, ownBasemaps } = useWorldBackground();
+    const { gamePick, setGamePick, defaultBasemap, useDefault } = useGameBasemapPick();
+    const maps = useMemo(() => scenarioMapsOfWorld({
+        background,
+        basemap,
+        allowedBasemaps: decodeAllowedBasemaps(allowedBasemaps),
+        ownBasemaps: decodeOwnBasemaps(ownBasemaps),
+    }), [background, basemap, allowedBasemaps, ownBasemaps]);
+    const status = useDetailedMapStatus(maps);
+    // What the game shows, whether detailed maps are on or off here.
+    const shown = basemapShownFor({ maps, gamePick, defaultBasemap, useDefault });
+    const only = maps.length === 1;
+    const labelOf = (map) => {
+        if (map.starting) return uiString(BASEMAP_OPTION_LABELS.starting, { name: map.name });
+        if (map.kind !== "detailed") return map.name;
+        const here = status[map.pick];
+        if (!here || here.have) return uiString(BASEMAP_OPTION_LABELS.detailed, { name: map.name });
+        return here.bytes
+            ? uiString(BASEMAP_OPTION_LABELS.detailedToDownload, { name: map.name, size: formatBytes(here.bytes) })
+            : uiString(BASEMAP_OPTION_LABELS.detailedNotHere, { name: map.name });
+    };
+    const option = (map) => <option key={map.pick || "start"} value={map.pick} style={{ color: "black" }}>{labelOf(map)}</option>;
+    const scenarioOwn = maps.filter((map) => !map.starting && map.kind !== "builtin");
+    const builtin = maps.filter((map) => !map.starting && map.kind === "builtin");
+    const grouped = scenarioOwn.length > 0 && builtin.length > 0;
     return (
         <div style={fieldGroupStyle}>
             <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-            <select id="game-basemap-style" data-no-translate value={shown} disabled={off} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1 }}>
-                <option value="" style={{ color: "black" }}>Scenario default</option>
-                {own.length > 0 && (
-                    <optgroup label={uiString(BASEMAP_GROUP_LABELS.own)}>
-                        {own.map((basemap) => <option key={basemap.id} value={ownBasemapPick(basemap.id)} style={{ color: "black" }}>{basemap.name}</option>)}
-                    </optgroup>
-                )}
-                {own.length > 0 && choices.length > 0
-                    ? <optgroup label={uiString(BASEMAP_GROUP_LABELS.builtin)}>{builtinOptions}</optgroup>
-                    : builtinOptions}
+            <select
+                id="game-basemap-style"
+                data-no-translate
+                value={shown.pick}
+                disabled={only}
+                onChange={(event) => setGamePick(event.target.value)}
+                style={{ ...inputStyle, cursor: only ? "not-allowed" : "pointer", opacity: only ? 0.6 : 1 }}
+            >
+                {option(maps[0])}
+                {grouped ? (
+                    <>
+                        <optgroup label={uiString(BASEMAP_GROUP_LABELS.own)}>{scenarioOwn.map(option)}</optgroup>
+                        <optgroup label={uiString(BASEMAP_GROUP_LABELS.builtin)}>{builtin.map(option)}</optgroup>
+                    </>
+                ) : [...scenarioOwn, ...builtin].map(option)}
             </select>
             <div style={helperStyle}>
-                {ownMap && off
-                    ? "This scenario uses its own basemap, which cannot be replaced."
-                    : off
-                        ? "This scenario uses its own basemap only."
-                        : forGame
-                            ? "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."
-                            : "Applies to every game whose scenario allows it; Scenario default uses each scenario's own basemap."}
+                {only
+                    ? "This scenario has one map."
+                    : "The maps this scenario offers. Your pick is kept for this game only, and applies at once."}
             </div>
         </div>
+    );
+};
+
+// The main menu's: the default basemap, a built-in map every game starts on
+// wherever its scenario offers it, unless that game has a pick of its own.
+const DefaultBasemapField = () => {
+    const useDefault = useMapSetting(DEFAULT_BASEMAP_ON_KEY);
+    const stored = useMapSettingValue(DEFAULT_BASEMAP_KEY, "");
+    const value = isBuiltinBasemapId(stored) ? stored : DEFAULT_BASEMAP_ID;
+    return (
+        <>
+            <Toggle
+                label="Use my default basemap"
+                enabled={useDefault}
+                onToggle={() => {
+                    if (!useDefault && !isBuiltinBasemapId(stored)) setMapSettingValue(DEFAULT_BASEMAP_KEY, value);
+                    setMapSetting(DEFAULT_BASEMAP_ON_KEY, !useDefault);
+                }}
+            />
+            <div style={fieldGroupStyle}>
+                <label style={labelStyle} htmlFor="default-basemap">Default basemap</label>
+                <select
+                    id="default-basemap"
+                    data-no-translate
+                    value={value}
+                    disabled={!useDefault}
+                    onChange={(event) => setMapSettingValue(DEFAULT_BASEMAP_KEY, event.target.value)}
+                    style={{ ...inputStyle, cursor: useDefault ? "pointer" : "not-allowed", opacity: useDefault ? 1 : 0.6 }}
+                >
+                    {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+                </select>
+                <div style={helperStyle}>
+                    {useDefault
+                        ? "Games start on this map wherever their scenario offers it, and on the scenario's starting map elsewhere. Each game's own settings can still pick another."
+                        : "Off: every game starts on its scenario's starting map. Each game's own settings can pick another."}
+                </div>
+            </div>
+        </>
     );
 };
 
@@ -2320,8 +2406,6 @@ const SettingsWorkspace = ({
     onToggleTerrain,
     mapSettings,
     updateMapSetting,
-    basemapStyle,
-    updateBasemapStyle,
     scenarioTerrain,
     updateScenarioTerrain,
     labelFont,
@@ -2441,17 +2525,23 @@ const SettingsWorkspace = ({
 
             {activeSection === "map" && (
                 <>
+                {/* In a game, this game's own pick among the scenario's maps
+                    (detailed maps among them); in the main menu, what every
+                    game starts on (Map/useBasemapPick.js). */}
                 <SettingsSection title="Basemap" description="The flat map drawn under the countries.">
-                    <BasemapField value={basemapStyle} forGame={forGame} onChange={updateBasemapStyle} />
+                    {forGame ? <GameBasemapField /> : <DefaultBasemapField />}
                 </SettingsSection>
-                <SettingsSection title="Detailed maps" description="Large terrain maps drawn on top of a scenario's basemap, sharp when zoomed in.">
-                    <Toggle
-                        label="Show detailed maps"
-                        enabled={scenarioTerrain !== SCENARIO_TERRAIN_PAINTED}
-                        onToggle={() => updateScenarioTerrain(scenarioTerrain === SCENARIO_TERRAIN_PAINTED ? "" : SCENARIO_TERRAIN_PAINTED)}
-                    />
-                    <div style={helperStyle}>On: a scenario&apos;s detailed map is drawn when you have it. Off: only its basemap, which is lighter.</div>
-                    {forGame && <ScenarioDetailedMapSetting labelStyle={labelStyle} helperStyle={helperStyle} fieldGroupStyle={fieldGroupStyle} />}
+                <SettingsSection title="Detailed maps" description="Large terrain maps, sharp when zoomed in. A scenario offers them among its maps, each drawn over one of its drawn maps.">
+                    {!forGame && (
+                        <>
+                            <Toggle
+                                label="Show detailed maps"
+                                enabled={scenarioTerrain !== SCENARIO_TERRAIN_PAINTED}
+                                onToggle={() => updateScenarioTerrain(scenarioTerrain === SCENARIO_TERRAIN_PAINTED ? "" : SCENARIO_TERRAIN_PAINTED)}
+                            />
+                            <div style={helperStyle}>On: a detailed map is drawn when you have it. Off, in every game: the drawn map under it, which is lighter.</div>
+                        </>
+                    )}
                     <div style={fieldGroupStyle}>
                         <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
                             Browse and download maps…
@@ -2745,10 +2835,6 @@ const SettingsMenu = ({
         el.style.setProperty("--oh-grow-x", (64 / rect.width).toFixed(4));
         el.style.setProperty("--oh-grow-y", (64 / rect.height).toFixed(4));
     });
-    // The basemap override is a value setting (a basemap id, or empty for the
-    // scenario's own), read live so the picker follows a change made elsewhere.
-    const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-    const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) || ownBasemapIdOf(storedBasemapStyle) ? storedBasemapStyle : "";
     // Relief tiles or the painted vector map, for scenarios that ship both.
     const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";
 
@@ -2772,7 +2858,6 @@ const SettingsMenu = ({
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
-    const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
     const updateScenarioTerrain = (value) => setMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain, value);
 
     useEffect(() => {
@@ -2860,8 +2945,6 @@ const SettingsMenu = ({
             onToggleTerrain={onToggleTerrain}
             mapSettings={mapSettings}
             updateMapSetting={updateMapSetting}
-            basemapStyle={basemapStyle}
-            updateBasemapStyle={updateBasemapStyle}
             scenarioTerrain={scenarioTerrain}
             updateScenarioTerrain={updateScenarioTerrain}
             labelFont={labelFontShown}

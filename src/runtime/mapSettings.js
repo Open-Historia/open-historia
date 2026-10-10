@@ -13,19 +13,21 @@ import { logDebugEvent, logSettingChange } from "./debugLog.js";
 const valueSettingMemory = new Map();
 
 export const MAP_SETTING_KEYS = {
-    // Empty/unset means "use the scenario author's basemap". A built-in ESRI
-    // basemap id here is a local, reversible player override for this browser.
-    basemapStyle: "map_basemap_style",
+    // The player's default basemap, a built-in map every game starts on where
+    // its scenario offers it, used while defaultBasemapOn is on. A game's own
+    // pick is kept apart, per game (runtime/basemapPick.js).
+    defaultBasemap: "map_basemap_default",
+    defaultBasemapOn: "map_basemap_default_on",
     // Empty/unset means "use the scenario author's label font" (world.labelFont,
     // itself defaulting to Georgia). A family name here is a local, reversible
-    // player override, the same shape as basemapStyle above. It exists in
+    // player override, like the default basemap above. It exists in
     // Settings as well as in the two editors because a label font you cannot
     // read is a reason to change it, and until now the only way to was through
     // the game editor.
     labelFont: "map_label_font",
     // Empty/unset shows a scenario's relief tiles when it ships them; "painted"
     // keeps its vector background only (Map/scenarioTerrain.js). Local to this
-    // browser, like basemapStyle.
+    // browser, like the default basemap.
     scenarioTerrain: "map_scenario_terrain",
     hideCountryLabels: "map_hide_country_labels",
     disableIdleRotation: "map_disable_idle_rotation",
@@ -123,6 +125,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
+    [MAP_SETTING_KEYS.defaultBasemapOn]: "Use my default basemap",
 };
 
 export function setMapSetting(key, value) {
@@ -147,7 +150,7 @@ export function getMapSettingValue(key, fallback = "") {
 // The value settings' names in the diagnostics log, as the Settings panel shows
 // them; an empty value is the scenario author's choice.
 const VALUE_SETTING_LABELS = {
-    [MAP_SETTING_KEYS.basemapStyle]: "Basemap",
+    [MAP_SETTING_KEYS.defaultBasemap]: "Default basemap",
     [MAP_SETTING_KEYS.labelFont]: "Label font",
     [MAP_SETTING_KEYS.scenarioTerrain]: "Scenario terrain",
 };

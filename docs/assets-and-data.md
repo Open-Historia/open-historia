@@ -353,7 +353,7 @@ Common invariants: each drops its promise on failure so the next call **retries*
 
 ## 10. Basemap raster + terrain (asset-adjacent)
 
-Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"`. The selected id is read from `localStorage["map_basemap_style"]` (`selectedBasemapId`).
+Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"`. `selectedBasemapId` reads the player's default basemap (`localStorage["map_basemap_default"]` while `map_basemap_default_on` is on, or the older `map_basemap_style` not yet migrated) so preload can warm its tiles; which map a game shows is `basemapShownFor` (`runtime/basemapPick.js`).
 
 | Concern | Mechanism |
 |---|---|

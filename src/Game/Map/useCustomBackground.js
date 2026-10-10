@@ -1,6 +1,6 @@
 /*! Open Historia — custom map background loader © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { JSON_URLS, decodeOwnBasemaps, getPmtilesArchive, hasOwnMap, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, decodeOwnBasemaps, hasOwnMap, readJson } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import {
   fetchOfficialBasemaps,
@@ -13,18 +13,7 @@ import {
 import { resolveTiledBasemap, scenarioTiledBasemap, wantsScenarioTerrain } from "./scenarioTerrain.js";
 import { useWorldBackground } from "./useWorldState.js";
 import { normalizeImageBounds } from "../../../server/mapProjection.js";
-
-// A named Tiled Basemap is optional on top of a vector background: opening its
-// archive proves it is there and readable before the style asks for a single
-// tile. Any failure (a 404, a corrupt header) means the vector background alone.
-const probeArchive = async (pmtilesUrl) => {
-  try {
-    const header = await getPmtilesArchive(pmtilesUrl.replace(/^pmtiles:\/\//, "")).getHeader();
-    return Boolean(header && header.numTileEntries !== 0);
-  } catch {
-    return false;
-  }
-};
+import { probeArchive } from "./useDetailedMap.js";
 
 // The scenario's background as the map draws it. `missingTiled` is set when the
 // scenario names a Tiled Basemap the player does not have yet (Map shows its

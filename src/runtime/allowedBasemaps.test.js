@@ -5,26 +5,21 @@
 // world allows none: the player's pick of, say, Satellite is ignored there.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ESRI_BASEMAPS, allowedBuiltinBasemaps, decodeAllowedBasemaps, hasOwnMap, isAllowedBasemapOverride, normalizeAllowedBasemaps } from "./assets.js";
+import { ESRI_BASEMAPS, allowedBuiltinBasemaps, decodeAllowedBasemaps, hasOwnMap, normalizeAllowedBasemaps } from "./assets.js";
 import { buildGameSeed, scenarioHasOwnMap } from "../Editor/exportPreset.js";
 
 test("no choice made: every built-in map is allowed, as before", () => {
   assert.equal(normalizeAllowedBasemaps(undefined), null);
   assert.equal(allowedBuiltinBasemaps(null), ESRI_BASEMAPS);
-  assert.equal(isAllowedBasemapOverride("imagery", null), true);
-  assert.equal(isAllowedBasemapOverride("not-a-map", null), false);
 });
 
 test("an empty list allows only the scenario's own map", () => {
   assert.deepEqual(allowedBuiltinBasemaps([]), []);
-  assert.equal(isAllowedBasemapOverride("imagery", []), false);
 });
 
 test("a list allows exactly those maps, and unknown ids are ignored", () => {
   assert.deepEqual(normalizeAllowedBasemaps(["topo", "nonsense", "imagery"]), ["imagery", "topo"]);
   assert.deepEqual(allowedBuiltinBasemaps(["topo"]).map((b) => b.id), ["topo"]);
-  assert.equal(isAllowedBasemapOverride("topo", ["topo"]), true);
-  assert.equal(isAllowedBasemapOverride("imagery", ["topo"]), false);
 });
 
 test("the Map Editor writes the author's choice into the scenario", () => {
@@ -35,7 +30,7 @@ test("the Map Editor writes the author's choice into the scenario", () => {
 });
 
 // On a scenario with a map of its own an unset list offers no built-in map
-// (basemapOverride.test.js), so the Map Editor shows nothing ticked there.
+// (basemapPick.test.js), so the Map Editor shows nothing ticked there.
 test("the Map Editor knows when the scenario has a map of its own", () => {
   const drawn = { kind: "vector", geojson: { type: "FeatureCollection", features: [{ type: "Feature", geometry: null, properties: {} }] } };
   assert.equal(scenarioHasOwnMap({ metadata: {} }), false);

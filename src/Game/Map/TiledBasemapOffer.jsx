@@ -51,7 +51,9 @@ const atInstallPanel = {
   boxShadow: "none",
 };
 
-export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, onDismiss }) {
+// `moreDetailedMaps`: how many other detailed maps the scenario has, which
+// are offered when the player picks one (docs/adr/0007).
+export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, onDismiss, moreDetailedMaps = 0 }) {
   const [phase, setPhase] = useState("offer"); // offer | downloading | failed | dismissed
   const [progress, setProgress] = useState({ received: 0, total: basemap?.bytes || null });
   const [error, setError] = useState("");
@@ -113,6 +115,13 @@ export default function TiledBasemapOffer({ basemap, atInstall = false, onDone, 
         <>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>{words.title}</div>
           <div style={{ opacity: 0.8, marginBottom: 10 }}>{words.body}</div>
+          {moreDetailedMaps > 0 && (
+            <div style={{ opacity: 0.65, fontSize: 12, marginBottom: 10 }}>
+              {moreDetailedMaps === 1
+                ? "This scenario has 1 more detailed map; get it by picking it in Settings → Map."
+                : `This scenario has ${moreDetailedMaps} more detailed maps; get them by picking one in Settings → Map.`}
+            </div>
+          )}
           {phase === "failed" && <div style={{ color: "#f3a8a8", marginBottom: 8 }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button type="button" style={button} onClick={() => { setPhase("dismissed"); onDismiss?.(); }}>{words.decline}</button>

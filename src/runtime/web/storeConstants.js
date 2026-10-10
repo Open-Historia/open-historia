@@ -70,7 +70,7 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
-  // The maps players may switch to (runtime/assets.js basemapOverrideFor).
+  // The maps players may switch to (runtime/basemapPick.js).
   "allowedBasemaps",
   "ownBasemaps",
   "canonModelVersion",

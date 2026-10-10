@@ -117,8 +117,10 @@ export const ESRI_BASEMAPS = [
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
-// Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
-const BASEMAP_STORAGE_KEY = "map_basemap_style";
+// Mirror runtime/basemapPick.js's keys (it imports this module).
+const DEFAULT_BASEMAP_STORAGE_KEY = "map_basemap_default";
+const DEFAULT_BASEMAP_ON_STORAGE_KEY = "map_basemap_default_on";
+const LEGACY_BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
 // Which built-in maps a scenario lets players switch to in Settings → Map
@@ -138,7 +140,6 @@ export const decodeAllowedBasemaps = (key) => (key == null ? null : String(key).
 // picture, a drawn map, the plain sea of a flat sheet). The game, Settings and
 // the Map Editor (exportPreset.js scenarioHasOwnMap) all ask this.
 export const hasOwnMap = (background) => Boolean(background?.kind);
-export const isAllowedBasemapOverride = (id, allowed) => isBuiltinBasemapId(id) && (allowed == null || allowed.includes(id));
 // The built-in maps Settings → Map offers on a scenario. One with a map of its
 // own that never chose (allowedBasemaps null) offers none, so a made-up world
 // saved before the choice existed never gets the Earth under it; a list it
@@ -205,17 +206,8 @@ export const decodeOwnBasemaps = (key) => {
   }
 };
 
-// The player's basemap pick (Settings > Map) as it applies to the scenario on
-// screen: a built-in basemap's id, "own:<id>" for one of the scenario's other
-// basemaps, or "" for the scenario's main one. Its regions are drawn for the
-// maps the author offers, so only those count (builtinBasemapChoices above,
-// world.ownBasemaps); anything else, a pick made on another scenario, leaves
-// the scenario's main map.
-export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false, allowedBasemaps = null, ownBasemaps = [] } = {}) => {
-  const ownId = ownBasemapIdOf(pickedId);
-  if (ownId) return (ownBasemaps ?? []).some((own) => own.id === ownId) ? pickedId : "";
-  return builtinBasemapChoices(allowedBasemaps, { scenarioHasOwnMap }).some((basemap) => basemap.id === pickedId) ? pickedId : "";
-};
+// Which map a player sees, of the scenario's maps, is runtime/basemapPick.js
+// basemapShownFor; this is the built-in map drawn when it is one.
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
@@ -245,11 +237,14 @@ export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
 // so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
 // placeholders can be swapped for an upscaled crop of the nearest real ancestor.
 export const basemapProtocolTemplate = (id) => `ohbase://${basemapById(id).id}/{z}/{y}/{x}`;
-// The picked basemap id straight from localStorage — used by preload before
-// React mounts (mapSettings.js drives it reactively once mounted).
+// The player's default basemap straight from localStorage, when they turned it
+// on (runtime/basemapPick.js) — used by preload to warm its tiles before React
+// mounts. A pick made before picks were kept per game counts the same.
 export const selectedBasemapId = () => {
   try {
-    return resolveBasemapId({ overrideId: localStorage.getItem(BASEMAP_STORAGE_KEY) });
+    const legacy = localStorage.getItem(LEGACY_BASEMAP_STORAGE_KEY);
+    const chosen = localStorage.getItem(DEFAULT_BASEMAP_ON_STORAGE_KEY) === "1" ? localStorage.getItem(DEFAULT_BASEMAP_STORAGE_KEY) : legacy;
+    return resolveBasemapId({ overrideId: chosen });
   } catch {
     return DEFAULT_BASEMAP_ID;
   }
