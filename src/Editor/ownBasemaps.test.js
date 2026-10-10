@@ -64,3 +64,13 @@ test("a bundle laid out in its projection moves the drawn ones too", () => {
   assert.equal(laid.assets.ownBasemapsData.data.p.dataUrl, PICTURE.dataUrl);
   assert.notDeepEqual(laid.assets.ownBasemapsData.data.d.geojson.features[0].geometry.coordinates, [10, 20]);
 });
+
+test("a detailed map among them reaches the game named, never carried, and comes back", () => {
+  const relief = { id: "relief", name: "Westeros relief", detailed: { id: "got-world", version: 2 }, fillOpacity: [[3, 0.2], [8, 0.5]], over: "terrain" };
+  const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame([{ id: "terrain", name: "Terrain", background: DRAWN }, relief]);
+  assert.deepEqual(ownBasemaps[1], { id: "relief", name: "Westeros relief", kind: "tiled", tiled: { id: "got-world", version: 2 }, fillOpacity: [[3, 0.2], [8, 0.5]], over: "terrain" });
+  assert.deepEqual(Object.keys(ownBasemapsData), ["terrain"], "a detailed map has no payload");
+  assert.deepEqual(ownBasemapsFromGame(ownBasemaps, ownBasemapsData)[1], relief);
+  // One whose drawn map did not come is dropped with it.
+  assert.deepEqual(ownBasemapsFromGame(ownBasemaps, {}), []);
+});

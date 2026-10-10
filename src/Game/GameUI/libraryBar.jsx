@@ -3441,6 +3441,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           ? world.polityOverrides
           : {},
         background,
+        // The starting map's name (Editor/scenarioMaps.js).
+        startingMapName: typeof bgDesc?.name === "string" ? bgDesc.name : "",
         // The map's projection (server/mapProjection.js), which the Workshop
         // shows, converts and saves back.
         projection: world.projection ?? null,

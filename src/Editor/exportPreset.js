@@ -217,8 +217,15 @@ export const gameCityToFeature = (f, id) => {
 // 0006). The vector drawing on screen is its basemap, and a scenario on a
 // detailed map must have one: a player who does not download the detailed map,
 // or whose game cannot show it, still gets a map, never empty sea.
-export const DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE = "This scenario needs a basemap first: it is what players see if they don't download the detailed map.\n\nIn Basemap → My Maps, pick one of Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then choose the detailed map again.\n\n(A detailed map that comes with its own basemap uses that one automatically.)";
-export const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
+export const DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE = "A detailed map is shown over one of this scenario's drawn maps: it is what players see if they don't download the detailed map.\n\nAdd a drawn map first: click one in Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then add the detailed map again.";
+// `name`: the starting map's name (doc.metadata.startingMapName), which
+// Settings → Map shows players.
+export const buildBackgroundForGame = (customBackground, tiledBasemap = null, { name = "" } = {}) => {
+  const built = backgroundForGame(customBackground, tiledBasemap);
+  const named = String(name || "").trim().slice(0, 80);
+  return built.background && named ? { ...built, background: { ...built.background, name: named } } : built;
+};
+const backgroundForGame = (customBackground, tiledBasemap) => {
   const bg = customBackground;
   if (tiledBasemap?.id || tiledBasemap?.hash) {
     const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
@@ -400,7 +407,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
-  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap);
+  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap, { name: doc.metadata?.startingMapName });
   const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame(doc.metadata?.ownBasemaps);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,

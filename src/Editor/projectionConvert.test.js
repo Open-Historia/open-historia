@@ -51,9 +51,9 @@ test("a map on a detailed map is not converted: the detailed map cannot move wit
     planBasemapChange({ from: "mercator", to: "robinson", background: drawn, detailedMap: true }),
     { kind: "blocked", reason: DETAILED_MAP_CONVERSION_MESSAGE },
   );
-  // It sends the author to the one action that takes the detailed map off and
-  // keeps the drawn basemap, not to picking another basemap.
-  assert.match(DETAILED_MAP_CONVERSION_MESSAGE, /Remove detailed map/);
+  // It sends the author to taking the detailed maps out of the scenario's
+  // maps, which keeps the drawn maps under them, not to picking another basemap.
+  assert.match(DETAILED_MAP_CONVERSION_MESSAGE, /This scenario's maps/);
   assert.doesNotMatch(DETAILED_MAP_CONVERSION_MESSAGE, /pick a basemap/);
   // Nothing to convert, nothing to block; and without one the map converts.
   assert.deepEqual(planBasemapChange({ from: "mercator", to: "mercator", background: drawn, detailedMap: true }), { kind: "none" });

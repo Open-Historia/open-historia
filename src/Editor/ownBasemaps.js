@@ -9,11 +9,18 @@
 // and the payloads in the ownBasemapsData asset (runtime/assets.js).
 
 import { convertDisplayPoint, moveBasemapPayload, sameProjection } from "../../server/mapProjection.js";
-import { normalizeOwnBasemaps } from "../runtime/assets.js";
+import { normalizeOwnBasemap, normalizeOwnBasemaps } from "../runtime/assets.js";
 
 const savedBackgroundOf = (background) => {
+  // A picture keeps where it lies and its shape, so it can be the starting map
+  // again just as it was (scenarioMaps.js).
   if (background?.kind === "image" && typeof background.dataUrl === "string" && background.dataUrl) {
-    return { kind: "image", dataUrl: background.dataUrl };
+    return {
+      kind: "image",
+      dataUrl: background.dataUrl,
+      ...(background.bounds ? { bounds: background.bounds } : {}),
+      ...(Number.isFinite(background.aspect) ? { aspect: background.aspect } : {}),
+    };
   }
   if (background?.kind === "vector" && Array.isArray(background.geojson?.features)) {
     return { kind: "vector", geojson: background.geojson };
@@ -22,14 +29,29 @@ const savedBackgroundOf = (background) => {
 };
 
 // Checked as the game checks its list (runtime/assets.js normalizeOwnBasemaps),
-// keeping each payload beside its entry.
+// keeping each payload beside its entry. A detailed map (docs/adr/0007) has no
+// payload: { id, name, detailed: { id, version } | { hash }, fillOpacity?,
+// over }, shown over another entry's drawing (`over`, its id) or the starting
+// map's ("").
 export const normalizeEditorOwnBasemaps = (value) => (Array.isArray(value) ? value : [])
   .map((entry) => {
+    if (entry?.detailed) {
+      const own = normalizeOwnBasemap({ ...entry, kind: "tiled", tiled: entry.detailed });
+      if (!own) return null;
+      return {
+        id: own.id,
+        name: own.name,
+        detailed: own.tiled,
+        ...(own.fillOpacity ? { fillOpacity: own.fillOpacity } : {}),
+        over: own.over,
+      };
+    }
     const background = savedBackgroundOf(entry?.background);
-    const [own] = background ? normalizeOwnBasemaps([{ ...entry, kind: background.kind }]) : [];
+    const own = background ? normalizeOwnBasemap({ ...entry, kind: background.kind }) : null;
     return own ? { id: own.id, name: own.name, background } : null;
   })
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter((entry, _, list) => !entry.detailed || entry.over === "" || list.some((other) => other.id === entry.over && other.background?.kind === "vector"));
 
 // A basemap from Your basemaps (basemapLibrary.js) as one of the scenario's
 // own: named by its checksum when it has one, so adding it twice is a no-op.
@@ -50,8 +72,10 @@ export const buildOwnBasemapsForGame = (value) => {
   const list = normalizeEditorOwnBasemaps(value);
   if (!list.length) return { ownBasemaps: null, ownBasemapsData: null };
   return {
-    ownBasemaps: normalizeOwnBasemaps(list.map(({ id, name, background }) => ({ id, name, kind: background.kind }))),
-    ownBasemapsData: Object.fromEntries(list.map(({ id, background }) => [
+    ownBasemaps: normalizeOwnBasemaps(list.map(({ id, name, background, detailed, fillOpacity, over }) => (detailed
+      ? { id, name, kind: "tiled", tiled: detailed, ...(fillOpacity ? { fillOpacity } : {}), over }
+      : { id, name, kind: background.kind }))),
+    ownBasemapsData: Object.fromEntries(list.filter((entry) => entry.background).map(({ id, background }) => [
       id,
       background.kind === "image" ? { dataUrl: background.dataUrl } : { geojson: background.geojson },
     ])),
@@ -59,13 +83,12 @@ export const buildOwnBasemapsForGame = (value) => {
 };
 
 // And back, when the Workshop opens a scenario: an entry whose payload did not
-// come is dropped rather than saved back empty.
+// come is dropped rather than saved back empty (and a detailed map shown over
+// it with it).
 export const ownBasemapsFromGame = (descriptors, data) => normalizeEditorOwnBasemaps(
-  normalizeOwnBasemaps(descriptors).map(({ id, name, kind }) => ({
-    id,
-    name,
-    background: { kind, ...(data && typeof data === "object" ? data[id] : null) },
-  })),
+  normalizeOwnBasemaps(descriptors).map(({ id, name, kind, tiled, fillOpacity, over }) => (kind === "tiled"
+    ? { id, name, detailed: tiled, ...(fillOpacity ? { fillOpacity } : {}), over }
+    : { id, name, background: { kind, ...(data && typeof data === "object" ? data[id] : null) } })),
 );
 
 // The drawn ones moved into another projection with the rest of the map
@@ -73,7 +96,7 @@ export const ownBasemapsFromGame = (descriptors, data) => normalizeEditorOwnBase
 // when there is nothing to move.
 export const moveOwnBasemapsBetween = (value, from, to) => {
   const list = normalizeEditorOwnBasemaps(value);
-  if (!list.length || sameProjection(from, to) || !list.some((entry) => entry.background.kind === "vector")) return null;
+  if (!list.length || sameProjection(from, to) || !list.some((entry) => entry.background?.kind === "vector")) return null;
   const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
-  return list.map((entry) => ({ ...entry, background: moveBasemapPayload(entry.background, move) }));
+  return list.map((entry) => (entry.background ? { ...entry, background: moveBasemapPayload(entry.background, move) } : entry));
 };

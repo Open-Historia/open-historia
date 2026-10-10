@@ -154,9 +154,43 @@ export const builtinBasemapChoices = (allowed, { scenarioHasOwnMap = false } = {
 export const OWN_BASEMAP_PREFIX = "own:";
 export const ownBasemapPick = (id) => `${OWN_BASEMAP_PREFIX}${id}`;
 export const ownBasemapIdOf = (pick) => (typeof pick === "string" && pick.startsWith(OWN_BASEMAP_PREFIX) ? pick.slice(OWN_BASEMAP_PREFIX.length) : "");
+// A detailed map among them (docs/adr/0007) is named, never carried, and has
+// no payload: { id, name, kind: "tiled", tiled: { id, version } | { hash },
+// fillOpacity?, over }, shown over another entry's drawing (`over`, its id) or
+// the starting map's ("").
+const DETAILED_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DETAILED_CHECKSUM = /^[a-f0-9]{64}$/;
+const detailedNamingOf = (tiled) => {
+  const id = DETAILED_ID.test(String(tiled?.id || "")) ? String(tiled.id) : "";
+  const hash = DETAILED_CHECKSUM.test(String(tiled?.hash || "").toLowerCase()) ? String(tiled.hash).toLowerCase() : "";
+  if (id) {
+    const version = Number(tiled.version);
+    return { id, version: Number.isInteger(version) && version >= 1 ? version : 1 };
+  }
+  return hash ? { hash } : null;
+};
+// One entry, checked on its own: null when it is not one.
+export const normalizeOwnBasemap = (entry) => {
+  if (!(entry && typeof entry.id === "string" && entry.id && ["image", "vector", "tiled"].includes(entry.kind))) return null;
+  const name = String(entry.name || "").trim() || "Basemap";
+  if (entry.kind !== "tiled") return { id: entry.id, name, kind: entry.kind };
+  const tiled = detailedNamingOf(entry.tiled);
+  if (!tiled) return null;
+  return {
+    id: entry.id,
+    name,
+    kind: "tiled",
+    tiled,
+    ...(Array.isArray(entry.fillOpacity) ? { fillOpacity: entry.fillOpacity } : {}),
+    over: typeof entry.over === "string" ? entry.over : "",
+  };
+};
+// The list: a detailed map shown over a map that is not a drawn one of the
+// list is dropped.
 export const normalizeOwnBasemaps = (value) => (Array.isArray(value) ? value : [])
-  .filter((entry) => entry && typeof entry.id === "string" && entry.id && (entry.kind === "image" || entry.kind === "vector"))
-  .map((entry) => ({ id: entry.id, name: String(entry.name || "").trim() || "Basemap", kind: entry.kind }));
+  .map(normalizeOwnBasemap)
+  .filter(Boolean)
+  .filter((entry, _, list) => entry.kind !== "tiled" || entry.over === "" || list.some((other) => other.id === entry.over && other.kind === "vector"));
 // The list as world state carries it (one string, as allowedBasemaps), read back.
 export const encodeOwnBasemaps = (value) => {
   const list = normalizeOwnBasemaps(value);

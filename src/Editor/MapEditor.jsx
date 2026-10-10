@@ -49,7 +49,7 @@ import FlagPicker from "./FlagPicker.jsx";
 import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import ProjectionPanel from "./ProjectionPanel.jsx";
-import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, hasDetailedMap, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
 import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
@@ -58,9 +58,9 @@ import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } 
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { ownMapHash } from "./ownMapHash.js";
-import { moveOwnBasemapsBetween, normalizeEditorOwnBasemaps, ownBasemapFromLibrary } from "./ownBasemaps.js";
-import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature, scenarioHasOwnMap } from "./exportPreset.js";
+import { moveOwnBasemapsBetween, ownBasemapFromLibrary, ownBasemapIdOfLibrary } from "./ownBasemaps.js";
+import { addBuiltinMap, addOwnMap, makeStartingMap, removeMap, scenarioMaps, setShownOver } from "./scenarioMaps.js";
+import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE, buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { normalizeRegionTypes } from "../runtime/regionTypes.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
@@ -171,7 +171,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [unitPopup, setUnitPopup] = useState(null); // {id, x, y, isNew} — inline unit editor
   const [featureSelection, setFeatureSelection] = useState([]); // feature ids ticked in the Features panel or box-selected on the map
   const [customBg, setCustomBg] = useState(null); // live background applied to the map
-  const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
   // Which country's flag we're picking, or null. Owned HERE, not in the inspector:
   // panelSurface used to carry backdrop-filter, which makes a containing block
@@ -199,7 +198,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // A suggested basemap goes on the map the way the Basemap picker puts one
   // there: OlMap renders it and hands the persistable form back to the document.
   const setReviewBackground = useCallback((saved) => {
-    setCustomBgId(null);
     if (saved) {
       setCustomBg(rebuildPersistedBackground(saved, { persisted: false }));
     } else {
@@ -334,119 +332,98 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return null;
   };
 
-  // Pick a built-in ESRI preset: drop any custom background so the preset shows.
-  const selectBuiltinBasemap = (id) => {
-    d.setBasemap(id);
-    setCustomBg(null);
-    setCustomBgId(null);
-    d.patchMetadata({ customBackground: null, tiledBasemap: null });
-  };
-
-  // Pick one of the user's saved basemaps: fetch its payload and apply it.
-  const selectLibraryBasemap = async (bm) => {
-    // A Tiled Basemap is named, not drawn here: the scenario keeps a vector
-    // drawing on screen as its painted fallback (the Basemap's own, else the
-    // one already in use), and the game draws the relief over it.
-    if (bm.kind === "tiled") {
-      if (!detailedMapFits(d.metadata?.projection)) {
-        window.alert(DETAILED_MAP_PROJECTION_MESSAGE);
-        return;
-      }
-      let fallback = null;
-      try {
-        fallback = (await getBasemapPayload(bm.id))?.geojson || null;
-      } catch {
-        fallback = null;
-      }
-      const current = normalizeBackground(customBg);
-      const hasBasicMap = (fallback?.features?.length > 0) || (current?.kind === "vector" && current.geojson?.features?.length > 0);
-      if (!hasBasicMap) {
-        window.alert(DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE);
-        return;
-      }
-      if (fallback?.features?.length > 0) {
-        setCustomBg(rebuildPersistedBackground({ kind: "vector", geojson: fallback }, { persisted: false }));
-      }
-      setCustomBgId(bm.id);
-      const previous = d.doc?.metadata?.tiledBasemap;
-      // An official map is named by its id and the version on screen, the
-      // lowest the scenario needs (docs/adr/0006); the author's own map, not on
-      // the official list, by its checksum.
-      d.patchMetadata({
-        tiledBasemap: {
-          ...(bm.official?.id ? { id: bm.official.id, version: bm.official.version } : { hash: bm.contentHash }),
-          name: bm.name,
-          ...(Array.isArray(previous?.fillOpacity) ? { fillOpacity: previous.fillOpacity } : {}),
-        },
-      });
-      return;
+  // ---- The scenario's maps (scenarioMaps.js, docs/adr/0007) ---------------
+  // The Maps window lists them, and every change goes through scenarioMaps.js
+  // as one patch: adding a map never replaces the starting one, and making
+  // another map the starting one keeps the old one in the list. A new
+  // starting picture or drawing goes on the map.
+  const scenarioMapList = scenarioMaps(d.doc?.metadata, { scenarioName: d.name });
+  const applyMaps = (result) => {
+    if (result.refused) {
+      window.alert(result.refused);
+      return false;
     }
-    d.patchMetadata({ tiledBasemap: null });
+    const before = d.doc?.metadata?.customBackground ?? null;
+    d.patchMetadata(result.patch);
+    if (result.patch.customBackground !== before) {
+      setCustomBg(result.patch.customBackground ? rebuildPersistedBackground(result.patch.customBackground, { persisted: false }) : null);
+    }
+    return true;
+  };
+  const addBuiltinToMaps = (id) => applyMaps(addBuiltinMap(d.doc?.metadata, id));
+  // One of Your basemaps or detailed maps. A detailed map is named, never
+  // carried (docs/adr/0006): an official one by its id and the version on
+  // screen, the author's own by its checksum. It needs a drawn map to be shown
+  // over; one that comes with its own drawing brings it along.
+  const addLibraryToMaps = async (bm) => {
     try {
-      const payload = await getBasemapPayload(bm.id);
-      const saved =
-        bm.kind === "vector"
-          ? { kind: "vector", geojson: payload.geojson }
-          : { kind: "image", dataUrl: payload.dataUrl, aspect: bm.aspect };
-      setCustomBg(rebuildPersistedBackground(saved, { persisted: false }));
-      setCustomBgId(bm.id);
+      if (bm.kind !== "tiled") {
+        const entry = ownBasemapFromLibrary(bm, await getBasemapPayload(bm.id));
+        if (!entry) throw new Error("It has no picture or drawn map in it.");
+        return applyMaps(addOwnMap(d.doc?.metadata, entry));
+      }
+      const metadata = d.doc?.metadata;
+      const detailed = {
+        id: ownBasemapIdOfLibrary(bm),
+        name: bm.name,
+        detailed: bm.official?.id ? { id: bm.official.id, version: bm.official.version } : { hash: bm.contentHash },
+      };
+      let result = addOwnMap(metadata, detailed);
+      if (result.refused === DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE) {
+        const fallback = (await getBasemapPayload(bm.id).catch(() => null))?.geojson;
+        if (fallback?.features?.length) {
+          const drawn = addOwnMap(metadata, { id: `${detailed.id.slice(0, 32)}-drawn`, name: `${bm.name} (drawn)`, background: { kind: "vector", geojson: fallback } });
+          const both = drawn.patch ? addOwnMap({ ...metadata, ...drawn.patch }, detailed) : drawn;
+          if (both.patch) result = both;
+        }
+      }
+      return applyMaps(result);
     } catch (e) {
-      window.alert(`Could not load that basemap: ${e?.message || e}`);
+      window.alert(`Could not add that map: ${e?.message || e}`);
+      return false;
     }
   };
-
-  // Take the scenario's detailed map off. The basemap drawn under it (the
-  // custom background on screen) stays, so the scenario keeps its map, and the
-  // projection can be converted again (projectionConvert.js).
-  const removeDetailedMap = () => {
-    d.patchMetadata({ tiledBasemap: null });
-    setCustomBgId(null);
+  // A built-in world map as the starting map of a scenario with a map of its
+  // own is asked first: it is most often a slip.
+  const makeStarting = (map) => {
+    const current = scenarioMapList.find((entry) => entry.starting);
+    if (map.kind === "builtin" && current && current.kind !== "builtin"
+      && !window.confirm(`${current.name} won't be the starting map any more: players will start on ${map.name}, a map of the real world. ${current.name} stays in this scenario's maps.`)) return;
+    applyMaps(makeStartingMap(d.doc?.metadata, map.key, { scenarioName: d.name }));
   };
+  const removeFromMaps = (key) => applyMaps(removeMap(d.doc?.metadata, key));
+  const showDetailedOver = (key, overKey) => applyMaps(setShownOver(d.doc?.metadata, key, overKey));
 
-  // The scenario's other basemaps of its own, which players may switch to
-  // (ownBasemaps.js): one of Your basemaps added to them, or taken off.
-  const ownBasemaps = normalizeEditorOwnBasemaps(d.doc?.metadata?.ownBasemaps);
-  const addOwnBasemap = async (bm) => {
-    try {
-      const entry = ownBasemapFromLibrary(bm, await getBasemapPayload(bm.id));
-      if (!entry) throw new Error("It has no picture or drawn map in it.");
-      if (ownBasemaps.some((own) => own.id === entry.id)) return;
-      d.patchMetadata({ ownBasemaps: [...ownBasemaps, entry] });
-    } catch (e) {
-      window.alert(`Could not add that basemap: ${e?.message || e}`);
-    }
-  };
-  const removeOwnBasemap = (id) => {
-    const next = ownBasemaps.filter((own) => own.id !== id);
-    d.patchMetadata({ ownBasemaps: next.length ? next : null });
-  };
-
-  // Upload a new basemap: apply it now AND save it to the library for reuse.
-  // Answers what the picker then tells the author, both of which used to go
-  // unsaid: { sessionOnly: true } for a GeoTIFF or PMTiles background, which is
-  // on the map for this session only (not saved with the map, not added to the
-  // library, not shown by the game), and { libraryError } when the library
-  // would not take it — it is on the map either way.
+  // Upload a new basemap: saved to Your basemaps for reuse, and added to the
+  // scenario's maps. Answers what the picker then tells the author:
+  // { sessionOnly: true } for a GeoTIFF or PMTiles background, which is on the
+  // map for this session only as a drawing aid (not saved with the map, not
+  // added to Your basemaps, not shown by the game); { added } once it is one of
+  // the scenario's maps; and { libraryError } when Your basemaps would not take
+  // it.
   const uploadBasemap = async (file) => {
     if (!file) return null;
     const bg = await loadBackgroundFile(file);
-    d.patchMetadata({ tiledBasemap: null });
-    setCustomBg(bg); // applies immediately (image / vector / raster)
     const normalized = normalizeBackground(bg);
     if (!normalized) {
-      setCustomBgId(null); // raster (GeoTIFF/PMTiles) is session-only reference, not saved
+      setCustomBg(bg);
       return { sessionOnly: true };
     }
     const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
+    let meta = null;
+    let libraryError = null;
     try {
-      const meta = await addBackgroundToLibrary(normalized, name, { author: d.author || "" });
-      setCustomBgId(meta?.id || null);
-      return { saved: true };
+      meta = await addBackgroundToLibrary(normalized, name, { author: d.author || "" });
     } catch (e) {
       console.warn("[editor] save basemap to library failed:", e);
-      setCustomBgId(null);
-      return { libraryError: e?.message || String(e) };
+      libraryError = e?.message || String(e);
     }
+    const entry = ownBasemapFromLibrary(
+      meta || { id: name, name, kind: normalized.kind },
+      normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl },
+    );
+    const added = Boolean(entry) && applyMaps(addOwnMap(d.doc?.metadata, entry));
+    return { added, ...(libraryError ? { libraryError } : {}) };
   };
 
   // ---- Projection: the whole map moved from one projection to another ----
@@ -470,15 +447,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
   const mapHasDetailedMap = hasDetailedMap(d.doc);
-  // The saved own map's checksum, for the Maps window's "In use" mark
-  // (ownMapHash.js): taken again only when that background changes.
-  const savedBackground = d.doc?.metadata?.customBackground ?? null;
-  const [savedOwnMapHash, setSavedOwnMapHash] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    ownMapHash(savedBackground).then((hash) => { if (alive) setSavedOwnMapHash(hash); }).catch(() => { if (alive) setSavedOwnMapHash(null); });
-    return () => { alive = false; };
-  }, [savedBackground]);
   // Regions, cities, units and basemap, each by its own rule
   // (projectionConvert.js). The basemap is made ready first: redrawing a
   // picture is the one step that can fail, and nothing has moved if it does.
@@ -537,7 +505,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       if (nextBg !== customBg) {
         setCustomBg(nextBg);
         // A redrawn picture is no longer the one in Your basemaps.
-        if (plan.kind !== "bounds") setCustomBgId(null);
       }
       api.fitToData?.();
     } catch (error) {
@@ -584,11 +551,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         const tmpl = params.template && params.template !== "random" ? params.template : "generated";
         const bmName = `${tmpl.charAt(0).toUpperCase()}${tmpl.slice(1)} world basemap`;
         const bm = await addBackgroundToLibrary(savedBg, bmName, { author: d.author || "" });
-        setCustomBgId(bm?.id || null);
         if (bm?.id) fmgLogLine("Saved this basemap to “Your basemaps”.");
       } catch (e) {
         console.warn("[editor] save generated basemap to library failed:", e);
-        setCustomBgId(null);
       }
       d.setSaveStatus("dirty");
       fmgLogLine(`✓ Imported ${seed.stats.regions} regions, ${seed.stats.polities} countries, ${seed.stats.cities} cities.`);
@@ -945,7 +910,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
     else writeAgainOnceLoaded(api?.reseedWorld());
     setCustomBg(null);
-    setCustomBgId(null);
     markLoaded(null);
   };
 
@@ -983,7 +947,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
     d.setDoc(opened.doc);
     setCustomBg(background);
-    setCustomBgId(null);
     markLoaded(opened.doc.id);
   };
 
@@ -1094,6 +1057,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (initialMap.background) base.metadata.customBackground = initialMap.background;
     // And the Tiled Basemap it names, for the same reason (exportPreset.js).
     if (initialMap.tiledBasemap) base.metadata.tiledBasemap = initialMap.tiledBasemap;
+    // And the starting map's name (scenarioMaps.js).
+    if (initialMap.startingMapName) base.metadata.startingMapName = initialMap.startingMapName;
     // And its projection, which the save writes back (exportPreset.js).
     if (initialMap.projection) base.metadata.projection = initialMap.projection;
     // Same reasoning as the background above, and it is data loss if missed:
@@ -1162,7 +1127,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
     setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
-    setCustomBgId(null);
     markLoaded(null);
     setScenarioDirty(false);
     Promise.resolve(mapLoaded).then(
@@ -1861,21 +1825,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <BasemapPicker
         open={basemapPickerOpen}
         onClose={() => setBasemapPickerOpen(false)}
-        currentBasemap={d.basemap}
-        currentCustomId={customBgId}
-        onSelectBuiltin={selectBuiltinBasemap}
-        onSelectCustom={selectLibraryBasemap}
         onUpload={uploadBasemap}
         currentVectorGeojson={normalizeBackground(customBg)?.kind === "vector" ? normalizeBackground(customBg).geojson : null}
-        allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
-        onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
-        scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
-        ownBasemaps={ownBasemaps}
-        onAddOwnBasemap={addOwnBasemap}
-        onRemoveOwnBasemap={removeOwnBasemap}
-        detailedMap={d.doc?.metadata?.tiledBasemap || null}
-        ownMapHash={savedOwnMapHash}
-        onRemoveDetailedMap={removeDetailedMap}
+        maps={scenarioMapList}
+        onAddBuiltin={addBuiltinToMaps}
+        onAddLibrary={addLibraryToMaps}
+        onMakeStarting={makeStarting}
+        onRemoveMap={removeFromMaps}
+        onShownOver={showDetailedOver}
       />
 
       <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />
