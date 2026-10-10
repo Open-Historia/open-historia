@@ -710,3 +710,210 @@ test("player can withdraw a pending accession application and its ballot is clos
     command: { type: "cancel-application", institutionId, caseId: application.lifecycleCase.id, polity: "Republic of Latvia", authority: "player" },
   }), /no longer pending/i);
 });
+
+// ---- A government already at the table may rise (issue 849) ---------------------------------------
+// An observer is an entry in `members`. The invitation picker left out everyone
+// in `members`, and the engine refused an invitation to, or an application by,
+// anyone found there ("already represented"), so an observer could never be
+// invited to become a member, nor ask to.
+
+// The Baltic Union, active, with Latvia and Estonia as members, Poland as an
+// observer and Lithuania suspended.
+const withObserver = ({ accessionMode = "approval", allowedStatuses = ["member", "observer", "associate"] } = {}) => {
+  const founded = foundBaltic(["Republic of Estonia"]);
+  const active = applyInstitutionLifecycleCommandCore({
+    world: founded.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-08-21",
+    command: { type: "respond", institutionId: founded.institution.id, caseId: founded.caseIds[0], actorPolity: "Republic of Estonia", decision: "accept" },
+  });
+  const world = structuredClone(active.world);
+  const record = world.institutions.byId[founded.institution.id];
+  record.members = [
+    ...record.members,
+    { polity: "Republic of Poland", status: "observer", role: "member", sinceDate: "2014-08-25" },
+    { polity: "Republic of Lithuania", status: "suspended", role: "member", sinceDate: "2014-08-22" },
+  ];
+  record.charter.lifecycle.accession = { ...record.charter.lifecycle.accession, mode: accessionMode, allowedStatuses };
+  return { world, id: founded.institution.id };
+};
+const latvia = (world, date, command) => applyInstitutionLifecycleCommandCore({ world, chats: [], events: [], playerCountry: "Republic of Latvia", date, command });
+const standingOf = (world, id, polity) => world.institutions.byId[id].members.filter((entry) => entry.polity === polity).map((entry) => entry.status);
+
+test("an observer can be invited to full membership, by the procedure the charter prescribes", async () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  assert.equal(invited.action, "invited");
+  assert.equal(invited.lifecycleCase.kind, "invitation");
+  assert.equal(invited.lifecycleCase.requestedStatus, "member");
+  // Nothing has changed yet: an invitation is not membership.
+  assert.deepEqual(standingOf(invited.world, id, "Republic of Poland"), ["observer"]);
+
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: invited.chats, events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "accept" },
+  });
+  assert.equal(accepted.lifecycleCase.status, "pending-approval");
+  assert.equal(accepted.proposal.status, "voting");
+  assert.equal(accepted.proposal.type, "accession");
+  assert.deepEqual(accepted.proposal.voting.eligibleVoters, ["Republic of Estonia", "Republic of Latvia"], "the observer does not vote on its own accession");
+  const [consequence] = accepted.proposal.consequences;
+  assert.deepEqual([consequence.op, consequence.polity, consequence.status], ["join", "Republic of Poland", "member"]);
+  assert.deepEqual(standingOf(accepted.world, id, "Republic of Poland"), ["observer"], "still an observer until the vote passes");
+
+  // The vote passes: governance applies the proposal's consequence.
+  const { applyInstitutionMembershipResolution } = await import("./institutions.js");
+  const resolved = applyInstitutionMembershipResolution({
+    world: accepted.world, institutionId: id, op: consequence.op, polity: consequence.polity, status: consequence.status,
+    role: consequence.role, date: "2014-09-10", sourceProposalId: accepted.proposal.id,
+  });
+  assert.equal(resolved.error || "", "");
+  // Its status changed. There is one entry for it, and it has been there since it came as an observer.
+  assert.deepEqual(standingOf(resolved.world, id, "Republic of Poland"), ["member"]);
+  const poland = resolved.world.institutions.byId[id].members.find((entry) => entry.polity === "Republic of Poland");
+  assert.equal(poland.sinceDate, "2014-08-25");
+  assert.equal(resolved.world.institutions.byId[id].lifecycleCases[invited.lifecycleCase.id].status, "resolved");
+  assert.equal(resolved.world.institutions.byId[id].membershipHistory.at(-1).action, "joined");
+});
+
+test("an observer's own government can apply for full membership", () => {
+  const { world, id } = withObserver();
+  const applied = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity: "Republic of Poland", requestedStatus: "member", reason: "Warsaw seeks a full seat." },
+  });
+  assert.equal(applied.action, "applied");
+  assert.equal(applied.lifecycleCase.status, "pending-approval");
+  assert.equal(applied.proposal.consequences[0].status, "member");
+  assert.ok(applied.createdChat, "the applicant is given its accession hearing");
+  assert.deepEqual(standingOf(applied.world, id, "Republic of Poland"), ["observer"]);
+});
+
+test("under a direct-accession charter the observer's status changes at once, with no second entry", () => {
+  const { world, id } = withObserver({ accessionMode: "direct" });
+  const applied = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity: "Republic of Poland", requestedStatus: "member" },
+  });
+  assert.equal(applied.action, "joined");
+  assert.deepEqual(standingOf(applied.world, id, "Republic of Poland"), ["member"]);
+
+  const invited = latvia(withObserver({ accessionMode: "direct" }).world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  const accepted = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "accept" },
+  });
+  assert.equal(accepted.action, "joined");
+  assert.deepEqual(standingOf(accepted.world, id, "Republic of Poland"), ["member"]);
+});
+
+test("an observer may rise to a status between, where the charter has one", () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "associate" });
+  assert.equal(invited.lifecycleCase.requestedStatus, "associate");
+});
+
+test("the status already held, a lower one, and anything offered to a full member are still refused", () => {
+  const { world, id } = withObserver();
+  const invite = (polity, requestedStatus) => () => latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity, requestedStatus });
+  assert.throws(invite("Republic of Poland", "observer"), /Republic of Poland is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "member"), /Republic of Estonia is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "observer"), /Republic of Estonia is already represented in Baltic Union\./);
+  assert.throws(invite("Republic of Estonia", "associate"), /already represented/);
+  const apply = (polity, requestedStatus) => () => applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: polity, date: "2014-09-01",
+    command: { type: "apply", institutionId: id, polity, requestedStatus },
+  });
+  assert.throws(apply("Republic of Poland", "observer"), /Republic of Poland is already represented in Baltic Union\./);
+  assert.throws(apply("Republic of Latvia", "member"), /Republic of Latvia is already represented in Baltic Union\./);
+  // An associate does not step down to observer by invitation.
+  const associate = structuredClone(world);
+  associate.institutions.byId[id].members.find((entry) => entry.polity === "Republic of Poland").status = "associate";
+  assert.throws(() => latvia(associate, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "observer" }), /already represented/);
+  assert.equal(latvia(associate, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" }).action, "invited");
+});
+
+test("a suspended member is reinstated, never invited or admitted anew", () => {
+  const { world, id } = withObserver();
+  assert.throws(
+    () => latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Lithuania", requestedStatus: "member" }),
+    /Republic of Lithuania is suspended from Baltic Union\./,
+  );
+  assert.throws(
+    () => applyInstitutionLifecycleCommandCore({ world, chats: [], events: [], playerCountry: "Republic of Lithuania", date: "2014-09-01", command: { type: "apply", institutionId: id, polity: "Republic of Lithuania", requestedStatus: "member" } }),
+    /Republic of Lithuania is suspended from Baltic Union\./,
+  );
+});
+
+test("a charter that closes accession closes it to an observer too, and an observer cannot do the inviting where it could not before", () => {
+  const closed = withObserver({ accessionMode: "not-permitted" });
+  assert.throws(
+    () => latvia(closed.world, "2014-09-01", { type: "invite", institutionId: closed.id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" }),
+    /does not permit accession invitations/,
+  );
+  const memberOnly = withObserver({ allowedStatuses: ["member"] });
+  assert.throws(
+    () => applyInstitutionLifecycleCommandCore({ world: memberOnly.world, chats: [], events: [], playerCountry: "Republic of Poland", date: "2014-09-01", command: { type: "apply", institutionId: memberOnly.id, polity: "Republic of Poland", requestedStatus: "associate" } }),
+    /does not accept associate applications/,
+  );
+});
+
+test("an observer invited to membership cannot answer by asking for what it already holds", () => {
+  const { world, id } = withObserver();
+  const invited = latvia(world, "2014-09-01", { type: "invite", institutionId: id, initiatedBy: "Republic of Latvia", polity: "Republic of Poland", requestedStatus: "member" });
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "seek-observer" },
+  }), /Republic of Poland is already represented in Baltic Union\./);
+  // Declining keeps it an observer.
+  const declined = applyInstitutionLifecycleCommandCore({
+    world: invited.world, chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-09-02",
+    command: { type: "respond", institutionId: id, caseId: invited.lifecycleCase.id, actorPolity: "Republic of Poland", decision: "reject" },
+  });
+  assert.deepEqual(standingOf(declined.world, id, "Republic of Poland"), ["observer"]);
+});
+
+test("a model's lifecycle operations follow the same rule: an AI member may raise an observer, and an AI observer may apply", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const { world, id } = withObserver();
+  const batch = applyInstitutionLifecycleImpactBatchCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-01",
+    ops: [
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Poland", requestedStatus: "member" },
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Poland", requestedStatus: "observer" },
+      { op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: "Republic of Lithuania", requestedStatus: "member" },
+    ],
+  });
+  assert.deepEqual(batch.applied.map((entry) => [entry.op.targetPolity, entry.action]), [["Republic of Poland", "invited"]]);
+  assert.deepEqual(batch.rejected.map((entry) => entry.reason), [
+    "Republic of Poland is already represented in Baltic Union.",
+    "Republic of Lithuania is suspended from Baltic Union.",
+  ]);
+  const applied = applyInstitutionLifecycleImpactBatchCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-01",
+    ops: [{ op: "apply", actorPolity: "Republic of Poland", institutionId: id, requestedStatus: "member" }],
+  });
+  assert.deepEqual(applied.applied.map((entry) => entry.action), ["applied"]);
+  assert.equal(applied.applied[0].proposal.consequences[0].status, "member");
+});
+
+test("the invitation picker is given observers, marked with what they hold, and never those who hold the status on offer", async () => {
+  const { institutionAccessionStanding, institutionInvitablePolities, institutionMayRequestMembership, institutionStandingRank } = await import("./institutionLifecycleCore.js");
+  const { world, id } = withObserver();
+  const institution = world.institutions.byId[id];
+  const everyone = ["Republic of Estonia", "Republic of Lithuania", "Republic of Poland", "Russian Federation"];
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "member"), [
+    { polity: "Republic of Poland", status: "observer" },
+    { polity: "Russian Federation", status: "" },
+  ]);
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "observer"), [{ polity: "Russian Federation", status: "" }]);
+  assert.deepEqual(institutionInvitablePolities(institution, everyone, "associate").map((entry) => entry.polity), ["Republic of Poland", "Russian Federation"]);
+  assert.equal(institutionAccessionStanding(institution, "Republic of Poland", "member"), "rise");
+  assert.equal(institutionAccessionStanding(institution, "Republic of Poland", "observer"), "held");
+  assert.equal(institutionAccessionStanding(institution, "Republic of Lithuania", "member"), "suspended");
+  assert.equal(institutionAccessionStanding(institution, "Russian Federation", "member"), "new");
+  assert.ok(institutionStandingRank("observer") < institutionStandingRank("associate") && institutionStandingRank("associate") < institutionStandingRank("member"));
+  // Its own "Request membership": an observer has it; a member, a suspended member and an outsider's ordinary application do not come through it.
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Poland"), true);
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Latvia"), false);
+  assert.equal(institutionMayRequestMembership(institution, "Republic of Lithuania"), false);
+  assert.equal(institutionMayRequestMembership(institution, "Russian Federation"), false);
+});

@@ -64,6 +64,45 @@ const samePolity = (a, b) => lower(a) === lower(b);
 const memberByPolity = (institution, polity) => list(institution?.members).find((member) => samePolity(member?.polity, polity)) || null;
 const caseMap = (institution) => institution?.lifecycleCases && typeof institution.lifecycleCases === "object" ? institution.lifecycleCases : {};
 
+// A polity already in an institution may still rise in it. An observer is an
+// entry in `members` like any other, and both an invitation and an application
+// used to refuse anyone found there ("already represented"), so an observer
+// could never be invited to full membership, nor ask for it (issue 849). The
+// standings below full membership, lowest first; a status asked for must rank
+// above the one held.
+const STANDING_RANK = Object.freeze({ observer: 1, candidate: 2, participant: 3, associate: 4, member: 5 });
+export const institutionStandingRank = (status) => STANDING_RANK[lower(status)] ?? 0;
+
+// Where a polity stands when accession to `requestedStatus` is opened for it:
+//   "new"        not represented: an ordinary accession
+//   "rise"       represented at a lower status: the same procedure, whose
+//                outcome changes that entry's status and adds no second one
+//   "held"       it holds that status already, or a higher one
+//   "suspended"  a suspended member comes back by reinstatement, its own motion
+export const institutionAccessionStanding = (institution, polity, requestedStatus = "member") => {
+  const current = memberByPolity(institution, polity);
+  if (!current) return "new";
+  const held = lower(current.status || "member");
+  if (held === "suspended") return "suspended";
+  return institutionStandingRank(requestedStatus) > institutionStandingRank(held) ? "rise" : "held";
+};
+
+// The governments a member may invite to `requestedStatus`, among `polities`:
+// everyone not represented, and everyone represented below it. Each with the
+// status it holds now ("" for none), for the picker to show beside its name.
+export const institutionInvitablePolities = (institution, polities = [], requestedStatus = "member") => list(polities)
+  .map((polity) => ({ polity: clean(polity), standing: institutionAccessionStanding(institution, polity, requestedStatus) }))
+  .filter((entry) => entry.polity && (entry.standing === "new" || entry.standing === "rise"))
+  .map((entry) => ({ polity: entry.polity, status: entry.standing === "rise" ? lower(memberByPolity(institution, entry.polity)?.status || "member") : "" }));
+
+// One wording for both refusals of a suspended member, which is also the
+// sentence its suspension was announced with, so every language pack has it.
+const suspendedError = (polity, name) => new Error(`${polity} is suspended from ${name}.`);
+
+// Whether a government represented in an institution may ask to rise in it:
+// it is there, below full membership, and not suspended.
+export const institutionMayRequestMembership = (institution, polity) => institutionAccessionStanding(institution, polity, "member") === "rise";
+
 // Keep lifecycle planning pure: these mirror the deterministic governance
 // eligibility/rule selection without importing the commit-bearing governance
 // module (which pulls in the full runtime store).
@@ -669,8 +708,12 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     const authority = lifecycleAuthority({ actor: applicant, player, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
-    if (memberByPolity(baseInstitution, applicant)) throw new Error(`${applicant} is already represented in ${baseInstitution.name}.`);
     const requestedStatus = ["member", "observer", "associate", "participant"].includes(lower(command.requestedStatus)) ? lower(command.requestedStatus) : "member";
+    // An observer may apply for full membership; nobody applies for what it
+    // holds already, or for less, and a suspended member is reinstated instead.
+    const standing = institutionAccessionStanding(baseInstitution, applicant, requestedStatus);
+    if (standing === "held") throw new Error(`${applicant} is already represented in ${baseInstitution.name}.`);
+    if (standing === "suspended") throw suspendedError(applicant, baseInstitution.name);
     const accessionMode = lower(baseInstitution.charter?.lifecycle?.accession?.mode || "approval");
     if (accessionMode === "not-permitted") throw new Error(`${baseInstitution.name} charter does not permit accession applications.`);
     const allowed = new Set(list(baseInstitution.charter?.lifecycle?.accession?.allowedStatuses));
@@ -730,12 +773,20 @@ export const applyInstitutionLifecycleCommandCore = ({
     const inviterMember = memberByPolity(baseInstitution, inviter);
     if (!inviterMember || lower(inviterMember.status) === "suspended") throw new Error(`${inviter} is not an active participant in ${baseInstitution.name}.`);
     if (lower(baseInstitution.charter?.lifecycle?.accession?.mode) === "not-permitted") throw new Error(`${baseInstitution.name} charter does not permit accession invitations.`);
-    if (memberByPolity(baseInstitution, target)) throw new Error(`${target} is already represented in ${baseInstitution.name}.`);
+    // An observer may be invited to full membership (issue 849): the same
+    // accession the charter prescribes, ending in a change of its status.
+    // Still refused: the status it holds already or a lower one (a full member
+    // is invited to nothing), and a suspended member, whose way back is
+    // reinstatement.
+    const invitedStatus = lower(command.requestedStatus) || "member";
+    const standing = institutionAccessionStanding(baseInstitution, target, invitedStatus);
+    if (standing === "held") throw new Error(`${target} is already represented in ${baseInstitution.name}.`);
+    if (standing === "suspended") throw suspendedError(target, baseInstitution.name);
     const caseId = lifecycleCaseId(baseInstitution.id, "invitation", target, date);
     const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
       const lifecycleCase = setCase(institution, {
         id: caseId, kind: "invitation", status: "pending", polity: target, initiatedBy: inviter,
-        requestedStatus: lower(command.requestedStatus) || "member", createdDate: date, updatedDate: date,
+        requestedStatus: invitedStatus, createdDate: date, updatedDate: date,
         reason: clean(command.reason), terms: clean(command.terms),
       }, localWorld);
       upsertHistory(institution, { action: "invited", polity: target, actor: inviter, date: clean(date), status: lifecycleCase.requestedStatus, sourceCaseId: lifecycleCase.id, reason: clean(command.reason) });
@@ -785,6 +836,12 @@ export const applyInstitutionLifecycleCommandCore = ({
         return { lifecycleCase, resolutionAction: decision };
       }
       const requestedStatus = decision === "seek-observer" ? "observer" : (current.requestedStatus || "member");
+      // An answer cannot settle for what its government already holds: an
+      // observer invited to full membership that would rather stay an observer
+      // declines.
+      if (institutionAccessionStanding(institution, actor, requestedStatus) === "held") {
+        return { error: `${actor} is already represented in ${institution.name}.` };
+      }
       const provisional = lower(institution.status) === "provisional" && current.kind === "founding-invitation";
       const accessionMode = lower(institution.charter?.lifecycle?.accession?.mode || "approval");
       if (!provisional && accessionMode === "not-permitted") return { error: `${institution.name} charter does not permit accession.` };
