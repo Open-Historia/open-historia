@@ -84,7 +84,9 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { loadWorldCities } from "./worldCities.js";
+import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -201,7 +203,7 @@ import {
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
-import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "../../runtime/polityIdentity.js";
 import {
   applyWarUpdates,
   bindWarUpdatesToEvents,
@@ -1907,27 +1909,117 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
 // It runs where region names are resolved — at validation — because the runtime
 // layer that APPLIES operations has no geometry (see buildOwnerFootprint in
 // gameState.js) and must go on receiving plain coordinates.
+
+// The world's towns (worldCities.js), for a phrase naming one this map does
+// not carry: Grand Forks, on a map of 2,527 cities. Null until a placing pass
+// first wants them, because the list is 7.9 MB and most skips name only places
+// the map has. What comes back is a compact index, kept for the session. A
+// list that could not be read stays null (loadWorldCities says why) and is
+// asked for again by a later pass.
+let worldCities = null;
+const readWorldCities = async () => {
+  if (worldCities) return worldCities;
+  worldCities = await loadWorldCities();
+  if (worldCities) {
+    logDebugEvent("turn", `Placement: the world city list was read for a place this map does not carry (${worldCities.towns} towns under ${worldCities.names} names).`, undefined, { verbose: true });
+  }
+  return worldCities;
+};
+
 const buildPlacementGazetteer = (context, world) => {
   const fold = (value) => foldRegionKey(value);
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
   const markers = normalizeArray(world?.markers).filter((marker) => Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat));
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
-  const asRegion = (row) => ({ id: row.id, name: row.name, geometry: row.geometry });
+  const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
+
+  // Which country a token names, as this map knows it: the owner label its
+  // regions carry (aliases and legacy codes included), and the ISO3 a stock
+  // map's region ids start with, so "US", "USA" and "United States" all land on
+  // USA.27_1 whoever holds it now.
+  const countryOf = (token) => {
+    const raw = normalizeString(token).replace(/^the\s+/i, "");
+    if (!raw) return null;
+    const label = context.resolveOwner(raw) || context.resolveOwner(toCountryName(raw));
+    // Its official name, its ISO3, or its ISO2, written any way a model writes it.
+    const iso3 = normalizeString(resolveStockCountryCode(raw) || countryGidFromIdentity(raw) || countryGidFromIdentity(fold(raw))).toUpperCase();
+    return label || iso3 ? { label, iso3 } : null;
+  };
+  // 2 for a region the country holds, 1 for one that is geographically its, 0 for neither.
+  const countryRank = (row, want) => {
+    if (!row || !want) return 0;
+    if (want.label && fold(row.owner) === fold(want.label)) return 2;
+    if (!want.iso3) return 0;
+    const gid = normalizeString(row.id).split(".")[0].toUpperCase();
+    return gid === want.iso3 || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3 ? 1 : 0;
+  };
+  // The place of that name inside one country: its city first, as everywhere else.
+  // `exactOnly` is the whole-phrase attempt and stays strict here too, or "off
+  // Okinawa, Japan" would match the region Okinawa and put the fleet ashore.
+  const findInCountry = (name, key, want, exactOnly) => {
+    const best = (list, rank) => list
+      .map((entry) => ({ entry, rank: rank(entry) }))
+      .filter((hit) => hit.rank > 0)
+      .sort((a, b) => b.rank - a.rank)[0]?.entry ?? null;
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const city = best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want));
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    const pool = withGeometry.filter((row) => countryRank(row, want) > 0);
+    const matched = pool.length
+      ? matchRegionName(name, pool, exactOnly ? { allowFuzzy: false, minSubstring: Infinity } : { maxFuzzy: 1 })
+      : null;
+    return matched?.region ? { kind: "region", name: matched.region.name, region: asRegion(matched.region) } : null;
+  };
+  // Every country holding a place of this name, for telling the model to say which.
+  // Cached: one payload asks for the same handful of names several times over.
+  const sharedNames = new Map();
+  const sharedName = (name) => {
+    const key = fold(name);
+    if (!key) return [];
+    if (sharedNames.has(key)) return sharedNames.get(key);
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const owners = [...context.cityRows.filter(named).map((city) => context.regionOfCity(city)), ...withGeometry.filter(named)]
+      .map((row) => normalizeString(row?.owner))
+      .filter(Boolean);
+    const found = [...new Set(owners)];
+    sharedNames.set(key, found);
+    return found;
+  };
 
   // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
   // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
   // substring match would read "off Sevastopol" as the region Sevastopol.
+  // `country`: the one the phrase named after a comma ("Montana, United States").
+  // `prefer`: the polity doing the placing, which decides a bare shared name.
+  // A name asked for with neither is `lookUp`, the lookup `find` remembers.
   const lookUp = (name, exactOnly) => {
+    return lookUpFor(name, exactOnly, "", "");
+  };
+  const lookUpFor = (name, exactOnly, country, prefer) => {
     const key = fold(name);
     if (!key) return null;
     const unit = units.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
     if (unit) return { kind: "unit", name: unit.name, point: [unit.lng, unit.lat] };
     const marker = markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
     if (marker) return { kind: "marker", name: marker.name, point: [marker.lng, marker.lat] };
-    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
-    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    // The country the model was told to name decides between places sharing one.
+    // A country the map does not know, or one holding no such place, is ignored:
+    // a wrong qualifier must not make a real place vanish.
+    const wanted = countryOf(country);
+    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly) : null;
+    if (qualified) return qualified;
     // A country before a region: "Ukraine" is the country even where a region shares the name.
     const owner = context.resolveOwner(name);
+    // Unqualified and shared: the polity placing it decides. "Montana" ordered by
+    // the United States is the state, not the Bulgarian province the map lists
+    // first. A country keeps its own name against any preference.
+    const preferred = !wanted && !owner ? countryOf(prefer) : null;
+    if (preferred && sharedName(name).length > 1) {
+      const mine = findInCountry(name, key, preferred, exactOnly);
+      if (mine) return mine;
+    }
+    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
     const owned = owner ? (context.ownerRows.get(owner) ?? []).filter((row) => row.geometry) : [];
     const exact = withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
     if (owned.length && !(exact && owned.length === 1)) return { kind: "polity", name: owner, regions: owned.map(asRegion) };
@@ -1948,10 +2040,38 @@ const buildPlacementGazetteer = (context, world) => {
   // region on the map. Nothing a lookup reads changes while this gazetteer
   // lives, so each name is worked out once. What comes back is only ever read.
   const lookedUp = new Map();
-  const find = (name, { exact: exactOnly = false } = {}) => {
+  const find = (name, { exact: exactOnly = false, country = "", prefer = "" } = {}) => {
     const memoKey = `${exactOnly ? "=" : "~"}${String(name ?? "")}`;
+    // Asked within a country, or by the polity placing the thing: an answer of its own.
+    if (country || prefer) {
+      const askedKey = `${memoKey}\n${String(country ?? "")}\n${String(prefer ?? "")}`;
+      if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, Boolean(exactOnly), country, prefer));
+      return lookedUp.get(askedKey);
+    }
     if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));
     return lookedUp.get(memoKey);
+  };
+
+  // A region by its id, for an operation that gives `regionId` and no phrase.
+  const findRegionId = (id) => {
+    const key = normalizeString(id);
+    if (!key) return null;
+    const row = withGeometry.find((candidate) => normalizeString(candidate.id) === key);
+    return row ? asRegion(row) : null;
+  };
+
+  // What a phrase ALMOST matched, for the receipt. The usual dead end is a name
+  // that fits several regions at once — "Falkland Islands" over East and West
+  // Falkland Islands — which matchRegionName refuses on purpose rather than pick
+  // one of them. Refusing is right; leaving the model to guess again is not, so
+  // the receipt names them and it can write one exactly next turn.
+  const suggest = (phrase) => {
+    const key = fold(phrase);
+    if (key.length < 4) return [];
+    return withGeometry
+      .filter((row) => fold(row.name).includes(key) || key.includes(fold(row.name)))
+      .slice(0, 4)
+      .map((row) => row.name);
   };
 
   const regionAt = (point) => {
@@ -1964,42 +2084,123 @@ const buildPlacementGazetteer = (context, world) => {
   // The nearest region to a point that is in none, within maxKm, and the spot
   // inside it nearest that point: where something put in the sea comes ashore.
   const nearestLand = (point, maxKm) => {
+    // The bbox only rules a region out: most of the world is nowhere near. It is
+    // no measure of how near the land is — a large region's bbox can take in the sea off
+    // another's coast, and ranking by it put a division ashore on the far side.
+    // Of the regions whose bbox is in reach, the one whose land is nearest wins.
     let best = null; let bestKm = maxKm;
     for (const row of withGeometry) {
-      // The bbox first: most of the world is nowhere near.
       const clamped = [Math.min(Math.max(point[0], row.bbox[0]), row.bbox[2]), Math.min(Math.max(point[1], row.bbox[1]), row.bbox[3])];
-      const km = placementDistanceKm(point, clamped);
-      if (km < bestKm) { bestKm = km; best = row; }
+      if (placementDistanceKm(point, clamped) >= bestKm) continue;
+      const ashore = nearestInteriorPoint(row.geometry, point);
+      const km = ashore ? placementDistanceKm(point, ashore) : Infinity;
+      if (km < bestKm) { bestKm = km; best = { point: ashore, region: asRegion(row) }; }
     }
-    if (!best) return null;
-    const ashore = nearestInteriorPoint(best.geometry, point);
-    return ashore ? { point: ashore, region: asRegion(best) } : null;
+    return best;
   };
-  return { find, regionAt, nearestLand };
+  // Whether a polity, by any of its names, holds any land on the map right now;
+  // null for a name the map does not know at all — a polity this very turn
+  // founds is not on the map yet, and must not read as one that lost its land.
+  const holdsLand = (name) => {
+    const owner = context.resolveOwner(name);
+    if (!owner) return null;
+    return (context.ownerRows.get(owner) ?? []).length > 0;
+  };
+  // A country's capital as the Scenario's cities mark it ("primary"), held by that
+  // country now: where approximate placement (AI/placement.js) puts a thing whose
+  // town the map does not know.
+  const capitalOf = (name) => {
+    const owner = context.resolveOwner(name) || normalizeString(name);
+    const key = fold(owner);
+    if (!key) return null;
+    const held = context.cityRows.filter((city) => city.capital && fold(context.regionOfCity(city)?.owner) === key);
+    // A country of several nations marks each one's capital "primary" (London,
+    // Cardiff, Edinburgh, Belfast): the largest is the country's own.
+    const byPopulation = (list) => [...list].sort((a, b) => b.population - a.population);
+    const city = byPopulation(held.filter((entry) => fold(entry.capital) === "primary"))[0] ?? byPopulation(held)[0];
+    return city ? { name: city.name, point: city.coordinates } : null;
+  };
+  // The provinces and cities a text names that `country` holds, in the order it
+  // names them, as anchors for approximate placement (AI/placement.js). Whole
+  // words only, and names of four letters or more, so "Ure" is not found in
+  // "secure".
+  const placesNamedIn = (text, country) => {
+    const owner = fold(context.resolveOwner(country) || country);
+    const haystack = ` ${fold(text).replace(/[^\p{L}\p{N}]+/gu, " ")} `;
+    if (!owner || haystack.trim().length === 0) return [];
+    const at = (name) => {
+      const key = fold(name).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      return key.length >= 4 ? haystack.indexOf(` ${key} `) : -1;
+    };
+    const found = [
+      ...withGeometry.filter((row) => fold(row.owner) === owner).map((row) => ({ kind: "region", name: row.name, region: asRegion(row), at: at(row.name) })),
+      ...context.cityRows.filter((city) => fold(context.regionOfCity(city)?.owner) === owner)
+        .map((city) => ({ kind: "city", name: city.name, point: city.coordinates, at: at(city.name) })),
+    ];
+    return found.filter((place) => place.at >= 0).sort((a, b) => a.at - b.at);
+  };
+  // Whether two names are one polity as the map knows them (an alias, a code).
+  const samePolity = (a, b) => {
+    const key = (name) => fold(context.resolveOwner(name) || name);
+    return Boolean(key(a)) && key(a) === key(b);
+  };
+  // The named seas this map has: the real ones, on the real-world map
+  // (placement.js seasForMap).
+  const seas = seasForMap({ regionAt });
+
+  // Where each town of that name stands in the wider world, for placement.js
+  // to test against this map (resolveWorldTown). While the list is not here
+  // the answer is none, and that a name went unanswered is remembered: the
+  // placing pass then asks for the list, once, and reads its phrase again.
+  let unanswered = false;
+  let asked = false;
+  const worldCitiesNamed = (name) => {
+    if (worldCities) return worldCities.find(name);
+    unanswered = true;
+    return [];
+  };
+  // True once, when a name went unanswered and the list is here now.
+  const worldCitiesArrived = async () => {
+    if (!unanswered) return false;
+    if (!worldCities && !asked) {
+      asked = true;
+      await readWorldCities();
+    }
+    if (!worldCities) return false;
+    unanswered = false;
+    return true;
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, holdsLand, capitalOf, placesNamedIn, samePolity, worldCities: worldCitiesNamed, worldCitiesArrived };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 
-// Every `at` in a list of containers ({ event, impacts, path }) becomes
-// coordinates, and every newly placed thing is spaced off the rest. Mutates the
-// operations in place, like the region resolvers beside it. `receipt` hears what
-// could not be placed; an operation that then has no coordinates at all is left
-// for the normalizer to drop, exactly as one that never had any.
+// Every `at` — or, failing that, every `regionId` — in a list of containers
+// ({ event, impacts, path }) becomes coordinates, and every newly placed thing is
+// spaced off the rest. Mutates the operations in place, like the region resolvers
+// beside it. `receipt` hears what could not be placed; an operation that then has
+// no coordinates at all is left for the normalizer to drop, exactly as one that
+// never had any.
 const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
     const title = normalizeString(event?.title);
+    // What the event itself says, for a place the map does not know: a province
+    // the event names puts a garrison the model sited at an unknown town in that
+    // province rather than by the capital.
+    const context = [title, normalizeString(event?.description)].filter(Boolean).join(". ");
     for (const op of normalizeArray(impacts.unitOps)) {
       const kind = normalizeString(op?.op).toLowerCase();
-      // `owner`: whose formation it is, so that a place given from its own side
-      // ("the northern border") can be read (placement.js, `home`).
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), atSea: normalizeString(unit.type).toLowerCase() === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
         const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path, owner: normalizeString(mover?.ownerCode) });
+        // A land formation's march ends on land, as its raising does: seen in a
+        // player's Game (2026-09-29), an armoured division sent to a coastal
+        // town stood in the sea, the model's guess a kilometre offshore.
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode) });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2009,9 +2210,11 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
-      // `home`: whose structure it is, for a side of its owner's own land and
-      // for an address the map cannot check (placement.js resolveAddress).
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, home: normalizeString(marker.ownerCode ?? op.ownerCode) });
+      // `owner`: the polity building it, which decides which Montana "Montana" is.
+      // `home`: whose structure it is, for an address the map cannot check
+      // (placement.js addressSpot) and a town it does not carry
+      // (resolveWorldTown).
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, context, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2029,20 +2232,121 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
-    if (entry.phrase) {
-      const resolved = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, home: entry.owner || entry.home });
-      if (resolved.error) {
-        const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
-        noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
-          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${resolved.error}. `
-          + (hasCoordinates ? "Its coordinates were used instead." : "It was left off the map. Name a city, region, structure or unit as the map spells it."));
-        if (!hasCoordinates) continue;
-      } else {
-        target[lngKey] = resolved.lng;
-        target[latKey] = resolved.lat;
-        if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
-        placed += 1;
+    // A new unit or structure given no place at all is put where its own event
+    // says it is, in its owner's land. Seen in a replayed turn (2026-09-29): a
+    // forward operating base was built with no `at` while its event named where
+    // it was, and it was dropped.
+    if (!entry.phrase && !entry.regionId && (entry.spawn || entry.build)
+      && !(Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey])))) {
+      const named = entry.context && entry.owner ? normalizeArray(gazetteer.placesNamedIn(entry.context, entry.owner))[0] : null;
+      if (named) {
+        entry.phrase = named.name;
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a new thing"} was given no place, so it was placed in ${named.name}, where its event says it is. Give every new unit and structure \`at\`.`);
       }
+    }
+    // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
+    // the region it belongs to is not. `regionId` is the fallback, and for an
+    // operation that gives only an id it is the whole answer. It used to be
+    // ignored, so such an operation was dropped for having no coordinates: the
+    // exact move a model reaches for after being told its `at` was not on the map.
+    const readPhrase = () => resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, home: entry.owner || entry.home });
+    let byPhrase = entry.phrase ? readPhrase() : null;
+    // A phrase naming a place this map does not carry is read a second time
+    // with the world's towns to hand. They are fetched here, the first time a
+    // pass wants them, and never by a skip whose places the map all has.
+    if (byPhrase && await gazetteer.worldCitiesArrived()) byPhrase = readPhrase();
+    const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
+      ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
+      : null;
+    const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    const givenLng = Number(target[lngKey]); const givenLat = Number(target[latKey]);
+    const hasCoordinates = target[lngKey] != null && target[latKey] != null
+      && Number.isFinite(givenLng) && Number.isFinite(givenLat) && !(givenLng === 0 && givenLat === 0);
+    // A NEW formation that nothing places — no phrase the map knows, no region
+    // id, no coordinates of its own — is raised in its owner's own territory
+    // rather than not at all. The receipt that told the model to name a place
+    // did not stop a player's Ecuador losing the same brigade on consecutive
+    // turns, to "northern frontier with Colombia" and then "northern border with
+    // Colombia". A moved unit is not treated so: a move that cannot be placed
+    // leaves the unit where it stands.
+    //
+    // A NEW unit or structure whose place is not on the map at all gets an
+    // approximate placement (AI/placement.js): by a province or city the phrase or
+    // the event names, near the country's capital, inside it, or in its owner's
+    // own land. Seen in a live game (2026-09-27): a base at "Djibo, Burkina Faso"
+    // was dropped because the map has no Djibo.
+    const approximated = (() => {
+      // A structure given no place at all still goes into its owner's land, marked
+      // so (placement.js `unnamed`); a unit with none is raised at home, below.
+      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !(entry.phrase || (entry.build && !entry.regionId))) return null;
+      const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
+      return attempt?.approximate && !attempt.error ? attempt : null;
+    })();
+    const homeland = !resolved && !approximated && !hasCoordinates && entry.spawn && entry.owner
+      ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
+      : null;
+    if (resolved) {
+      // A phrase that failed still gets said: the model wrote it, and next turn
+      // it should know which of the two the engine went with.
+      if (byPhrase?.error) {
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
+          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
+      }
+      // A name two countries share, written without the country the directive asks
+      // for. Only the phrase can be ambiguous: a regionId names one region.
+      const shared = byPhrase && !byPhrase.error && !resolved.country && resolved.label
+        ? gazetteer.sharedName(resolved.label)
+        : [];
+      if (shared.length > 1 && !["unit", "marker"].includes(gazetteer.find(resolved.label)?.kind)) {
+        // Where it actually went, which is the builder's own country when it has one.
+        const went = gazetteer.regionAt([resolved.lng, resolved.lat])?.owner || shared[0];
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}"${entry.phrase}" could be ${shared.slice(0, 3).join(" or ")}: `
+          + `it was placed in ${went}. Always name the country, as "${resolved.label}, ${went}".`);
+      }
+      target[lngKey] = resolved.lng;
+      target[latKey] = resolved.lat;
+      if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (approximated) {
+      noteReceipt(receipt, "adjusted", describeApproximatePlacement({
+        title: entry.title, name: entry.name, phrase: entry.phrase, reason: byPhrase?.error, placed: approximated,
+      }));
+      target[lngKey] = approximated.lng;
+      target[latKey] = approximated.lat;
+      if (entry.family === "unit" && approximated.regionId) target.regionId = approximated.regionId;
+      placed += 1;
+    } else if (homeland && !homeland.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+        : byRegion?.error
+          ? `could not be placed in region "${entry.regionId}" — ${byRegion.error}`
+          : "came with no place and no coordinates";
+      noteReceipt(receipt, "adjusted",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}. `
+        + `It was raised in ${homeland.regionName || entry.owner}, inside ${entry.owner}'s own territory, rather than left off the map. `
+        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.");
+      target[lngKey] = homeland.lng;
+      target[latKey] = homeland.lat;
+      if (homeland.regionId) target.regionId = homeland.regionId;
+      placed += 1;
+    } else if (byPhrase?.error || byRegion?.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+          + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
+        : `could not be placed in region "${entry.regionId}" — ${byRegion.error}`;
+      // The commonest dead end is a name that fits several regions at once, which
+      // the matcher refuses rather than guess between. Naming them turns a turn
+      // wasted guessing again into one exact name.
+      const near = (byPhrase?.names ?? [entry.phrase])
+        .map((name) => gazetteer.suggest(name))
+        .find((hits) => hits.length) ?? [];
+      noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}.`
+        + (near.length ? ` Did you mean ${near.map((name) => `"${name}"`).join(" or ")}?` : "")
+        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."));
+      if (!hasCoordinates) continue;
     }
     delete target.at;
     let lng = Number(target[lngKey]); let lat = Number(target[latKey]);
@@ -2050,9 +2354,9 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 
     // An army is not raised at sea. This is what a guessed longitude looks like:
     // a rifle division standing in the Black Sea, forty kilometres off the city
-    // it was meant for. Only a land formation being CREATED, and only close to a
-    // shore — one that moves may be at sea in transit, and a point in mid-ocean
-    // is not a near miss.
+    // it was meant for. Only a land formation, raised or sent somewhere, and only
+    // close to a shore: its destination is land, while the steps of its march may
+    // cross water, and a point in mid-ocean is not a near miss.
     if (entry.raisedOnLand && !gazetteer.regionAt([lng, lat])) {
       const ashore = gazetteer.nearestLand([lng, lat], 150);
       if (ashore) {
@@ -2060,6 +2364,54 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
         lng = Number(ashore.point[0].toFixed(5)); lat = Number(ashore.point[1].toFixed(5));
         target[lngKey] = lng; target[latKey] = lat;
         target.regionId = ashore.region.id;
+      }
+    }
+
+    // And a fleet is not put ashore. Sent to a port or a province by its name or
+    // its regionId, it was given a point inside that land, and sailed about on
+    // it (a player's Game, 2026-09-30). It goes to the water off that coast.
+    if (entry.atSea && gazetteer.regionAt([lng, lat])) {
+      const seaSeed = placementHash(entry.id || entry.name);
+      const offshore = nearestSea([lng, lat], gazetteer, { seed: seaSeed });
+      // A NEW fleet inland in its owner's own country, with no sea in reach,
+      // goes to its owner's own waters (placement.js homeWaters), as a new army
+      // nothing places is raised in its owner's own land. The inland point is
+      // usually the engine's own: a place the map could not read is put near
+      // the capital, a unit given no place in the middle of its country, and
+      // for Russia, India or Brazil neither is within reach of a sea. Seen in a
+      // player's Game (2026-10-05): a Black Sea Fleet squadron was raised that
+      // way and then dropped here, so the event's formation never reached the
+      // map. Off the coast nearest where it was put; nearest the capital when
+      // it was given no place at all. A fleet put inland in another power's
+      // country is not sent home to a coast an ocean away: it is dropped, below.
+      const ownWaters = !offshore && entry.spawn && entry.owner
+        && gazetteer.samePolity(gazetteer.regionAt([lng, lat])?.owner, entry.owner)
+        ? homeWaters(entry.owner, gazetteer, {
+          near: (homeland && !homeland.error && gazetteer.capitalOf(entry.owner)?.point) || [lng, lat],
+          seed: seaSeed,
+        })
+        : null;
+      if (offshore) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed on land and was moved to the sea off its coast. Place fleets with "off <port>" or the name of a sea.`);
+        lng = Number(offshore[0].toFixed(5)); lat = Number(offshore[1].toFixed(5));
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
+      } else if (ownWaters) {
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was put to sea off ${ownWaters.coast || entry.owner}, on ${entry.owner}'s own coast, instead. Place fleets with "off <port>" or the name of a sea.`);
+        lng = ownWaters.lng; lat = ownWaters.lat;
+        target[lngKey] = lng; target[latKey] = lat;
+        target.regionId = "";
+      } else {
+        // Inland, with no sea within reach: there is nowhere for a fleet to go,
+        // so the placement is dropped (a move with no destination is not made;
+        // a new fleet with no waters of its own to go to is not raised) rather
+        // than leaving it sailing on land.
+        noteReceipt(receipt, "dropped", entry.spawn
+          ? `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was placed inland, too far from any sea for a fleet, and was left off the map. Place fleets with "off <port>" or the name of a sea.`
+          : `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a fleet"} was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.`);
+        delete target[lngKey]; delete target[latKey];
+        target.regionId = "";
+        continue;
       }
     }
 

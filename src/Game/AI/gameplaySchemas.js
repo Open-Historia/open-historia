@@ -272,12 +272,14 @@ const polityChangeSchema = {
 // WHOLE turn's structured output into a fallback simulation, which is exactly
 // the failure the note field on the spawn op was added to prevent (see its
 // comment below).
-// WHERE, in words (AI/placement.js): "Kharkiv", "near Kharkiv", "eastern Ukraine",
-// "coast of Crimea", "off Sevastopol", "Donetsk Oblast facing Russia". The engine
-// finds the point. Stated once here and explained once in the call-time
-// directive ([Placing Things]) — the jump's schema has a size budget
-// (projectOpSchema.test.js) and five copies of a grammar would spend it.
-const atSchema = { type: "string", description: "Where, in words — see [Placing Things]. Preferred to lng/lat." };
+// WHERE, in words (AI/placement.js): "Kharkiv, Ukraine", "near Kharkiv, Ukraine",
+// "eastern Ukraine", "coast of Crimea", "off Sevastopol, Ukraine", "Donetsk
+// Oblast, Ukraine facing Russia". The engine finds the point. Stated once here
+// and explained once in the call-time directive ([Placing Things]) — the jump's
+// schema has a size budget (projectOpSchema.test.js) and five copies of a
+// grammar would spend it.
+// The country after the comma is not optional: two countries have a Montana.
+const atSchema = { type: "string", description: "Where, in words, WITH the country: \"Montana, United States\" — see [Placing Things]. Preferred to lng/lat." };
 
 const unitSchema = {
   type: "object",
@@ -503,7 +505,7 @@ const markerOpSchema = {
         kind: textSchema("New kind, when it materially changed."),
         ownerCode: textSchema("New operating polity's FULL name, when control changes."),
         status: markerStatusSchema,
-        at: { type: "string", description: "New place, only when it genuinely relocates." },
+        at: { type: "string", description: "New place, with its country, only when it genuinely relocates." },
         lng: { type: "number", description: "New longitude, only with no `at`.", minimum: -180, maximum: 180 },
         lat: { type: "number", description: "New latitude, only with no `at`.", minimum: -90, maximum: 90 },
         note: textSchema("Updated brief description."),

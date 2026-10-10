@@ -6,7 +6,7 @@
 // this map is good at resolving. So a unit or a structure may be placed with a
 // phrase — `at` — and the engine works out the point:
 //
-//   "Kharkiv"                        the place itself (a city, a base, a unit, a region)
+//   "Kharkiv, Ukraine"               the place itself (a city, a base, a unit, a region)
 //   "near Kharkiv"                   beside it, not on top of it
 //   "east of Kharkiv"                a short way off in that direction
 //   "120 km north-east of Kharkiv"   a VECTOR: that far, that way, from the place
@@ -19,12 +19,14 @@
 //   "between Kyiv and Kharkiv"       halfway
 //   "[36.2, 50.0]"                   longitude, latitude, when it really is known
 //
+// A name is said with the country it is in, because two countries have a Montana.
+//
 // The WHOLE phrase is tried as a name before any of it is read as grammar, so
 // North Korea, South Ossetia, the Ivory Coast and the West Bank are places and
 // not directions — but only as the map spells it: a lookup loose enough to take
 // "off Sevastopol" for the region Sevastopol would put every fleet ashore.
 //
-// DELIBERATELY IMPORT-FREE. The caller hands in a gazetteer — find(name, { exact })
+// DELIBERATELY IMPORT-FREE. The caller hands in a gazetteer — find(name, options)
 // and regionAt(point) — built from the map it already has (gameplay.js
 // buildPlacementGazetteer), so everything here runs under bare node. Every
 // result is deterministic: the same phrase for the same thing on the same map is
@@ -52,6 +54,14 @@ export const distanceKm = (a, b) => {
 
 const wrapLng = (lng) => ((((lng + 180) % 360) + 360) % 360) - 180;
 const clampLat = (lat) => Math.max(-89.9, Math.min(89.9, lat));
+
+// Halfway between two points the short way round: across the antimeridian,
+// Fiji and Samoa meet in the Pacific, not off Angola.
+const midpoint = (a, b) => {
+    const [westLng, eastLng] = a[0] <= b[0] ? [a[0], b[0]] : [b[0], a[0]];
+    const lng = eastLng - westLng > 180 ? wrapLng((westLng + 360 + eastLng) / 2) : (a[0] + b[0]) / 2;
+    return [lng, (a[1] + b[1]) / 2];
+};
 
 // bearing in compass degrees: 0 north, 90 east.
 export const offsetPoint = (point, bearingDegrees, km) => {
@@ -247,13 +257,44 @@ const partOfBox = ([west, south, east, north], direction) => {
 const DIRECTION_PATTERN = "(north|south|east|west|n|s|e|w)(?:[\\s-]?(east|west|e|w))?";
 const stripArticle = (text) => asText(text).replace(/^(?:the|a|an)\s+/i, "");
 
+// Words for a kind of ground after a place name — "Putumayo jungle frontier",
+// "the Donbas region" — which no map spells as part of the name.
+const GROUND_WORDS = /\s+(?:jungles?|frontiers?|borders?|borderlands?|regions?|areas?|sectors?|front|zones?|countryside|hinterland|outskirts)$/i;
+// The country a name is in, said after a comma: "Montana, United States".
+// Two countries have a Montana, so an unqualified one is whichever the map lists
+// first, and a US base ordered in Montana was built in Bulgaria. The directive
+// below tells the model to name the country; this takes it off the name and
+// hands it to the gazetteer, which uses it to choose between places that share
+// the name. A tail the comma grammar above already claims is not a country:
+// "Donetsk Oblast, north" is a part of one place and "Crimea, coast" its shore.
+const QUALIFIER_TAIL = /^(.+?)\s*,\s*([^,()]{2,48}?)\)?$/;
+const GROUND_TAIL = /^(?:coast|coastal|shore|seaside|centre|center|central|middle|interior|heart)$/i;
+const splitQualifier = (text) => {
+    const match = asText(text).match(QUALIFIER_TAIL);
+    if (!match) return null;
+    const tail = stripArticle(match[2]).replace(/\s+(?:part|half|side|sector|end)$/i, "").trim();
+    if (!tail || readDirection(tail) || GROUND_TAIL.test(tail)) return null;
+    const name = stripArticle(match[1]);
+    return name ? { name, country: tail } : null;
+};
+const stripGround = (text) => {
+    let out = asText(text);
+    for (let guard = 0; guard < 4; guard += 1) {
+        const next = out.replace(GROUND_WORDS, "");
+        if (next === out || !next) break;
+        out = next;
+    }
+    return out;
+};
+
 const COORDINATES = /^[[(]?\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*[\])]?$/;
 
 // Every reading of the phrase that its words allow, most specific first. The
 // resolver takes the first whose names are on the map.
-// `home`: whose thing is being placed, unit or structure, when the caller knows
+// `owner`: whose unit is being placed, when the caller knows — what "the border
+// with Colombia" is measured from. `home`: whose thing it is, unit or structure
 // — what "the northern border" is the north of.
-export const readPlacement = (phrase, { home: whose = "" } = {}) => {
+export const readPlacement = (phrase, { owner = "", home: whose = owner } = {}) => {
     const text = asText(phrase).replace(/\s+/g, " ").replace(/[.;]+$/, "");
     if (!text) return [];
     const coordinates = text.match(COORDINATES);
@@ -303,6 +344,22 @@ export const readPlacement = (phrase, { home: whose = "" } = {}) => {
     if ((match = text.match(/^(.+?),? (?:facing|toward|towards|opposite|on the border with|on the frontier with|bordering|border with|nearest to|nearest|closest to) (.+)$/i))) {
         add({ kind: "facing", name: stripArticle(match[1]), toward: stripArticle(match[2]) });
     }
+    // "the northern frontier with Colombia", "along the border with Russia",
+    // "the Colombia border": a border with no first place named. To a person it
+    // is the unit's own side of it, so given the owner it reads as "<owner>
+    // facing <the other place>". A player's Ecuador lost the brigade it had just
+    // mobilised, twice, to "northern frontier with Colombia" and "northern border
+    // with Colombia", which named no first place for the grammar above.
+    const home = asText(owner);
+    if (home) {
+        const lead = "^(?:on |along |at |near |by |to |toward |towards |into |onto )?(?:the )?";
+        if ((match = text.match(new RegExp(`${lead}(?:${DIRECTION_PATTERN}(?:ern)? )?(?:border|frontier|boundary|borderlands?|border (?:area|region|zone)) (?:with|facing|toward|towards|against) (.+)$`, "i")))) {
+            add({ kind: "facing", name: home, toward: stripArticle(match[3]) });
+        }
+        if ((match = text.match(new RegExp(`${lead}(.+?) (?:border|frontier|borderlands?)$`, "i")))) {
+            add({ kind: "facing", name: home, toward: stripArticle(match[1]) });
+        }
+    }
 
     // "the northern border", "our eastern frontier", "the southern provinces":
     // a side of a country with no country named. To a person it is the side of
@@ -346,9 +403,35 @@ export const readPlacement = (phrase, { home: whose = "" } = {}) => {
         add({ kind: "near", name: stripArticle(match[1]) });
     }
     if ((match = text.match(/^(?:at|in|inside|within|on|into|to) (.+)$/i))) add({ kind: "place", name: stripArticle(match[1]) });
+    // "near Putumayo jungle frontier": every reading is tried again with the
+    // words for a kind of ground taken off its names, after every reading as
+    // written — so a real name that ends in one ("Northern Region") still wins.
+    for (const reading of [...readings]) {
+        const bare = { ...reading };
+        let changed = false;
+        for (const key of ["name", "toward", "first", "second"]) {
+            if (typeof reading[key] !== "string") continue;
+            const stripped = stripGround(reading[key]);
+            if (stripped && stripped !== reading[key]) {
+                bare[key] = stripped;
+                changed = true;
+            }
+        }
+        if (changed) add(bare);
+    }
+    // Every reading again with its country taken off the name and carried as
+    // `country`, each one just before the unqualified readings it came from. The
+    // whole phrase is only split when it is the whole of the reading: the grammar
+    // keeps its own comma, and "Montana, US facing Bulgaria" is not a country.
+    const splits = readings.map((reading, index) => (
+        typeof reading.name === "string" && (index > 0 || readings.length === 1) ? splitQualifier(reading.name) : null
+    ));
     // Where the words could be grammar, the whole phrase is a name only as the
-    // map spells it; a phrase that can be nothing else may be matched loosely.
+    // map spells it; a phrase that can be nothing else may be matched loosely,
+    // qualifier and all: "Putumayo jungle frontier, Colombia" is the Putumayo
+    // the map spells, and the comma keeps a bare name from matching loosely.
     if (readings.length > 1) readings[0].exact = true;
+    readings.splice(1, 0, ...splits.map((split, index) => (split ? { ...readings[index], ...split } : null)).filter(Boolean));
     return readings;
 };
 
@@ -356,12 +439,18 @@ export const readPlacement = (phrase, { home: whose = "" } = {}) => {
 // Resolving it against the map
 // ---------------------------------------------------------------------------
 //
-// gazetteer.find(name, { exact }) -> null, or
+// gazetteer.find(name, { exact, country, prefer }) -> null, or
 //   { kind: "unit" | "marker" | "city", name, point: [lng, lat] }
 //   { kind: "region", name, region: { id, name, geometry } }
 //   { kind: "polity", name, regions: [{ id, name, geometry }] }
 //   (`exact`: the name as the map spells it, or an alias — no near misses)
+//   (`country`: the country the phrase named after a comma, which decides between
+//    places that share a name and is ignored where it holds none of them)
+//   (`prefer`: the polity doing the placing, which decides an unqualified one)
 // gazetteer.regionAt(point) -> { id, name, geometry } | null
+// gazetteer.worldCities(name) -> [[lng, lat], …]: where each town of that name
+//   stands in the wider world, for a name the map does not carry (resolveWorldTown).
+//   Optional, and [] for a name its list does not have.
 
 export const NEAR_KM = 22;
 export const DIRECTION_KM = 35;
@@ -437,17 +526,28 @@ const done = (point, how, gazetteer, label) => {
     return { lng: Number(point[0].toFixed(5)), lat: Number(point[1].toFixed(5)), regionId: region?.id ?? "", regionName: region?.name ?? "", how, label };
 };
 
-const resolveReading = (reading, gazetteer, seed) => {
+// A second place a phrase names, "Kyiv, Ukraine" as readily as "Kyiv".
+const findQualified = (gazetteer, text, prefer) => {
+    const split = splitQualifier(text);
+    return gazetteer.find(split ? split.name : text, { country: split ? split.country : "", prefer });
+};
+
+// `accepts`: a last word on what the map found for the reading's name, before
+// anything is placed by it (resolveExactly: a name whose country was taken off
+// it must be where that country says it is).
+// `found`: what the reading's name stands for, when the caller has settled that
+// itself and the map is not to be asked (a town of the wider world).
+const resolveReading = (reading, gazetteer, seed, prefer = "", accepts = null, found = null) => {
     if (reading.kind === "coordinates") return done(reading.point, "coordinates", gazetteer, "");
     if (reading.kind === "between") {
-        const first = positionOf(gazetteer.find(reading.first), seed);
-        const second = positionOf(gazetteer.find(reading.second), seed);
+        const first = positionOf(findQualified(gazetteer, reading.first, prefer), seed);
+        const second = positionOf(findQualified(gazetteer, reading.second, prefer), seed);
         if (!first || !second) return null;
-        return done([(first[0] + second[0]) / 2, (first[1] + second[1]) / 2], "between", gazetteer, `between ${reading.first} and ${reading.second}`);
+        return done(midpoint(first, second), "between", gazetteer, `between ${reading.first} and ${reading.second}`);
     }
 
-    const thing = gazetteer.find(reading.name, { exact: Boolean(reading.exact) });
-    if (!thing) return null;
+    const thing = found ?? gazetteer.find(reading.name, { exact: Boolean(reading.exact), country: reading.country ?? "", prefer });
+    if (!thing || (accepts && !accepts(thing))) return null;
 
     if (reading.kind === "place") {
         const point = reading.interior && !thing.point ? positionOf({ ...thing, point: null }, seed) : positionOf(thing, seed);
@@ -461,7 +561,7 @@ const resolveReading = (reading, gazetteer, seed) => {
         if (!origin) return null;
         let { bearing, km } = reading;
         if (reading.toward) {
-            const target = positionOf(gazetteer.find(reading.toward), seed);
+            const target = positionOf(findQualified(gazetteer, reading.toward, prefer), seed);
             if (!target) return null;
             // Never past the place it is heading for: that far or farther is the place.
             if (km >= distanceKm(origin, target)) return done(target, "vector", gazetteer, thing.name);
@@ -553,7 +653,7 @@ const resolveReading = (reading, gazetteer, seed) => {
     }
 
     if (reading.kind === "facing") {
-        const other = gazetteer.find(reading.toward);
+        const other = findQualified(gazetteer, reading.toward, prefer);
         if (!other) return null;
         const from = positionOf(thing, seed);
         if (!from) return null;
@@ -595,81 +695,700 @@ const regionIdsOf = (found, gazetteer) => (found?.kind === "region" ? [found.reg
         // A town is where it stands: "…, Kharkiv" is the region Kharkiv is in.
         : Array.isArray(found?.point) ? [gazetteer.regionAt(found.point)?.id] : []).filter(Boolean);
 
-const resolveAddress = (phrase, gazetteer, seed, home) => {
-    const parts = asText(phrase).split(",").map((part) => stripArticle(part.replace(/\s+/g, " ").trim())).filter(Boolean);
-    if (parts.length < 2) return null;
-    const find = (name) => gazetteer.find(name, { exact: true }) ?? gazetteer.find(name);
-    const place = (name) => {
-        for (const exact of [true, false]) {
-            try {
-                const resolved = resolveReading({ kind: "place", name, exact }, gazetteer, seed);
-                if (resolved) return resolved;
-            } catch {
-                // one odd polygon costs this reading only
-            }
+const addressParts = (phrase) => asText(phrase).split(",").map((part) => stripArticle(part.replace(/\s+/g, " ").trim())).filter(Boolean);
+// The gazetteer is told what it is told everywhere else in this file: `prefer`,
+// the polity doing the placing, and as `country` the last part of the address,
+// which as a rule is one. Both only choose between places that share a name,
+// so the Montana of "Fort Harrison, Montana, United States" is the state,
+// whoever is placing the thing.
+const addressCountry = (parts, name) => {
+    const last = parts[parts.length - 1];
+    return name === last ? "" : last;
+};
+const findNamed = (name, gazetteer, { country = "", prefer = "" } = {}) => gazetteer.find(name, { exact: true, country, prefer }) ?? gazetteer.find(name, { country, prefer });
+const placeNamed = (name, gazetteer, seed, { country = "", prefer = "" } = {}) => {
+    for (const exact of [true, false]) {
+        try {
+            const resolved = resolveReading({ kind: "place", name, exact, country }, gazetteer, seed, prefer);
+            if (resolved) return resolved;
+        } catch {
+            // one odd polygon costs this reading only
         }
-        return null;
-    };
-    const within = new Set(parts.slice(1).flatMap((name) => regionIdsOf(find(name), gazetteer)));
-    const spot = place(parts[0]);
+    }
+    return null;
+};
+
+// The spot itself: the first part of the address, when the map has it where
+// the rest says it is.
+const addressSpot = (parts, gazetteer, seed, home, prefer = "") => {
+    const told = (name) => ({ country: addressCountry(parts, name), prefer });
+    const within = new Set(parts.slice(1).flatMap((name) => regionIdsOf(findNamed(name, gazetteer, told(name)), gazetteer)));
+    const spot = placeNamed(parts[0], gazetteer, seed, told(parts[0]));
     if (spot && within.size && within.has(spot.regionId)) return spot;
     if (spot && !within.size) {
-        const own = new Set(asText(home) ? regionIdsOf(find(home), gazetteer) : []);
+        const own = new Set(asText(home) ? regionIdsOf(findNamed(home, gazetteer, { prefer }), gazetteer) : []);
         if (!own.size || own.has(spot.regionId)) return spot;
     }
+    return null;
+};
+
+// What the spot is in: the innermost of the places after the comma that the
+// map has. Asked apart from the spot because a town of the wider world
+// (resolveWorldTown) is tried between the two, and because a caller may place
+// a spot the map does not have approximately instead (resolvePlacement).
+const addressContainer = (parts, gazetteer, seed, prefer = "") => {
     for (let index = 1; index < parts.length; index += 1) {
-        const container = place(parts[index]);
+        const container = placeNamed(parts[index], gazetteer, seed, { country: addressCountry(parts, parts[index]), prefer });
         if (container) return container;
     }
     return null;
 };
 
+// A reading whose name had its country taken off it (splitQualifier: "Montana,
+// United States") is an address as well, and the same rule holds for what the
+// map finds for that name: it counts where the country is one the map has and
+// it lies there, or the map does not know the country and it lies in `home`'s
+// own land (anywhere, with no `home`). The gazetteer uses the country to choose
+// between places that share the name and ignores it where it holds none of
+// them; left at that, "Paris, Texas" was in France again. The answer is for
+// the place itself and not the point a phrase ends up at: "off Sevastopol,
+// Ukraine" is at sea, in no region.
+const addressCheck = (gazetteer, { home = "", prefer = "" } = {}) => {
+    const known = new Map();
+    const regionsOf = (name) => {
+        if (!known.has(name)) {
+            const found = gazetteer.find(name, { exact: true, prefer }) ?? gazetteer.find(name, { prefer });
+            known.set(name, new Set(regionIdsOf(found, gazetteer)));
+        }
+        return known.get(name);
+    };
+    return (found, country) => {
+        const at = regionIdsOf(found, gazetteer);
+        const within = regionsOf(asText(country));
+        if (within.size) return at.some((id) => within.has(id));
+        const own = asText(home) ? regionsOf(asText(home)) : null;
+        return !own?.size || at.some((id) => own.has(id));
+    };
+};
+
+// "A", "A and B", "A, B and C"; past `limit`, "A, B, C and 4 more".
+const inWords = (names, limit = 6) => {
+    const shown = names.slice(0, limit);
+    if (names.length > shown.length) return `${shown.join(", ")} and ${names.length - shown.length} more`;
+    return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}` : shown.join("");
+};
+
+// A town the map does not carry. No map has every town, and one whose regions
+// are named after cities has no "North Dakota" to fall back on either: a real
+// skip (2026-10-05) opened a depot at "Grand Forks, North Dakota" and lost it,
+// and the unit it raised "near Grand Forks, North Dakota" was put somewhere in
+// its owner's land instead.
+//
+// The game ships a list of seventy thousand of the world's towns
+// (gazetteer.worldCities, from worldCities.js). It knows where Grand Forks
+// is. It also has sixteen Springfields, and says of none of them what country
+// it is in, so a name alone settles nothing. A town is taken only when it is
+// the ONE town of that name which stands
+//   - on land this map has (in the sea, or off the edge of a regional map, it
+//     is no town of this world), and
+//   - inside every place the address says it is in that the map knows ("X,
+//     Kharkiv Oblast"); or, when the map knows none of them or the phrase
+//     gives none, inside `home`, the land of whoever is placing the thing:
+//     the test addressSpot puts a map city to. With nobody's land to test it
+//     against, a town of the list is not taken at all (a map city then is,
+//     but only because a loose match of the whole phrase always took it).
+// Two such towns are refused, and so is a town that stands only outside
+// `home`: nothing is picked by its size, and nothing crosses a border on a
+// name's say-so. The refusal names the regions those towns stand in, so the
+// next answer can say which one, as "Springfield, <region>". An address
+// whose place the map knows is not refused: it falls back to that place, as it
+// did before there was a list to ask.
+//
+// The readings are the ones the map was asked, each with its grammar: "near
+// Grand Forks, North Dakota" is beside the town, not on it. Those whose name
+// has no comma go first, as they do for the map's own names ("Grand Forks,
+// north" is the north of it, not a town in a place called North). The first
+// reading whose town stands on this map's land decides, taken or refused: a
+// later one would be a second guess at what was meant.
+//
+// A reading whose country was taken off its name (splitQualifier) is passed
+// over. The reading it came from is in the list with the name whole, and that
+// one is read here as the address it is: left to the split one, "Springfield,
+// Illinois" would be a bare Springfield, tested against `home`.
+//
+// Only what the map lacks is asked of the list. A name the map has an answer
+// for is the map's, even where the list has a namesake that would fit.
+//
+// A town taken from an address carries `country`, the last part of it, as the
+// map's own answer to an address does (resolveExactly).
+const resolveWorldTown = (readings, gazetteer, seed, home, prefer = "") => {
+    if (typeof gazetteer.worldCities !== "function") return null;
+    const land = asText(home) ? findNamed(home, gazetteer, { prefer }) : null;
+    const own = new Set(regionIdsOf(land, gazetteer));
+    const named = readings.filter((reading) => typeof reading.name === "string" && !reading.country);
+    const ordered = [...named.filter((reading) => !reading.name.includes(",")), ...named.filter((reading) => reading.name.includes(","))];
+    for (const reading of ordered) {
+        const parts = addressParts(reading.name);
+        const [spot, ...rest] = parts;
+        if (!spot) continue;
+        const onMap = rest.length ? addressSpot(parts, gazetteer, seed, home, prefer) : gazetteer.find(spot, { exact: Boolean(reading.exact), prefer });
+        if (onMap) continue;
+        const within = rest.map((name) => new Set(regionIdsOf(findNamed(name, gazetteer, { country: addressCountry(parts, name), prefer }), gazetteer))).filter((ids) => ids.size);
+        // Nothing says where it would have to stand, so the list is not asked.
+        if (!within.length && !own.size) continue;
+        const standing = asArray(gazetteer.worldCities(spot))
+            .map((point) => ({ point, region: gazetteer.regionAt(point) }))
+            .filter((town) => town.region);
+        if (!standing.length) continue;
+        const fitting = standing.filter((town) => (within.length ? within.every((ids) => ids.has(town.region.id)) : own.has(town.region.id)));
+        if (fitting.length === 1) {
+            const town = resolveReading({ ...reading, name: spot }, gazetteer, seed, prefer, null, { kind: "city", name: spot, point: fitting[0].point });
+            return town && rest.length ? { ...town, country: rest[rest.length - 1] } : town;
+        }
+        if (within.length) return null;
+        const regions = [...new Set((fitting.length ? fitting : standing).map((town) => asText(town.region.name) || asText(town.region.id)))];
+        const where = `in the region${regions.length > 1 ? "s" : ""} ${inWords(regions)}`;
+        const whose = asText(land?.name) || asText(home);
+        const refused = fitting.length
+            ? `${fitting.length} towns called ${spot} lie in ${whose}, ${where}`
+            : `no town called ${spot} lies in ${whose}: ${standing.length > 1 ? `the ${standing.length} on this map are` : "the one on this map is"} ${where}`;
+        return { error: `${refused}; name the region it is in, as "${spot}, <region>"` };
+    }
+    return null;
+};
+
+// ---------------------------------------------------------------------------
+// Approximate placement: a place the map does not know
+// ---------------------------------------------------------------------------
+//
+// Seen in a live game (2026-09-27): a base ordered at "Djibo, Burkina Faso" was
+// dropped because the Scenario's map has no Djibo, and a unit sent there was
+// raised in its owner's homeland, which for a foreign unit is another continent.
+// Now it gets an approximate placement: near the capital of the country the
+// phrase says the place is in, inside that country when the map marks no capital,
+// or in its owner's own land when no country can be told — and the model is told.
+//
+// gazetteer.capitalOf(country) -> { name, point } | null
+
+export const APPROXIMATE_KM = 50;
+
+// A country that can hold something: a polity the map knows, with land.
+const landedPolity = (thing) => (thing?.kind === "polity" && asArray(thing.regions).length ? thing : null);
+
+// One seed per phrase and thing, so a replayed turn lands on the same spot.
+const seedOf = (phrase, seedText) => hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
+
+// The country a phrase says its place is in, as the map knows it: named outright
+// ("Djibo, Burkina Faso", "Djibo in Burkina Faso", "Burkina Faso's Soum"), or
+// the holder of a province or city in the phrase the map does know ("Djibo,
+// Soum"). Countries mentioned elsewhere in an event are never used.
+const countryInPhrase = (phrase, gazetteer) => {
+    const named = namedInPhrase(phrase);
+    for (const token of named) {
+        const country = landedPolity(gazetteer.find(token, { exact: true }));
+        if (country) return country;
+    }
+    for (const token of named) {
+        const thing = gazetteer.find(token, { exact: true });
+        const holder = asText(thing?.region?.owner ?? (thing?.point ? gazetteer.regionAt(thing.point)?.owner : ""));
+        const country = holder ? landedPolity(gazetteer.find(holder, { exact: true })) : null;
+        if (country) return country;
+    }
+    return null;
+};
+
+// Every name a phrase gives, the last part first: "Djibo, Burkina Faso" gives
+// Burkina Faso, then Djibo; "in" and a possessive give the name they carry.
+const namedInPhrase = (phrase) => {
+    const parts = asText(phrase).split(",").map((part) => stripArticle(part.trim())).filter(Boolean);
+    const named = [];
+    for (const part of [...parts].reverse()) {
+        named.push(part);
+        const inside = part.match(/\bin\s+(.+)$/i);
+        if (inside) named.push(stripArticle(inside[1]));
+        const possessive = part.match(/^(.+?)['’]s\b/);
+        if (possessive) named.push(stripArticle(possessive[1]));
+    }
+    return named;
+};
+
+const insideAny = (point, regions) => asArray(regions).some((region) => pointInGeometry(point, region.geometry));
+
+// A province or city the phrase names beside the unknown town: "Stranraer,
+// Scotland".
+const anchorInPhrase = (phrase, gazetteer) => {
+    for (const token of namedInPhrase(phrase)) {
+        const thing = gazetteer.find(token, { exact: true });
+        if (thing?.kind === "region" || thing?.kind === "city") return thing;
+    }
+    return null;
+};
+
+// A spot by an anchor on the country's own land: inside a province, or within
+// APPROXIMATE_KM of a point, the bearing and distance taken from the thing's
+// name so a replayed turn puts it back in the same spot. null when the anchor
+// is not the country's.
+const nearAnchor = (anchor, regions, seed) => {
+    if (anchor?.region?.geometry) {
+        const point = interiorPoint(anchor.region.geometry, { seed });
+        return point && insideAny(point, regions) ? { point, near: asText(anchor.name) } : null;
+    }
+    if (!anchor?.point) return null;
+    const first = seed % 360;
+    const reach = 10 + (seed % (APPROXIMATE_KM - 10));
+    for (const km of [reach, reach / 2, reach / 4]) {
+        for (let step = 0; step < 8; step += 1) {
+            const point = offsetPoint(anchor.point, (first + step * 45) % 360, km);
+            if (insideAny(point, regions)) return { point, near: asText(anchor.name) };
+        }
+    }
+    return insideAny(anchor.point, regions) ? { point: anchor.point, near: asText(anchor.name) } : null;
+};
+
+// Where a thing goes in a country when its town is not on the map, the most
+// particular first: a province or city the phrase names; one the event's own
+// words name in that country (`context`); the country's capital; its interior.
+const approximatePoint = (country, gazetteer, seed, { phrase = "", context = "" } = {}) => {
+    const regions = asArray(country.regions);
+    const anchors = [
+        anchorInPhrase(phrase, gazetteer),
+        ...(asText(context) ? asArray(gazetteer.placesNamedIn?.(context, country.name)) : []),
+        gazetteer.capitalOf?.(country.name) ?? null,
+    ];
+    for (const anchor of anchors) {
+        const spot = anchor ? nearAnchor(anchor, regions, seed) : null;
+        if (spot) return spot;
+    }
+    const region = heartland(regions);
+    const point = region && interiorPoint(region.geometry, { seed });
+    return point ? { point, near: "" } : null;
+};
+
 // { lng, lat, regionId, regionName, how, label } — or { error } saying what could
 // not be found, in words the model can act on next turn.
-// `home`: whose thing is being placed, for a side of their own land with no
-// country named (readPlacement) and for an address the map cannot check
-// (resolveAddress).
-export const resolvePlacement = (phrase, gazetteer, { seedText = "", home = "" } = {}) => {
-    const readings = readPlacement(phrase, { home });
+// `owner` is the polity doing the placing: what "the border with Colombia" is
+// measured from, and which Montana an unqualified "Montana" means.
+// `home`: whose thing is being placed, for an address the map cannot check
+// (addressSpot) and for a town it does not carry (resolveWorldTown); it
+// defaults to `owner`, which also reads a border phrase.
+// `approximate`: when nothing in the phrase is on the map, give the thing an
+// approximate placement and return `approximate: { asked, country, near }`
+// alongside the point (`near` is "" when the country marks no capital).
+//
+// An address whose spot the map does not have ("Djibo, Burkina Faso") can be
+// answered both ways. Asked plainly, the thing goes into the innermost place of
+// the address that the map has (addressContainer). Asked with `approximate`, the
+// approximate placement does that work instead and says so: the same ground,
+// with the event's own words and the capital to go by. The address stands in
+// only where no approximate placement can be made. A town of the wider world
+// is the place itself, and is the answer either way.
+export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "", home = owner, approximate = false, context = "" } = {}) => {
+    const exact = resolveExactly(phrase, gazetteer, { seedText, owner, home, contained: !approximate });
+    if (!exact.error || !approximate) return exact;
+    const unmarked = () => (asText(phrase).includes(",") ? resolveExactly(phrase, gazetteer, { seedText, owner, home }) : exact);
+    try {
+        const country = countryInPhrase(phrase, gazetteer)
+            ?? (asText(owner) ? landedPolity(gazetteer.find(asText(owner), { exact: true })) : null);
+        if (!country) return unmarked();
+        const spot = approximatePoint(country, gazetteer, seedOf(phrase, seedText), { phrase, context });
+        if (!spot) return unmarked();
+        return {
+            ...done(spot.point, "approximate", gazetteer, country.name),
+            // `unnamed`: no place was given at all, so nothing was not found.
+            approximate: { asked: asText(phrase), country: country.name, near: spot.near, ...(asText(phrase) ? {} : { unnamed: true }) },
+        };
+    } catch {
+        return unmarked(); // one odd polygon must not cost the turn its other placements
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Seas and oceans: water the map leaves unnamed
+// ---------------------------------------------------------------------------
+//
+// On this map the sea is simply where no region is, so nothing in the
+// gazetteer is called "Black Sea" or "Ionian Sea" — and those are exactly the
+// names a model gives a fleet. Seen in a player's Game (2026-09-30): the Black
+// Sea Vanguard Task Group, sent to "Central Mediterranean, Mediterranean Sea"
+// and then to "Ionian Sea, Eastern Mediterranean", could not be placed either
+// time, so its moves were dropped and it sat where it was; the player had to
+// keep ordering it on. A named sea is now a point in open water inside it,
+// tried only after every name the map itself knows.
+//
+// The seas belong to the map, not to this file. The gazetteer hands in its own
+// `seas` (seasForMap): the real ones below only when the real-world map is
+// loaded, and whatever a scenario with its own map declares in its world
+// (`world.seas`). A hand-drawn world declaring none gets none, so a fleet
+// there is never sent to where the Black Sea would be on Earth.
+//
+// [lng, lat], each a spot well out from any shore. Names are matched whole,
+// with or without "the".
+const EARTH_SEAS = [
+    [["Mediterranean Sea", "Mediterranean", "the Med"], [18, 34.5]],
+    [["Western Mediterranean"], [5, 38.5]],
+    [["Central Mediterranean"], [17, 35]],
+    [["Eastern Mediterranean"], [28.5, 33.8]],
+    [["Ionian Sea"], [19, 37.5]],
+    [["Aegean Sea", "Aegean"], [25.6, 39.4]],
+    [["Adriatic Sea", "Adriatic"], [16, 42.6]],
+    [["Tyrrhenian Sea"], [12, 40]],
+    [["Ligurian Sea"], [9, 43.6]],
+    [["Balearic Sea"], [2, 40.6]],
+    [["Alboran Sea"], [-3.5, 36]],
+    [["Strait of Gibraltar"], [-5.6, 35.95]],
+    [["Levantine Sea"], [32.5, 33.5]],
+    [["Sea of Marmara"], [28.2, 40.75]],
+    [["Black Sea"], [34, 43.2]],
+    [["Sea of Azov"], [36.5, 46]],
+    [["Kerch Strait"], [36.55, 45.2]],
+    [["Caspian Sea"], [51, 42]],
+    [["Red Sea"], [38.5, 20]],
+    [["Gulf of Aden"], [48, 12.5]],
+    [["Arabian Sea"], [64, 16]],
+    [["Persian Gulf", "Arabian Gulf", "the Gulf"], [51.5, 27]],
+    [["Gulf of Oman"], [58.5, 24.8]],
+    [["Strait of Hormuz"], [56.4, 26.5]],
+    [["Indian Ocean"], [80, -10]],
+    [["Bay of Bengal"], [88, 15]],
+    [["Andaman Sea"], [96, 10]],
+    [["Strait of Malacca", "Malacca Strait"], [99.8, 3.6]],
+    [["South China Sea"], [114, 14]],
+    [["East China Sea"], [125, 29]],
+    [["Yellow Sea"], [123, 35.5]],
+    [["Sea of Japan", "East Sea"], [134, 40]],
+    [["Philippine Sea"], [132, 18]],
+    [["Taiwan Strait"], [119.5, 24.3]],
+    [["Sea of Okhotsk"], [150, 54]],
+    [["Bering Sea"], [-178, 58]],
+    [["Pacific Ocean", "Pacific"], [-150, 10]],
+    [["North Pacific", "North Pacific Ocean"], [-160, 35]],
+    [["South Pacific", "South Pacific Ocean"], [-130, -25]],
+    [["Coral Sea"], [155, -16]],
+    [["Tasman Sea"], [160, -38]],
+    [["Atlantic Ocean", "Atlantic"], [-35, 30]],
+    [["North Atlantic", "North Atlantic Ocean"], [-35, 45]],
+    [["South Atlantic", "South Atlantic Ocean"], [-15, -25]],
+    [["Caribbean Sea", "Caribbean"], [-75, 15]],
+    [["Gulf of Mexico"], [-90, 25]],
+    [["Gulf of Guinea"], [3, 2]],
+    [["Mozambique Channel"], [41, -18]],
+    [["North Sea"], [3, 56]],
+    [["English Channel", "the Channel"], [-2, 50.2]],
+    [["Irish Sea"], [-5, 53.5]],
+    [["Celtic Sea"], [-7.5, 50.5]],
+    [["Bay of Biscay"], [-5, 45.5]],
+    [["Norwegian Sea"], [2, 68]],
+    [["Barents Sea"], [40, 73]],
+    [["Baltic Sea", "Baltic"], [19, 56]],
+    [["Gulf of Finland"], [25, 59.8]],
+    [["Gulf of Bothnia"], [20.5, 62.5]],
+    [["Greenland Sea"], [-5, 75]],
+    [["Labrador Sea"], [-55, 58]],
+    [["Arctic Ocean", "Arctic"], [0, 85]],
+    [["Southern Ocean"], [0, -60]],
+];
+const seaKey = (name) => stripArticle(name).toLowerCase();
+
+// A scenario's own seas, as its world declares them:
+//   "seas": [{ "name": "Narrow Sea", "aliases": ["the Narrows"], "point": [lng, lat] }]
+// (`lng` and `lat` in place of `point` are read too). An entry without a name
+// or a usable point is skipped.
+export const declaredSeas = (list) => asArray(list).flatMap((entry) => {
+    const name = asText(entry?.name);
+    const point = Array.isArray(entry?.point) ? entry.point.map(Number) : [Number(entry?.lng), Number(entry?.lat)];
+    const [lng, lat] = point;
+    if (!name || !Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) return [];
+    return [{ name, aliases: asArray(entry?.aliases).map(asText).filter(Boolean), point: [lng, lat] }];
+});
+
+// Whether the loaded map is the real world, told by its land and water: the
+// map has land under the middle of the continents and none in the middle of the
+// oceans and the inland seas. Not by its region ids — the stock map's are GADM
+// ids ("UKR.11_1"), but Modern Day's own redrawn map numbers them ("2001") —
+// and not by the world's builtInMap stamp, which a scenario started from
+// scratch copies with Modern Day's world.json and keeps over a map of its own.
+// Where the coastlines are Earth's, the real seas are where they say they are,
+// whatever the story: an alternate or fictional one told on the real map still
+// has them. One land point may be missing (a region left undrawn); no ocean
+// point may be land.
+const EARTH_LAND_PROBES = [
+    [-3.7, 40.4], [37.6, 55.75], [31.2, 30.05], [116.4, 39.9], [-98, 38.5],
+    [-47.9, -15.8], [133.9, -23.7], [77.2, 28.6], [18.7, 15.5],
+];
+const EARTH_WATER_PROBES = [[-35, 30], [-150, 10], [80, -10], [34, 43.2], [18, 34.5], [-15, -25]];
+export const isRealWorldMap = (regionAt) => {
+    if (typeof regionAt !== "function") return false;
+    if (EARTH_WATER_PROBES.some((point) => regionAt(point))) return false;
+    return EARTH_LAND_PROBES.filter((point) => regionAt(point)).length >= EARTH_LAND_PROBES.length - 1;
+};
+
+// The seas a gazetteer offers: the scenario's own first, so they win a shared
+// name, then the real ones when the map is the real world.
+export const seasForMap = ({ regionAt = null, declared = [] } = {}) => [
+    ...declaredSeas(declared),
+    ...(isRealWorldMap(regionAt) ? EARTH_SEAS.map(([[name, ...aliases], point]) => ({ name, aliases, point })) : []),
+];
+
+// The gazetteer's seas by every name they go by, built once per list.
+const seaIndexes = new WeakMap();
+const seaIndexOf = (seas) => {
+    if (!Array.isArray(seas) || !seas.length) return null;
+    if (!seaIndexes.has(seas)) {
+        const index = new Map();
+        for (const sea of seas) {
+            for (const name of [sea.name, ...asArray(sea.aliases)]) {
+                const key = seaKey(name);
+                if (key && !index.has(key)) index.set(key, { name: sea.name, point: sea.point });
+            }
+        }
+        seaIndexes.set(seas, index);
+    }
+    return seaIndexes.get(seas);
+};
+
+// The sea a phrase names, among the gazetteer's seas: each comma part of it,
+// the first and most particular first, so "Ionian Sea, Eastern Mediterranean"
+// is the Ionian Sea; then the names its readings give, so "western Black Sea"
+// is the Black Sea. null when it names none, or the map has no seas.
+const seaInPhrase = (phrase, readings, seas) => {
+    const index = seaIndexOf(seas);
+    if (!index) return null;
+    const names = [
+        ...asText(phrase).split(",").map((part) => part.trim()),
+        ...readings.map((reading) => reading.name),
+    ];
+    for (const name of names) {
+        const plain = asText(name).replace(/^(?:in|into|to|toward|towards|across|through|the waters of|waters of)\s+/i, "");
+        // The name itself first, so the North Sea and the South Atlantic stay
+        // themselves; then without a part of it, so "the western Black Sea" is
+        // the Black Sea. Seen in a player's Game (2026-10-02, a live check): a
+        // fleet sent to "western Black Sea" was dropped.
+        const sea = index.get(seaKey(plain)) ?? index.get(seaKey(plain.replace(SEA_PART, "")));
+        if (sea) return sea;
+    }
+    return null;
+};
+// "<sea> off <port>": the sea, the word, the place.
+const SEA_THEN_PLACE = /^(.+?)\s+(off|near|outside)\s+(.+)$/i;
+// "the western …", "north-eastern …", "the open …": a part of a sea, not its name.
+const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west))?(?:ern)?|east(?:ern)?|west(?:ern)?|central|upper|lower|inner|outer|open|mid|middle)\s+(?:part of\s+|reaches of\s+)?(?:the\s+)?/i;
+
+// Where a thing put on land goes to be at sea: the nearest open water within
+// maxKm, searched in widening rings, then a little further out so it is not on
+// the shoreline. null when there is none in reach. A fleet is never left
+// standing in a city: seen in a player's Game (2026-09-30), a task group sent
+// to a port by its name moved about on land.
+const SEA_RINGS_KM = [8, 16, 25, 35, 50, 70, 100, 140, 200, 300, 400];
+export const nearestSea = (point, gazetteer, { seed = 0, maxKm = 400 } = {}) => {
+    if (!gazetteer.regionAt(point)) return point;
+    for (const km of SEA_RINGS_KM.filter((ring) => ring <= maxKm)) {
+        for (let step = 0; step < 16; step += 1) {
+            const bearing = (seed + step * 22.5) % 360;
+            const out = offsetPoint(point, bearing, km);
+            if (gazetteer.regionAt(out)) continue;
+            const further = offsetPoint(point, bearing, km + 12);
+            return gazetteer.regionAt(further) ? out : further;
+        }
+    }
+    return null;
+};
+
+// Where a NEW fleet goes when nothing else puts it at sea: the open water off
+// its owner's own coast, at the stretch nearest `near` (where it had been put,
+// or its owner's capital). An army nothing places is raised in its owner's own
+// land; this is the same promise for a fleet, whose own land is no use to it.
+//
+// Seen in a player's Game (2026-10-05, played in Russian): a squadron of the
+// Black Sea Fleet was given the inland fallback an army gets, found no sea
+// within nearestSea's reach of it, and lost its coordinates. The event raised
+// a formation the map never showed.
+//
+// Regions are tried nearest first, by the nearest edge of their box, and the
+// walk stops once no box left could hold a nearer shore than the one found, so
+// a power of three hundred regions is not walked to its far coast. null for an
+// owner the map does not know, or one that holds no coast at all.
+export const homeWaters = (owner, gazetteer, { near = null, seed = 0 } = {}) => {
+    const country = landedPolity(gazetteer.find(asText(owner), { exact: true }));
+    if (!country) return null;
+    const anchor = Array.isArray(near) && near.length >= 2 && near.every(Number.isFinite)
+        ? near
+        : centreOf(heartland(country.regions));
+    if (!anchor) return null;
+    const byReach = country.regions
+        .map((region) => ({ region, box: bboxOfGeometry(region.geometry) }))
+        .filter((entry) => entry.box)
+        .map(({ region, box }) => ({
+            region,
+            km: distanceKm(anchor, [Math.min(Math.max(anchor[0], box[0]), box[2]), Math.min(Math.max(anchor[1], box[1]), box[3])]),
+        }))
+        .sort((a, b) => a.km - b.km);
+    let best = null; let bestKm = Infinity;
+    for (const { region, km } of byReach) {
+        if (km >= bestKm) break;
+        let coast = null;
+        try {
+            coast = coastOf(region, gazetteer, { toward: anchor, seed });
+        } catch {
+            coast = null; // one odd polygon must not cost the fleet its coast
+        }
+        if (!coast) continue;
+        const reach = distanceKm(coast.vertex, anchor);
+        if (reach >= bestKm) continue;
+        for (const out of [OFFSHORE_KM, 16, 8]) {
+            const point = seawardPoint(region, coast.vertex, coast.inner, gazetteer, out);
+            if (!point) continue;
+            best = { point, region };
+            bestKm = reach;
+            break;
+        }
+    }
+    return best ? { ...done(best.point, "home waters", gazetteer, country.name), coast: asText(best.region.name) } : null;
+};
+
+// Every name the map itself knows, then its seas, then a town of the wider
+// world, then what an address says its spot is in. `home`: whose thing is
+// being placed (resolvePlacement).
+// `contained`: whether an address whose spot the map does not have is placed in
+// what the address says it is in (addressContainer); off when the caller places
+// such a thing approximately instead, and for the place a sea phrase goes on to
+// name.
+const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "", home = owner, contained = true } = {}) => {
+    const readings = readPlacement(phrase, { owner, home });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
-    const seed = hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
+    const seed = seedOf(phrase, seedText);
     // A phrase with a comma in it is a name only as the map spells it. Past
     // that it is grammar ("Donetsk Oblast, north") or an address, and never a
     // loose guess at the whole of it: that guess is what put "Paris, Texas" in
-    // France.
+    // France. A name with its country taken off it is held to the address's
+    // rule too (addressCheck).
     const hasComma = readings[0]?.kind === "place" && asText(phrase).includes(",");
+    const whereSaid = addressCheck(gazetteer, { home, prefer: asText(owner) });
     for (const written of readings) {
         const reading = hasComma && asText(written.name).includes(",") ? { ...written, exact: true } : written;
         let resolved = null;
         try {
-            resolved = resolveReading(reading, gazetteer, seed);
+            resolved = resolveReading(reading, gazetteer, seed, asText(owner), reading.country ? (found) => whereSaid(found, reading.country) : null);
         } catch {
             resolved = null; // one odd polygon must not cost the turn its other placements
         }
-        if (resolved) return resolved;
+        // `country` says the phrase named one, so a caller can tell the model to.
+        if (resolved) return reading.country ? { ...resolved, country: reading.country } : resolved;
     }
-    if (hasComma) {
-        // The whole phrase, then what each reading took for its name: "near
-        // Fort Drum, New York" is an address after its first word.
-        const candidates = [...new Set([asText(phrase), ...readings.map((reading) => asText(reading.name))].filter((text) => text.includes(",")))];
-        for (const candidate of candidates) {
-            const address = resolveAddress(candidate, gazetteer, seed, home);
-            if (address) return address;
+    // The whole phrase, then what each reading took for its name: "near
+    // Fort Drum, New York" is an address after its first word.
+    const candidates = hasComma
+        ? [...new Set([asText(phrase), ...readings.map((reading) => asText(reading.name))].filter((text) => text.includes(",")))]
+        : [];
+    // An address names what its spot is in, which is all `country` says.
+    const addresses = candidates
+        .map((candidate) => ({ parts: addressParts(candidate), country: stripArticle(candidate.slice(candidate.lastIndexOf(",") + 1)) }))
+        .filter((address) => address.parts.length > 1);
+    // The spot itself, when the map has it where the address says. What the
+    // address says it is in waits for the seas below: "Aegean Sea, Greece" names
+    // a sea this map knows, not a spot it lacks, and a fleet sent there is not
+    // put in the middle of Greece.
+    for (const address of addresses) {
+        const spot = addressSpot(address.parts, gazetteer, seed, home, asText(owner));
+        if (spot) return { ...spot, country: address.country };
+    }
+    // "western Black Sea off Odesa, Ukraine": a sea, then where in it. The
+    // where is the more exact of the two, so it is tried first; the sea is
+    // what is left when it names nothing. Seen in a live check on a player's
+    // save (2026-10-02): the whole phrase named nothing and the move was dropped.
+    const within = asText(phrase).match(SEA_THEN_PLACE);
+    const seaPart = within && seaInPhrase(within[1], [], gazetteer.seas);
+    if (seaPart) {
+        // The place itself or nothing: the country a port is in is not where
+        // in the sea the fleet goes.
+        const placed = resolveExactly(`${within[2]} ${within[3]}`, gazetteer, { seedText, owner, home, contained: false });
+        if (!placed.error) return placed;
+    }
+    const sea = seaPart || seaInPhrase(phrase, readings, gazetteer.seas);
+    if (sea) {
+        // A point inside the sea; if the map has land there after all, the open
+        // water nearest it.
+        const point = nearestSea(sea.point, gazetteer, { seed });
+        if (point) return done(point, "sea", gazetteer, sea.name);
+    }
+    // A town of the wider world, for a name the map does not carry.
+    let town = null;
+    try {
+        town = resolveWorldTown(readings, gazetteer, seed, home, asText(owner));
+    } catch {
+        town = null; // as above: one odd polygon costs this reading only
+    }
+    if (town && !town.error) return town;
+    // What an address's spot is in, where the map has that and not the spot.
+    // It is the answer only after the world's towns have been asked: the town
+    // itself is nearer the mark than the middle of its state.
+    if (contained) {
+        for (const address of addresses) {
+            const container = addressContainer(address.parts, gazetteer, seed, asText(owner));
+            if (container) return { ...container, country: address.country };
         }
     }
-    return { error: `no city, region, unit or structure on this map is called "${asText(readings[0].name ?? phrase)}"` };
+    // `names` is every place the phrase could be read as naming — the whole of
+    // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
+    // can say what the phrase nearly matched. The message quotes the first, which
+    // is the whole phrase, because that is what the model actually wrote.
+    const names = [...new Set(readings.flatMap((reading) => [reading.name, reading.first, reading.second]).map(asText).filter(Boolean))];
+    const name = names[0] || asText(phrase);
+    // A town refused has said which regions the choice lies between. It names
+    // no near misses: "did you mean Paris?" after "three towns called Paris"
+    // would send the next answer to the one Paris the map does have.
+    if (town) return { error: town.error, name, names: [] };
+    return { error: `no city, region, unit or structure on this map is called "${name}"`, name, names };
+};
+
+// What the model is told of an approximate placement, in the next turn's notes:
+// the place it named that the map lacks, and where the thing went instead, so it
+// names a place the map knows next time. `placed` is resolvePlacement's answer.
+export const describeApproximatePlacement = ({ title = "", name = "", phrase = "", reason = "", placed } = {}) => {
+    const mark = placed?.approximate;
+    if (!mark) return "";
+    const where = mark.near ? `near ${mark.near}, in ${mark.country}` : `in ${mark.country}`;
+    if (mark.unnamed) {
+        return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} was given no place. It was placed ${where} instead. Give every new unit and structure \`at\`.`;
+    }
+    return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} could not be placed at "${asText(phrase)}"`
+        + `${asText(reason) ? ` — ${asText(reason)}` : ""}. It was placed ${where} instead. Name a city or province this map knows to place it exactly.`;
+};
+
+// A destination given as a region id instead of a phrase. The schema offers
+// `regionId` on both a spawn and a move, and a model just told its `at` phrase
+// is not on the map reaches for it next — so it has to land somewhere. Before
+// this it landed nowhere: nothing turned an id into a point, and the operation
+// was dropped for having no coordinates, silently, every time.
+//
+// The point is the one a bare region NAME would have given: inside it, off
+// centre, stable for the same id and unit.
+export const resolveRegionPlacement = (regionId, gazetteer, { seedText = "" } = {}) => {
+    const id = asText(regionId);
+    if (!id) return { error: "no region id" };
+    const region = gazetteer.findRegionId?.(id);
+    if (!region) {
+        // A name in the id's place: a model writes `regionId: "Odessa"` as readily
+        // as the map's id for it. Seen in a player's Game (2026-09-30): a fleet's
+        // move to "Odessa" was dropped for having no coordinates.
+        const named = gazetteer.find ? resolveExactly(id, gazetteer, { seedText }) : null;
+        return named && !named.error ? named : { error: `no region on this map has the id "${id}"` };
+    }
+    const point = interiorPoint(region.geometry, { seed: hashText(`${id}|${asText(seedText).toLowerCase()}`) });
+    return point ? done(point, "region", gazetteer, region.name) : { error: `region "${region.name || id}" has no shape to stand in` };
 };
 
 // What the model is told. Short, because it rides on every jump.
 export const PLACEMENT_DIRECTIVE = [
     "[Placing Things — say WHERE in words]",
     "Every unit you spawn or move and every structure you build can be placed with `at`: a phrase naming places the map knows. The engine finds the exact point, keeps it inside the right borders, and moves it clear of anything already standing there. Prefer `at` to coordinates: a guessed longitude puts an army in the sea.",
-    "- \"Kharkiv\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
-    "- \"near Kharkiv\" — beside it. \"east of Kharkiv\" — a short way off in that direction. \"toward Kharkiv\" — a move's objective; it gets as far as the days allow.",
-    "- \"120 km north-east of Kharkiv\" or \"120 km on a bearing of 045 from Kharkiv\" — an exact distance and direction from any place the map knows: a city, a structure, a unit, the middle of a region. \"80 km from Kyiv toward Kharkiv\" — that far along the line to another. Use it when where something stands matters and no name is there.",
-    "- \"eastern Ukraine\", \"Donetsk Oblast, north\" — that part of a country or region.",
-    "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison.",
-    "- \"coast of Crimea\" — on land at the sea's edge. \"off Sevastopol\" — AT SEA, for fleets.",
-    "- \"between Kyiv and Kharkiv\" — halfway.",
-    "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins.",
+    "ALWAYS NAME THE COUNTRY after a comma: \"Montana, United States\", \"Kharkiv, Ukraine\", \"Alexandria, Egypt\". Two countries have a Montana and two have an Alexandria, and a bare name is whichever of them the map happens to list first: a US base ordered in Montana was built in Bulgaria. The full name or the code (\"US\", \"USA\") both work. A unit or structure already on the map, named exactly as the map spells it, needs no country.",
+    "- \"Kharkiv, Ukraine\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
+    "- \"near Kharkiv, Ukraine\" — beside it. \"east of Kharkiv, Ukraine\" — a short way off in that direction. \"toward Kharkiv, Ukraine\" — a move's objective; it gets as far as the days allow.",
+    "- \"120 km north-east of Kharkiv, Ukraine\" or \"120 km on a bearing of 045 from Kharkiv, Ukraine\" — an exact distance and direction from any place the map knows: a city, a structure, a unit, the middle of a region. \"80 km from Kyiv, Ukraine toward Kharkiv, Ukraine\" — that far along the line to another. Use it when where something stands matters and no name is there.",
+    "- \"eastern Ukraine\", \"Donetsk Oblast, Ukraine, north\" — that part of a country or region.",
+    "- \"Donetsk Oblast, Ukraine facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
+    "- \"coast of Crimea, Ukraine\" — on land at the sea's edge. \"off Sevastopol, Ukraine\" — AT SEA, for fleets.",
+    "- \"between Kyiv, Ukraine and Kharkiv, Ukraine\" — halfway.",
+    "- \"Black Sea\", \"Ionian Sea\", \"South Atlantic\" — open water in that sea or ocean, for fleets, on a map that knows it.",
+    "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
 ].join("\n");
