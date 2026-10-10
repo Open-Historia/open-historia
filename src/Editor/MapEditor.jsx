@@ -1824,6 +1824,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         allowedBasemaps={Array.isArray(d.doc?.metadata?.allowedBasemaps) ? d.doc.metadata.allowedBasemaps : null}
         onAllowedBasemapsChange={(value) => d.patchMetadata({ allowedBasemaps: value })}
         scenarioHasOwnMap={scenarioHasOwnMap(d.doc)}
+        hasOwnMap={Boolean(customBg)}
+        detailedMap={d.doc?.metadata?.tiledBasemap || null}
       />
 
       <BorderCleanupNote lines={cleanupNote} top={isMobile ? 200 : 56} />

@@ -27,6 +27,7 @@ import {
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
+import { basemapInUse } from "./basemapInUse.js";
 
 const overlay = {
   position: "fixed",
@@ -323,6 +324,10 @@ const BasemapPicker = ({
   allowedBasemaps,
   onAllowedBasemapsChange,
   scenarioHasOwnMap = false,
+  // What is on screen, for the "In use" mark (basemapInUse.js): a map of the
+  // scenario's own, and the detailed map it names.
+  hasOwnMap = false,
+  detailedMap = null,
 }) => {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
@@ -390,6 +395,8 @@ const BasemapPicker = ({
   useEffect(() => () => downloadControllerRef.current?.abort(), []);
 
   if (!open) return null;
+
+  const inUse = basemapInUse({ builtinId: currentBasemap, hasOwnMap, libraryId: currentCustomId, detailedMap });
 
   // What Your basemaps already holds, so a post installed before says so
   // instead of offering to download its whole payload again (the store would
@@ -590,7 +597,7 @@ const BasemapPicker = ({
                       title={b.label}
                       imageUrl={esriPreviewUrl(b.service)}
                       imageFilter={b.previewFilter}
-                      active={!currentCustomId && currentBasemap === b.id}
+                      active={inUse.builtin(b.id)}
                       onClick={() => { onSelectBuiltin(b.id); onClose(); }}
                     />
                   ))}
@@ -610,7 +617,7 @@ const BasemapPicker = ({
                         key={bm.id}
                         title={bm.name}
                         imageUrl={bm.thumbnail}
-                        active={!browse && currentCustomId === bm.id}
+                        active={!browse && inUse.library(bm)}
                         badge={bm.kind === "vector" ? "painted" : "picture"}
                         onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm)}
@@ -637,7 +644,7 @@ const BasemapPicker = ({
                         key={bm.id}
                         title={bm.name}
                         imageUrl={bm.thumbnail}
-                        active={!browse && currentCustomId === bm.id}
+                        active={!browse && inUse.library(bm)}
                         badge={`detailed${bm.official ? ` v${bm.official.version}` : ""} · ${formatBytes(bm.bytes)}`}
                         onClick={browse ? undefined : () => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm)}
