@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DETAILED_MAP_BLOCKS_CONVERSION, formatAspect, moveFeatureCoords, moveUnits, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, formatAspect, moveFeatureCoords, moveUnits, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
 import { MAX_REDRAWN_WIDTH, redrawnSize, reprojectPixels } from "./projectionImage.js";
 import { convertDisplayPoint, geoToDisplay, sheetBounds } from "../../server/mapProjection.js";
 
@@ -49,12 +49,22 @@ test("a map on a detailed map is not converted: the detailed map cannot move wit
   const drawn = { kind: "vector" };
   assert.deepEqual(
     planBasemapChange({ from: "mercator", to: "robinson", background: drawn, detailedMap: true }),
-    { kind: "blocked", reason: DETAILED_MAP_BLOCKS_CONVERSION },
+    { kind: "blocked", reason: DETAILED_MAP_CONVERSION_MESSAGE },
   );
-  assert.match(DETAILED_MAP_BLOCKS_CONVERSION, /remove the detailed map/i);
+  assert.match(DETAILED_MAP_CONVERSION_MESSAGE, /remove the detailed map/i);
   // Nothing to convert, nothing to block; and without one the map converts.
   assert.deepEqual(planBasemapChange({ from: "mercator", to: "mercator", background: drawn, detailedMap: true }), { kind: "none" });
   assert.deepEqual(planBasemapChange({ from: "mercator", to: "robinson", background: drawn }), { kind: "vector" });
+});
+
+test("a detailed map is only put on a map in Mercator", () => {
+  // Its tiles are Mercator: on a map converted to another projection they would
+  // lie under regions drawn for that one.
+  assert.equal(detailedMapFits(undefined), true);
+  assert.equal(detailedMapFits({ type: "mercator", globe: false }), true);
+  assert.equal(detailedMapFits("robinson"), false);
+  assert.equal(detailedMapFits({ type: "freeform", aspect: 2 }), false);
+  assert.match(DETAILED_MAP_PROJECTION_MESSAGE, /Mercator/);
 });
 
 test("cities, features and units go where their map goes", () => {

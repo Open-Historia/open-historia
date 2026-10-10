@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
-import { DETAILED_MAP_BLOCKS_CONVERSION, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -467,7 +467,9 @@ test("on a map with a detailed map a change of projection is refused before anyt
   const city = { id: "city:new", area: "cities", kind: "city-add", to: { name: "Southport", coord: flatPlace(10, 10), population: 100 } };
   const changes = [projection, polity, city];
   const before = JSON.stringify(state.doc);
-  assert.throws(() => acceptMapChanges([polity, city], ctx, { changes }), (error) => error.message === DETAILED_MAP_BLOCKS_CONVERSION);
+  const result = acceptMapChanges([polity, city], ctx, { changes });
+  assert.equal(result.refused, DETAILED_MAP_CONVERSION_MESSAGE);
+  assert.deepEqual(result.accepted, []);
   assert.deepEqual(calls, []);
   assert.equal(JSON.stringify(state.doc), before, "nothing was accepted");
 });

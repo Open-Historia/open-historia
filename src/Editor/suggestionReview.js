@@ -19,7 +19,7 @@ import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
-import { DETAILED_MAP_BLOCKS_CONVERSION, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -753,12 +753,12 @@ export const planAccept = (list, ctx, { changes = [], accepted = new Set() } = {
 // every rename, so a row written against an old name lands on the new one).
 // Returns the ids accepted, each one's undo, and the renames now in force.
 // A map with a detailed map cannot change projection (projectionConvert.js):
-// a batch that needs that is refused, with the reason, before anything in it
-// is accepted.
+// a batch that needs that is refused before anything in it is accepted, and
+// `refused` says why.
 export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set(), renames = {} } = {}) => {
   const order = planAccept(list, ctx, { changes, accepted });
   if (ctx.doc?.metadata?.tiledBasemap && order.some((change) => change.kind === "projection")) {
-    throw new Error(DETAILED_MAP_BLOCKS_CONVERSION);
+    return { accepted: [], undoers: new globalThis.Map(), renames: { ...renames }, refused: DETAILED_MAP_CONVERSION_MESSAGE };
   }
   const localRenames = { ...renames };
   const undoers = new globalThis.Map();

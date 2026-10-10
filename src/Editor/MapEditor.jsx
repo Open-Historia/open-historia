@@ -49,7 +49,7 @@ import FlagPicker from "./FlagPicker.jsx";
 import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import ProjectionPanel from "./ProjectionPanel.jsx";
-import { DETAILED_MAP_BLOCKS_CONVERSION, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
 import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
@@ -346,6 +346,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // drawing on screen as its painted fallback (the Basemap's own, else the
     // one already in use), and the game draws the relief over it.
     if (bm.kind === "tiled") {
+      if (!detailedMapFits(d.metadata?.projection)) {
+        window.alert(DETAILED_MAP_PROJECTION_MESSAGE);
+        return;
+      }
       let fallback = null;
       try {
         fallback = (await getBasemapPayload(bm.id))?.geojson || null;
@@ -1594,7 +1598,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           hasPicture={customBg?.kind === "image"}
           busy={projectionBusy}
           error={projectionError}
-          blocked={hasDetailedMap ? DETAILED_MAP_BLOCKS_CONVERSION : ""}
+          blocked={hasDetailedMap ? DETAILED_MAP_CONVERSION_MESSAGE : ""}
           onConvert={convertProjection}
           onView={(patch) => {
             // { globe } or { wrap }: written only when switched off.

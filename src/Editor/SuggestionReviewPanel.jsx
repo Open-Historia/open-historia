@@ -107,15 +107,10 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
   // ownership rows batched by the country they go to).
   const accept = useCallback((list) => {
     if (!api) return;
-    let result;
-    try {
-      result = acceptMapChanges(list, ctxRef.current, { changes, accepted: decisions.accepted, renames: renamesRef.current });
-    } catch (error) {
-      // Refused whole, nothing accepted (a projection change on a map with a
-      // detailed map).
-      window.alert(error?.message || String(error));
-      return;
-    }
+    const result = acceptMapChanges(list, ctxRef.current, { changes, accepted: decisions.accepted, renames: renamesRef.current });
+    // Refused whole, nothing accepted (a projection change on a map with a
+    // detailed map).
+    if (result.refused) window.alert(result.refused);
     if (!result.accepted.length) return;
     for (const [id, undo] of result.undoers) undoers.current.set(id, undo);
     setRenames(result.renames);
