@@ -412,3 +412,27 @@ test("list_regions with a group: its whole area with each region's owner, paged;
   assert.equal(around.byOwner["Russian Federation"][0].controlledByGroup, "Kharkiv Partisans");
   assert.equal("controlledByGroup" in executeLookup(ctx, "map_around", { regionId: "ukr-zap" }).byOwner["Russian Federation"][0], false);
 });
+// A territory by its own name (src/Game/AI/namedAreas.js): Greenland is no
+// power and no region of the built-in map, only the regions that belong to it.
+test("list_regions names a power's territories beside its regions", () => {
+  const context = buildLookupContext({
+    regions: [
+      { id: "50", name: "Copenhagen", country: "Denmark", countryCode: "DNK", geometry: square(12, 55) },
+      { id: "4709", name: "Nuuk", country: "Denmark", countryCode: "GRL", geometry: square(-52, 64) },
+      { id: "4710", name: "Sermersooq", country: "Denmark", countryCode: "GRL", geometry: square(-40, 66) },
+    ],
+    world: {},
+  });
+  const out = executeLookup(context, "list_regions", { owner: "Denmark" });
+  assert.deepEqual(out.territories, [{ name: "Greenland", regions: 2 }]);
+  assert.deepEqual(out.regions, [{ name: "Copenhagen" }, { name: "Nuuk", territory: "Greenland" }, { name: "Sermersooq", territory: "Greenland" }]);
+  assert.match(out.note, /country: <its name>/);
+  assert.deepEqual(context.areaNamed("Greenland").rows.map((row) => row.name), ["Nuuk", "Sermersooq"]);
+  assert.equal(context.areaNamed("Atlantis"), null);
+});
+
+test("list_regions says nothing of territories for a power that has none", () => {
+  const out = run("list_regions", { owner: "Ukraine" });
+  assert.equal("territories" in out, false);
+  assert.equal("note" in out, false);
+});

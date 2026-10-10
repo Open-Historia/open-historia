@@ -751,6 +751,10 @@ const addressSpot = (parts, gazetteer, seed, home, prefer = "") => {
 // Georgia, United States" was the country in the Caucasus, and a division
 // ordered home was marched there (a 45-skip test, 2026-10-09). Georgia the
 // country is not in the United States; the next part is, and is the answer.
+// That answer is the whole of the United States, a long way from Fort Stewart:
+// the operation's own region field, where it names a region of that country,
+// is nearer, and the caller reads it (gameplay.js resolvePlacements). So what
+// stood in for the spot is said in `contained` ("polity" for a whole country).
 const addressContainer = (parts, gazetteer, seed, prefer = "") => {
     const told = (name) => ({ country: addressCountry(parts, name), prefer });
     for (let index = 1; index < parts.length; index += 1) {
@@ -761,7 +765,7 @@ const addressContainer = (parts, gazetteer, seed, prefer = "") => {
             .filter((ids) => ids.size);
         if (outer.length && !regionIdsOf(found, gazetteer).some((id) => outer.every((ids) => ids.has(id)))) continue;
         const container = placeNamed(parts[index], gazetteer, seed, told(parts[index]));
-        if (container) return container;
+        if (container) return { ...container, contained: found.kind };
     }
     return null;
 };
@@ -1424,6 +1428,26 @@ export const resolveRegionPlacement = (regionId, gazetteer, { seedText = "" } = 
     }
     const point = interiorPoint(region.geometry, { seed: hashText(`${id}|${asText(seedText).toLowerCase()}`) });
     return point ? done(point, "region", gazetteer, region.name) : { error: `region "${region.name || id}" has no shape to stand in` };
+};
+
+// A phrase that came down to a whole country, beside a region field that
+// names a region of that country: the region. Seen in a 45-skip test
+// (2026-10-09): a division ordered home to "Fort Stewart, Georgia, United
+// States" with regionId "Savannah". The map has no Fort Stewart and no state
+// called Georgia (its American regions are named for their cities), so the
+// phrase placed it somewhere in the United States, 1,600 km off, while the
+// region the model had also named was the one Fort Stewart stands in. The
+// phrase still wins wherever it found a place of its own; this is only for an
+// address answered by its country. null when it does not apply.
+export const regionWithinContainer = (byPhrase, regionId, gazetteer, { seedText = "" } = {}) => {
+    if (!byPhrase || byPhrase.error || byPhrase.contained !== "polity" || !asText(regionId)) return null;
+    const inRegion = resolveRegionPlacement(regionId, gazetteer, { seedText });
+    if (!inRegion || inRegion.error) return null;
+    const holderAt = (placed) => asText(gazetteer.regionAt?.([placed.lng, placed.lat])?.owner);
+    const [country, holder] = [holderAt(byPhrase), holderAt(inRegion)];
+    if (!country || !holder) return null;
+    const same = typeof gazetteer.samePolity === "function" ? gazetteer.samePolity(country, holder) : country.toLowerCase() === holder.toLowerCase();
+    return same ? { ...inRegion, country: byPhrase.country } : null;
 };
 
 // What the model is told. Short, because it rides on every jump.

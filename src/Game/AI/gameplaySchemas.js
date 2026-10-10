@@ -68,8 +68,9 @@ const createdChatSchema = {
 // always given, so a description here only has to say what the field IS.
 // A region is written by its NAME (AI/nameRefs.js). The field keeps its old
 // name because saved turns and previews carry it; what goes in it is
-// "region: <name>", or "country: <name>" for the whole of a country's land.
-const regionIdSchema = textSchema("The region's NAME as the map spells it, written \"region: Hamhung\" (or \"country: North Korea\" for ALL of a country's land). Never an id.");
+// "region: <name>", or "country: <name>" for the whole of a country, a
+// territory or a dependency (AI/namedAreas.js).
+const regionIdSchema = textSchema("The region's NAME as the map spells it: \"region: Hamhung\". All of a country or territory: \"country: Puerto Rico\". Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
 
 const regionTransferSchema = {

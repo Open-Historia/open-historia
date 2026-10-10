@@ -339,3 +339,65 @@ test("with the region lists behind lookups, the vocabulary is powers and counts 
   assert.match(text, /- France — \d+ regions?/);
   assert.equal(/Bourgogne/.test(text), false, "no region names");
 });
+// ---- Territories: named, with a size, never region by region ---------------------------------------------
+//
+// A 45-skip test (2026-10-09): the United States holds 285 regions of the
+// built-in map, the list showed the first 120 by the alphabet, and "Puerto
+// Rico" was not among them, so its independence moved "British Virgin
+// Islands". A territory is now said by its own name after the power's regions,
+// whatever the cap cuts, and "country: <its name>" is all of it.
+const WITH_TERRITORIES = [
+  { id: "1", name: "Atlanta", country: "United States", countryCode: "USA" },
+  { id: "2", name: "Boston", country: "United States", countryCode: "USA" },
+  { id: "3", name: "Chicago", country: "United States", countryCode: "USA" },
+  { id: "760", name: "Puerto Rico", country: "United States", countryCode: "PRI" },
+  { id: "614", name: "Guam", country: "United States", countryCode: "GUM" },
+  { id: "50", name: "Copenhagen", country: "Denmark", countryCode: "DNK" },
+  { id: "4709", name: "Nuuk", country: "Denmark", countryCode: "GRL" },
+  { id: "4710", name: "Sermersooq", country: "Denmark", countryCode: "GRL" },
+  { id: "60", name: "Kerch", country: "Russia", countryCode: "UKR" },
+  { id: "70", name: "Moscow", country: "Russia", countryCode: "RUS" },
+  { id: "61", name: "Kyiv", country: "Ukraine", countryCode: "UKR" },
+];
+
+test("T1 a power's territories follow its regions, by name and size", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["United States", "Denmark"] });
+  assert.match(text, /^- United States \[5 regions\]: Atlanta, Boston, Chicago; territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+  assert.match(text, /^- Denmark \[3 regions\]: Copenhagen; territories: Greenland \(2 regions\)$/m);
+  assert.equal(/Nuuk|Sermersooq/.test(text), false, "a territory's regions are not listed");
+  assert.ok(FOCUS_INTRO.includes("\"country: <its name>\""), "the intro says how a territory is written");
+});
+
+test("T2 a territory is shown however short the cap cuts the list", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["United States"], ownerCap: 1 });
+  assert.match(text, /^- United States \[5 regions\]: Atlanta, \(\+2 more\); territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+});
+
+test("T3 the roster names a power's territories too", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: [] });
+  assert.match(text, /^- Denmark — 3 regions; territories: Greenland \(2 regions\)$/m);
+  assert.match(text, /^- United States — 5 regions; territories: Guam \(1 region\), Puerto Rico \(1 region\)$/m);
+});
+
+test("T4 land of a country that is on the map is listed by its regions, not as a territory", () => {
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, {}, { focusCodes: ["Russia"] });
+  assert.match(text, /^- Russia \[2 regions\]: Kerch, Moscow$/m);
+});
+
+test("T5 a country the game keeps a record of is nobody's territory, land or no land", () => {
+  // Ukraine conquered whole: its record stays, and so do its regions' names.
+  const text = buildRegionOwnershipText(WITH_TERRITORIES, { 61: "Russia" }, { focusCodes: ["Russia"], polityNames: { ukraine: "Ukraine" } });
+  assert.match(text, /^- Russia \[3 regions\]: Kerch, Moscow, Kyiv$/m);
+  // With no record of it, it is an area like any other.
+  const forgotten = buildRegionOwnershipText(WITH_TERRITORIES, { 61: "Russia" }, { focusCodes: ["Russia"] });
+  assert.match(forgotten, /^- Russia \[3 regions\]: Moscow; territories: Ukraine \(2 regions\)$/m);
+});
+
+test("T6 a power the map names differently from its regions' country has no territory of itself", () => {
+  const catalog = [
+    { id: "80", name: "Brno", country: "Czech Republic", countryCode: "CZE" },
+    { id: "81", name: "Ostrava", country: "Czech Republic", countryCode: "CZE" },
+  ];
+  const text = buildRegionOwnershipText(catalog, {}, { focusCodes: ["Czech Republic"] });
+  assert.match(text, /^- Czech Republic \[2 regions\]: Brno, Ostrava$/m);
+});
