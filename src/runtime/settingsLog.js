@@ -37,6 +37,7 @@ import { isRatingEnabled, isTelemetryEnabled } from "../Game/AI/telemetry.js";
 import { requestDay, requestSettings } from "../Game/AI/requestBudget.js";
 import { deviceProfileForLog } from "./deviceProfile.js";
 import { GAME_BASEMAP_PICK_PREFIX } from "./basemapPick.js";
+import { DEFAULT_BASEMAP_ID } from "./assets.js";
 
 const onOff = (value) => (value ? "on" : "off");
 
@@ -81,7 +82,7 @@ registerSettingsSnapshot("Map", () => [
     // A game's own pick is kept per game (runtime/basemapPick.js): how many have one.
     ["Basemap", `${gamesWithOwnBasemapPick()} game(s) with their own pick`],
     ["Use my default basemap", onOff(getMapSetting(MAP_SETTING_KEYS.defaultBasemapOn))],
-    ["Default basemap", getMapSettingValue(MAP_SETTING_KEYS.defaultBasemap) || "ocean"],
+    ["Default basemap", getMapSettingValue(MAP_SETTING_KEYS.defaultBasemap) || DEFAULT_BASEMAP_ID],
     ["Label font", getMapSettingValue(MAP_SETTING_KEYS.labelFont) || "scenario default"],
     // Off is the stored "painted" choice: only the scenario's basemap is drawn.
     ["Show detailed maps", onOff(getMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) !== "painted")],

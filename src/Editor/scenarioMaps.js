@@ -19,13 +19,14 @@
 // the reason to show the author.
 
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, builtinBasemapChoices } from "../runtime/assets.js";
+import { STARTING_DRAWN_PICK } from "../runtime/basemapPick.js";
 import { editorBasemapById } from "./basemaps.js";
 import { normalizeEditorOwnBasemaps } from "./ownBasemaps.js";
 import { DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits } from "./projectionConvert.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
 
 export const STARTING_MAP_KEY = "start";
-export const STARTING_DRAWN_KEY = "start:drawn";
+export const STARTING_DRAWN_KEY = STARTING_DRAWN_PICK; // the same key in the game (runtime/basemapPick.js)
 const BUILTIN = "builtin:";
 const OWN = "own:";
 
@@ -207,8 +208,10 @@ export const makeStartingMap = (metadata, key, { scenarioName = "" } = {}) => {
   }
   // The drawn map under a detailed starting map: the detailed map moves into
   // the list, shown over it as before.
+  if (key === STARTING_DRAWN_KEY && !state.customBackground) return patchOf(stateOf(metadata));
   const demotedDrawn = key === STARTING_DRAWN_KEY ? demoteStartingMap(state, scenarioName) : null;
   const id = demotedDrawn ?? (key.startsWith(OWN) ? key.slice(OWN.length) : "");
+  if (demotedDrawn === "") return patchOf(stateOf(metadata));
   if (demotedDrawn !== null) {
     promoteOwn(state, id);
     return patchOf(state);
@@ -263,7 +266,7 @@ export const removeMap = (metadata, key) => {
 
 // Which drawn map a detailed map is shown over. For the detailed starting
 // map, the chosen drawing comes under it and the old one goes into the list.
-export const setShownOver = (metadata, key, overKey) => {
+export const setShownOver = (metadata, key, overKey, { scenarioName = "" } = {}) => {
   const state = stateOf(metadata);
   const drawnStarting = isDrawn(state.customBackground);
   const overId = overKey === STARTING_MAP_KEY || overKey === STARTING_DRAWN_KEY
@@ -272,7 +275,7 @@ export const setShownOver = (metadata, key, overKey) => {
   if (overId === null) return refused("A detailed map can only be shown over one of this scenario's drawn maps.");
   if (key === STARTING_MAP_KEY) {
     if (!state.tiledBasemap || overId === "") return patchOf(state);
-    const old = { name: startingNameOf(state, ""), background: state.customBackground };
+    const old = { name: startingNameOf(state, scenarioName), background: state.customBackground };
     const oldId = freshId(state, old.name);
     state.own = [...state.own, { id: oldId, ...old }];
     repoint(state, "", oldId);

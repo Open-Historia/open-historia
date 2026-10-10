@@ -14,7 +14,7 @@
 // STARTING_DRAWN_PICK for the drawn map under a detailed starting map, a
 // built-in map's id, or "own:<id>".
 
-import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, builtinBasemapChoices, isBuiltinBasemapId, normalizeOwnBasemaps, ownBasemapPick } from "./assets.js";
+import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, LEGACY_BASEMAP_STORAGE_KEY, builtinBasemapChoices, detailedNamingOf, isBuiltinBasemapId, normalizeOwnBasemaps, ownBasemapPick } from "./assets.js";
 import { MAP_SETTING_KEYS } from "./mapSettings.js";
 
 export const STARTING_DRAWN_PICK = "start:drawn";
@@ -22,19 +22,10 @@ export const STARTING_MAP_FALLBACK_NAME = "Scenario map";
 export const DETAILED_MAP_FALLBACK_NAME = "Detailed map";
 
 const builtinName = (id) => ESRI_BASEMAPS.find((basemap) => basemap.id === id)?.label || id;
-const OFFICIAL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const CHECKSUM = /^[a-f0-9]{64}$/;
-// The detailed map world.background names (Game/Map/scenarioTerrain.js
-// scenarioTiledBasemap reads it the same way).
-const startingDetailedOf = (background) => {
-  const tiled = background?.kind === "vector" ? background.tiled : null;
-  if (!tiled || typeof tiled !== "object") return null;
-  if (OFFICIAL_ID.test(String(tiled.id || ""))) {
-    const version = Number(tiled.version);
-    return { id: String(tiled.id), version: Number.isInteger(version) && version >= 1 ? version : 1 };
-  }
-  return CHECKSUM.test(String(tiled.hash || "")) ? { hash: String(tiled.hash) } : null;
-};
+// The detailed map world.background names, read as one in world.ownBasemaps.
+const startingDetailedOf = (background) => (background?.kind === "vector" && background.tiled && typeof background.tiled === "object"
+  ? detailedNamingOf(background.tiled)
+  : null);
 
 // `world`: { background, basemap, allowedBasemaps, ownBasemaps }, the lists
 // as arrays.
@@ -104,16 +95,14 @@ export const basemapShownFor = ({ maps, gamePick = null, defaultBasemap = "", us
 export const GAME_BASEMAP_PICK_PREFIX = "map_basemap_pick:";
 export const DEFAULT_BASEMAP_KEY = MAP_SETTING_KEYS.defaultBasemap;
 export const DEFAULT_BASEMAP_ON_KEY = MAP_SETTING_KEYS.defaultBasemapOn;
-// Before picks were kept per game, one pick applied to every game.
-const LEGACY_BASEMAP_KEY = "map_basemap_style";
 
 // `store`: get/set/has/delete, as a Map (localStorageStore below in the game).
 export const migrateBasemapSettings = (store) => {
-  if (!store.has(LEGACY_BASEMAP_KEY)) return;
-  const legacy = store.get(LEGACY_BASEMAP_KEY);
+  if (!store.has(LEGACY_BASEMAP_STORAGE_KEY)) return;
+  const legacy = store.get(LEGACY_BASEMAP_STORAGE_KEY);
   if (isBuiltinBasemapId(legacy) && !store.has(DEFAULT_BASEMAP_KEY)) {
     store.set(DEFAULT_BASEMAP_KEY, legacy);
     store.set(DEFAULT_BASEMAP_ON_KEY, "1");
   }
-  store.delete(LEGACY_BASEMAP_KEY);
+  store.delete(LEGACY_BASEMAP_STORAGE_KEY);
 };

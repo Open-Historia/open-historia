@@ -117,10 +117,11 @@ export const ESRI_BASEMAPS = [
   { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
-// Mirror runtime/basemapPick.js's keys (it imports this module).
+// Mirror runtime/basemapPick.js's keys (it imports this module); the last is
+// the one pick for every game before picks were kept per game.
 const DEFAULT_BASEMAP_STORAGE_KEY = "map_basemap_default";
 const DEFAULT_BASEMAP_ON_STORAGE_KEY = "map_basemap_default_on";
-const LEGACY_BASEMAP_STORAGE_KEY = "map_basemap_style";
+export const LEGACY_BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
 // Which built-in maps a scenario lets players switch to in Settings → Map
@@ -161,7 +162,7 @@ export const ownBasemapIdOf = (pick) => (typeof pick === "string" && pick.starts
 // the starting map's ("").
 const DETAILED_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const DETAILED_CHECKSUM = /^[a-f0-9]{64}$/;
-const detailedNamingOf = (tiled) => {
+export const detailedNamingOf = (tiled) => {
   const id = DETAILED_ID.test(String(tiled?.id || "")) ? String(tiled.id) : "";
   const hash = DETAILED_CHECKSUM.test(String(tiled?.hash || "").toLowerCase()) ? String(tiled.hash).toLowerCase() : "";
   if (id) {

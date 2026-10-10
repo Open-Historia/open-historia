@@ -358,7 +358,8 @@ const useDetailedMapStatus = (maps) => {
     useEffect(() => subscribeTiledBasemaps(() => setLibraryVersion((v) => v + 1)), []);
     useEffect(() => {
         const wanted = JSON.parse(key);
-        if (!wanted.length) return undefined;
+        // The browser version shows the drawn maps; it never downloads one.
+        if (!wanted.length || import.meta.env.VITE_OH_WEB) return undefined;
         let cancelled = false;
         (async () => {
             const list = await fetchOfficialBasemaps().catch(() => null);

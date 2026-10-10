@@ -154,3 +154,22 @@ test("the starting map's name: open, accepted, undone", () => {
   undo();
   assert.equal(state.doc.metadata.startingMapName, "");
 });
+
+test("removing the drawn map a detailed map is shown over moves it to another drawn map, or is refused", () => {
+  const relief = { id: "relief", name: "Relief", detailed: { id: "got-world", version: 2 }, over: "terrain" };
+  const terrain = { id: "terrain", name: "Terrain", background: { kind: "vector", geojson: DRAWN } };
+  const remove = { id: "own-basemap-remove:terrain", area: "map", kind: "own-basemap-remove", key: "terrain", from: { name: "Terrain", kind: "vector", hash: hashOf({ geojson: DRAWN }) } };
+  const moved = setup({ customBackground: { kind: "vector", geojson: DRAWN }, ownBasemaps: [terrain, relief] });
+  assert.equal(acceptMapChanges([remove], moved.ctx, { changes: [remove] }).refused, undefined);
+  assert.deepEqual(moved.state.doc.metadata.ownBasemaps, [{ ...relief, over: "" }], "now over the starting map's drawing");
+  const alone = setup({ customBackground: { kind: "image", dataUrl: PICTURE }, ownBasemaps: [terrain, relief] });
+  assert.match(acceptMapChanges([remove], alone.ctx, { changes: [remove] }).refused, /Relief is shown over this map/);
+  assert.equal(alone.state.doc.metadata.ownBasemaps.length, 2, "nothing was removed");
+});
+
+test("a detailed map added among the scenario's maps is refused out of Mercator", () => {
+  const { ctx } = setup({ customBackground: { kind: "vector", geojson: DRAWN }, projection: { type: "equirectangular" } });
+  const data = { tiled: { id: "got-world", version: 2 }, over: "" };
+  const relief = { id: "own-basemap-add:relief", area: "map", kind: "own-basemap-add", key: "relief", to: { name: "Relief", kind: "tiled", hash: hashOf(data), data } };
+  assert.equal(acceptMapChanges([relief], ctx, { changes: [relief] }).refused, DETAILED_MAP_PROJECTION_MESSAGE);
+});

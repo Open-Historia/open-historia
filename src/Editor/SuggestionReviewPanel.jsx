@@ -327,6 +327,9 @@ const builtinNames = (ids) => ESRI_BASEMAPS.filter((basemap) => ids.includes(bas
 // One line saying what the change does, in the names a person uses.
 const changeText = (change, doc) => {
   const name = (key) => polityName(doc, key);
+  // One of the scenario's other maps, by the name the map has (or the
+  // suggestion's id for one it adds).
+  const ownMapName = (key) => (Array.isArray(doc?.metadata?.ownBasemaps) ? doc.metadata.ownBasemaps.find((own) => own?.id === key)?.name : "") || key;
   switch (change.kind) {
     case "polity-add": return `New country: ${clean(change.record?.name) || change.key}`;
     case "polity-remove": return `Remove ${name(change.key)}`;
@@ -381,7 +384,7 @@ const changeText = (change, doc) => {
         return `Rename the basemap ${change.from.name} to ${change.to.name}`;
       }
       return change.to?.kind === "tiled"
-        ? `Change the detailed map ${change.to?.name || change.key}`
+        ? `Change the detailed map ${change.to?.name || change.key}, shown over ${change.to.data?.over ? ownMapName(change.to.data.over) : "the starting map"}`
         : `New version of the basemap ${change.to?.name || change.key}`;
     case "detailed-map": {
       if (!change.to) return change.from?.name ? `Take the detailed map ${change.from.name} off` : "Take the detailed map off";

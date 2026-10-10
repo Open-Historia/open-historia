@@ -22,6 +22,7 @@ import { convertDisplayPoint, moveGeojson, normalizeProjection, sameProjection }
 import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, hasDetailedMap, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
 import { normalizeEditorOwnBasemaps } from "./ownBasemaps.js";
+import { removeMap } from "./scenarioMaps.js";
 import { normalizeAllowedBasemaps } from "../runtime/assets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -799,7 +800,12 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     case "own-basemap-change":
     case "own-basemap-remove": {
       const before = normalizeEditorOwnBasemaps(ctx.doc?.metadata?.ownBasemaps);
-      let next = before.filter((own) => own.id !== change.key);
+      // A detailed map shown over the drawn map removed moves to another, as
+      // the Maps window's ✕ does (scenarioMaps.js removeMap; a batch it would
+      // refuse is refused whole, detailedMapRefusal).
+      const removed = change.kind === "own-basemap-remove" ? removeMap(ctx.doc?.metadata, `own:${change.key}`) : null;
+      if (removed?.refused) return null;
+      let next = removed ? normalizeEditorOwnBasemaps(removed.patch.ownBasemaps) : before;
       if (change.kind !== "own-basemap-remove") {
         const entry = ownBasemapEntry(change.key, change.to);
         if (!entry) return null;
@@ -841,10 +847,21 @@ const applyRank = (change) => {
 // Why a batch that puts a detailed map on cannot be accepted, or null: the map
 // would be in another projection than Mercator, or have no drawn basemap under
 // it, once the rest of the batch is in.
+const isDetailedOwnPut = (change) => (change.kind === "own-basemap-add" || change.kind === "own-basemap-change") && change.to?.kind === "tiled";
 const detailedMapRefusal = (order, ctx) => {
-  if (!order.some((change) => change.kind === "detailed-map" && change.to)) return null;
+  // Removing a drawn map a detailed map is shown over, with no other drawn
+  // map to move it to, unless the batch removes that detailed map too.
+  const removedKeys = new Set(order.filter((change) => change.kind === "own-basemap-remove").map((change) => change.key));
+  const metadata = { ...ctx.doc?.metadata, ownBasemaps: normalizeEditorOwnBasemaps(ctx.doc?.metadata?.ownBasemaps).filter((own) => !(own.detailed && removedKeys.has(own.id))) };
+  for (const key of removedKeys) {
+    const result = removeMap(metadata, `own:${key}`);
+    if (result.refused) return result.refused;
+  }
+  const putsDetailedOn = order.some((change) => change.kind === "detailed-map" && change.to);
+  if (!putsDetailedOn && !order.some(isDetailedOwnPut)) return null;
   const projection = order.find((change) => change.kind === "projection");
   if (!detailedMapFits(projection ? projection.to : ctx.doc?.metadata?.projection)) return DETAILED_MAP_PROJECTION_MESSAGE;
+  if (!putsDetailedOn) return null;
   const background = order.find((change) => change.kind === "background");
   const drawn = background ? background.to?.kind === "vector" && Boolean(background.to?.data?.geojson?.features?.length) : isDrawnBasemap(ctx.doc?.metadata?.customBackground);
   return drawn ? null : DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE;

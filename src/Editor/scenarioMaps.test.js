@@ -159,3 +159,14 @@ test("a detailed map can be shown over another drawn map", () => {
   assert.deepEqual(view(doc).slice(-1), ['own:relief detailed "Relief" over own:essos']);
   assert.ok(setShownOver(base, "own:relief", "builtin:ocean").refused, "only over a drawn map");
 });
+
+test("the detailed starting map moved over another drawing names the old one as the list does", () => {
+  const base = { customBackground: WESTEROS, tiledBasemap: RELIEF, ownBasemaps: [{ id: "essos", name: "Essos", background: ESSOS }] };
+  const doc = apply(base, setShownOver(base, "start", "own:essos", { scenarioName: "Westeros" }));
+  assert.ok(view(doc).includes(`own:westeros-map vector "Westeros map"`), view(doc).join("\n"));
+});
+
+test("making the drawn map under a detailed starting map the starting one, with no drawing left, changes nothing", () => {
+  const base = { basemap: "ocean" };
+  assert.deepEqual(apply(base, makeStartingMap(base, "start:drawn", { scenarioName: "Westeros" })), apply(base, makeStartingMap(base, "start")));
+});

@@ -474,14 +474,11 @@ const ScenarioDetail = ({ post, busy, onImport, onPlay, onBack, notice, error, t
 // A scenario on a detailed map never carries it: it names a map on the official
 // list (docs/adr/0006), and players installing it are offered that map. One
 // that names the author's own map, not on the list, plays on its basemap.
+// The detailed maps among a bundle's scenario's maps (docs/adr/0007).
+const detailedMapsOf = (bundle) => scenarioMapsOfWorld(bundle.data?.world || {}).filter((map) => map.kind === "detailed");
+
 const describeScenarioTiledBasemap = (bundle) => {
-  const world = bundle.data?.world || {};
-  const detailed = scenarioMapsOfWorld({
-    background: world.background,
-    basemap: world.basemap,
-    allowedBasemaps: world.allowedBasemaps,
-    ownBasemaps: world.ownBasemaps,
-  }).filter((map) => map.kind === "detailed");
+  const detailed = detailedMapsOf(bundle);
   if (!detailed.length) return "";
   const unlisted = detailed.filter((map) => !map.detailed?.id);
   const offered = detailed.length === 1
@@ -495,18 +492,14 @@ const describeScenarioTiledBasemap = (bundle) => {
 
 // The last step of installing a scenario on official detailed maps (it may
 // name several, docs/adr/0007): what to offer for each, the starting one
-// marked. A player who has a map (any version) downloads nothing; one with an
-// older version than the scenario was made on is offered the update.
+// marked, and how many detailed maps the scenario names. A player who has a
+// map (any version) downloads nothing; one with an older version than the
+// scenario was made on is offered the update.
 const installOffersFor = async (bundle) => {
-  if (import.meta.env.VITE_OH_WEB) return []; // the browser version shows the drawn maps
-  const world = bundle.data?.world || {};
-  const detailed = scenarioMapsOfWorld({
-    background: world.background,
-    basemap: world.basemap,
-    allowedBasemaps: world.allowedBasemaps,
-    ownBasemaps: world.ownBasemaps,
-  }).filter((map) => map.kind === "detailed" && map.detailed?.id);
-  if (!detailed.length) return [];
+  if (import.meta.env.VITE_OH_WEB) return { offers: [], count: 0 }; // the browser version shows the drawn maps
+  const named = detailedMapsOf(bundle);
+  const detailed = named.filter((map) => map.detailed?.id);
+  if (!detailed.length) return { offers: [], count: named.length };
   const list = await fetchOfficialBasemaps();
   const offers = await Promise.all(detailed.map(async (map) => {
     const installed = await findOfficialBasemap(map.detailed.id);
@@ -514,7 +507,7 @@ const installOffersFor = async (bundle) => {
     const offer = missing && !missing.unavailable ? missing : update?.needed ? update : null;
     return offer ? { ...offer, starting: map.starting } : null;
   }));
-  return offers.filter(Boolean);
+  return { offers: offers.filter(Boolean), count: named.length };
 };
 
 // onPlay(scenario) opens the library's country picker for a scenario already
@@ -685,7 +678,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // A scenario on a detailed map offers that map's download right here, with
       // its size and the choice of its basemap, rather than leaving the player
       // to meet it over the map.
-      const mapsToOffer = await installOffersFor(bundle).catch(() => []);
+      const { offers: mapsToOffer, count: detailedCount } = await installOffersFor(bundle).catch(() => ({ offers: [], count: 0 }));
       // A basemap that just failed to download is not tried again this session
       // (runtime/missingBasemap.js); Import & Play opens the picker next.
       noteMissingBasemapTried(details?.scenario);
@@ -711,8 +704,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // menu — once the map offer is answered, and unless the player has
       // already moved on to another post.
       const playNext = play && details?.scenario ? details.scenario : null;
-      // The starting map alone keeps the plain offer; several are listed.
-      if (mapsToOffer.length === 1 && mapsToOffer[0].starting) setMissingMap({ basemap: mapsToOffer[0], postId: post.id, playNext });
+      // A scenario with one detailed map, the starting one, keeps the plain
+      // offer; one with several lists them.
+      if (detailedCount === 1 && mapsToOffer.length === 1 && mapsToOffer[0].starting) setMissingMap({ basemap: mapsToOffer[0], postId: post.id, playNext });
       else if (mapsToOffer.length) setMissingMap({ basemaps: mapsToOffer, postId: post.id, playNext });
       else if (playNext && selectedPostRef.current?.id === post.id) onPlay?.(playNext);
     } catch (nextError) {

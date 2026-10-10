@@ -60,6 +60,7 @@ export default function DetailedMapsInstallOffer({ offers, onDone }) {
           onProgress: ({ received, total: size }) => setDownloading({ name: offer.name, percent: size ? Math.round((received / size) * 100) : null }),
         });
       }
+      setDownloading(null);
       onDone?.();
     } catch (caught) {
       if (caught?.name !== "AbortError") setError(caught?.message || "The download failed.");

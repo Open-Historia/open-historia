@@ -392,7 +392,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     applyMaps(makeStartingMap(d.doc?.metadata, map.key, { scenarioName: d.name }));
   };
   const removeFromMaps = (key) => applyMaps(removeMap(d.doc?.metadata, key));
-  const showDetailedOver = (key, overKey) => applyMaps(setShownOver(d.doc?.metadata, key, overKey));
+  const showDetailedOver = (key, overKey) => applyMaps(setShownOver(d.doc?.metadata, key, overKey, { scenarioName: d.name }));
 
   // Upload a new basemap: saved to Your basemaps for reuse, and added to the
   // scenario's maps. Answers what the picker then tells the author:
