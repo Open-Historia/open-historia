@@ -141,6 +141,10 @@ node server/server.js              # Start the server
 
 Then open **http://localhost:3000** in your browser.
 
+Local builds also offer optional **ChatGPT (Sign in)** (Windows preview) and
+**ChatGPT Codex** connections without an API key. See
+[ChatGPT plan setup, model selection and security](docs/chatgpt-plan.md).
+
 ### Reaching the server from another device
 
 Out of the box the server answers **only the machine it runs on** — which covers

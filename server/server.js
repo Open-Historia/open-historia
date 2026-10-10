@@ -62,12 +62,15 @@ import { renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } fro
 import {
   allowedCorsOrigin,
   crossOriginWriteAllowed,
+  codexRequestAllowed,
   isAllowedHubUrl,
   isLoopbackAddress,
   parseByteRange,
   relayTargetAllowed,
   sanitizeRelayHeaders,
 } from "./security.js";
+import { CodexAppServer } from "./codexAppServer.js";
+import { ChatGPTAuth } from "./chatgptAuth.js";
 import { appendLog, clearLog, readLogSince } from "./logStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -145,6 +148,15 @@ const lanAddresses = () =>
 const jsonParser = express.json({ limit: "64mb" });
 const largeJsonParser = express.json({ limit: "512mb" });
 const uploadParser = express.raw({ type: () => true, limit: "512mb" });
+const codexAppServer = new CodexAppServer({
+  // Electron packages the source tree as read-only. Keep Codex's disposable
+  // workspace beside the rest of the writable per-user game data instead.
+  workspaceDir: path.join(DATA_DIR, "codex-workspace"),
+});
+const chatgptAuth = new ChatGPTAuth({ storageDir: path.join(DATA_DIR, "chatgpt-auth") });
+const officialChatGPT = new CodexAppServer({
+  workspaceDir: path.join(DATA_DIR, "chatgpt-workspace"), officialAuth: chatgptAuth,
+});
 
 // The Android app's connect screen lives on the WebView's own origin, so its
 // probe of this server is a cross-origin request — without these headers the
@@ -1090,6 +1102,131 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   }
 });
 
+// ChatGPT-managed Codex auth stays inside the local Codex process. These routes
+// never accept or return auth tokens. Normal launches remain PC-only; the
+// dedicated tablet launcher permits same-origin browser requests from private
+// LAN addresses without exposing Codex to public or cross-origin clients.
+const ALLOW_CODEX_PRIVATE_LAN = process.env.OH_CODEX_ALLOW_PRIVATE_LAN === "1";
+const codexLocalOnly = (req, res, next) => {
+  const decision = codexRequestAllowed({
+    method: req.method,
+    remoteAddress: req.socket?.remoteAddress,
+    origin: req.headers.origin,
+    host: req.headers.host,
+    allowPrivateLan: ALLOW_CODEX_PRIVATE_LAN,
+  });
+  if (!decision.allowed) {
+    return sendError(
+      res,
+      403,
+      new Error("ChatGPT Codex access is limited to this PC or the enabled private-LAN app origin."),
+    );
+  }
+  next();
+};
+
+app.get("/api/ai/codex/status", codexLocalOnly, async (_req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await codexAppServer.getStatus());
+  } catch (error) {
+    sendError(res, 503, error);
+  }
+});
+
+app.get("/api/ai/chatgpt/status", codexLocalOnly, async (_req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await officialChatGPT.getStatus());
+  } catch (error) { sendError(res, 503, error); }
+});
+
+// Authorize and manage the PC's account only from that PC. Tablet generation
+// uses the established connection, and never receives an authorization URL.
+const chatgptHostOnly = (req, res, next) => {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return sendError(res, 403, new Error("Manage ChatGPT connections on the host PC."));
+  return codexLocalOnly(req, res, next);
+};
+app.post("/api/ai/chatgpt/login", chatgptHostOnly, jsonParser, async (req, res) => {
+  try {
+    await officialChatGPT.stop();
+    res.setHeader("Cache-Control", "no-store");
+    res.status(202).json(await chatgptAuth.beginLogin({ profileId: req.body?.profileId, newProfile: req.body?.newProfile === true, reconsent: req.body?.reconsent === true }));
+  } catch (error) { sendError(res, 400, error); }
+});
+app.post("/api/ai/chatgpt/login/cancel", chatgptHostOnly, (_req, res) => {
+  chatgptAuth.cancelLogin();
+  res.json({ cancelled: true });
+});
+app.post("/api/ai/chatgpt/account", chatgptHostOnly, jsonParser, async (req, res) => {
+  try { await officialChatGPT.stop(); await chatgptAuth.selectAccount(req.body?.id); res.json({ selected: true }); }
+  catch (error) { sendError(res, 400, error); }
+});
+app.post("/api/ai/chatgpt/logout", chatgptHostOnly, async (_req, res) => {
+  try { await officialChatGPT.stop(); res.json(await chatgptAuth.disconnect()); }
+  catch (error) { sendError(res, 400, error); }
+});
+app.post("/api/ai/chatgpt/welcome", codexLocalOnly, async (_req, res) => {
+  try { await chatgptAuth.acknowledgeWelcome(); res.json({ acknowledged: true }); }
+  catch (error) { sendError(res, 400, error); }
+});
+
+app.post(["/api/ai/codex/generate", "/api/ai/chatgpt/generate"], codexLocalOnly, jsonParser, async (req, res) => {
+  const controller = new AbortController();
+  const abortGeneration = () => {
+    if (!controller.signal.aborted) controller.abort(new Error("Codex generation was cancelled."));
+  };
+  const abortIfDisconnected = () => {
+    if (!res.writableEnded) abortGeneration();
+  };
+  req.once("aborted", abortGeneration);
+  res.once("close", abortIfDisconnected);
+  const streamProgress = String(req.headers.accept ?? "").includes("application/x-ndjson");
+  const sendStreamEvent = streamProgress
+    ? (event) => {
+        if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(event)}\n`);
+      }
+    : null;
+  try {
+    const { systemPrompt, history, model, effort, timeoutMs, outputSchema } = req.body ?? {};
+    res.setHeader("Cache-Control", "no-store");
+    if (streamProgress) {
+      res.status(200);
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.flushHeaders();
+      sendStreamEvent({ type: "progress", progress: { kind: "connecting", state: "started" } });
+    }
+    const runtime = req.path === "/api/ai/chatgpt/generate" ? officialChatGPT : codexAppServer;
+    const result = await runtime.generate({
+      systemPrompt,
+      history,
+      model,
+      effort,
+      timeoutMs,
+      outputSchema,
+      signal: controller.signal,
+      onProgress: (progress) => sendStreamEvent?.({ type: "progress", progress }),
+    });
+    if (streamProgress) {
+      sendStreamEvent({ type: "result", result });
+      res.end();
+    } else {
+      res.json(result);
+    }
+  } catch (error) {
+    if (streamProgress) {
+      sendStreamEvent({ type: "error", error: { message: error?.message || "Codex generation failed." } });
+      if (!res.writableEnded && !res.destroyed) res.end();
+    } else if (!res.writableEnded && !res.destroyed) {
+      sendError(res, 502, error);
+    }
+  } finally {
+    req.off("aborted", abortGeneration);
+    res.off("close", abortIfDisconnected);
+  }
+});
+
 // --- LAN sharing, from the UI ---------------------------------------------
 // Reading it is harmless (the page shows the toggle's state); the ADDRESSES are
 // only handed to a caller on this machine, since they describe the host's other
@@ -1499,3 +1636,6 @@ httpServer.on("error", (error) => {
   }
   throw error;
 });
+
+const stopCodex = () => { void codexAppServer.stop(); void officialChatGPT.stop(); chatgptAuth.cancelLogin(); };
+process.once("exit", stopCodex);

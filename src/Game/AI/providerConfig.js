@@ -31,6 +31,22 @@ const FORMER_GEMINI_DEFAULT = "gemini-3.5-flash-lite";
 export const OPENAI_DEFAULT_MODEL = "gpt-6-luna";
 
 export const PROVIDER_OPTIONS = [
+    ...(!import.meta.env?.VITE_OH_WEB ? [
+    {
+        value: "chatgpt-plan",
+        label: "ChatGPT (Sign in)",
+        group: "ChatGPT subscription",
+        description: "Sign in with ChatGPT and use your ChatGPT plan",
+        searchTerms: ["chatgpt", "official", "plus", "subscription", "sign in"],
+    },
+    {
+        value: "chatgpt-codex",
+        label: "ChatGPT Codex",
+        group: "ChatGPT subscription",
+        description: "Codex CLI login and your ChatGPT plan allowance",
+        searchTerms: ["codex", "chatgpt", "plus", "subscription", "app server"],
+    },
+    ] : []),
     {
         value: "gemini",
         label: "Gemini",
@@ -69,6 +85,14 @@ export const PROVIDER_OPTIONS = [
 ];
 
 const PROVIDER_SETTINGS = {
+    "chatgpt-plan": {
+        model: { storageKey: "chatgpt_plan_model", defaultValue: "" },
+        effort: { storageKey: "chatgpt_plan_effort", defaultValue: "" },
+    },
+    "chatgpt-codex": {
+        model: { storageKey: "chatgpt_codex_model", defaultValue: "" },
+        effort: { storageKey: "chatgpt_codex_effort", defaultValue: "" },
+    },
     gemini: {
         apiKey: { storageKey: "gemini_api_key", defaultValue: "" },
         model: { storageKey: "gemini_model", defaultValue: GEMINI_DEFAULT_CHAIN[0] },
@@ -176,12 +200,30 @@ export function getProviderMeta(provider) {
 
 export function providerSupportsModelDiscovery(provider) {
     const normalized = normalizeProvider(provider);
-    return normalized === "openai" || normalized === "openai-compatible";
+    return normalized === "openai" || normalized === "openai-compatible" || normalized === "chatgpt-codex" || normalized === "chatgpt-plan";
 }
 
-function getProviderField(provider, field) {
+export function getProviderField(provider, field) {
     const setting = getSettingConfig(provider, field);
     return setting ? readStoredValue(setting) : "";
+}
+
+export function setProviderField(provider, field, value) {
+    const setting = getSettingConfig(provider, field);
+    if (!setting?.storageKey || typeof localStorage === "undefined") return;
+    localStorage.setItem(setting.storageKey, value ?? "");
+}
+
+export function getProviderSettings(provider) {
+    const normalized = normalizeProvider(provider);
+    return {
+        provider: normalized,
+        apiKey: getProviderField(normalized, "apiKey"),
+        endpoint: getProviderField(normalized, "endpoint"),
+        model: getProviderField(normalized, "model"),
+        effort: getProviderField(normalized, "effort"),
+        customParams: getProviderField(normalized, "customParams"),
+    };
 }
 
 // The tasks a player can give a pick of their own (ported from the
@@ -264,6 +306,8 @@ export function providerSetupRequirement(provider) {
 }
 
 export function describeProviderSetupNeed(provider) {
+    if (normalizeProvider(provider) === "chatgpt-plan") return "a Sign in with ChatGPT connection";
+    if (normalizeProvider(provider) === "chatgpt-codex") return "a ChatGPT Codex login";
     return providerSetupRequirement(provider) === "endpoint" ? "a server endpoint" : "an API key";
 }
 
@@ -598,7 +642,9 @@ export function getResolvedFallbackList() {
 
 // Whether an entry has what its provider needs before a call can go out: a
 // hosted provider its key, a self-hosted one its endpoint.
-const entryIsConfigured = (entry) => String(entry[providerSetupRequirement(entry.provider)] ?? "").trim().length > 0;
+const entryIsConfigured = (entry) => entry?.provider === "chatgpt-codex" || entry?.provider === "chatgpt-plan"
+    ? true
+    : String(entry[providerSetupRequirement(entry.provider)] ?? "").trim().length > 0;
 
 export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);
@@ -678,16 +724,17 @@ export function fillFallbackList(connectionIds, models) {
 // { connectionId, entryId }.
 export function applyQuickAiSetup({ provider, apiKey = "", endpoint = "", model = "" } = {}) {
     const normalized = normalizeProvider(provider);
+    const usesCodexLogin = normalized === "chatgpt-codex" || normalized === "chatgpt-plan";
     const requirement = providerSetupRequirement(normalized);
-    const key = String(apiKey ?? "").trim();
-    const url = String(endpoint ?? "").trim();
+    const key = usesCodexLogin ? "" : String(apiKey ?? "").trim();
+    const url = usesCodexLogin ? "" : String(endpoint ?? "").trim();
     const modelName = String(model ?? "").trim();
-    if (requirement === "endpoint" ? !url : !key) {
+    if (!usesCodexLogin && (requirement === "endpoint" ? !url : !key)) {
         throw new Error(requirement === "endpoint" ? "Enter the server endpoint first." : "Paste an API key first.");
     }
     const connections = getConnections();
     const list = getFallbackList();
-    const lacks = (connection) => !String(connection?.[requirement] ?? "").trim();
+    const lacks = (connection) => usesCodexLogin || !String(connection?.[requirement] ?? "").trim();
     const top = connections.find((connection) => connection.id === list[0]?.connectionId);
     const target = (top && top.provider === normalized && lacks(top) ? top : null)
         ?? connections.find((connection) => connection.provider === normalized && lacks(connection))
@@ -695,8 +742,8 @@ export function applyQuickAiSetup({ provider, apiKey = "", endpoint = "", model 
     let connectionId;
     if (target) {
         updateConnection(target.id, {
-            apiKey: key || target.apiKey,
-            endpoint: url || target.endpoint,
+            apiKey: usesCodexLogin ? "" : key || target.apiKey,
+            endpoint: usesCodexLogin ? "" : url || target.endpoint,
             suggestedModel: modelName || target.suggestedModel,
         });
         connectionId = target.id;
@@ -725,7 +772,7 @@ export function applyQuickAiSetup({ provider, apiKey = "", endpoint = "", model 
         entryId = addEntry({ connectionId, model: modelName });
     }
     if (getFallbackList().findIndex((entry) => entry.id === entryId) > 0) moveEntry(entryId, 0);
-    logDebugEvent("setting", `Quick AI setup: ${getProviderMeta(normalized).label} ${requirement === "endpoint" ? "endpoint" : "key"} saved from the start-of-game prompt.`, {
+    logDebugEvent("setting", `Quick AI setup: ${getProviderMeta(normalized).label} ${usesCodexLogin ? "ChatGPT login selected" : `${requirement === "endpoint" ? "endpoint" : "key"} saved`} from the start-of-game prompt.`, {
         model: modelName || "(unchanged)",
     });
     return { connectionId, entryId };
