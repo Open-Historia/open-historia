@@ -374,9 +374,12 @@ const detailedMapStatus = (lookups) => Object.fromEntries(lookups.map(({ map, in
     const latest = official?.versions?.[official.versions.length - 1] || null;
     return [map.pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
 }));
-const GameBasemapField = () => {
+// The game's scenario's maps, its detailed ones looked up, and the one shown
+// (whether detailed maps are on or off here): what the Basemap and Detailed
+// maps fields both read.
+const useGameScenarioMaps = () => {
     const { background, basemap, allowedBasemaps, ownBasemaps } = useWorldBackground();
-    const { gamePick, setGamePick, defaultBasemap, useDefault } = useGameBasemapPick();
+    const pick = useGameBasemapPick();
     const maps = useMemo(() => scenarioMapsOfWorld({
         background,
         basemap,
@@ -384,11 +387,13 @@ const GameBasemapField = () => {
         ownBasemaps: decodeOwnBasemaps(ownBasemaps),
     }), [background, basemap, allowedBasemaps, ownBasemaps]);
     const lookups = useDetailedMapLookups(maps);
-    const status = useMemo(() => detailedMapStatus(lookups), [lookups]);
-    const offers = useMemo(() => detailedMapOffers(lookups, { optionalUpdates: true }), [lookups]);
-    const [downloading, setDownloading] = useState(false);
-    // What the game shows, whether detailed maps are on or off here.
+    const { gamePick, defaultBasemap, useDefault } = pick;
     const shown = basemapShownFor({ maps, gamePick, defaultBasemap, useDefault });
+    return { maps, lookups, shown, setGamePick: pick.setGamePick };
+};
+const GameBasemapField = () => {
+    const { maps, lookups, shown, setGamePick } = useGameScenarioMaps();
+    const status = useMemo(() => detailedMapStatus(lookups), [lookups]);
     const only = maps.length === 1;
     const labelOf = (map) => {
         if (map.starting) return uiString(BASEMAP_OPTION_LABELS.starting, { name: map.name });
@@ -427,23 +432,32 @@ const GameBasemapField = () => {
                     ? "This scenario has one map."
                     : "The maps this scenario offers. Your pick is kept for this game only, and applies at once."}
             </div>
-            {offers.length > 0 && (
-                downloading ? (
-                    <div style={{ marginTop: 10 }}>
-                        <DetailedMapsInstallOffer
-                            // The map on screen ticked, else the starting one.
-                            offers={offers.map((offer) => ({ ...offer, ticked: offers.some((other) => other.pick === shown.pick) ? offer.pick === shown.pick : offer.starting }))}
-                            title="Download detailed maps"
-                            intro="Large terrain maps, sharp up close. Each downloads once, and every scenario on it shares it. Your basemap pick stays as it is."
-                            onDone={() => setDownloading(false)}
-                        />
-                    </div>
-                ) : (
-                    <div style={{ ...helperStyle, display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-                        <span data-no-translate style={{ flex: 1 }}>{detailedMapsDownloadLine(offers, uiString)}</span>
-                        <button type="button" style={smallButtonStyle} onClick={() => setDownloading(true)}>Download…</button>
-                    </div>
-                )
+        </div>
+    );
+};
+
+// The game's detailed maps this device lacks or has an older version of, to
+// download in one go (Map/detailedMapOffers.js); nothing when there are none.
+const GameDetailedMapsDownloadField = () => {
+    const { lookups, shown } = useGameScenarioMaps();
+    const offers = useMemo(() => detailedMapOffers(lookups, { optionalUpdates: true }), [lookups]);
+    const [downloading, setDownloading] = useState(false);
+    if (!offers.length) return null;
+    return (
+        <div style={fieldGroupStyle}>
+            {downloading ? (
+                <DetailedMapsInstallOffer
+                    // The map on screen ticked, else the starting one.
+                    offers={offers.map((offer) => ({ ...offer, ticked: offers.some((other) => other.pick === shown.pick) ? offer.pick === shown.pick : offer.starting }))}
+                    title="Download detailed maps"
+                    intro="Large terrain maps, sharp up close. Each downloads once, and every scenario on it shares it. Your basemap pick stays as it is."
+                    onDone={() => setDownloading(false)}
+                />
+            ) : (
+                <div style={{ ...helperStyle, display: "flex", alignItems: "center", gap: 10 }}>
+                    <span data-no-translate style={{ flex: 1 }}>{detailedMapsDownloadLine(offers, uiString)}</span>
+                    <button type="button" style={smallButtonStyle} onClick={() => setDownloading(true)}>Download…</button>
+                </div>
             )}
         </div>
     );
@@ -2563,6 +2577,7 @@ const SettingsWorkspace = ({
                             <div style={helperStyle}>On: a detailed map is drawn when you have it. Off, in every game: the drawn map under it, which is lighter.</div>
                         </>
                     )}
+                    {forGame && <GameDetailedMapsDownloadField />}
                     <div style={fieldGroupStyle}>
                         <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
                             Browse and download maps…
