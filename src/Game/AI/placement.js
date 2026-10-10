@@ -251,7 +251,9 @@ const COORDINATES = /^[[(]?\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*[\]
 
 // Every reading of the phrase that its words allow, most specific first. The
 // resolver takes the first whose names are on the map.
-export const readPlacement = (phrase) => {
+// `home`: whose thing is being placed, unit or structure, when the caller knows
+// — what "the northern border" is the north of.
+export const readPlacement = (phrase, { home: whose = "" } = {}) => {
     const text = asText(phrase).replace(/\s+/g, " ").replace(/[.;]+$/, "");
     if (!text) return [];
     const coordinates = text.match(COORDINATES);
@@ -300,6 +302,20 @@ export const readPlacement = (phrase) => {
     if ((match = text.match(/^(?:the )?(?:border|frontier) of (.+?) with (.+)$/i))) add({ kind: "facing", name: stripArticle(match[1]), toward: stripArticle(match[2]) });
     if ((match = text.match(/^(.+?),? (?:facing|toward|towards|opposite|on the border with|on the frontier with|bordering|border with|nearest to|nearest|closest to) (.+)$/i))) {
         add({ kind: "facing", name: stripArticle(match[1]), toward: stripArticle(match[2]) });
+    }
+
+    // "the northern border", "our eastern frontier", "the southern provinces":
+    // a side of a country with no country named. To a person it is the side of
+    // whoever is speaking, so given whose thing is being placed it reads as
+    // that part of their own land. A real skip (2026-10-05) held an exercise
+    // and opened a depot at "northern border": the brigade was raised in the
+    // middle of the country and the depot was not built at all.
+    const land = asText(whose);
+    if (land && (match = text.match(new RegExp(
+        `^(?:on |along |at |near |by |to |toward |towards |into |onto |in )?(?:the |our |its |their )?${DIRECTION_PATTERN}(?:ern)? `
+        + "(?:border|frontier|boundary|borderlands?|flank|front|sector|territor(?:y|ies)|provinces?|regions?|districts?|marches)s?$", "i")))) {
+        const direction = readDirection(`${match[1]}${match[2] ?? ""}`);
+        if (direction) add({ kind: "part", direction, name: land });
     }
 
     // "east of Kharkiv", "north-west of Lviv", "just south of the Don".
@@ -556,13 +572,74 @@ const resolveReading = (reading, gazetteer, seed) => {
     return null;
 };
 
+// "Fort Drum, New York", "Norfolk, Virginia, United States": a spot and what it
+// is in, the way a person gives an address. No map carries every base and
+// town, so the spot is often not on it while the state it is in is. A real
+// time skip (2026-10-05) opened a depot at "Fort Drum, New York" and lost it,
+// and raised the brigade beside it in Kansas, because the phrase as a whole
+// named nothing.
+//
+// Read part by part, each name as the map spells it first and loosely after
+// ("Minot Air Force Base" finds a region called Minot):
+//   - the spot itself, when the map has it AND it lies in the place the address
+//     says it is in. A namesake elsewhere is not it: the map's only Paris may be
+//     in France, and "Paris, Texas" is not there;
+//   - otherwise the innermost of the places after the comma that the map has.
+// When the map knows NONE of the places after the comma (its regions may be
+// named after cities, with no "Texas" on it at all), nothing says where the
+// spot is. It is taken only if it lies in `home`, the land of whoever is
+// placing the thing; with no `home` given there is nothing to test it against,
+// and it is taken, as a loose match of the whole phrase always took it.
+const regionIdsOf = (found, gazetteer) => (found?.kind === "region" ? [found.region?.id]
+    : found?.kind === "polity" ? asArray(found.regions).map((region) => region?.id)
+        // A town is where it stands: "…, Kharkiv" is the region Kharkiv is in.
+        : Array.isArray(found?.point) ? [gazetteer.regionAt(found.point)?.id] : []).filter(Boolean);
+
+const resolveAddress = (phrase, gazetteer, seed, home) => {
+    const parts = asText(phrase).split(",").map((part) => stripArticle(part.replace(/\s+/g, " ").trim())).filter(Boolean);
+    if (parts.length < 2) return null;
+    const find = (name) => gazetteer.find(name, { exact: true }) ?? gazetteer.find(name);
+    const place = (name) => {
+        for (const exact of [true, false]) {
+            try {
+                const resolved = resolveReading({ kind: "place", name, exact }, gazetteer, seed);
+                if (resolved) return resolved;
+            } catch {
+                // one odd polygon costs this reading only
+            }
+        }
+        return null;
+    };
+    const within = new Set(parts.slice(1).flatMap((name) => regionIdsOf(find(name), gazetteer)));
+    const spot = place(parts[0]);
+    if (spot && within.size && within.has(spot.regionId)) return spot;
+    if (spot && !within.size) {
+        const own = new Set(asText(home) ? regionIdsOf(find(home), gazetteer) : []);
+        if (!own.size || own.has(spot.regionId)) return spot;
+    }
+    for (let index = 1; index < parts.length; index += 1) {
+        const container = place(parts[index]);
+        if (container) return container;
+    }
+    return null;
+};
+
 // { lng, lat, regionId, regionName, how, label } — or { error } saying what could
 // not be found, in words the model can act on next turn.
-export const resolvePlacement = (phrase, gazetteer, { seedText = "" } = {}) => {
-    const readings = readPlacement(phrase);
+// `home`: whose thing is being placed, for a side of their own land with no
+// country named (readPlacement) and for an address the map cannot check
+// (resolveAddress).
+export const resolvePlacement = (phrase, gazetteer, { seedText = "", home = "" } = {}) => {
+    const readings = readPlacement(phrase, { home });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
     const seed = hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
-    for (const reading of readings) {
+    // A phrase with a comma in it is a name only as the map spells it. Past
+    // that it is grammar ("Donetsk Oblast, north") or an address, and never a
+    // loose guess at the whole of it: that guess is what put "Paris, Texas" in
+    // France.
+    const hasComma = readings[0]?.kind === "place" && asText(phrase).includes(",");
+    for (const written of readings) {
+        const reading = hasComma && asText(written.name).includes(",") ? { ...written, exact: true } : written;
         let resolved = null;
         try {
             resolved = resolveReading(reading, gazetteer, seed);
@@ -570,6 +647,15 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "" } = {}) => {
             resolved = null; // one odd polygon must not cost the turn its other placements
         }
         if (resolved) return resolved;
+    }
+    if (hasComma) {
+        // The whole phrase, then what each reading took for its name: "near
+        // Fort Drum, New York" is an address after its first word.
+        const candidates = [...new Set([asText(phrase), ...readings.map((reading) => asText(reading.name))].filter((text) => text.includes(",")))];
+        for (const candidate of candidates) {
+            const address = resolveAddress(candidate, gazetteer, seed, home);
+            if (address) return address;
+        }
     }
     return { error: `no city, region, unit or structure on this map is called "${asText(readings[0].name ?? phrase)}"` };
 };

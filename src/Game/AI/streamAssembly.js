@@ -306,8 +306,11 @@ export async function readAnthropicStreamedResponse(response, onActivity, onTool
 // Gemini sends a function call two ways, and both land here.
 //
 // Whole, in one part, with `args` already an object. Nothing to reassemble, and
-// it is all the Gemini Developer API ever sends, so a Gemini skip's events
-// arrive together; callGemini says why.
+// it is all the Gemini Developer API ever sends for a function call, so a skip
+// asked for that way has its events arrive together. That is why callGemini
+// asks for a watched skip as JSON TEXT instead, which this API does stream:
+// the text parts below grow frame by frame and the watcher reads events out
+// of them (streamedEvents.js pushJson).
 //
 // Or as `partialArgs` fragments, when the request asked for them. That field is
 // Vertex-only and the game does not ask, but the reader is kept because it costs
@@ -417,7 +420,16 @@ export function applyGeminiFrame(state, chunk, onToolProgress) {
     for (const part of candidate.content?.parts ?? []) {
         // NOT trimmed: the parts are joined verbatim and only trimmed once at the
         // end, or a chunk boundary that falls on a space runs two words together.
-        if (typeof part?.text === "string") state.text += part.text;
+        // A thought summary is not part of the answer, and inside an answer asked
+        // for as JSON it would leave text no parser can read.
+        if (typeof part?.text === "string" && part.thought !== true) {
+            state.text += part.text;
+            // An answer asked for as JSON text (callGemini, a time skip whose
+            // events are being watched) grows here rather than in a function
+            // call, so a watcher hears it the way it hears the OpenAI-style
+            // content above.
+            if (part.text) observe(onToolProgress, { name: "", json: state.text });
+        }
         if (part?.functionCall) applyGeminiFunctionCall(state, part, onToolProgress);
     }
     if (candidate.finishReason) state.finishReason = candidate.finishReason;

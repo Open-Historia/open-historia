@@ -19,7 +19,6 @@ import {
     DEFAULT_DAILY_REQUEST_LIMIT,
     JUMP_REQUEST_CAP,
     REQUEST_BUDGET_KEYS,
-    REVIEW_SECTIONS,
     backgroundAllowance,
     createJumpBudget,
     createMemoryStorage,
@@ -28,7 +27,6 @@ import {
     describeDay,
     describeJumpCost,
     jumpRequestCap,
-    reviewSectionKey,
 } from "./requestBudget.js";
 
 // 2026-09-17 12:00 in Los Angeles (UTC-7 in September).
@@ -50,7 +48,6 @@ test("a fresh install saves requests, runs background AI within its cap, and ass
     assert.equal(settings.dailyLimit(), DEFAULT_DAILY_REQUEST_LIMIT);
     assert.equal(settings.dailyLimit(), 500);
     assert.equal(settings.backgroundDailyCap(), DEFAULT_BACKGROUND_DAILY_CAP);
-    for (const section of REVIEW_SECTIONS) assert.equal(settings.reviewSection(section), true, section);
     assert.equal(JUMP_REQUEST_CAP, 3);
 });
 
@@ -58,17 +55,24 @@ test("only an explicit choice changes a default", () => {
     const { settings, storage } = setup();
     settings.setSaveRequests(false);
     settings.setBackgroundAi(false);
-    settings.setReviewSection("timeline", false);
     assert.equal(settings.saveRequests(), false);
     assert.equal(settings.backgroundAi(), false);
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "0");
-    assert.equal(settings.reviewSection("timeline"), false);
-    assert.equal(settings.reviewSection("board"), true);
-    assert.equal(storage.getItem(reviewSectionKey("timeline")), "0");
-    // Not a section: never on, and nothing is written for it.
-    assert.equal(settings.reviewSection("weather"), false);
-    assert.equal(settings.setReviewSection("weather", true), false);
-    assert.equal(storage.getItem(reviewSectionKey("weather")), null);
+});
+
+// The five switches for the checks after a time skip are gone: the checks are
+// part of the skip. A player who once turned one off gets it back, because the
+// key they set is no longer read by anything.
+test("a check a player once switched off is on again: there is no switch left to read", () => {
+    const { settings } = setup({ stored: {
+        ai_review_units: "0", ai_review_territory: "0",
+        ai_review_timeline: "0", ai_review_board: "0", ai_review_spies: "0",
+    } });
+    assert.equal(settings.reviewSection, undefined);
+    assert.equal(settings.setReviewSection, undefined);
+    assert.equal(Object.values(REQUEST_BUDGET_KEYS).some((key) => key.startsWith("ai_review_")), false);
+    // And the settings that are left read as they always did beside them.
+    assert.equal(settings.saveRequests(), true);
 });
 
 test("the limits are whole numbers inside their range, whatever was typed", () => {

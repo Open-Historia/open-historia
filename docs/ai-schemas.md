@@ -178,7 +178,9 @@ Required: `op` and `name`. `eventIndex` says which of the events this op follows
 
 ### 4.5-ter `PROJECTS_SCHEMA` — the board's own task (`:2082`)
 
-`projectOps` no longer appears on a jump at all. `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
+While requests are being saved the skip keeps the board itself: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `priority`, `startedAt`, the links, `focus`, the nested `project` and `onComplete`), and `agentReports` at the top level when an agent's report is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts both contracts. See [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences).
+
+With saving off, and for a skip a provider refused in its folded form, `projectOps` does not appear on the jump the model is sent: `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by a separate `projects` call (`submit_project_ops`) that runs once per jump, after the segments merge and before anything is written.
 
 ```
 { "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
