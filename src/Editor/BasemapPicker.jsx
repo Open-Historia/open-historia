@@ -459,11 +459,11 @@ const BasemapPicker = ({
     }
     try {
       await deleteBasemapApi(bm.id);
+      // A game open on a scenario naming it goes back to its basemap.
+      if (bm.kind === "tiled") announceTiledBasemap(null);
     } catch (e) {
       window.alert(`Could not delete that basemap: ${e?.message || e}`);
     }
-    // A game open on a scenario naming it goes back to its basemap.
-    if (bm.kind === "tiled") announceTiledBasemap(null);
     refresh();
   };
 

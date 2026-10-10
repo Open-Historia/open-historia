@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, inSuggestedProjection, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { convertDisplayPoint, moveGeojson, normalizeProjection, sheetBounds } from "../../server/mapProjection.js";
-import { moveFeatureCoords, moveUnits } from "./projectionConvert.js";
+import { DETAILED_MAP_BLOCKS_CONVERSION, moveFeatureCoords, moveUnits } from "./projectionConvert.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -456,6 +456,21 @@ const projectionSetup = () => {
 };
 const FLAT = { type: "equirectangular", globe: false };
 const flatPlace = (lon, lat) => convertDisplayPoint("mercator", FLAT, lon, lat);
+
+test("on a map with a detailed map a change of projection is refused before anything is accepted", () => {
+  // The detailed map cannot move with the map (projectionConvert.js), and a
+  // city placed for the suggested projection would land in the wrong place.
+  const { state, ctx, d, calls } = projectionSetup();
+  d.patchMetadata({ tiledBasemap: { id: "got-world", version: 1, name: "Westeros" } });
+  const projection = { id: "map:projection", area: "map", kind: "projection", from: { type: "mercator" }, to: FLAT, bounds: sheetBounds(FLAT) };
+  const polity = { id: "polity:Gamma", area: "polities", kind: "polity-add", key: "Gamma", to: { name: "Gamma" } };
+  const city = { id: "city:new", area: "cities", kind: "city-add", to: { name: "Southport", coord: flatPlace(10, 10), population: 100 } };
+  const changes = [projection, polity, city];
+  const before = JSON.stringify(state.doc);
+  assert.throws(() => acceptMapChanges([polity, city], ctx, { changes }), (error) => error.message === DETAILED_MAP_BLOCKS_CONVERSION);
+  assert.deepEqual(calls, []);
+  assert.equal(JSON.stringify(state.doc), before, "nothing was accepted");
+});
 
 test("a change of projection is the Workshop's own conversion, and Undo converts back", () => {
   const { api, state, ctx, calls } = projectionSetup();

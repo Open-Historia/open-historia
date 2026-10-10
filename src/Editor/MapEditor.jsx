@@ -227,11 +227,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       return [X * EARTH, Y * EARTH];
     };
     const background = customBgRef.current;
-    const plan = planBasemapChange({ from, to, background, keepPicture: background?.kind === "image", detailedMap: Boolean(d.doc?.metadata?.tiledBasemap) });
-    if (plan.kind === "blocked") {
-      console.warn("[editor] the map was not converted:", plan.reason);
-      return;
-    }
+    // A map with a detailed map never gets here: the review refuses the
+    // change first (suggestionReview.js acceptMapChanges).
+    const plan = planBasemapChange({ from, to, background, keepPicture: background?.kind === "image" });
     let nextBg = background;
     if (plan.kind === "bounds") {
       // Mercator with no bounds given: the picture fills the square, as it did.
@@ -438,6 +436,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   }, [customBg]);
   const [projectionBusy, setProjectionBusy] = useState(false);
   const [projectionError, setProjectionError] = useState("");
+  // A detailed map cannot be converted with the map (projectionConvert.js).
+  const hasDetailedMap = Boolean(d.doc?.metadata?.tiledBasemap);
   // Regions, cities, units and basemap, each by its own rule
   // (projectionConvert.js). The basemap is made ready first: redrawing a
   // picture is the one step that can fail, and nothing has moved if it does.
@@ -456,7 +456,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
         return [X * EARTH, Y * EARTH];
       };
-      const plan = planBasemapChange({ from, to, background: customBg, keepPicture, detailedMap: Boolean(d.doc?.metadata?.tiledBasemap) });
+      const plan = planBasemapChange({ from, to, background: customBg, keepPicture, detailedMap: hasDetailedMap });
       if (plan.kind === "blocked") {
         setProjectionError(plan.reason);
         return;
@@ -1594,7 +1594,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           hasPicture={customBg?.kind === "image"}
           busy={projectionBusy}
           error={projectionError}
-          blocked={d.doc?.metadata?.tiledBasemap ? DETAILED_MAP_BLOCKS_CONVERSION : ""}
+          blocked={hasDetailedMap ? DETAILED_MAP_BLOCKS_CONVERSION : ""}
           onConvert={convertProjection}
           onView={(patch) => {
             // { globe } or { wrap }: written only when switched off.

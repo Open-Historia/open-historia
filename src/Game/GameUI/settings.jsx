@@ -350,7 +350,7 @@ const BasemapField = ({ value, forGame, onChange }) => {
     return (
         <div style={fieldGroupStyle}>
             <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-            <select id="game-basemap-style" value={shown} disabled={off} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1 }}>
+            <select id="game-basemap-style" data-no-translate value={shown} disabled={off} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1 }}>
                 <option value="" style={{ color: "black" }}>Scenario default</option>
                 {choices.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
             </select>
