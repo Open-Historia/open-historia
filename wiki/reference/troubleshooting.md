@@ -112,8 +112,8 @@ failing. See [time and turns](/wiki/time/).
 
 The turn's events can succeed while the **Projects & Operations** update fails. When that happens
 the turn is held the same way: *"Your events are ready, but the Projects & Operations board did
-not update, so nothing has been saved yet."* (With **Save AI requests** on, the board is one of
-the checks that share the after-skip request.)
+not update, so nothing has been saved yet."* (A skip's events now carry the board's changes themselves,
+so this is rare.)
 
 **Retry the board** and it finishes the turn, keeping the events that already came back. You do
 not re-run the whole simulation to fix a board that was the only thing to fail. Discard it and
@@ -151,7 +151,7 @@ AI shows which entries are Spent and when each comes back.
 Symptoms: turns fail intermittently, or stall on long jumps while short ones work.
 
 Free tiers have per-minute limits that a long jump can exceed, and a daily allowance that a busy
-session can. Options: leave **Save AI requests** on (a skip then costs one to three requests),
+session can. Options: leave **Save AI requests** on (a skip is then one request),
 use the smaller/faster model in the family (limits are usually more generous), add a
 [backup model](/wiki/ai-setup/#backup-models), or move to a paid tier.
 

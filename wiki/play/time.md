@@ -64,10 +64,10 @@ thin. Start with months.
 ## What a skip costs
 
 Under the presets the panel shows today's count — *"0 of 500 AI requests used today · a skip uses
-1, at most 3"*. With **Save AI requests** on (the default), a skip is one request, a second when
-there is something to check afterwards — units to move, fronts to redraw, the Projects board, your
-agents' reports, all in one — and never more than three. Turn it off in Settings → AI for the most
-thorough turns on a key with no daily limit. See [settings](/wiki/settings/#ai-requests).
+1 request"*. A skip is one request, with **Save AI requests** on or off: each event carries what
+it changed — units, fronts, the Projects board — and your agents' reports come back in the same
+answer. With Save AI requests off and AI lookup functions on, the model may look things up first,
+and the panel then says *"at most 3"*. See [settings](/wiki/settings/#ai-requests).
 
 ## While it runs
 

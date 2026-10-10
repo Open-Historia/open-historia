@@ -29,8 +29,9 @@ The Events panel opens as soon as a skip starts and fills as the model writes, s
 reading before the turn has finished (Gemini delivers everything at once, so there it all arrives
 together). When you open the history for a fresh turn, the map rolls back to how it looked
 *before* the jump. Each time you press **Next event**, that event's changes are applied on top —
-the border moves, the unit appears, the flag changes — and the camera flies to whatever the event
-concerns.
+the border moves, the unit appears, the flag changes — and the camera flies to where the event
+happened: the places it names as places and the things it changed. An event that names no place
+leaves the camera where it is.
 
 **Skip to end** fast-forwards the remaining events and snaps the map to the final state.
 
@@ -47,7 +48,8 @@ kept, the rest never happens, and the date becomes that event's. See
 Each card has the event's date, its title and a description that says what happened — who,
 where, with what — in a paragraph or two rather than a fixed word count. Below it are **chips**
 for the countries, regions, formations and structures the event is about; click one and the map
-flies there. A document that reached you through the event is shown on its card, a click away.
+flies there. A chip comes from a place the event itself names as a place, or from something it
+changed on the map — never from a word in its text that happens to match a place name. A document that reached you through the event is shown on its card, a click away.
 
 If the camera movement is distracting, **Settings → Map → Disable camera movement during
 events** turns it off and leaves you in control.
@@ -84,10 +86,9 @@ one of the six is dropped. Older events without tags are always shown.
 
 ## Events kept off the timeline
 
-After a skip, a check takes repeats and filler off the timeline — events that restate the
-record, or report a meeting with no outcome. Events with hard consequences (territory, units,
-structures, chats, renames, war records) always stay. With **Save AI requests** on this check
-shares the one after-skip request; it can be turned off in Settings → AI.
+After a skip, the game takes repeats off the timeline — events that restate the record word
+for word. Events with hard consequences (territory, units, structures, chats, renames, war
+records) always stay. This costs no request and has no switch.
 
 <p class="beta-note"><b>On beta you see what was kept off, and why.</b> While the skip is
 written, a card that will not make the timeline is greyed as it arrives, with the reason, and is

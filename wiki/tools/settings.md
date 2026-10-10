@@ -74,11 +74,11 @@ time, which is when a Gemini key's day begins) and what your last time skip cost
 
 | Setting | |
 |---|---|
-| **Save AI requests** | **On by default.** A time skip is one request, two when there is something to check afterwards, and never more than three. Off gives the most thorough turns, for a key with no daily limit: every check after a skip makes its own request, the model may look things up, and a flawed answer is sent back to be redone — a busy skip can use twenty requests or more. |
+| **Save AI requests** | **On by default.** A time skip is one request either way: each event arrives already carrying what it changed, and your agents' reports come back in the same answer. On, the model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again; a skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where the automatic Stats refresh falls due. Off is for a key with no daily limit: with AI lookup functions on, the model may look things up before it answers — two rounds at most, so a skip never uses more than three — and outside a skip a flawed answer is sent back to be redone. |
 | **Requests a day your key allows** | 500 by default. Used only for the count and to keep background AI off the end of your day. The game never stops you at the limit; your provider does. |
 | **Background AI** | **On by default.** While you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading. Off: the game only calls the model when you do something. |
 | **Background requests a day, at most** | 30 by default. Background AI also stops by itself once less than a tenth of your day is left. |
-| **Checks after a time skip** | Five switches — move units to match the events, mark occupied and disputed land, take repeats and filler off the timeline, keep the Projects board in step, collect your agents' reports. With Save AI requests on they share one request; turning one off makes it smaller, and saves the request only if it was the only one with work to do. |
+| **Checks after a time skip** | Gone. Each event of a skip now carries its own consequences — the units it moved, the land it took, the Projects board, your agents' reports — inside the skip's one request, so there is nothing left to switch on or off. |
 
 <p class="beta-note"><b>On beta there is a sixth check</b>, <b>Put new structures on the map</b>:
 bases, shipyards, data centres and ground stations appear where the events built them.</p>
@@ -89,7 +89,7 @@ bases, shipyards, data centres and ground stations appear where the events built
 |---|---|
 | **Limit AI generation** | **Off by default.** On, the game stops waiting and falls back to canned events when the model goes quiet — five minutes of silence part-way through an answer, or fifteen with no answer at all. It measures **silence**, not elapsed time: a model that is still writing is never interrupted. Worth turning on for a local model, or if you have had turns hang. |
 | **Generate long time skips in segments** | **Off by default.** On, skips of more than a few months are generated as several shorter requests merged into one round — slower and costlier, but far less likely to time out on a hosted provider. See [time and turns](/wiki/time/). |
-| **AI lookup functions** | On by default, but only used while Save AI requests is off. The model can call functions — exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Needs a provider that supports function calling. |
+| **AI lookup functions** | On by default, but only used while Save AI requests is off. The model can call functions — exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Needs a provider that supports function calling. |
 | **Show time skip events as they are written** | **On by default.** A skip opens the Events panel and fills it as the model writes. Off: the round appears at the end. The turn is the same either way, and Gemini arrives all at once regardless. |
 | **Batch background AI tasks** | Anthropic only, off by default. History consolidation runs through the Message Batches API at about half the price and lands a little later. |
 

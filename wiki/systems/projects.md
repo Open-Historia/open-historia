@@ -79,8 +79,8 @@ steer them; you do not type them into existence.
 
 After each time skip the board is brought into step with what happened — progress, stalls and new
 long-term efforts — reading every event of the turn, including ones taken off the timeline as
-filler. With **Save AI requests** on, this shares the one after-skip request; it can be turned
-off in Settings → AI. If that update fails, the turn is held rather than lost — see
+filler. The skip's own events carry the board's changes, so this costs no request and has no
+switch. If that update fails, the turn is held rather than lost — see
 [troubleshooting](/wiki/troubleshooting/#a-held-projects-board). The time skip itself is shown
 the board, so an effort you push is narrated as what it actually is.
 

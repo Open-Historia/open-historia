@@ -187,8 +187,8 @@ place.</p>
 
 ## Agents report in real time
 
-Agents report after time skips — with **Save AI requests** on, collecting their reports is one of
-the after-skip checks, and each agent files at least every third skip. They also report between
+Agents report after time skips — their reports come back in the skip's own answer, at no extra
+request, and each agent files at least every third skip. They also report between
 skips: while the game is open and on screen, each deployed agent is rolled roughly once a minute,
 working out to about **one report every twenty minutes per agent**. Those in-between reports are
 background AI, so they only happen while **Background AI** is on, and stop at its daily cap.
