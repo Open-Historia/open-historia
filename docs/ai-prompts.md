@@ -312,7 +312,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.6 `eventConsolidator` — compress history
 - **Purpose:** Fold a batch of events + closed chats into one continuity summary (~≤360 words) so old detail leaves the context window without losing map/diplomacy facts.
-- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (`535`, auto-run by `compactHistoryIfNeeded` `554` after jumps) and `consolidateRecentHistory({limit})`.
+- **Prompt:** `tasks.eventConsolidator`. **Entries:** a time skip carries a fold that is due inside its own request: the whole prompt goes into the skip's as a fenced job and the answer comes back in the skip's `history` field (`prepareSkipHistoryFold`, `buildSkipHistoryJob`; see [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences)). `consolidateHistoryBatch` is the same prompt as a request of its own: run by `compactHistoryIfNeeded` only for a skip that could not carry the fold, and by `consolidateHistoryNow` (Cheats → History Document, refused while a turn is in flight).
 - **Tool/schema:** `submit_event_consolidation` / `EVENT_CONSOLIDATOR_SCHEMA`: `{ summary }`.
 - **Fallback:** concatenate raw event lines + `buildChatSummaryText`. Triggers: `CONSOLIDATION_*` thresholds (`gameplay.js`).
 

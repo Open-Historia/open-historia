@@ -12,6 +12,7 @@
 // module is what the turn, the Cheats panel's History Document tool and the
 // tests all agree through.
 import { normalizeActions, normalizeChats, normalizeWorldState } from "../../runtime/gameState.js";
+import { HISTORY_FIELD } from "./gameplaySchemas.js";
 import { getUnconsolidatedEvents } from "./promptContext.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -31,6 +32,15 @@ export const HISTORY_CONSOLIDATION = Object.freeze({
   // must condense or drop older material to make room for the new period.
   documentWordBudget: 1500,
   documentWordCeiling: 1800,
+  // A fold a time skip carried and got no usable answer for simply waits for
+  // the next skip. Past this many unfolded events it has waited long enough,
+  // and is asked for as a request of its own (gameplay.js compactHistoryIfNeeded).
+  ownRequestThreshold: 96,
+  // What a skip's answer has to give for its fold to be taken at all
+  // (judgeSkipHistoryAnswer): a document of at least this many words, or
+  // failing that a summary of this many, which is then appended.
+  minDocumentWords: 80,
+  minSummaryWords: 40,
 });
 
 export const countWords = (text) => {
@@ -39,11 +49,13 @@ export const countWords = (text) => {
 };
 
 // Returns what this pass would fold and why. `force` (the Cheats tool) skips
-// the round/size thresholds but still keeps the retained tail in full.
-export const planHistoryConsolidation = (bundle, { force = false } = {}) => {
+// the round/size thresholds but still keeps the retained tail in full. `round`
+// stands in for the game's own: a time skip plans its fold before it runs, for
+// the round it is about to produce (gameplay.js prepareSkipHistoryFold).
+export const planHistoryConsolidation = (bundle, { force = false, round: asRound = null } = {}) => {
   const world = normalizeWorldState(bundle?.world);
   const unconsolidatedEvents = getUnconsolidatedEvents(bundle?.events, world);
-  const round = Number(bundle?.game?.round) || 0;
+  const round = Number.isFinite(Number(asRound)) && asRound !== null ? Number(asRound) : Number(bundle?.game?.round) || 0;
   const { sizeThreshold, intervalRounds, retainEvents, batchSize } = HISTORY_CONSOLIDATION;
 
   const overSize = unconsolidatedEvents.length > sizeThreshold;
@@ -153,6 +165,68 @@ export const applyHistoryDocumentUpdate = (worldLike, {
       throughRound: throughRound || current?.throughRound || 0,
     },
   };
+};
+
+// --- Folded into a time skip ---
+//
+// A time skip is ONE request (requestBudget.js), so a fold that is due gets no
+// request of its own: it rides on the skip as a separate job, fenced off from
+// the period being simulated the way the turn review fences its jobs
+// (turnReview.js), and its answer comes back in one field of the skip's answer.
+// The job's text is the consolidator's own prompt, whole: its template, with
+// whatever guidance the scenario's author gave it, the material to fold and the
+// document directive above. What it covers is decided BEFORE the skip
+// (planHistoryConsolidation with the round the skip is about to produce), so
+// the events the skip itself writes are never part of it. The field is
+// HISTORY_FIELD (gameplaySchemas.js, beside the contract that declares it).
+const historyJobFence = (edge) => `########## ${edge} OF A SEPARATE JOB: THE HISTORY DOCUMENT ##########`;
+
+// `brief`: the system prompt the consolidator's own request would have carried.
+export const buildSkipHistoryJob = (brief) => {
+  const text = normalizeString(brief);
+  if (!text) return "";
+  return [
+    historyJobFence("BEGINNING"),
+    "One more job rides on this answer, and it is separate from the period you are simulating: the campaign's older history is due to be folded into its history document. Everything between these two fence lines is that job's own brief. The role it gives you, its inputs and its rules belong to it alone, and nothing in it changes how you write the events.",
+    `Do it LAST, after the events and everything else, and put its answer in the "${HISTORY_FIELD}" field: {"summary": "<this period's compressed history>", "document": "<the whole revised history document>"}. Where the brief tells you to return JSON, to use a tool, or shows an output format, that describes the content of this one field.`,
+    "It covers ONLY the events, conversations and orders its brief lists. The events you write in this answer are not part of it: they are folded on a later turn.",
+    "",
+    text,
+    historyJobFence("END"),
+  ].join("\n");
+};
+
+// What a skip's answer gave for the job, read before anything is folded,
+// because a fold is for good: what it covers is never shown to the simulation
+// again. `ok` only when there is something to keep those events in.
+//
+// A document is taken when it reads like a whole one. A model that ran out of
+// room writes the summary and a stub of a document: taking the stub would throw
+// the campaign's memory away, so then the document is left out and the summary
+// is appended to the one the campaign has (applyHistoryDocumentUpdate does that
+// for a pass that came back without a document). A summary too short to stand
+// for the events it replaces is no fold at all: it waits for the next skip.
+export const judgeSkipHistoryAnswer = (answer, { currentText = "" } = {}) => {
+  const source = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : null;
+  const summary = normalizeString(source?.summary);
+  if (!summary) {
+    return { ok: false, summary: "", document: "", reason: source ? "its history had no summary" : "it carried no history" };
+  }
+  const { documentWordBudget, minDocumentWords, minSummaryWords } = HISTORY_CONSOLIDATION;
+  const document = normalizeString(source?.document);
+  const before = countWords(currentText);
+  const written = countWords(document);
+  // Half of what the campaign has, or of the budget when it has more than that:
+  // a document condensed to its budget is still a document.
+  const floor = Math.max(minDocumentWords, Math.min(before, documentWordBudget) * 0.5);
+  if (document && written >= floor) return { ok: true, summary, document, reason: "" };
+  const why = document
+    ? `its document came back at ${written} word${written === 1 ? "" : "s"} against the ${before} the campaign has`
+    : "it gave no document";
+  if (countWords(summary) < minSummaryWords) {
+    return { ok: false, summary: "", document: "", reason: `${why}, and its summary is too short to stand for what it would replace` };
+  }
+  return { ok: true, summary, document: "", reason: `${why}; its summary is appended instead` };
 };
 
 // The plain-words state the Cheats tool shows above the document.

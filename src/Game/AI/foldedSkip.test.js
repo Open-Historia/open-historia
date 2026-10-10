@@ -4,10 +4,12 @@
 // Runs without node_modules: foldedSkip.js imports nothing, and gameplay.js is
 // read as text.
 //
-// A time skip is one request while requests are being saved. What that promise
-// rests on is checked here: when a refusal is the contract's fault (and only
-// then is the skip asked again the old way), that a board op is applied once,
-// and that an agent's report reaches the agent it was written for.
+// A time skip is one request, in every mode. What that promise rests on is
+// checked here: when a refusal is the contract's fault (and only then is the
+// skip asked again the old way), that a board op is applied once, that an
+// agent's report reaches the agent it was written for, that nothing after a
+// skip is a request of its own any more, and that function calling, the one
+// thing that can add requests, is counted against the skip's budget.
 
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -20,7 +22,7 @@ import {
   providerRefusedContract,
   withoutBoardOps,
 } from "./foldedSkip.js";
-import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD } from "./gameplaySchemas.js";
+import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, HISTORY_FIELD } from "./gameplaySchemas.js";
 
 const gameplaySource = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const functionBody = (name) => {
@@ -122,12 +124,29 @@ test("a report for nobody listed is nobody's, and an agent gets only the first w
 // ---------------------------------------------------------------------------
 // The contract
 
-test("the contract a skip is sent by default has no board and no agents' reports", () => {
+test("the lean contract has no board, no agents' reports and no history: each is added only when a skip carries it", () => {
   for (const task of ["jumpForward", "autoJumpForward"]) {
     const tool = getGameplayTool(task);
     assert.equal("projectOps" in tool.schema.properties.events.items.properties.impacts.properties, false, task);
     assert.equal(AGENT_REPORTS_FIELD in tool.schema.properties, false, task);
+    assert.equal(HISTORY_FIELD in tool.schema.properties, false, task);
   }
+});
+
+test("the history fold is the last field of the contract, and only when a fold is due", () => {
+  const lean = getGameplayTool("jumpForward");
+  assert.equal(HISTORY_FIELD in foldJumpTool(lean, { agentReports: true }).schema.properties, false, "no fold due, no field");
+  const all = foldJumpTool(lean, { agentReports: true, history: true });
+  assert.deepEqual(Object.keys(all.schema.properties).slice(-2), [AGENT_REPORTS_FIELD, HISTORY_FIELD], "after the reports: the one an answer cut short can best do without");
+  assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary", "document"]);
+  assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "document"], "the consolidator's own two fields");
+  const historyOnly = foldJumpTool(lean, { board: false, history: true });
+  assert.equal(HISTORY_FIELD in historyOnly.schema.properties, true, "a skip with no board and no agents still carries a fold that is due");
+  assert.equal("projectOps" in historyOnly.schema.properties.events.items.properties.impacts.properties, false);
+  // An answer that carries one passes the skip's own validation: it is judged
+  // when it is read, never by the schema (a poor fold costs the fold, not the turn).
+  const answer = { stopDate: "2026-02-01", summary: "A quiet month.", events: [{ date: "2026-01-05", title: "A depot opens", description: "A depot opens at the railhead." }], [HISTORY_FIELD]: { summary: "x", document: "" } };
+  assert.equal(validateGameplayPayload("jumpForward", answer).valid, true);
 });
 
 test("folding adds the board under each event's impacts, and the agents' reports last, each only when asked for", () => {
@@ -175,12 +194,43 @@ test("an answer written to either contract passes the skip's validation", () => 
 // ---------------------------------------------------------------------------
 // The wiring, read from gameplay.js (which does not load under bare node)
 
-test("a skip is folded exactly when requests are being saved, decided once", () => {
+test("every skip is folded, with Save AI requests on or off, decided once", () => {
   const body = functionBody("runJumpSegments");
-  assert.match(body, /if \(state\.folded === undefined\) state\.folded = Boolean\(state\.requests\?\.saving\) && !foldedSkipRefused;/);
+  // No setting is read: only a provider that refused the folded request this
+  // session is asked the old way.
+  assert.match(body, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;/);
+  assert.equal(/state\.requests\?\.saving/.test(body), false, "whether requests are being saved no longer decides what a skip asks");
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
-  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: Boolean\(state\.foldedPrep\?\.board\), agentReports: agentJobs\.length > 0 \}\)/);
+  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: Boolean\(state\.foldedPrep\?\.board\), agentReports: agentJobs\.length > 0, history: Boolean\(historyJob\) \}\)/);
   assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
+  assert.match(body, /const historyJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");
+  // One request in every mode: a flawed answer is cut down, never sent back.
+  assert.match(body, /salvage: true,/);
+});
+
+test("the history a skip folds is planned before it and written from its own answer", () => {
+  const prepare = functionBody("prepareSkipHistoryFold");
+  assert.match(prepare, /planHistoryConsolidation\(bundle, \{ round: \(Number\(bundle\.game\?\.round\) \|\| 0\) \+ 1 \}\)/, "for the round the skip is about to produce");
+  assert.match(prepare, /if \(!plan\.due\) return null;/);
+  assert.match(prepare, /if \(batchBackgroundTasksEnabled\(\) && providerSupportsBatch\("eventConsolidator"\)\) return \{ separate: true \};/, "a player who sends this pass as a batch still does");
+  assert.match(prepare, /buildTaskSystemPrompt\("eventConsolidator", \{ variables, lookups: null, reminders: false \}\)/, "the consolidator's own prompt, whole");
+
+  const segments = functionBody("runJumpSegments");
+  assert.match(segments, /if \(payload && typeof payload === "object" && HISTORY_FIELD in payload\) \{/);
+  assert.match(segments, /delete payload\[HISTORY_FIELD\];/, "the fold never reaches anything that applies events");
+
+  const review = functionBody("foldedTurnReview");
+  assert.match(review, /if \(!fold\?\.separate\) review\.history = \{ due: false \};/);
+  assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
+  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText \}\),/);
+
+  // Read by the pass that used to make the request.
+  assert.match(gameplaySource, /\{ requests, skipFold: review\?\.history \?\? null \}\);/);
+  const pass = functionBody("compactHistoryIfNeeded");
+  assert.match(pass, /if \(skipFold && !force\) \{\s*\n\s*if \(!skipFold\.due\) return world;/, "nothing was due before the skip: nothing is asked after it");
+  const written = pass.slice(pass.indexOf("if (skipFold.ok) {"), pass.indexOf("const waiting ="));
+  assert.equal(/runJsonTask|consolidateHistoryBatch|budget\.take/.test(written), false, "a carried fold is written with no request");
+  assert.match(pass, /if \(waiting <= HISTORY_CONSOLIDATION\.ownRequestThreshold\) \{/, "a fold that failed waits for the next skip");
 });
 
 test("a refused folded request is asked again the old way, and only a refusal is", () => {
@@ -196,11 +246,48 @@ test("a refused folded request is asked again the old way, and only a refusal is
 
 test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {
   const body = functionBody("finishTimelineJump");
-  assert.match(body, /const folded = Boolean\(state\.folded && state\.requests\?\.saving\);/);
-  assert.match(body, /\? \(folded \? foldedTurnReview\(\{ context, merged, state \}\) : await runTurnReview\(\{ context, merged, signal, state \}\)\)\s*\n\s*: null;/);
+  assert.match(body, /const folded = Boolean\(state\.folded\);/);
+  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await runTurnReview\(\{ context, merged, signal, state \}\);/);
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);
+});
+
+test("nothing after a skip is a request of its own: no director, no agent, no attribution, in any mode", () => {
+  // With Save AI requests off each of these used to be a request (and each
+  // agent due a report another): a busy skip made twenty or more.
+  const finish = functionBody("finishTimelineJump");
+  assert.equal(/runJsonTask\(/.test(finish), false, "the finish makes no request");
+  assert.equal(/savingRequests\(\)|requests\?\.saving/.test(finish), false, "and reads no setting");
+  for (const part of ["units", "territory"]) {
+    assert.ok(finish.includes(`review.parts.${part} ??`), `the ${part} check is the review's part, or none`);
+  }
+  for (const gone of ["runJsonTask(\"unitDirector\"", "runJsonTask(\"territoryDirector\""]) {
+    assert.equal(gameplaySource.includes(gone), false, `${gone} is gone`);
+  }
+  // A skip always has a review record, so the per-agent requests are never
+  // reached after one: they are left for a turn that is not a skip.
+  assert.match(gameplaySource, /if \(review\) await fileReviewedAgentReports\(review\);\s*\n\s*else if \(!savingRequests\(\)\) await refreshSpyIntercepts\(\);/);
+  // What a skip may spend on is one list (requestBudget.js), and the budget is
+  // never unlimited for a real skip.
+  const requests = functionBody("createJumpRequests");
+  assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces \}\), only: SKIP_SPENDERS \}\);/);
+  assert.equal(/unlimited/.test(requests), false);
+  assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
+  // The two that asked outside the list are told no before they build anything.
+  assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
+  assert.match(functionBody("repairSkipStorylineMotion"), /const noRepairRequests = Boolean\(state\?\.requests\?\.budget\) && !state\.requests\.budget\.allows\("repair"\);/);
+});
+
+test("function calling inside a skip spends the skip's budget: a round is a request", () => {
+  const task = functionBody("runJsonTask");
+  assert.match(task, /const lookupRounds = budget && !budget\.unlimited && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? budget\.free\s*\n\s*: null;/);
+  assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
+  assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
+  // Decided after the attempt's own request is taken, so `free` is what is left.
+  assert.ok(task.indexOf("budget.take(outputAttempt === 1 ?") < task.indexOf("const lookupRounds ="));
+  // Function calling is still the player's switch, and off while saving.
+  assert.match(gameplaySource, /const lookupFunctionsEnabled = \(\) => !savingRequests\(\) && getMapSettingDefaultOn\(MAP_SETTING_KEYS\.lookupFunctions\);/);
 });
 
 test("the folded review takes the ops off the events before anything applies them", () => {
