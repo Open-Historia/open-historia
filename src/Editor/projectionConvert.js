@@ -31,10 +31,19 @@ import { DEFAULT_PROJECTION, FREEFORM, convertBounds, convertDisplayPoint, moveP
 //   "vector"  its geometry moved with the map
 //   "plain"   a plain sea in place of the built-in tiles
 //   "tiles"   the built-in tiles again
-export const planBasemapChange = ({ from, to, background = null, keepPicture = false }) => {
+//   "blocked" not converted at all, and `reason` says why
+//
+// A detailed map (doc.metadata.tiledBasemap) is a Mercator tile archive the
+// editor cannot move (docs/adr/0005): converting would move the regions and
+// the basemap under it and leave it where it was, out of line with both.
+export const DETAILED_MAP_BLOCKS_CONVERSION =
+  "This map has a detailed map, which is always drawn in the Mercator projection and cannot be converted with the rest of the map. "
+  + "To change the projection, remove the detailed map first: in Basemap → My Maps, pick a basemap without one.";
+export const planBasemapChange = ({ from, to, background = null, keepPicture = false, detailedMap = false }) => {
   const source = normalizeProjection(from);
   const target = normalizeProjection(to);
   if (sameProjection(source, target)) return { kind: "none" };
+  if (detailedMap) return { kind: "blocked", reason: DETAILED_MAP_BLOCKS_CONVERSION };
   const kind = background?.kind ?? null;
   if (kind === "image") {
     if (source.type === FREEFORM || target.type === FREEFORM) {

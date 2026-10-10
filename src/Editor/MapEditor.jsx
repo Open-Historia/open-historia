@@ -49,7 +49,7 @@ import FlagPicker from "./FlagPicker.jsx";
 import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import ProjectionPanel from "./ProjectionPanel.jsx";
-import { moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
+import { DETAILED_MAP_BLOCKS_CONVERSION, moveFeatureCoords, moveUnits, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
 import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
@@ -227,7 +227,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       return [X * EARTH, Y * EARTH];
     };
     const background = customBgRef.current;
-    const plan = planBasemapChange({ from, to, background, keepPicture: background?.kind === "image" });
+    const plan = planBasemapChange({ from, to, background, keepPicture: background?.kind === "image", detailedMap: Boolean(d.doc?.metadata?.tiledBasemap) });
+    if (plan.kind === "blocked") {
+      console.warn("[editor] the map was not converted:", plan.reason);
+      return;
+    }
     let nextBg = background;
     if (plan.kind === "bounds") {
       // Mercator with no bounds given: the picture fills the square, as it did.
@@ -452,7 +456,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
         return [X * EARTH, Y * EARTH];
       };
-      const plan = planBasemapChange({ from, to, background: customBg, keepPicture });
+      const plan = planBasemapChange({ from, to, background: customBg, keepPicture, detailedMap: Boolean(d.doc?.metadata?.tiledBasemap) });
+      if (plan.kind === "blocked") {
+        setProjectionError(plan.reason);
+        return;
+      }
       let nextBg = customBg;
       if (plan.kind === "redraw") {
         const redrawn = await reprojectPicture({ dataUrl: customBg.dataUrl, from, to, bounds: customBg.bounds });
@@ -1586,6 +1594,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           hasPicture={customBg?.kind === "image"}
           busy={projectionBusy}
           error={projectionError}
+          blocked={d.doc?.metadata?.tiledBasemap ? DETAILED_MAP_BLOCKS_CONVERSION : ""}
           onConvert={convertProjection}
           onView={(patch) => {
             // { globe } or { wrap }: written only when switched off.

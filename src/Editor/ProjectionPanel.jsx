@@ -38,7 +38,9 @@ const smallButton = {
   cursor: "pointer",
 };
 
-const ProjectionPanel = ({ projection, pictureAspect = null, hasPicture = false, busy = false, error = "", onConvert, onView, onClose }) => {
+// `blocked`: why the map cannot be converted at all (a detailed map,
+// projectionConvert.js), shown in place of the button's offer.
+const ProjectionPanel = ({ projection, pictureAspect = null, hasPicture = false, busy = false, error = "", blocked = "", onConvert, onView, onClose }) => {
   const current = normalizeProjection(projection);
   const [type, setType] = useState(current.type);
   const [shape, setShape] = useState(() => formatAspect(current.type === FREEFORM ? current.aspect : pictureAspect || 2));
@@ -47,6 +49,7 @@ const ProjectionPanel = ({ projection, pictureAspect = null, hasPicture = false,
   const aspect = parseAspect(shape);
   const chosen = type === FREEFORM ? (aspect ? projectionChoice(type, aspect) : null) : projectionChoice(type);
   const changed = Boolean(chosen) && !sameProjection(current, chosen);
+  const canConvert = changed && !busy && !blocked;
   // "Already drawn for it" only means something for a picture going to a world
   // projection: to freeform a picture is never redrawn anyway.
   const offersKeep = hasPicture && type !== FREEFORM && current.type !== FREEFORM;
@@ -91,11 +94,12 @@ const ProjectionPanel = ({ projection, pictureAspect = null, hasPicture = false,
         Converting moves every region, city and unit together with the basemap. Undo does not reach back past it: convert again to return.
       </p>
       {error ? <p style={{ ...note, color: "#ffb4a8" }}>{error}</p> : null}
+      {blocked && changed ? <p style={{ ...note, color: "#ffb4a8" }}>{blocked}</p> : null}
       <button
         type="button"
-        disabled={!changed || busy}
-        style={button(changed && !busy)}
-        onClick={() => changed && !busy && onConvert?.(chosen, { keepPicture: offersKeep && keepPicture })}
+        disabled={!canConvert}
+        style={button(canConvert)}
+        onClick={() => canConvert && onConvert?.(chosen, { keepPicture: offersKeep && keepPicture })}
       >
         {busy ? "Converting the map…" : changed ? "Convert the map" : "The map is in this projection"}
       </button>
