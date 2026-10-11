@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { VISIT_SCRIPT_URL, VISIT_TAGS, VISIT_WEBSITE_ID, countVisit, visitNeedsKind, visitScriptAttributes, visitTagOf } from "./visitCount.js";
+import { VISIT_BEAT_EVENT, VISIT_BEAT_MS, VISIT_SCRIPT_URL, VISIT_TAGS, VISIT_WEBSITE_ID, countVisit, startVisitBeat, visitNeedsKind, visitScriptAttributes, visitTagOf } from "./visitCount.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..", "..");
@@ -155,10 +155,99 @@ test("the privacy policy says so", { skip: hasPolicy ? false : "this branch has 
   const policy = read("public/privacy/index.html");
   assert.ok(policy.includes("<strong>Umami</strong>"));
   assert.ok(policy.includes("which application it is"));
+  assert.ok(policy.includes("<code>playing</code>"));
   assert.ok(policy.includes("<code>cloud.umami.is</code>"));
   assert.ok(policy.includes("<td>Umami Cloud, in the United States</td>"));
   assert.ok(policy.includes("Data held by Google Analytics, Umami, GitHub, Discord or your AI provider"));
   // The Android app loads neither counter (vite.config.ts dropWebAnalytics), and the policy no longer says it does.
   assert.equal(policy.includes("the desktop app and the Android app when you are online, load <strong>Google Analytics</strong>"), false);
   assert.ok(read("vite.config.ts").includes("const dropWebAnalytics = (isAndroid: boolean) => ({"));
+});
+
+// "Umami says there are 15 active users right now. However the website says
+// there are 35 people connected to the node." Umami counts a visitor active
+// who sent it something in the last five minutes; the game sent it the visit
+// and nothing after.
+const playing = ({ visibility = "visible", umami = true } = {}) => {
+  const sent = [];
+  const listeners = {};
+  let tick = null;
+  const clock = { at: 0 };
+  const doc = { visibilityState: visibility, addEventListener: (name, listener) => { listeners[name] = listener; }, removeEventListener: (name) => { delete listeners[name]; } };
+  const win = {
+    setInterval: (callback, every) => { tick = { callback, every, next: clock.at + every }; return 7; },
+    clearInterval: (id) => { if (id === 7) tick = null; },
+    ...(umami ? { umami: { track(name) { sent.push([name, this === win.umami]); } } } : {}),
+  };
+  const stop = startVisitBeat({ doc, win, now: () => clock.at });
+  // Time passing: the timer fires as often as it asked to.
+  const pass = (ms) => {
+    const end = clock.at + ms;
+    while (tick && tick.next <= end) {
+      clock.at = tick.next;
+      tick.next += tick.every;
+      tick.callback();
+    }
+    clock.at = end;
+  };
+  return { sent, doc, win, listeners, clock, pass, stop, timer: () => tick };
+};
+
+test("while the game is on screen it says so inside Umami's five minutes, and an hour of play is fifteen events", () => {
+  assert.ok(VISIT_BEAT_MS < 5 * 60 * 1000 && VISIT_BEAT_MS >= 3 * 60 * 1000);
+  const game = playing();
+  // Nothing at once: the visit itself is what the counter sends when it loads.
+  assert.deepEqual(game.sent, []);
+  game.pass(VISIT_BEAT_MS - 1000);
+  assert.deepEqual(game.sent, []);
+  game.pass(1000);
+  // An event by its name, said to the counter as its own method.
+  assert.deepEqual(game.sent, [[VISIT_BEAT_EVENT, true]]);
+  game.pass(60 * 60 * 1000 - VISIT_BEAT_MS);
+  assert.equal(game.sent.length, 15);
+  // And the timer asks more often than it speaks, so one held back by the browser loses no turn.
+  assert.ok(game.timer().every <= VISIT_BEAT_MS / 2);
+});
+
+test("a hidden page is nobody playing: nothing is said until it is looked at again, and then at once", () => {
+  const game = playing({ visibility: "hidden" });
+  game.pass(30 * 60 * 1000);
+  assert.deepEqual(game.sent, []);
+  game.doc.visibilityState = "visible";
+  game.listeners.visibilitychange();
+  assert.equal(game.sent.length, 1);
+  // Looked away and back within the interval: not said twice.
+  game.doc.visibilityState = "hidden";
+  game.listeners.visibilitychange();
+  game.doc.visibilityState = "visible";
+  game.listeners.visibilitychange();
+  assert.equal(game.sent.length, 1);
+});
+
+test("a counter that never loaded is told nothing, one that throws breaks nothing, and it can be stopped", () => {
+  const blocked = playing({ umami: false });
+  blocked.pass(20 * 60 * 1000);
+  assert.deepEqual(blocked.sent, []);
+  const broken = playing();
+  broken.win.umami.track = () => { throw new Error("the counter failed"); };
+  assert.doesNotThrow(() => broken.pass(10 * 60 * 1000));
+  const stopped = playing();
+  stopped.stop();
+  assert.equal(stopped.timer(), null);
+  assert.equal(stopped.listeners.visibilitychange, undefined);
+  // No page to watch (a test, a worker): nothing is started.
+  assert.equal(startVisitBeat({}), null);
+});
+
+test("the game's page starts it when it adds the counter, and only then", async () => {
+  const timers = [];
+  const win = { location: { hostname: "openhistoria.com" }, setInterval: (callback, every) => timers.push(every), clearInterval: () => {} };
+  const web = page();
+  web.addEventListener = () => {};
+  assert.equal(await countVisit({ env: { VITE_OH_WEB: true }, doc: web, win }), "website");
+  assert.equal(timers.length, 1);
+  // Where nothing is counted nothing beats: a development run.
+  const dev = page();
+  assert.equal(await countVisit({ env: { DEV: true }, doc: dev, win: { ...win, location: { hostname: "localhost" } } }), "");
+  assert.equal(timers.length, 1);
 });

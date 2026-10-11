@@ -19,9 +19,26 @@
 //     would go to Umami with the count, and it is theirs.
 //
 // In the applications the page's query and fragment are left out of what is sent.
+//
+// WHO IS PLAYING NOW. "Umami says there are 15 active users right now. However
+// the website says there are 35 people connected to the node." Umami calls a
+// visitor active who sent it something in the last five minutes, and the game
+// sent it one thing: the visit, when the page loaded. Somebody playing for an
+// hour was active for the first five minutes of it. So while the game is on
+// screen it says so again every VISIT_BEAT_MS, as an event named
+// VISIT_BEAT_EVENT, under the same tag. Not while the page is hidden: a tab
+// left open behind others is nobody playing (the node counts those, which is
+// one reason its figure stays the higher; visitors whose browser blocks the
+// counter are the other).
+//
+// Each of these is an event on the Umami plan's monthly count: fifteen for an
+// hour of play at four minutes. The interval is the one figure to change.
 
 export const VISIT_SCRIPT_URL = "https://cloud.umami.is/script.js";
 export const VISIT_WEBSITE_ID = "452a6cce-d389-4c2d-bc09-e221194c93a2";
+// Inside Umami's five minutes, with room for a timer that fires late.
+export const VISIT_BEAT_MS = 4 * 60 * 1000;
+export const VISIT_BEAT_EVENT = "playing";
 
 export const VISIT_TAGS = Object.freeze({
   website: "website",
@@ -69,12 +86,42 @@ const askKind = async (fetchImpl) => {
   }
 };
 
+// Says the game is still being played, every `every` ms while its page is on
+// screen, and once on coming back to a page that was hidden longer than that.
+// The first is said one interval after the visit itself, which the counter
+// sends when it loads. Returns a function that stops it; null where there is
+// no page to watch. A counter that never loaded (offline, blocked) has no
+// `umami` to tell, and nothing is sent.
+export const startVisitBeat = ({ doc = null, win = null, every = VISIT_BEAT_MS, now = () => Date.now() } = {}) => {
+  if (!doc || !win || typeof win.setInterval !== "function") return null;
+  let last = now();
+  const beat = () => {
+    if (doc.visibilityState === "hidden" || now() - last < every) return;
+    const track = win.umami?.track;
+    if (typeof track !== "function") return;
+    last = now();
+    try {
+      track.call(win.umami, VISIT_BEAT_EVENT);
+    } catch {
+      /* the counter is nothing the game depends on */
+    }
+  };
+  // (Asked a little more often than it is said, so that a timer the browser held back does not skip a turn.)
+  const timer = win.setInterval(beat, Math.max(1000, Math.round(every / 4)));
+  doc.addEventListener?.("visibilitychange", beat);
+  return () => {
+    win.clearInterval?.(timer);
+    doc.removeEventListener?.("visibilitychange", beat);
+  };
+};
+
 // Adds the counter to the page, once. Returns the tag it was counted under ("" for none).
 // Never throws, and a counter that cannot be loaded (offline, blocked) is nothing at all.
 export const countVisit = async ({
   env = {},
   doc = typeof document === "undefined" ? null : document,
-  hostname = typeof window === "undefined" ? "" : window.location.hostname,
+  win = typeof window === "undefined" ? null : window,
+  hostname = win?.location?.hostname ?? "",
   fetchImpl = typeof fetch === "undefined" ? null : (...args) => fetch(...args),
 } = {}) => {
   try {
@@ -87,6 +134,7 @@ export const countVisit = async ({
     for (const [name, value] of Object.entries(visitScriptAttributes(tag))) script.setAttribute(name, value);
     script.onerror = () => script.remove?.();
     doc.head.appendChild(script);
+    startVisitBeat({ doc, win });
     return tag;
   } catch {
     return "";
