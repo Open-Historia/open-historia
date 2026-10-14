@@ -42,6 +42,7 @@ files:
   - LICENSE
   - dist/**
   - server/**
+  - "!server/data/**"
   - electron/**
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
