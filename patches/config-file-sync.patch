@@ -1,0 +1,69 @@
+diff --git a/electron/main.cjs b/electron/main.cjs
+index 96b28e33..445540bf 100644
+--- a/electron/main.cjs
++++ b/electron/main.cjs
+@@ -794,6 +794,56 @@ app.on("child-process-gone", (_event, details) => {
+   logMain("warn", "gpu.processGone", `The graphics process stopped (${String(details.reason || "unknown")}).`, { reason: details.reason, exitCode: details.exitCode });
+ });
+ 
++const CONFIG_FILE = process.env.OPEN_HISTORIA_CONFIG || path.join(USER_ROOT, "config.json");
++
++const setupConfigSync = (win) => {
++  win.webContents.on("dom-ready", async () => {
++    try {
++      if (fs.existsSync(CONFIG_FILE)) {
++        const raw = fs.readFileSync(CONFIG_FILE, "utf8");
++        const parsed = JSON.parse(raw);
++        const statements = [];
++        for (const [key, value] of Object.entries(parsed)) {
++          const serialized = typeof value === "string" ? value : JSON.stringify(value);
++          statements.push(`localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(serialized)});`);
++        }
++        if (statements.length > 0) {
++          await win.webContents.executeJavaScript(`(() => {
++            ${statements.join("\n")}
++            window.dispatchEvent(new Event("storage"));
++          })()`);
++          console.log(`[config-sync] Injected configuration from ${CONFIG_FILE}`);
++        }
++      } else {
++        setTimeout(async () => {
++          try {
++            if (win.isDestroyed()) return;
++            const dumped = await win.webContents.executeJavaScript(`(() => {
++              const keys = ["ai_connections", "ai_fallback_list", "ai_task_picks"];
++              const out = {};
++              for (const k of keys) {
++                const val = localStorage.getItem(k);
++                if (val) {
++                  try { out[k] = JSON.parse(val); } catch { out[k] = val; }
++                }
++              }
++              return JSON.stringify(out, null, 2);
++            })()`);
++            if (dumped && dumped !== "{}") {
++              fs.writeFileSync(CONFIG_FILE, dumped, "utf8");
++              console.log(`[config-sync] Exported initial configuration to ${CONFIG_FILE}`);
++            }
++          } catch (e) {
++            console.warn("[config-sync] Failed to export initial config:", e);
++          }
++        }, 1500);
++      }
++    } catch (err) {
++      console.warn(`[config-sync] Error with config file ${CONFIG_FILE}:`, err);
++    }
++  });
++};
++
+ const createMainWindow = () => {
+   const win = new BrowserWindow({
+     width: 1440,
+@@ -844,6 +894,7 @@ const createMainWindow = () => {
+     if (openableExternally(targetUrl)) shell.openExternal(targetUrl);
+   });
+   attachEditingContextMenu(win);
++  setupConfigSync(win);
+   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
+   win.once("ready-to-show", () => {
+     win.show();
