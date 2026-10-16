@@ -11,6 +11,7 @@
 import { useEffect, useRef } from "react";
 import Icon from "./Icon.jsx";
 import { panelSurface, toolButton } from "./editorStyles.js";
+import { toolHint } from "./toolHints.js";
 
 const TOOLS = [
   { id: "select", icon: "select", label: "Select", enabled: true },
@@ -98,6 +99,8 @@ const Toolbar = ({ activeTool, onToolChange, onFit, onUndo, onRedo, canUndo, can
             <button
               key={t.id}
               title={t.enabled ? t.label : `${t.label} (coming soon)`}
+              aria-label={toolHint(t.id)?.name || t.label}
+              aria-pressed={activeTool === t.id}
               disabled={!t.enabled}
               onClick={() => t.enabled && onToolChange(t.id)}
               style={toolButton(activeTool === t.id, !t.enabled)}
@@ -107,14 +110,14 @@ const Toolbar = ({ activeTool, onToolChange, onFit, onUndo, onRedo, canUndo, can
           ),
         )}
         <Separator />
-        <button title="Undo" disabled={!canUndo} onClick={onUndo} style={toolButton(false, !canUndo)}>
+        <button title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled={!canUndo} onClick={onUndo} style={toolButton(false, !canUndo)}>
           <Icon name="undo" />
         </button>
-        <button title="Redo" disabled={!canRedo} onClick={onRedo} style={toolButton(false, !canRedo)}>
+        <button title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)" aria-label="Redo" disabled={!canRedo} onClick={onRedo} style={toolButton(false, !canRedo)}>
           <Icon name="redo" />
         </button>
         <Separator />
-        <button title="Fit to data" onClick={onFit} style={toolButton(false, false)}>
+        <button title="Fit to data" aria-label="Fit to data" onClick={onFit} style={toolButton(false, false)}>
           <Icon name="fit" />
         </button>
       </div>

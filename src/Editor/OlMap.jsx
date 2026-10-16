@@ -1040,6 +1040,18 @@ const OlMap = ({
         }
         if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); doRedo(); return; }
       }
+      // Esc: first abandon an unfinished outline, otherwise let go of the
+      // selection. Typing in a field keeps Esc (CityPopup and UnitPopup focus
+      // one, and close themselves on it), as does anything that already used it.
+      if (e.key === "Escape") {
+        if (typing || e.defaultPrevented) return;
+        if (activeDrawRef.current && placedPointsRef.current.length > 0) {
+          activeDrawRef.current.abortDrawing();
+        } else if (selectedIdsRef.current.size) {
+          onSelectionRef.current?.([]);
+        }
+        return;
+      }
       // Delete / Backspace removes the current selection
       if (e.key !== "Delete" && e.key !== "Backspace") return;
       if (typing) return;

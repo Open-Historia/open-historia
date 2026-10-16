@@ -6,8 +6,9 @@
 // Shared UI constants for the map editor: flat dark grey, no glass. Glass is
 // for the HUD, where there is a map behind it to see; the Workshop's panels sit
 // over the map the player is DRAWING, and a translucent panel over that is just
-// harder to read. A selected control reads darker than its neighbours rather
-// than brighter — nothing here glows to say it is chosen.
+// harder to read. A chosen tool is the one light button in a row of dark ones:
+// flat, no glow, but at least 3:1 against its neighbours (editorStyles.test.js),
+// because "which tool am I holding" is the question a map-maker asks most.
 
 export const ACCENT = "#e7e7ea";
 export const ACCENT_RGB = [231, 231, 234];
@@ -21,6 +22,8 @@ export const panelSurface = {
   boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
 };
 
+export const TOOL_ACTIVE_BG = ACCENT;
+
 export const toolButton = (active, disabled) => ({
   display: "inline-flex",
   alignItems: "center",
@@ -29,10 +32,10 @@ export const toolButton = (active, disabled) => ({
   minWidth: "34px",
   height: "34px",
   padding: "0 8px",
-  background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.06)",
-  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
+  background: active ? TOOL_ACTIVE_BG : "rgba(255,255,255,0.06)",
+  border: active ? `1px solid ${TOOL_ACTIVE_BG}` : "1px solid rgba(255,255,255,0.12)",
   borderRadius: "8px",
-  color: disabled ? "rgba(255,255,255,0.3)" : "white",
+  color: disabled ? "rgba(255,255,255,0.3)" : active ? "#111114" : "white",
   cursor: disabled ? "not-allowed" : "pointer",
   fontSize: "13px",
   fontWeight: 600,
