@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createSaveGate, mayReplaceDocument, retryDelayMs, MAX_SAVE_FAILURES } from "./saveGuard.js";
+import { createSaveGate, mayReplaceDocument, retryDelayMs, settleSave, withTimeout, MAX_SAVE_FAILURES } from "./saveGuard.js";
 
 const spy = (result) => {
   const fn = async () => { fn.calls += 1; return result; };
@@ -103,5 +103,20 @@ test("a save that outlives its document learns so, and the replacement saves on 
 test("a failed write frees the gate for the retry", async () => {
   const gate = createSaveGate();
   await assert.rejects(gate.run(async () => { throw new Error("disk full"); }));
+  assert.equal(await gate.run(async () => true), true);
+});
+
+test("a save that landed is saved only if nothing changed meanwhile, and an edit asks for another save", () => {
+  assert.deepEqual(settleSave("saving"), { status: "saved", resave: false });
+  // The autosave timer for that edit may already have run out and only joined this save.
+  assert.deepEqual(settleSave("dirty"), { status: "dirty", resave: true });
+});
+
+test("a write that hangs fails after the timeout, so the gate and the backoff move on", async () => {
+  await assert.rejects(withTimeout(new Promise(() => {}), 10), /did not finish within/);
+  assert.equal(await withTimeout(Promise.resolve("doc-1"), 10), "doc-1");
+  await assert.rejects(withTimeout(Promise.reject(new Error("disk full")), 10), /disk full/);
+  const gate = createSaveGate();
+  await assert.rejects(gate.run(() => withTimeout(new Promise(() => {}), 10)));
   assert.equal(await gate.run(async () => true), true);
 });

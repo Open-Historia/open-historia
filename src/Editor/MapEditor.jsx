@@ -59,7 +59,7 @@ import { buildGameSeed } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
-import { createSaveGate, mayReplaceDocument, retryDelayMs } from "./saveGuard.js";
+import { createSaveGate, mayReplaceDocument, retryDelayMs, settleSave, withTimeout } from "./saveGuard.js";
 import { toolHint } from "./toolHints.js";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
@@ -587,6 +587,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [saveFailures, setSaveFailures] = useState(0);
   // One save at a time, and none of the old map's results on a new one (saveGuard.js).
   const [saveGate] = useState(createSaveGate);
+  // Bumped when a save lands after an edit it does not contain (settleSave): the
+  // autosave below depends on it, since nothing else it watches changes then.
+  const [resaveTick, setResaveTick] = useState(0);
 
   // A save carries the document plus either the whole map or only the regions
   // that moved since the last one (OlMap serializeRegionChanges). That matters
@@ -610,18 +613,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       const payload = !changes || creating || changes.full
         ? buildPayload(changes?.full ?? null)
         : { ...buildDocumentFields(), regionsDelta: { changed: changes.changed, count: changes.count, removed: changes.removed } };
-      let saved = await saveDocument(docId, payload);
+      let saved = await withTimeout(saveDocument(docId, payload));
       if (saved?.needsFullRegions) {
         console.warn("[editor] the store could not apply the map difference; writing the whole map:", saved.needsFullRegions);
         api.forgetSavedRegions?.();
-        saved = await saveDocument(saved.id ?? docId, buildPayload());
+        saved = await withTimeout(saveDocument(saved.id ?? docId, buildPayload()));
       }
       if (!isCurrent()) return false;
       if (!docId) setDocId(saved.id);
       changes?.commit?.();
       setSaveFailures(0);
       setSaveError("");
-      if (d.getSaveStatus() !== "saving") return false;
+      const settled = settleSave(d.getSaveStatus());
+      if (settled.resave) setResaveTick((n) => n + 1);
+      if (settled.status !== "saved") return false;
       d.setSaveStatus("saved");
       return true;
     } catch (e) {
@@ -674,7 +679,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       reason === "saving"
         ? `This map is still being saved. ${verb} it anyway and risk losing those changes?`
         : reason === "edited"
-          ? `This map changed while it was being saved. ${verb} it and lose the newest changes?`
+          ? `This map has changed in the meantime. ${verb} it and lose the newest changes?`
           : `This map has changes that could not be saved. ${verb} it and lose them?`,
     );
   const confirmReplace = confirmDrop("Replace");
@@ -695,6 +700,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (!(await mayReplaceDocument({ getStatus: d.getSaveStatus, save: saveNow, confirm: confirmReplace }))) return;
     try {
       const stored = await loadDocument(id);
+      // An edit made while it loaded is unsaved, and is not saved here either: this
+      // closure's saveNow predates it. With save answering false the status alone
+      // picks the question ("edited", "saving", "failed").
+      if (!(await mayReplaceDocument({ getStatus: d.getSaveStatus, save: async () => false, confirm: confirmReplace }))) return;
       // Only now: if the load fails the old map stays open, and its save in flight still counts.
       saveGate.replace();
       // Bring a pre-rename document forward before anything reads it. A document
@@ -750,7 +759,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const t = setTimeout(() => { setSaveFailures(0); saveNow(); }, 2000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, d.saveStatus, docId, d.doc]);
+  }, [api, d.saveStatus, docId, d.doc, resaveTick]);
 
   // After a failed save, try again on a backoff rather than waiting for the next
   // edit — the autosave above only runs for "dirty". A retry that fails lands back
