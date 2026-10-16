@@ -55,6 +55,9 @@ const BottomBar = ({
   name,
   onNameChange,
   saveStatus,
+  // The last save failure and a way to try again; shown only while the status is "error".
+  saveError = "",
+  onRetrySave,
   scenarioDirty = false,
   openPanel,
   onOpenPanel,
@@ -126,6 +129,16 @@ const BottomBar = ({
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
         {save.label}
       </span>
+      {saveStatus === "error" && (
+        <span role="alert" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "#fca5a5" }}>
+          {saveError || "The map could not be saved."} Retrying automatically.
+          {onRetrySave && (
+            <button type="button" onClick={onRetrySave} style={{ ...inputStyle, width: "auto", padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>
+              Retry now
+            </button>
+          )}
+        </span>
+      )}
       {scenarioDirty && (
         <span
           title="The editor document may be autosaved, but these changes have not yet been written into the scenario."

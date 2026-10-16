@@ -2836,7 +2836,11 @@ const LibraryTopBar = () => {
   // palette) so it edits that map instead of the default world. Assets stream
   // in async; the editor hydrates the moment they arrive. `review` puts a
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
+  const [mapEditorLoadError, setMapEditorLoadError] = useState("");
+  const mapEditorWorldRef = useRef({}); // the `world` openMapEditorFor was given, for the Retry
   const openMapEditorFor = (scenario, world = {}, { review = null } = {}) => {
+    setMapEditorLoadError("");
+    mapEditorWorldRef.current = world;
     setMapEditorScenario(scenario);
     setMapEditorSeed(null);
     setMapEditorReview(review);
@@ -2895,6 +2899,10 @@ const LibraryTopBar = () => {
         // The scenario's starting units, so the Units panel edits what the game starts with.
         units: Array.isArray(world.units) ? world.units : [],
       });
+    }).catch((e) => {
+      // A failed download used to leave the Workshop on "Loading map…" for good.
+      // The editor shows this with a Retry that downloads the assets again.
+      setMapEditorLoadError(e?.message || String(e));
     });
   };
   const [countryPicker, setCountryPicker] = useState(null);
@@ -3347,6 +3355,8 @@ const LibraryTopBar = () => {
               }}
               scenarioName={mapEditorScenario?.name}
               initialMap={mapEditorSeed}
+              loadError={mapEditorLoadError}
+              onRetryLoad={() => openMapEditorFor(mapEditorScenario, mapEditorWorldRef.current, { review: mapEditorReview })}
               review={mapEditorReview}
               onApplyToScenario={
                 mapEditorScenario ? (seed, options) => applyMapToScenario(mapEditorScenario, seed, options) : undefined

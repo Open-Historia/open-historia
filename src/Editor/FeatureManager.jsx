@@ -126,7 +126,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
           <span style={{ color: "rgba(255,255,255,0.5)" }}>{features.length} features total</span>
           {features.length > 0 && (
-            <button onClick={() => setFeatures([])} style={{ ...pillButton(false), color: "#f87171" }}>
+            <button onClick={() => { if (window.confirm(`Delete all ${features.length} features from this map?`)) setFeatures([]); }} style={{ ...pillButton(false), color: "#f87171" }}>
               Delete All
             </button>
           )}

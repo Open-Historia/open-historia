@@ -57,8 +57,10 @@ import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
-import { panelSurface, inputStyle } from "./editorStyles.js";
+import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
+import { mayReplaceDocument, retryDelayMs } from "./saveGuard.js";
+import { toolHint } from "./toolHints.js";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
@@ -89,7 +91,9 @@ const normalizePolityKeyedMap = (input, polities) => {
 
 // review: a suggestion to review in this map (libraryBar.jsx, from the Suggested
 // changes dialog): { suggestion, decisions, onSaved(decisions) }.
-const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, review: reviewSource = null } = {}) => {
+// loadError / onRetryLoad: the scenario's map could not be downloaded (libraryBar.jsx
+// openMapEditorFor); without them the editor would say "Loading map…" forever.
+const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, review: reviewSource = null, loadError = "", onRetryLoad } = {}) => {
   const d = useMapDocument();
   const isMobile = useIsMobile();
   // Opened from a scenario: the scenario's own map (regions/cities/colors) is
@@ -279,6 +283,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const toolHintNow = toolHint(d.activeTool, d.selection.length);
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
   // An OpenLayers-loaded background in the persistable form the library stores.
@@ -569,6 +574,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
   };
 
+  // The last save's failure, shown by the status bar with a Retry, and how many
+  // failed in a row, which paces the automatic retry below.
+  const [saveError, setSaveError] = useState("");
+  const saveFailuresRef = useRef(0);
+
   // A save carries the document plus either the whole map or only the regions
   // that moved since the last one (OlMap serializeRegionChanges). That matters
   // because this runs every two seconds while the map is dirty: it used to write
@@ -578,8 +588,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the map, or a document whose geometry it does not have — says so, and the
   // save is made again with the whole map. The record of what was last written is
   // committed only once the save has landed, so a failure is retried in full.
+  // Answers whether the save landed, so a caller that is about to replace the
+  // document does not have to guess from a status that has not re-rendered yet.
   const saveNow = async () => {
-    if (!api) return;
+    if (!api) return false;
     try {
       d.setSaveStatus("saving");
       const changes = api.serializeRegionChanges?.() ?? null;
@@ -595,10 +607,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       if (!docId) setDocId(saved.id);
       changes?.commit?.();
+      saveFailuresRef.current = 0;
+      setSaveError("");
       d.setSaveStatus("saved");
+      return true;
     } catch (e) {
       console.warn("[editor] save failed:", e);
+      saveFailuresRef.current += 1;
+      setSaveError(e?.message || String(e));
       d.setSaveStatus("error");
+      return false;
     }
   };
 
@@ -640,7 +658,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // A side panel open in it (types, regions, layers…) closes first.
   useBackToClose(Boolean(openPanel), () => setOpenPanel(null));
 
-  const newDoc = (kind) => {
+  // New / Open replace the document, so they save it first and ask only when that
+  // cannot be done — the same promise requestClose makes. Without it a failed save
+  // was followed by "All saved" over the replacement and the old edits were gone.
+  const confirmReplace = (reason) =>
+    window.confirm(
+      reason === "saving"
+        ? "This map is still being saved. Replace it anyway and risk losing those changes?"
+        : "This map has changes that could not be saved. Replace it and lose them?",
+    );
+
+  const newDoc = async (kind) => {
+    if (!(await mayReplaceDocument({ status: dRef.current.saveStatus, save: saveNow, confirm: confirmReplace }))) return;
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
     setDocId(null);
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
@@ -651,6 +680,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
 
   const openDoc = async (id) => {
+    if (!(await mayReplaceDocument({ status: dRef.current.saveStatus, save: saveNow, confirm: confirmReplace }))) return;
     try {
       const stored = await loadDocument(id);
       // Bring a pre-rename document forward before anything reads it. A document
@@ -704,6 +734,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.doc]);
+
+  // After a failed save, try again on a backoff rather than waiting for the next
+  // edit — the autosave above only runs for "dirty". A retry that fails lands back
+  // on "error" and schedules the next one; success clears it (saveNow).
+  useEffect(() => {
+    if (!api || d.saveStatus !== "error") return;
+    const t = setTimeout(() => saveNowRef.current(), retryDelayMs(saveFailuresRef.current));
+    return () => clearTimeout(t);
+  }, [api, d.saveStatus]);
 
 
   // Standalone document autosave and scenario persistence are intentionally
@@ -986,6 +1025,30 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onOpen={openDoc}
       />
 
+      {loadError && !hydrated && (
+        <div
+          role="alert"
+          style={{
+            ...panelSurface,
+            position: "fixed",
+            top: "calc(var(--editor-toolbar-bottom, 58px) + 52px)",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 45,
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            fontSize: 13,
+            color: "#fca5a5",
+            maxWidth: "min(560px, calc(100vw - 24px))",
+          }}
+        >
+          <span>The scenario’s map could not be loaded: {loadError}</span>
+          {onRetryLoad && <button onClick={onRetryLoad} style={{ ...pillButton(true), flexShrink: 0 }}>Retry</button>}
+        </div>
+      )}
+
       {(onClose || onApplyToScenario) && (
         // On a phone the buttons stack vertically (Apply above Close) and drop their
         // labels, so the block is one icon wide and does not overlap the centred
@@ -1084,112 +1147,76 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onRedo={() => api?.redo()}
       />
 
-      {d.activeTool === "paint" && (
+      {/* One status line for every tool: its name and one sentence on using it.
+          Paint keeps its pickers in it; the others' old banners are its text. */}
+      {toolHintNow && (
         <div
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
             display: "flex",
+            flexDirection: "column",
             alignItems: "center",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            gap: 8,
-            padding: "7px 10px",
-            fontSize: 12,
-            maxWidth: "calc(100vw - 20px)",
-          }}
-        >
-          <span style={{ color: "rgba(255,255,255,0.72)", fontWeight: 700 }}>Paint polity</span>
-          {d.colors[paintOwner] && (
-            <span style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: `rgb(${d.colors[paintOwner].join(",")})` }} />
-          )}
-          <select
-            value={paintOwner}
-            onChange={(e) => setPaintOwner(e.target.value)}
-            style={{ ...inputStyle, width: 220, padding: "4px 7px" }}
-            title="Stable polity key to assign while painting"
-          >
-            <option value="">Unowned / erase ownership</option>
-            {polityChoices.map((row) => (
-              <option key={row.key} value={row.key}>
-                {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
-              </option>
-            ))}
-          </select>
-
-          <span style={{ color: "rgba(255,255,255,0.48)" }}>paint over</span>
-          <select
-            value={paintOnlyOwner}
-            onChange={(e) => setPaintOnlyOwner(e.target.value)}
-            style={{ ...inputStyle, width: 190, padding: "4px 7px" }}
-            title="Restrict a paint stroke to regions that currently have this owner"
-          >
-            <option value="*">Any region</option>
-            <option value="__unowned__">Unowned regions only</option>
-            {polityChoices.map((row) => (
-              <option key={`filter-${row.key}`} value={row.key}>
-                Only {row.name}
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            onClick={() => setOpenPanel("polities")}
-            style={{ ...panelSurface, padding: "4px 8px", cursor: "pointer", fontSize: 11 }}
-          >
-            Manage polities…
-          </button>
-          <span style={{ color: "rgba(255,255,255,0.46)", whiteSpace: "nowrap" }}>
-            click or drag · one stroke = one undo
-          </span>
-        </div>
-      )}
-
-      {d.activeTool === "modify" && (
-        <div
-          style={{
-            ...panelSurface,
-            position: "fixed",
-            top: 58,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 31,
-            padding: "7px 11px",
-            maxWidth: "min(760px, calc(100vw - 24px))",
-            fontSize: 11.5,
-            color: "rgba(255,255,255,0.78)",
-            textAlign: "center",
-          }}
-        >
-          <b>Manual vertex override:</b> {d.selection.length ? `${d.selection.length} selected region${d.selection.length === 1 ? "" : "s"}` : "no selection — editing all regions"} · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo
-        </div>
-      )}
-
-      {d.activeTool === "border" && (
-        <div
-          style={{
-            ...panelSurface,
-            position: "fixed",
-            top: 58,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 31,
+            gap: 6,
             padding: "7px 11px",
             maxWidth: "min(850px, calc(100vw - 24px))",
-            fontSize: 11.5,
-            color: d.selection.length === 2 ? "rgba(255,255,255,0.84)" : "#fbbf24",
-            textAlign: "center",
+            fontSize: 12,
           }}
         >
-          <b>Shared border precision:</b>{" "}
-          {d.selection.length === 2
-            ? "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo"
-            : `select exactly 2 neighbouring regions first (${d.selection.length} selected)`}
+          <div role="status" style={{ textAlign: "center", color: toolHintNow.warn ? "#fbbf24" : "rgba(255,255,255,0.84)" }}>
+            <b>{toolHintNow.name}:</b> {toolHintNow.text}
+          </div>
+          {d.activeTool === "paint" && (
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
+              {d.colors[paintOwner] && (
+                <span style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: `rgb(${d.colors[paintOwner].join(",")})` }} />
+              )}
+              <select
+                value={paintOwner}
+                onChange={(e) => setPaintOwner(e.target.value)}
+                style={{ ...inputStyle, width: 220, padding: "4px 7px" }}
+                title="Stable polity key to assign while painting"
+              >
+                <option value="">Unowned / erase ownership</option>
+                {polityChoices.map((row) => (
+                  <option key={row.key} value={row.key}>
+                    {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
+                  </option>
+                ))}
+              </select>
+
+              <span style={{ color: "rgba(255,255,255,0.48)" }}>paint over</span>
+              <select
+                value={paintOnlyOwner}
+                onChange={(e) => setPaintOnlyOwner(e.target.value)}
+                style={{ ...inputStyle, width: 190, padding: "4px 7px" }}
+                title="Restrict a paint stroke to regions that currently have this owner"
+              >
+                <option value="*">Any region</option>
+                <option value="__unowned__">Unowned regions only</option>
+                {polityChoices.map((row) => (
+                  <option key={`filter-${row.key}`} value={row.key}>
+                    Only {row.name}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setOpenPanel("polities")}
+                style={{ ...panelSurface, padding: "4px 8px", cursor: "pointer", fontSize: 11 }}
+              >
+                Manage polities…
+              </button>
+              <span style={{ color: "rgba(255,255,255,0.46)", whiteSpace: "nowrap" }}>
+                click or drag · one stroke = one undo
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -1434,6 +1461,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
+        saveError={saveError}
+        onRetrySave={() => saveNow()}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}
