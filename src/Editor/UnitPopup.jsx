@@ -36,11 +36,14 @@ const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClo
   }, [isNew]);
 
   useEffect(() => {
+    // Capture, and preventDefault on Esc: the editor's own Esc (OlMap) listens on
+    // window too, registered first, and would otherwise also drop the selection.
     const onKey = (e) => {
+      if (e.key === "Escape") e.preventDefault();
       if (e.key === "Escape" || e.key === "Enter") onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
   if (!unit) return null;

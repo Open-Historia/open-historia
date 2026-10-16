@@ -59,7 +59,7 @@ import { buildGameSeed } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
-import { mayReplaceDocument, retryDelayMs } from "./saveGuard.js";
+import { createSaveGate, mayReplaceDocument, retryDelayMs } from "./saveGuard.js";
 import { toolHint } from "./toolHints.js";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
@@ -284,6 +284,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   }, []);
 
   const toolHintNow = toolHint(d.activeTool, d.selection.length);
+  // Spoken when the tool changes, not when the count in the visible hint does.
+  const toolAnnouncement = useMemo(() => {
+    const hint = toolHint(d.activeTool, d.selection.length);
+    return hint ? `${hint.name}: ${hint.text}` : "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.activeTool]);
+  const showLoadError = Boolean(loadError) && !hydrated;
   const togglePanel = (name) => setOpenPanel((cur) => (cur === name ? null : name));
 
   // An OpenLayers-loaded background in the persistable form the library stores.
@@ -575,9 +582,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
 
   // The last save's failure, shown by the status bar with a Retry, and how many
-  // failed in a row, which paces the automatic retry below.
+  // failed in a row, which paces the automatic retry below and ends it.
   const [saveError, setSaveError] = useState("");
-  const saveFailuresRef = useRef(0);
+  const [saveFailures, setSaveFailures] = useState(0);
+  // One save at a time, and none of the old map's results on a new one (saveGuard.js).
+  const [saveGate] = useState(createSaveGate);
 
   // A save carries the document plus either the whole map or only the regions
   // that moved since the last one (OlMap serializeRegionChanges). That matters
@@ -588,9 +597,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the map, or a document whose geometry it does not have — says so, and the
   // save is made again with the whole map. The record of what was last written is
   // committed only once the save has landed, so a failure is retried in full.
-  // Answers whether the save landed, so a caller that is about to replace the
-  // document does not have to guess from a status that has not re-rendered yet.
-  const saveNow = async () => {
+  // Answers whether the map is saved now — false too when an edit landed while it
+  // was written, which stays "dirty" for the autosave — so a caller about to
+  // replace the document does not have to guess from a status that has not
+  // re-rendered yet. A save of a map replaced meanwhile touches nothing.
+  const saveNow = () => saveGate.run(async (isCurrent) => {
     if (!api) return false;
     try {
       d.setSaveStatus("saving");
@@ -605,20 +616,23 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         api.forgetSavedRegions?.();
         saved = await saveDocument(saved.id ?? docId, buildPayload());
       }
+      if (!isCurrent()) return false;
       if (!docId) setDocId(saved.id);
       changes?.commit?.();
-      saveFailuresRef.current = 0;
+      setSaveFailures(0);
       setSaveError("");
+      if (d.getSaveStatus() !== "saving") return false;
       d.setSaveStatus("saved");
       return true;
     } catch (e) {
       console.warn("[editor] save failed:", e);
-      saveFailuresRef.current += 1;
+      if (!isCurrent()) return false;
+      setSaveFailures((n) => n + 1);
       setSaveError(e?.message || String(e));
       d.setSaveStatus("error");
       return false;
     }
-  };
+  });
 
   // The unload/visibility listeners below are registered once, so a closure would
   // freeze whatever the document was at that moment and flush THAT on the way out
@@ -642,15 +656,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // Closing with edits still in the debounce window would drop them
     // silently — the button looks like "go back", not "discard". Try
     // to save first, and only ask if that fails or is still pending,
-    // so the common case closes with no prompt and no loss.
-    if (d.saveStatus === "dirty") {
-      await saveNow();
-      if (dRef.current.saveStatus === "saved") { onClose(); return true; }
-    }
-    if (d.saveStatus === "saved") { onClose(); return true; }
-    const ok = window.confirm(
-      "This map has changes that could not be saved. Close it and lose them?",
-    );
+    // so the common case closes with no prompt and no loss. saveNow's
+    // answer decides, not d.saveStatus: that has not re-rendered yet.
+    const ok = await mayReplaceDocument({ getStatus: d.getSaveStatus, save: saveNow, confirm: confirmDrop("Close") });
     if (ok) onClose();
     return ok;
   };
@@ -661,15 +669,19 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // New / Open replace the document, so they save it first and ask only when that
   // cannot be done — the same promise requestClose makes. Without it a failed save
   // was followed by "All saved" over the replacement and the old edits were gone.
-  const confirmReplace = (reason) =>
+  const confirmDrop = (verb) => (reason) =>
     window.confirm(
       reason === "saving"
-        ? "This map is still being saved. Replace it anyway and risk losing those changes?"
-        : "This map has changes that could not be saved. Replace it and lose them?",
+        ? `This map is still being saved. ${verb} it anyway and risk losing those changes?`
+        : reason === "edited"
+          ? `This map changed while it was being saved. ${verb} it and lose the newest changes?`
+          : `This map has changes that could not be saved. ${verb} it and lose them?`,
     );
+  const confirmReplace = confirmDrop("Replace");
 
   const newDoc = async (kind) => {
-    if (!(await mayReplaceDocument({ status: dRef.current.saveStatus, save: saveNow, confirm: confirmReplace }))) return;
+    if (!(await mayReplaceDocument({ getStatus: d.getSaveStatus, save: saveNow, confirm: confirmReplace }))) return;
+    saveGate.replace();
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
     setDocId(null);
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
@@ -680,9 +692,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
 
   const openDoc = async (id) => {
-    if (!(await mayReplaceDocument({ status: dRef.current.saveStatus, save: saveNow, confirm: confirmReplace }))) return;
+    if (!(await mayReplaceDocument({ getStatus: d.getSaveStatus, save: saveNow, confirm: confirmReplace }))) return;
     try {
       const stored = await loadDocument(id);
+      // Only now: if the load fails the old map stays open, and its save in flight still counts.
+      saveGate.replace();
       // Bring a pre-rename document forward before anything reads it. A document
       // saved when owners were codes renders in hash colours (every palette lookup
       // misses) and forks a country in two on the first edit. It is also the one
@@ -728,21 +742,26 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the status to "saved" — leaving the new colour unsaved and the UI claiming
   // otherwise. d.doc is a new object on every document change, so it cannot fall
   // behind the way a field list does.
+  //
+  // A new edit also starts the failure count afresh, so the retries after it get
+  // their whole backoff again rather than inheriting a finished one.
   useEffect(() => {
     if (!api || d.saveStatus !== "dirty") return;
-    const t = setTimeout(() => saveNow(), 2000);
+    const t = setTimeout(() => { setSaveFailures(0); saveNow(); }, 2000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.doc]);
 
   // After a failed save, try again on a backoff rather than waiting for the next
   // edit — the autosave above only runs for "dirty". A retry that fails lands back
-  // on "error" and schedules the next one; success clears it (saveNow).
+  // on "error" and schedules the next one; success clears it (saveNow). After
+  // MAX_SAVE_FAILURES only Retry now or a new edit tries again.
   useEffect(() => {
-    if (!api || d.saveStatus !== "error") return;
-    const t = setTimeout(() => saveNowRef.current(), retryDelayMs(saveFailuresRef.current));
+    const delay = retryDelayMs(saveFailures);
+    if (!api || d.saveStatus !== "error" || delay === null) return;
+    const t = setTimeout(() => saveNowRef.current(), delay);
     return () => clearTimeout(t);
-  }, [api, d.saveStatus]);
+  }, [api, d.saveStatus, saveFailures]);
 
 
   // Standalone document autosave and scenario persistence are intentionally
@@ -762,9 +781,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // The browser shows its own generic wording and ignores ours; assigning
   // returnValue is what actually triggers the prompt (Chrome needs it even with
   // preventDefault). "saving" counts as unsaved: the write is in flight and has
-  // not landed in IndexedDB yet.
+  // not landed in IndexedDB yet; "error" too: the last one did not land at all.
   useEffect(() => {
-    const unsaved = d.saveStatus === "dirty" || d.saveStatus === "saving";
+    const unsaved = d.saveStatus !== "saved";
     if (!unsaved) return;
     const onBeforeUnload = (e) => {
       e.preventDefault();
@@ -782,7 +801,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   useEffect(() => {
     if (!api) return;
     const flush = () => {
-      if (dRef.current.saveStatus === "dirty") saveNowRef.current();
+      const status = dRef.current.getSaveStatus();
+      if (status === "dirty" || status === "error") saveNowRef.current();
     };
     const onVisibility = () => { if (document.hidden) flush(); };
     document.addEventListener("visibilitychange", onVisibility);
@@ -1025,30 +1045,6 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onOpen={openDoc}
       />
 
-      {loadError && !hydrated && (
-        <div
-          role="alert"
-          style={{
-            ...panelSurface,
-            position: "fixed",
-            top: "calc(var(--editor-toolbar-bottom, 58px) + 52px)",
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 45,
-            padding: "10px 14px",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            fontSize: 13,
-            color: "#fca5a5",
-            maxWidth: "min(560px, calc(100vw - 24px))",
-          }}
-        >
-          <span>The scenario’s map could not be loaded: {loadError}</span>
-          {onRetryLoad && <button onClick={onRetryLoad} style={{ ...pillButton(true), flexShrink: 0 }}>Retry</button>}
-        </div>
-      )}
-
       {(onClose || onApplyToScenario) && (
         // On a phone the buttons stack vertically (Apply above Close) and drop their
         // labels, so the block is one icon wide and does not overlap the centred
@@ -1147,74 +1143,113 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onRedo={() => api?.redo()}
       />
 
-      {/* One status line for every tool: its name and one sentence on using it.
-          Paint keeps its pickers in it; the others' old banners are its text. */}
-      {toolHintNow && (
+      {/* What a screen reader is told about the tool: its hint as it reads when the
+          tool is picked. The visible line below also follows the selection count,
+          and a live region on that would speak again on every click. */}
+      <span role="status" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" }}>
+        {toolAnnouncement}
+      </span>
+
+      {/* One column under the toolbar, so the load error and the status line stack
+          instead of covering each other. It sits above the side panels (35) only
+          while the error shows: that has the Retry the player needs. */}
+      {(showLoadError || toolHintNow) && (
         <div
           style={{
-            ...panelSurface,
             position: "fixed",
             top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
-            zIndex: 31,
+            zIndex: showLoadError ? 45 : 31,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: 6,
-            padding: "7px 11px",
-            maxWidth: "min(850px, calc(100vw - 24px))",
-            fontSize: 12,
+            gap: 8,
           }}
         >
-          <div role="status" style={{ textAlign: "center", color: toolHintNow.warn ? "#fbbf24" : "rgba(255,255,255,0.84)" }}>
-            <b>{toolHintNow.name}:</b> {toolHintNow.text}
-          </div>
-          {d.activeTool === "paint" && (
-            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
-              {d.colors[paintOwner] && (
-                <span style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: `rgb(${d.colors[paintOwner].join(",")})` }} />
+          {/* One status line for every tool: its name and one sentence on using it.
+              Paint keeps its pickers in it; the others' old banners are its text. */}
+          {toolHintNow && (
+            <div
+              style={{
+                ...panelSurface,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 6,
+                padding: "7px 11px",
+                maxWidth: "min(850px, calc(100vw - 24px))",
+                fontSize: 12,
+              }}
+            >
+              <div style={{ textAlign: "center", color: toolHintNow.warn ? "#fbbf24" : "rgba(255,255,255,0.84)" }}>
+                <b>{toolHintNow.name}:</b> {toolHintNow.text}
+              </div>
+              {d.activeTool === "paint" && (
+                <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
+                  {d.colors[paintOwner] && (
+                    <span style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(255,255,255,0.3)", background: `rgb(${d.colors[paintOwner].join(",")})` }} />
+                  )}
+                  <select
+                    value={paintOwner}
+                    onChange={(e) => setPaintOwner(e.target.value)}
+                    style={{ ...inputStyle, width: 220, padding: "4px 7px" }}
+                    title="Stable polity key to assign while painting"
+                  >
+                    <option value="">Unowned / erase ownership</option>
+                    {polityChoices.map((row) => (
+                      <option key={row.key} value={row.key}>
+                        {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
+                      </option>
+                    ))}
+                  </select>
+
+                  <span style={{ color: "rgba(255,255,255,0.48)" }}>paint over</span>
+                  <select
+                    value={paintOnlyOwner}
+                    onChange={(e) => setPaintOnlyOwner(e.target.value)}
+                    style={{ ...inputStyle, width: 190, padding: "4px 7px" }}
+                    title="Restrict a paint stroke to regions that currently have this owner"
+                  >
+                    <option value="*">Any region</option>
+                    <option value="__unowned__">Unowned regions only</option>
+                    {polityChoices.map((row) => (
+                      <option key={`filter-${row.key}`} value={row.key}>
+                        Only {row.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setOpenPanel("polities")}
+                    style={{ ...panelSurface, padding: "4px 8px", cursor: "pointer", fontSize: 11 }}
+                  >
+                    Manage polities…
+                  </button>
+                  <span style={{ color: "rgba(255,255,255,0.46)", whiteSpace: "nowrap" }}>
+                    click or drag · one stroke = one undo
+                  </span>
+                </div>
               )}
-              <select
-                value={paintOwner}
-                onChange={(e) => setPaintOwner(e.target.value)}
-                style={{ ...inputStyle, width: 220, padding: "4px 7px" }}
-                title="Stable polity key to assign while painting"
-              >
-                <option value="">Unowned / erase ownership</option>
-                {polityChoices.map((row) => (
-                  <option key={row.key} value={row.key}>
-                    {row.name}{row.name !== row.key ? ` — ${row.key}` : ""}
-                  </option>
-                ))}
-              </select>
-
-              <span style={{ color: "rgba(255,255,255,0.48)" }}>paint over</span>
-              <select
-                value={paintOnlyOwner}
-                onChange={(e) => setPaintOnlyOwner(e.target.value)}
-                style={{ ...inputStyle, width: 190, padding: "4px 7px" }}
-                title="Restrict a paint stroke to regions that currently have this owner"
-              >
-                <option value="*">Any region</option>
-                <option value="__unowned__">Unowned regions only</option>
-                {polityChoices.map((row) => (
-                  <option key={`filter-${row.key}`} value={row.key}>
-                    Only {row.name}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                type="button"
-                onClick={() => setOpenPanel("polities")}
-                style={{ ...panelSurface, padding: "4px 8px", cursor: "pointer", fontSize: 11 }}
-              >
-                Manage polities…
-              </button>
-              <span style={{ color: "rgba(255,255,255,0.46)", whiteSpace: "nowrap" }}>
-                click or drag · one stroke = one undo
-              </span>
+            </div>
+          )}
+          {showLoadError && (
+            <div
+              role="alert"
+              style={{
+                ...panelSurface,
+                padding: "10px 14px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                fontSize: 13,
+                color: "#fca5a5",
+                maxWidth: "min(560px, calc(100vw - 24px))",
+              }}
+            >
+              <span>The scenario’s map could not be loaded: {loadError}</span>
+              {onRetryLoad && <button onClick={onRetryLoad} style={{ ...pillButton(true), flexShrink: 0 }}>Retry</button>}
             </div>
           )}
         </div>
@@ -1463,6 +1498,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         saveStatus={d.saveStatus}
         saveError={saveError}
         onRetrySave={() => saveNow()}
+        saveAutoRetry={retryDelayMs(saveFailures) !== null}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}

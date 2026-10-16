@@ -3,16 +3,52 @@
 // The rules for not losing the open map. Pure so they can be tested without the
 // editor: MapEditor passes in its own save and its own window.confirm.
 
-// May the open document be swapped for another (New / Open)? Only a document that
-// is saved, or that saves now, may go quietly. After a failed save — or one still
-// in flight — the player decides; `confirm(reason)` gets "failed" or "saving".
-export async function mayReplaceDocument({ status, save, confirm }) {
+// May the open document be swapped for another (New / Open / close)? Only a
+// document that is saved, or that saves now, may go quietly. After a failed save —
+// or one still in flight — the player decides; `confirm(reason)` gets "failed",
+// "saving", or "edited" when an edit landed while the save was written. That last
+// one is found by reading `getStatus` again, since React state would still show
+// the status from before the save. It is asked, not saved again: the caller's
+// save closure predates the edit and would write the map without it.
+export async function mayReplaceDocument({ getStatus, save, confirm }) {
+  const status = getStatus();
   if (status === "saved") return true;
   if (status === "saving") return confirm("saving");
   if (await save()) return true;
-  return confirm("failed");
+  return confirm(getStatus() === "dirty" ? "edited" : "failed");
 }
 
+// Failed saves in a row after which the automatic retry gives up and only Retry
+// now is left — a store that is full or gone would otherwise be hammered forever.
+export const MAX_SAVE_FAILURES = 6;
+
 // How long to wait before the next automatic retry after `failures` failed saves
-// in a row: 2 s, doubling, never more than 30 s.
-export const retryDelayMs = (failures) => Math.min(30000, 2000 * 2 ** Math.max(0, failures - 1));
+// in a row: 2 s, doubling, never more than 30 s; null once MAX_SAVE_FAILURES is reached.
+export const retryDelayMs = (failures) =>
+  failures >= MAX_SAVE_FAILURES ? null : Math.min(30000, 2000 * 2 ** Math.max(0, failures - 1));
+
+// One save at a time. A call while a save is in flight gets that save's promise
+// rather than writing again: Retry now, Save now and the retry timer racing on a
+// map that has no id yet would each create a document of their own. replace()
+// (New / Open) starts a new generation — a save still in flight for the old map
+// then sees isCurrent() false, must leave the new one alone, and no longer blocks
+// the new map's own saves.
+export function createSaveGate() {
+  let generation = 0;
+  let pending = null;
+  return {
+    replace() {
+      generation += 1;
+      pending = null;
+    },
+    run(write) {
+      if (pending) return pending;
+      const mine = generation;
+      const p = write(() => mine === generation).finally(() => {
+        if (pending === p) pending = null;
+      });
+      pending = p;
+      return p;
+    },
+  };
+}

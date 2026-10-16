@@ -2838,7 +2838,11 @@ const LibraryTopBar = () => {
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
   const [mapEditorLoadError, setMapEditorLoadError] = useState("");
   const mapEditorWorldRef = useRef({}); // the `world` openMapEditorFor was given, for the Retry
+  // Which call may still deliver: a slower download from an earlier open (another
+  // scenario, or the one a Retry replaced) must not land its map or its error here.
+  const mapEditorLoadRef = useRef(0);
   const openMapEditorFor = (scenario, world = {}, { review = null } = {}) => {
+    const load = ++mapEditorLoadRef.current;
     setMapEditorLoadError("");
     mapEditorWorldRef.current = world;
     setMapEditorScenario(scenario);
@@ -2862,6 +2866,7 @@ const LibraryTopBar = () => {
         ? downloadScenarioJsonAsset(scenario.id, "backgroundData")
         : Promise.resolve(null),
     ]).then(([regions, cities, colors, flags, tags, bgData]) => {
+      if (load !== mapEditorLoadRef.current) return;
       const bgDesc = world.background;
       const background =
         bgDesc?.kind === "image" && bgData?.dataUrl
@@ -2902,6 +2907,7 @@ const LibraryTopBar = () => {
     }).catch((e) => {
       // A failed download used to leave the Workshop on "Loading map…" for good.
       // The editor shows this with a Retry that downloads the assets again.
+      if (load !== mapEditorLoadRef.current) return;
       setMapEditorLoadError(e?.message || String(e));
     });
   };

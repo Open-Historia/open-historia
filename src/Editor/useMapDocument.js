@@ -9,7 +9,7 @@
 // the document only on save/export. Ephemeral UI state (active tool, selection,
 // save status, live region count) also lives here for the panels to read.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
@@ -119,7 +119,16 @@ export const useMapDocument = (initial) => {
   const [activeTool, setActiveTool] = useState("select");
   const [selection, setSelection] = useState([]); // selected region ids
   const [regionCount, setRegionCount] = useState(0);
-  const [saveStatus, setSaveStatus] = useState("saved"); // saved | dirty | saving | error
+  const [saveStatus, setSaveStatusState] = useState("saved"); // saved | dirty | saving | error
+  // The same status, readable at once. State shows a change only after the next
+  // render, and a caller that has just awaited a save has to know whether an edit
+  // landed meanwhile (MapEditor saveNow, saveGuard.js mayReplaceDocument).
+  const saveStatusRef = useRef("saved");
+  const setSaveStatus = useCallback((status) => {
+    saveStatusRef.current = status;
+    setSaveStatusState(status);
+  }, []);
+  const getSaveStatus = useCallback(() => saveStatusRef.current, []);
 
   // Owner -> [r,g,b] palette (shared with the game map for export compatibility).
   useEffect(() => {
@@ -483,6 +492,7 @@ export const useMapDocument = (initial) => {
     setRegionCount,
     saveStatus,
     setSaveStatus,
+    getSaveStatus,
     counts: {
       regions: regionCount,
       features: doc.features.length,

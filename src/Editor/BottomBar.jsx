@@ -55,9 +55,12 @@ const BottomBar = ({
   name,
   onNameChange,
   saveStatus,
-  // The last save failure and a way to try again; shown only while the status is "error".
+  // The last save failure and a way to try again; shown while the status is "error",
+  // and through the retry's own "saving" so Retry now stays put but cannot double it.
+  // saveAutoRetry false: the automatic retries have given up (saveGuard.js).
   saveError = "",
   onRetrySave,
+  saveAutoRetry = true,
   scenarioDirty = false,
   openPanel,
   onOpenPanel,
@@ -129,11 +132,12 @@ const BottomBar = ({
         <span style={{ width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
         {save.label}
       </span>
-      {saveStatus === "error" && (
+      {(saveStatus === "error" || (saveStatus === "saving" && saveError)) && (
         <span role="alert" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "#fca5a5" }}>
-          {saveError || "The map could not be saved."} Retrying automatically.
+          {saveError || "The map could not be saved."}{" "}
+          {saveAutoRetry ? "Retrying automatically." : "Automatic retries have stopped; use Retry now."}
           {onRetrySave && (
-            <button type="button" onClick={onRetrySave} style={{ ...inputStyle, width: "auto", padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>
+            <button type="button" onClick={onRetrySave} disabled={saveStatus === "saving"} style={{ ...inputStyle, width: "auto", padding: "4px 10px", cursor: saveStatus === "saving" ? "default" : "pointer", fontWeight: 700 }}>
               Retry now
             </button>
           )}
