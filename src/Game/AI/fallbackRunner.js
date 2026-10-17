@@ -202,8 +202,17 @@ const unavailableError = (entries, store, now, formatTime, cause) => {
 // not marked: it is the request that is too big, not the entry that is broken,
 // and the next request may fit. When every entry is refused this way the call
 // fails with `tooBigError(refused)` before a single request is spent.
+//
+// `serves(entry)` says whether the entry answers this kind of call at all. An
+// Agent Connection answers only the tasks it names (ADR 0008), so every other
+// call goes past it as though it were not in the list: no request, no mark, no
+// notice to the player, and not counted as too big. It is not that the entry
+// failed; it was never meant for this call.
+export const NOT_SERVED_MESSAGE = "Nothing in your Fallback list answers this request. An Agent Connection answers time skips only, so add a Connection below it.";
+
 export async function runWithFallback({
-    entries,
+    entries: listed,
+    serves = null,
     preferredEntryId,
     store,
     now = Date.now,
@@ -216,6 +225,8 @@ export async function runWithFallback({
     onSwitch,
     formatTime = formatResetTime,
 }) {
+    const entries = typeof serves === "function" ? listed.filter((candidate) => serves(candidate)) : listed;
+    if (listed.length && !entries.length) throw new Error(NOT_SERVED_MESSAGE);
     let lastError = null;
     const skipped = [];
     const refused = [];
@@ -267,6 +278,13 @@ export async function runWithFallback({
             return { result, entry: candidate };
         } catch (error) {
             const failure = error?.providerFailure;
+            // The player sent a request waiting on their own Agent on to the
+            // next entry (Use API key, ADR 0008). Nothing failed: no mark, no
+            // notice, just the next entry.
+            if (failure?.kind === "passedOn") {
+                lastError = error;
+                continue;
+            }
             // The model refused the request as too big for its window. Not a
             // mark on the entry (the next request may fit), but a reason to try
             // the next entry, whose window may be larger.

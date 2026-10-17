@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  REQUEST_AGENT,
   REQUEST_THINKING,
   REQUEST_WAITING,
   REQUEST_WRITING,
@@ -203,4 +204,17 @@ test("the log clause says how long the request was open and what it had received
     describeRequestActivity({ ...base, label: "", answerChars: 3420 }),
     "the open request (open 105 s) had received 3,420 characters of its answer",
   );
+});
+
+test("a request handed to the player's Agent reads as waiting for the Agent, and is never 'still working'", () => {
+  const { now, advance } = clock();
+  const activity = createRequestActivity({ now });
+  const live = activity.open({ label: "jumpForward → My Claude" });
+  live.sent();
+  live.agentWaiting();
+  advance(10 * 60 * 1000);
+  const shown = activity.current();
+  assert.equal(shown.state, REQUEST_AGENT);
+  assert.equal(shown.stillWorking, false, "it waits on the player, not on a slow model");
+  assert.match(describeRequestActivity(shown), /waiting for the player's Agent/);
 });

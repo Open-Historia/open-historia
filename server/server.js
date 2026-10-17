@@ -1,4 +1,5 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { spawn } from "child_process";
 import crypto from "crypto";
 import dns from "dns";
 import express from "express";
@@ -130,6 +131,9 @@ import { appendLog, clearLog, readLogSince } from "./logStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
+import { AGENT_REQUESTS_DIR, writeAgentFolder, writeAgentSubagents } from "./agentFolder.js";
+import { handleMcpMessage, tokenMatches } from "./agentMcp.js";
+import { AGENT_WAIT_MS, createAgentQueue } from "./agentQueue.js";
 import { appKindOf } from "./appKind.js";
 import { createClockOffsetCache } from "./clockOffset.js";
 import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
@@ -1500,6 +1504,119 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     clearTimeout(timeout);
   }
 });
+
+// --- The Agent queue (docs/adr/0008-subscription-agents-answer-through-the-game.md)
+// An Agent Connection's requests wait here for the player's own Agent, which
+// answers them through the MCP server below. The Agent folder is written at
+// every start with this run's address and a new token; the MCP server refuses
+// a call without that token. Both sides are this machine only: the game's page
+// and the Agent the player opened in the folder.
+const AGENT_FOLDER = path.join(DATA_DIR, "agent");
+const AGENT_TOKEN = crypto.randomBytes(32).toString("base64url");
+const agentQueue = createAgentQueue({
+  folder: path.join(AGENT_FOLDER, AGENT_REQUESTS_DIR),
+  waitMs: Number(process.env.OH_AGENT_WAIT_MS) || AGENT_WAIT_MS,
+  ...(process.env.OH_AGENT_FOLLOW_UP_MS ? { followUpMs: Number(process.env.OH_AGENT_FOLLOW_UP_MS) } : {}),
+  log: (event, data) => appendLog({ level: "info", source: "server", event, message: event, data }),
+});
+try {
+  writeAgentFolder(AGENT_FOLDER, { url: `http://127.0.0.1:${PORT}/api/agent/mcp`, token: AGENT_TOKEN });
+} catch (error) {
+  console.warn(`[agent] could not write the Agent folder: ${error.message}`);
+}
+
+const agentLocalOnly = (req, res, next) => {
+  if (isLoopbackAddress(req.socket?.remoteAddress)) return next();
+  return sendError(res, 403, new Error("The Agent queue only answers this computer."));
+};
+
+app.get("/api/agent/folder", agentLocalOnly, (_req, res) => {
+  res.json({ path: AGENT_FOLDER });
+});
+
+// Opens the folder in the system's file manager. The game opens a folder; it
+// never starts an Agent.
+app.post("/api/agent/folder/open", agentLocalOnly, (_req, res) => {
+  const opener = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    spawn(opener, [AGENT_FOLDER], { detached: true, stdio: "ignore" }).on("error", () => {}).unref();
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/agent/skips", agentLocalOnly, jsonParser, (req, res) => {
+  res.json({ skipId: agentQueue.openSkip(req.body?.skipId) });
+});
+
+// A page that loads afresh: whatever an earlier page left waiting is over.
+app.delete("/api/agent/skips", agentLocalOnly, (_req, res) => {
+  agentQueue.dropAll();
+  res.json({ ok: true });
+});
+
+app.delete("/api/agent/skips/:skipId", agentLocalOnly, (req, res) => {
+  agentQueue.finishSkip(req.params.skipId);
+  res.json({ ok: true });
+});
+
+app.post("/api/agent/requests", agentLocalOnly, largeJsonParser, (req, res) => {
+  const { skipId, task, system, prompt, lookupTools } = req.body || {};
+  if (typeof prompt !== "string" || !prompt) return sendError(res, 400, new Error("A request needs its prompt."));
+  try {
+    const request = agentQueue.ask({ skipId, task, system: typeof system === "string" ? system : "", prompt, lookupTools });
+    res.json({ id: request.id });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+// The game's wait: answers once the request changes, or after `waitMs` (at
+// most AGENT_WAIT_MS) with it still waiting, and the game asks again.
+app.get("/api/agent/requests/:id", agentLocalOnly, async (req, res) => {
+  const waitMs = Math.min(AGENT_WAIT_MS, Math.max(0, Number(req.query.waitMs) || 0));
+  const polled = await agentQueue.poll(req.params.id, waitMs);
+  if (!polled) return res.status(404).json({ error: "This request is not in the Agent queue." });
+  res.json(polled);
+});
+
+// The game's answer to a lookup the Agent asked (GET above hands them over).
+app.post("/api/agent/requests/:id/lookups/:callId", agentLocalOnly, largeJsonParser, (req, res) => {
+  const taken = agentQueue.answerLookup(req.params.id, req.params.callId, req.body?.result);
+  if (!taken) return res.status(404).json({ error: "That lookup is not waiting for an answer." });
+  res.json({ ok: true });
+});
+
+app.delete("/api/agent/requests/:id", agentLocalOnly, (req, res) => {
+  agentQueue.cancel(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/agent/mcp", agentLocalOnly, jsonParser, async (req, res) => {
+  if (!tokenMatches(req.headers.authorization, AGENT_TOKEN)) {
+    return res.status(401).json({
+      jsonrpc: "2.0",
+      id: req.body?.id ?? null,
+      error: { code: -32001, message: "Refused: this is not the token the game wrote for this run. Start the Agent again in the Agent folder." },
+    });
+  }
+  // Models the player picked since the last call reach the sub-agents now.
+  try {
+    writeAgentSubagents(AGENT_FOLDER);
+  } catch (error) {
+    console.warn(`[agent] could not update the sub-agents: ${error.message}`);
+  }
+  const messages = Array.isArray(req.body) ? req.body : [req.body];
+  const replies = (await Promise.all(messages.map((message) => handleMcpMessage(agentQueue, message)))).filter(Boolean);
+  if (!replies.length) return res.status(202).end();
+  res.json(Array.isArray(req.body) ? replies : replies[0]);
+});
+
+// Streamable HTTP's optional server-to-Agent stream: this server sends nothing
+// unasked, so there is none.
+app.get("/api/agent/mcp", agentLocalOnly, (_req, res) => res.status(405).set("Allow", "POST").end());
+app.delete("/api/agent/mcp", agentLocalOnly, (_req, res) => res.status(405).set("Allow", "POST").end());
 
 // --- LAN sharing, from the UI ---------------------------------------------
 // Reading it is harmless (the page shows the toggle's state); the ADDRESSES are

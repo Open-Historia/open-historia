@@ -698,3 +698,60 @@ test("the Advisor Report has its own routing row and starts on the stat-sheet pi
   assert.equal(plan.implicit, false);
   assert.equal(config.resolveTaskFallbackEntries("countryStatSheet").preferredEntryId, statSheet, "the stat sheet never inherits back");
 });
+
+// --- an Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md) ---
+
+test("an Agent Connection needs no key, endpoint or model, and starts with every kind ticked and not paused", () => {
+  const connectionId = config.addConnection({ provider: "agent", name: "My Claude" });
+  config.clearFallbackList();
+  config.addEntry({ connectionId });
+  const [row] = resolved();
+  assert.equal(row.provider, "agent");
+  assert.equal(row.connectionName, "My Claude");
+  assert.deepEqual(row.kinds, ["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+  assert.equal(row.paused, false);
+  assert.equal(config.isFallbackListConfigured(), true, "the start-of-game prompt must not ask for a key");
+  assert.equal(config.providerSetupRequirement("agent"), "none");
+});
+
+test("an Agent Connection saved before the kinds existed answers every kind", () => {
+  store.set("ai_connections", JSON.stringify([{ id: "c1", provider: "agent", name: "Old", tasks: ["jump", "review"] }]));
+  store.set("ai_fallback_list", JSON.stringify([{ id: "e1", connectionId: "c1" }]));
+  const [row] = resolved();
+  assert.deepEqual(row.kinds, ["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+});
+
+test("unticking a kind and pausing are kept", () => {
+  const connectionId = config.addConnection({ provider: "agent" });
+  config.updateConnection(connectionId, { kinds: ["skip", "advisor"], paused: true });
+  const connection = config.getConnections().find((candidate) => candidate.id === connectionId);
+  assert.deepEqual(connection.kinds, ["skip", "advisor"]);
+  assert.equal(connection.paused, true);
+});
+
+test("an Agent entry serves what the player started, of the kinds it ticks, and nothing while paused", () => {
+  const agent = { provider: "agent", kinds: ["skip", "advisor", "diplomacy", "gameMaster", "interactive"], paused: false };
+  const serves = (call, entry = agent) => config.entryServesCall(entry, call);
+  assert.equal(serves({ spender: "jump" }), true, "a time-skip call is the skip kind");
+  assert.equal(serves({ spender: "jumpRetry" }), true);
+  assert.equal(serves({ agentKind: "skip", spender: "stats" }), true, "a skip's follow-up");
+  assert.equal(serves({ agentKind: "advisor" }), true);
+  assert.equal(serves({ agentKind: "diplomacy" }), true);
+  assert.equal(serves({ agentKind: "gameMaster" }), true);
+  assert.equal(serves({ agentKind: "interactive" }), true);
+  assert.equal(serves({}), false, "a call that does not say the player started it never goes to the Agent");
+  assert.equal(serves({ agentKind: "advisor", requestKind: "background" }), false, "nobody is at the terminal for background AI");
+  assert.equal(serves({ agentKind: "skip", requestKind: "background" }), true, "a skip's own follow-up is the player's skip, though the game asks it");
+  assert.equal(serves({ spender: "jump", sharedGame: true }), false, "a shared game never waits on one player's terminal");
+  assert.equal(serves({ agentKind: "diplomacy" }, { ...agent, kinds: ["skip"] }), false, "an unticked kind goes to the entry below");
+  assert.equal(serves({ spender: "jump" }, { ...agent, paused: true }), false, "paused, it serves nothing");
+  assert.equal(serves({ spender: "review", skipPassedOn: true }), false, "the rest of a skip the player sent to their key");
+  assert.equal(serves({ agentKind: "skip", spender: "stats", skipPassedOn: true }), false);
+  assert.equal(serves({ agentKind: "advisor", skipPassedOn: true }), true, "a chat is not the skip");
+  assert.equal(config.entryServesCall({ provider: "gemini" }, {}), true, "every other Connection serves every call");
+});
+
+test("the Agent Connection kind is offered only where a local server runs", () => {
+  assert.equal(config.providerOptionsFor({ localServer: true }).some((option) => option.value === "agent"), true);
+  assert.equal(config.providerOptionsFor({ localServer: false }).some((option) => option.value === "agent"), false);
+});

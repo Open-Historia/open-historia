@@ -1,7 +1,9 @@
 /*! Open Historia — portions (server relay for OpenAI-style APIs + reasoning toggle) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import {
+    AGENT_PROVIDER,
     GEMINI_DEFAULT_CHAIN,
     OPENAI_DEFAULT_MODEL,
+    entryServesCall,
     fallbackStateStore,
     getConnections,
     getEntryStatus,
@@ -16,6 +18,9 @@ import {
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
+import { agentClient } from "./agentConnection.js";
+import { onSimulationsIdle } from "./simulationStatus.js";
+import { hostingSharedGame } from "../../runtime/humanPolities.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
     LOCAL_OUTPUT_LIMIT_TOKENS,
@@ -146,6 +151,14 @@ import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiploma
 import { describeWeatherForAdvisor } from "./advisorWeather.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+
+// A time skip the player's Agent was answering is over once the game stops
+// simulating, so the Agent's `/skip` stops too (ADR 0008).
+onSimulationsIdle(() => { void agentClient.finishSkip(); });
+// A page that loads afresh has no skip running: whatever an earlier page left
+// waiting in the Agent queue (a reload mid-skip) is dropped, so `/skip` neither
+// answers it nor waits on it.
+if (typeof window !== "undefined" && !import.meta.env?.VITE_OH_WEB) void agentClient.dropStaleSkips();
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -2672,6 +2685,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
 function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
     switch (provider) {
+    // The player's own Agent, through the local server's Agent queue (ADR 0008).
+    case AGENT_PROVIDER:
+        return agentClient.call(systemPrompt, history, providerOpts);
     case "openai":
         return callOpenAI(systemPrompt, history, providerOpts);
     case "anthropic":
@@ -2907,9 +2923,14 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // `requestKind` says whether the player asked for this call or the game made
     // it in the background, and `onRequest` lets the caller count along (a time
     // skip reports what it cost): both are for the request budget below.
+    // `spender` is the time-skip task the call spends on (requestBudget.js), set
+    // only inside a skip, and `agentKind` what else the player started (an
+    // advisor message, a diplomatic reply, a Game Master command, an
+    // interactive event): together they decide whether an Agent entry answers
+    // the call (providerConfig.js entryServesCall).
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
-        requestKind = PLAYER_REQUEST, onRequest: observeRequest = null,
+        requestKind = PLAYER_REQUEST, onRequest: observeRequest = null, spender = "", agentKind = "",
         ...providerOpts
     } = opts;
     // The difficulty's priority line opens every system prompt the game sends
@@ -3079,7 +3100,12 @@ export async function callAI(systemPrompt, history, opts = {}) {
             store: fallbackStateStore,
             rateLimitPolicy: getRateLimitPolicy(),
             onChunk: providerOpts.onChunk,
-            canAttempt: (entry) => contextWindows.refusal(contextWindowKey(entry), requestTokens, { reserveTokens: answerReserve, trustLearned: windowIsLearned(entry) }),
+            // An Agent entry answers only a player's time-skip calls of the tasks
+            // it names; every other call goes past it without a word (ADR 0008).
+            // What the player started, of a kind the entry ticks, and not part of
+            // a skip the player sent on to their key (Use API key).
+            serves: (entry) => entryServesCall(entry, { spender, agentKind, requestKind, sharedGame: hostingSharedGame(), skipPassedOn: agentClient.skipPassedOn() }),
+            canAttempt: (entry) => entry.provider === AGENT_PROVIDER ? "" : contextWindows.refusal(contextWindowKey(entry), requestTokens, { reserveTokens: answerReserve, trustLearned: windowIsLearned(entry) }),
             tooBigError: (refused) => providerFailureError(
                 nothingFitsMessage(refused.map(({ entry, reason }) => ({ label: entry.label, reason })), requestTokens),
                 { kind: "tooBig", reason: "no entry in the Fallback list can fit this request" },
@@ -3099,7 +3125,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         : limit.source === "custom" ? `${limit.tokens} (the entry's custom parameters)`
                         : callShape.maxTokens,
                 }, { verbose: true });
-                return runWithLookups(lookups, history, (roundHistory, roundOpts) => {
+                // An Agent has no lookup rounds: it calls the task's lookups as
+                // tools while it answers (agentConnection.js), so none is a request.
+                const agentEntry = entry.provider === AGENT_PROVIDER;
+                return runWithLookups(agentEntry ? null : lookups, history, (roundHistory, roundOpts) => {
                     // Open from here until this round's answer is in or has
                     // failed: one request, or several when the provider path
                     // asks again (it says so with onSend).
@@ -3116,6 +3145,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         onActivity: timer.note,
                         onSend: live?.sent,
                         onReceived: live?.received,
+                        onAgentWait: live?.agentWaiting,
+                        spender,
+                        agentKind,
+                        ...(agentEntry && lookups ? { agentLookups: lookups } : {}),
                         onUnmarkedEnd: () => { endedUnmarked = true; },
                         onRequest: noteRequest,
                         onUsage: (data) => {
@@ -3945,7 +3978,7 @@ export async function sendMessage(userMessage, options) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
+        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", agentKind: "advisor", ...(lookups ? { lookups } : {}) });
         // The memory line comes off before the reply joins the history: the
         // model is given it once, ahead of the turns. A reply that dropped it
         // keeps the last one. The raw reply goes back to the panel, which
@@ -4095,7 +4128,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         conversationShape(freshPrompt, historyWithInstruction), { verbose: true });
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy" });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
         const { reply, reaction, memorySummary: generatedMemorySummary } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
@@ -4188,7 +4221,7 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
         playerMessage, { verbose: true });
 
     try {
-        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}`, taskKey: "diplomacy" });
+        const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy (advisor draft) → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
         const parsed = parseDiplomaticEnvelope(raw);
         if (!parsed.memorySummary && priorMemory?.summary) parsed.memorySummary = priorMemory.summary;
         logDebugEvent("diplomacy",

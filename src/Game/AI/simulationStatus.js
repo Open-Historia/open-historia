@@ -102,8 +102,20 @@ export const beginSimulation = () => {
   activeSimulations += 1;
 };
 
+// Told when the last running simulation ends: a time skip the player's Agent
+// is answering is then finished, and its `/skip` stops (agentConnection.js).
+const simulationIdleListeners = new Set();
+export const onSimulationsIdle = (listener) => {
+  simulationIdleListeners.add(listener);
+  return () => simulationIdleListeners.delete(listener);
+};
+
 export const endSimulation = () => {
   activeSimulations = Math.max(0, activeSimulations - 1);
+  if (activeSimulations) return;
+  for (const listener of [...simulationIdleListeners]) {
+    try { listener(); } catch { /* a listener must never break the end of a turn */ }
+  }
 };
 
 export const getHeldTurn = (kind) => heldHere(holdsOf(kind));

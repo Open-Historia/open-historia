@@ -44,6 +44,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 import { WarAndPeaceCards } from "./warAndPeace.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
@@ -984,6 +985,7 @@ const Main = ({
           passing fallback-switch notice draws over it, not under it. */}
       <BordersFallbackNotice />
       <FallbackSwitchNotice />
+      <AgentWaitingNotice />
       {/* An offer of peace or a call to arms that waits for the player's answer. */}
       <WarAndPeaceCards />
     </>

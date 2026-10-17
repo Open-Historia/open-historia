@@ -528,3 +528,101 @@ test("a request every model refused as too big fails with the last model's own w
         /tooBig failure/,
     );
 });
+
+// --- an Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md) ---
+// An Agent entry answers only the tasks it names. Every other call passes over
+// it without a request, a mark or a notice, so a chat keeps using the key below.
+
+const agentEntry = (id = "agent") => ({ id, provider: "agent", label: id });
+
+test("an entry the call is not served by is passed over without a request, a mark or a notice", async () => {
+    const store = createMemoryStateStore();
+    const { attempt, tried } = scripted({});
+    const marks = [];
+    const switches = [];
+    const outcome = await runWithFallback({
+        entries: [agentEntry(), entry("key")],
+        store, now: () => 0, attempt,
+        serves: (candidate) => candidate.provider !== "agent",
+        onMark: (mark) => marks.push(mark),
+        onSwitch: (detail) => switches.push(detail),
+    });
+    assert.equal(outcome.entry.id, "key");
+    assert.deepEqual(tried, ["key"]);
+    assert.deepEqual(marks, [], "passing over is not a failure");
+    assert.deepEqual(switches, [], "nothing to tell the player: the entry was never meant for this call");
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready");
+});
+
+test("an entry the call is not served by is not counted as too big", async () => {
+    const { attempt } = scripted({});
+    await assert.rejects(
+        runWithFallback({
+            entries: [agentEntry(), entry("small", "openai")],
+            store: createMemoryStateStore(), now: () => 0, attempt,
+            serves: (candidate) => candidate.provider !== "agent",
+            canAttempt: (candidate) => (candidate.id === "small" ? "too big" : ""),
+            tooBigError: (refused) => new Error(`nothing fits: ${refused.map((r) => r.entry.id).join(",")}`),
+        }),
+        /nothing fits: small$/,
+    );
+});
+
+test("a list whose only entries do not serve the call fails before anything is sent, and says why", async () => {
+    const { attempt, tried } = scripted({});
+    await assert.rejects(
+        runWithFallback({
+            entries: [agentEntry()],
+            store: createMemoryStateStore(), now: () => 0, attempt,
+            serves: () => false,
+        }),
+        /answers time skips only|does not answer this/i,
+    );
+    assert.deepEqual(tried, []);
+});
+
+test("an Agent attempt that waits a long time leaves no Busy, Rate limited or Spent mark", async () => {
+    const store = createMemoryStateStore();
+    let clock = 0;
+    const attempt = async () => {
+        clock += 6 * 60 * 60 * 1000; // six hours at the terminal
+        return "answer from the agent";
+    };
+    const outcome = await runWithFallback({ entries: [agentEntry(), entry("key")], store, now: () => clock, attempt, serves: () => true });
+    assert.equal(outcome.entry.id, "agent");
+    assert.equal(entryStatus(store.get("agent"), clock).status, "ready");
+});
+
+test("a cancel while the Agent is waiting fails the call as a cancel, and the entry below is not tried", async () => {
+    const store = createMemoryStateStore();
+    const { attempt, tried } = scripted({ agent: new DOMException("Timeline jump cancelled.", "AbortError") });
+    await assert.rejects(
+        runWithFallback({ entries: [agentEntry(), entry("key")], store, now: () => 0, attempt, serves: () => true }),
+        (error) => error.name === "AbortError",
+    );
+    assert.deepEqual(tried, ["agent"]);
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready", "cancelling cancels the call, not the entry");
+});
+
+test("an answer from an Agent entry comes back as from any other entry", async () => {
+    const { attempt } = scripted({ agent: { rawText: "{\"events\":[]}", toolInput: null } });
+    const outcome = await runWithFallback({ entries: [agentEntry(), entry("key")], store: createMemoryStateStore(), now: () => 0, attempt, serves: () => true });
+    assert.equal(outcome.entry.id, "agent");
+    assert.deepEqual(outcome.result, { rawText: "{\"events\":[]}", toolInput: null });
+});
+
+test("an Agent call the player passes on (Use API key) goes to the next entry, with no mark and no notice", async () => {
+    const store = createMemoryStateStore();
+    const marks = [];
+    const switches = [];
+    const { attempt, tried } = scripted({ agent: fail("passedOn", { reason: "the player chose their API key" }) });
+    const outcome = await runWithFallback({
+        entries: [agentEntry(), entry("key")], store, now: () => 0, attempt, serves: () => true,
+        onMark: (mark) => marks.push(mark), onSwitch: (detail) => switches.push(detail),
+    });
+    assert.equal(outcome.entry.id, "key");
+    assert.deepEqual(tried, ["agent", "key"]);
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready");
+    assert.deepEqual(marks, []);
+    assert.deepEqual(switches, []);
+});

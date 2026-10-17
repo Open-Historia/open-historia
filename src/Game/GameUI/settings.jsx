@@ -4,12 +4,13 @@ import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrima
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import {
+    AGENT_KINDS,
+    AGENT_PROVIDER,
     AI_TASK_ROUTING,
     CONNECTION_TEMPLATES,
     DEFAULT_PROVIDER,
     GEMINI_DEFAULT_CHAIN,
     OPENAI_DEFAULT_MODEL,
-    PROVIDER_OPTIONS,
     addConnection,
     addEntry,
     clearFallbackList,
@@ -26,6 +27,7 @@ import {
     getResolvedFallbackList,
     getTaskPick,
     moveEntry,
+    providerOptionsFor,
     providerSetupRequirement,
     removeConnection,
     removeEntry,
@@ -82,6 +84,7 @@ import { getLibraryState, saveGame, useLibraryState } from "../../runtime/librar
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
 import { copyToClipboard } from "../../runtime/clipboard.js";
+import { openAgentFolder, readAgentFolder } from "../AI/agentConnection.js";
 import {
     buildLoggingFile,
     clearDebugLog,
@@ -590,7 +593,9 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     const [query, setQuery] = useState("");
     const selectedProvider = getProviderMeta(provider);
     const normalizedQuery = query.trim().toLowerCase();
-    const filteredProviders = PROVIDER_OPTIONS.filter((option) => providerMatchesQuery(option, normalizedQuery));
+    // The player's own Agent only where the local server runs (ADR 0008).
+    const filteredProviders = providerOptionsFor({ localServer: !import.meta.env.VITE_OH_WEB })
+        .filter((option) => providerMatchesQuery(option, normalizedQuery));
     const groupedProviders = groupProviders(filteredProviders);
 
     useEffect(() => {
@@ -999,12 +1004,93 @@ const StatusChip = ({ status, at }) => {
 // The first Connection, made if there is none: an entry cannot exist without one.
 const ensureConnectionId = (connections) => connections[0]?.id ?? addConnection({ provider: DEFAULT_PROVIDER });
 
+// The commands that open each Agent in the Agent folder. The game never runs
+// them: the player does, in their own terminal (ADR 0008).
+const AGENT_COMMANDS = [
+    { name: "Claude Code", command: "claude" },
+    { name: "Codex", command: "codex" },
+    { name: "Antigravity CLI", command: "agy" },
+];
+
+// An Agent Connection has no key, endpoint or model: what the player needs is
+// where to open their Agent, and how.
+// What the player may send to their Agent, one tick each (providerConfig.js AGENT_KINDS).
+const AGENT_KIND_LABELS = [
+    { kind: "skip", label: "Time skips" },
+    { kind: "advisor", label: "Advisor" },
+    { kind: "diplomacy", label: "Diplomacy" },
+    { kind: "gameMaster", label: "Game Master" },
+    { kind: "interactive", label: "Interactive events" },
+];
+
+const AgentConnectionHelp = ({ connection = null }) => {
+    const [folder, setFolder] = useState("");
+    const [copied, setCopied] = useState("");
+    useEffect(() => {
+        let live = true;
+        readAgentFolder().then((path) => { if (live) setFolder(path); }).catch(() => {});
+        return () => { live = false; };
+    }, []);
+    const copy = async (command) => {
+        // A shell command, not interface text: built so no language pack sees it.
+        if (await copyToClipboard(["cd", JSON.stringify(folder) + ";", command].join(" "))) setCopied(command);
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <div style={helperStyle}>
+        <p style={{ margin: "0 0 0.5rem" }}>What you start (the kinds ticked below) waits for your own Agent, on your own subscription. No API key is used.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>Open a terminal in the Agent folder, start Claude Code, Codex or Antigravity CLI there, signed in with your own account, and type /answer whenever something is waiting. One /answer answers all of it, a whole time skip included.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>The first /answer asks which models to use for Open Historia. The game never starts your Agent and never reads its sign-in.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>Anything unticked, and what the game starts by itself (background diplomacy, idle chats, automatic stat tracking), goes to the entry below it.</p>
+        <p style={{ margin: 0 }}>With nothing below it, those don't run. Add an entry below it, such as a free Gemini key, to keep them.</p>
+        </div>
+        {connection && (
+            <div style={{ marginTop: "0.6rem" }}>
+            {AGENT_KIND_LABELS.map(({ kind, label }) => (
+                <Toggle
+                key={kind}
+                label={label}
+                enabled={connection.kinds?.includes(kind) ?? true}
+                onToggle={() => {
+                    const kinds = connection.kinds ?? AGENT_KINDS;
+                    updateConnection(connection.id, { kinds: kinds.includes(kind) ? kinds.filter((value) => value !== kind) : [...kinds, kind] });
+                }}
+                />
+            ))}
+            <Toggle label="Pause my Agent" enabled={connection.paused === true} onToggle={() => updateConnection(connection.id, { paused: connection.paused !== true })} />
+            <div style={{ ...helperStyle, marginTop: "-0.4rem" }}>While paused, everything goes to the entry below, for when you are away from your terminal.</div>
+            </div>
+        )}
+        {folder && (
+            <div data-no-translate style={{ ...helperStyle, marginTop: "0.5rem", overflowWrap: "anywhere", fontFamily: "monospace" }}>{folder}</div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.6rem" }}>
+        <button type="button" style={smallButtonStyle} onClick={() => { void openAgentFolder(); }}>Open the Agent folder</button>
+        {folder && AGENT_COMMANDS.map(({ name, command }) => (
+            <button key={command} type="button" style={smallButtonStyle} onClick={() => { void copy(command); }}>
+            {copied === command ? "Copied" : `Copy the command for ${name}`}
+            </button>
+        ))}
+        </div>
+        </div>
+    );
+};
+
 // A Connection's own fields: where it is and what reaches it. Shared by every
 // entry that uses it, which the editor says when it is more than one.
 const ConnectionFields = ({ connection, sharedBy = 1 }) => {
     const set = (field) => (value) => updateConnection(connection.id, { [field]: value });
     const selfHosted = providerSetupRequirement(connection.provider) === "endpoint";
     const meta = getProviderMeta(connection.provider);
+    if (connection.provider === AGENT_PROVIDER) {
+        return (
+            <>
+            <ApiProviderSelector provider={connection.provider} onProviderChange={set("provider")} />
+            <SettingsInput label="Connection name" value={connection.name} onChange={set("name")} placeholder={meta.label} />
+            <AgentConnectionHelp connection={connection} />
+            </>
+        );
+    }
     return (
         <>
         <ApiProviderSelector provider={connection.provider} onProviderChange={set("provider")} />
@@ -1084,6 +1170,8 @@ const EntryEditor = ({ entry, connections, entries }) => {
             </div>
         )}
         {connection && <ConnectionFields connection={connection} sharedBy={sharedBy} />}
+        {provider !== AGENT_PROVIDER && (
+        <>
         <SettingsInput
         label="Model"
         value={entry.model}
@@ -1107,6 +1195,8 @@ const EntryEditor = ({ entry, connections, entries }) => {
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
         <ContextWindowField entry={entry.resolved} />
         </details>
+        </>
+        )}
         </div>
     );
 };
@@ -1281,7 +1371,7 @@ const ConnectionsSection = () => {
                 <div style={{ fontSize: "0.82rem", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{connectionDisplayName(connection)}</div>
                 <div style={{ ...helperStyle, marginTop: "0.1rem" }}>
                 {getProviderMeta(connection.provider).label}
-                {selfHosted ? ` · ${connection.endpoint || "no endpoint"}` : ` · key ${connection.apiKey.trim() ? "set" : "not set"}`}
+                {connection.provider === AGENT_PROVIDER ? (connection.paused ? " · paused" : " · answers through /answer") : selfHosted ? ` · ${connection.endpoint || "no endpoint"}` : ` · key ${connection.apiKey.trim() ? "set" : "not set"}`}
                 {` · used by ${using} entr${using === 1 ? "y" : "ies"}`}
                 </div>
                 </div>

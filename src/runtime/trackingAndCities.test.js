@@ -50,7 +50,7 @@ test("a player who turns it off has turned it off, and it stays off through ever
 test("the player's country is given its first sheet for the tracking to begin from, asked for once as any first reading is", () => {
   const source = read("../Game/AI/gameplay.js");
   // (With what the war reads on it: runtime/statsBackend.js.)
-  assert.ok(source.includes('if (waiting) void ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true });'));
+  assert.ok(source.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
   assert.equal(source.split("  requestTrackedBaseline(pendingBaseline, game);\n").length - 1, 2, "in the standard sheet's runner and the custom sheet's");
 });
 

@@ -632,6 +632,8 @@ const JS_REGISTRY_DIRS = ["src/runtime", "src/Game/GameUI", "src/Game/Selection"
 const MESSAGE_FILES = [
   "src/Game/AI/providerErrors.js", "src/Game/AI/fallbackRunner.js", "src/Game/AI/contextWindow.js",
   "src/Game/AI/requestBudget.js",
+  // An Agent Connection: what a skip waiting on the player's Agent fails with.
+  "src/Game/AI/agentConnection.js",
   // The institutions: what their commands refuse with shows in the Institutions
   // tab, and the events and channel lines they write are read in the log.
   "src/runtime/institutionLifecycle.js", "src/runtime/institutionLifecycleCore.js",

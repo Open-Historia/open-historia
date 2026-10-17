@@ -148,6 +148,22 @@ _Avoid_: Quota exceeded (for a short-window limit)
 A Fallback entry that failed in a way waiting cannot fix, such as a rejected key or a model the provider does not know. It is skipped until the player edits it, and it shows the player what went wrong.
 _Avoid_: Broken, Spent (for this case)
 
+**Agent Connection**:
+A Connection answered by an Agent on the player's own subscription rather than by a provider's API. It answers only what the player starts, of the kinds it ticks (time skips, the advisor, diplomacy, the Game Master, interactive events), and can be paused. It waits until it is answered, the player cancels, or the player sends the request to the next entry. Desktop only. See `docs/adr/0008-subscription-agents-answer-through-the-game.md`.
+_Avoid_: Subscription mode, bridge (for the Connection itself)
+
+**Agent**:
+The program that answers an Agent Connection: Claude Code, Codex or Antigravity CLI, started and signed in by the player, never by the game. It returns answers; it never writes the save.
+_Avoid_: Bot, AI player
+
+**Agent queue**:
+The requests an Agent Connection is waiting on, held by the local server until an Agent answers them.
+_Avoid_: Inbox, jobs
+
+**Agent folder**:
+The folder the install ships for the player to open their own Agent in: its instructions, the `/answer` skill (and `/skip`, the same command), the MCP server's settings, the player's choice of models for Open Historia, and the prompt files of the Agent queue.
+_Avoid_: Workspace, agent files
+
 ### Subordination
 
 **Puppet**:

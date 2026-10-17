@@ -153,6 +153,11 @@ registerSettingsSnapshot("AI", () => {
         items.push(["Custom parameters", customParams ? `set (${customParams.length} characters)` : "none"]);
         items.push(["Structured output", entry.structuredMode || "auto"]);
         if (entry.provider === "openai-compatible") items.push(["Strict tool schema", onOff(entry.toolStrict)]);
+        // The player's own Agent (ADR 0008): what it answers, and whether it is paused.
+        if (entry.provider === "agent") {
+            items.push(["Answers", (entry.kinds ?? []).join(", ") || "nothing ticked"]);
+            items.push(["Pause my Agent", onOff(entry.paused === true)]);
+        }
         items.push(["Status", describeStatus(entry)]);
     });
     items.push(["When a model is rate limited", getRateLimitPolicy() === "next" ? "try the next one" : "wait"]);

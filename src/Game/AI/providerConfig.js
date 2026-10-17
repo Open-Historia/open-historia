@@ -2,6 +2,7 @@
 import { logDebugEvent, logSettingMessage, setDebugLogContext } from "../../runtime/debugLog.js";
 import { entryStatus } from "./fallbackRunner.js";
 import { FORMER_TASK_KEYS, readUnderTaskKey } from "./formerTaskKeys.js";
+import { BACKGROUND_REQUEST, SKIP_SPENDERS, spenderBase } from "./requestBudget.js";
 
 export const DEFAULT_PROVIDER = "gemini";
 
@@ -29,6 +30,12 @@ const FORMER_GEMINI_DEFAULT = "gemini-3.5-flash-lite";
 // request and still guessed; naming the one the game is built around is both
 // quicker and better. A model the player types is theirs instead.
 export const OPENAI_DEFAULT_MODEL = "gpt-6-luna";
+
+// An Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md):
+// answered by the player's own Claude Code, Codex or Antigravity CLI through
+// the local server's Agent queue, never by a provider's API. Desktop only,
+// since the queue lives on the local server.
+export const AGENT_PROVIDER = "agent";
 
 export const PROVIDER_OPTIONS = [
     {
@@ -66,7 +73,47 @@ export const PROVIDER_OPTIONS = [
         description: "Self-hosted proxy that speaks the Anthropic Messages API",
         searchTerms: ["claude", "anthropic", "messages api", "proxy", "gateway", "self-hosted"],
     },
+    {
+        value: AGENT_PROVIDER,
+        label: "Your own Agent",
+        group: "Your subscription",
+        description: "Claude Code, Codex or Antigravity CLI answers what you start when you type /answer",
+        searchTerms: ["claude code", "codex", "antigravity", "subscription", "pro", "max", "plus", "/answer", "/skip", "agent"],
+    },
 ];
+
+// What an Agent Connection may answer: the kinds of request the player starts
+// (ADR 0008). A time skip, with what the game does right after it; the
+// advisor; replies to the player's diplomatic messages; Game Master commands;
+// interactive events. The player ticks which on the entry; all are ticked
+// when it is added.
+export const AGENT_KINDS = Object.freeze(["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+
+// The provider choices a build can offer. Without a local server (the web
+// build, the Android app) an Agent Connection could never be answered.
+export const providerOptionsFor = ({ localServer }) =>
+    PROVIDER_OPTIONS.filter((option) => localServer || option.value !== AGENT_PROVIDER);
+
+// Whether an entry answers this call at all (fallbackRunner `serves`). An Agent
+// entry answers only what the player started, of a kind it ticks, while it is
+// not paused. A call says the player started it with `agentKind`, or with the
+// time skip's `spender`; one that says neither (the game's own work, and every
+// background call) never waits on a terminal nobody may be at. Nor does a
+// shared game's round. Every other entry answers every call.
+// `skipPassedOn`: the player sent the rest of the running skip to their key
+// (Use API key).
+export function entryServesCall(entry, { agentKind = "", spender = "", requestKind = "", sharedGame = false, skipPassedOn = false } = {}) {
+    if (entry?.provider !== AGENT_PROVIDER) return true;
+    if (entry.paused === true || sharedGame) return false;
+    // The game's own follow-up to a skip (a first stat-sheet reading as it
+    // lands) is still the skip the player started; anything else in the
+    // background has nobody at the terminal.
+    if (requestKind === BACKGROUND_REQUEST && agentKind !== "skip") return false;
+    const kind = agentKind || (spender && SKIP_SPENDERS.includes(spenderBase(spender)) ? "skip" : "");
+    if (!kind || (kind === "skip" && skipPassedOn)) return false;
+    const kinds = Array.isArray(entry.kinds) ? entry.kinds : AGENT_KINDS;
+    return kinds.includes(kind);
+}
 
 const PROVIDER_SETTINGS = {
     gemini: {
@@ -281,6 +328,7 @@ export function syncAiDebugContext() {
 // start prompt asks for it up front instead of letting the first turn fail.
 export function providerSetupRequirement(provider) {
     const normalized = normalizeProvider(provider);
+    if (normalized === AGENT_PROVIDER) return "none";
     return normalized === "openai-compatible" || normalized === "anthropic-compatible" ? "endpoint" : "apiKey";
 }
 
@@ -360,6 +408,10 @@ const writeJsonSetting = (key, value) => {
     localStorage.setItem(key, JSON.stringify(value));
 };
 
+// The kinds an Agent Connection ticks, in AGENT_KINDS order. One saved before
+// there were kinds (it named time-skip tasks) answers every kind, as a new one does.
+const agentKinds = (kinds) => (Array.isArray(kinds) ? AGENT_KINDS.filter((kind) => kinds.includes(kind)) : [...AGENT_KINDS]);
+
 // Names and models are stored as typed — the Settings fields save on every
 // keystroke — and trimmed where they are used.
 const normalizeConnection = (connection) => ({
@@ -371,6 +423,7 @@ const normalizeConnection = (connection) => ({
     customParams: String(connection?.customParams ?? ""),
     toolStrict: connection?.toolStrict === true,
     suggestedModel: String(connection?.suggestedModel ?? ""),
+    ...(normalizeProvider(connection?.provider) === AGENT_PROVIDER ? { kinds: agentKinds(connection?.kinds), paused: connection?.paused === true } : {}),
 });
 
 const normalizeEntry = (entry) => ({
@@ -607,6 +660,7 @@ const resolveEntry = (entry, connectionsById) => {
         structuredMode: entry.structuredMode,
         toolStrict: connection.toolStrict,
         label: describeEntry(model, connectionDisplayName(connection)),
+        ...(connection.provider === AGENT_PROVIDER ? { kinds: connection.kinds, paused: connection.paused } : {}),
     };
 };
 
@@ -619,7 +673,20 @@ export function getResolvedFallbackList() {
 
 // Whether an entry has what its provider needs before a call can go out: a
 // hosted provider its key, a self-hosted one its endpoint.
-const entryIsConfigured = (entry) => String(entry[providerSetupRequirement(entry.provider)] ?? "").trim().length > 0;
+const entryIsConfigured = (entry) => {
+    const requirement = providerSetupRequirement(entry.provider);
+    return requirement === "none" || String(entry[requirement] ?? "").trim().length > 0;
+};
+
+// Whether something below the player's own Agent can take a request it was
+// waiting on (Use API key).
+export function agentHasEntryBelow(at = Date.now()) {
+    const list = getResolvedFallbackList();
+    const first = list.findIndex((entry) => entry.provider === AGENT_PROVIDER);
+    return first >= 0 && list.slice(first + 1).some((entry) => entry.provider !== AGENT_PROVIDER
+        && entryIsConfigured(entry)
+        && !["spent", "unusable"].includes(entryStatus(fallbackStateStore.get(entry.id), at).status));
+}
 
 export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);

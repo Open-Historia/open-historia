@@ -62,7 +62,7 @@ export const JUMP_REQUEST_CAP = 3;
 export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats", "institutionBallots"]);
 
 // "jumpRetry" and "jumpLookup" are "jump" asking again and looking something up.
-const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
+export const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
 
 export const REQUEST_BUDGET_KEYS = Object.freeze({
     // ON unless the player turned it off ("0"): an absent key saves requests.

@@ -139,7 +139,7 @@ test("it is asked after a turn, when a scenario's fronts are built, and when a r
   // A sheet wanted for the war is one with a backend: a scenario's own sheet written before it kept one is written again.
   assert.ok(turn.includes("if (complete && (!needBackend || hasStatsBackend(persisted))) return persisted;"));
   // And the player's own country, tracked from the first skip, is asked for the same.
-  assert.ok(turn.includes('if (waiting) void ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true });'));
+  assert.ok(turn.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
 });
 
 // "I meant update both layers of the stats in one request."

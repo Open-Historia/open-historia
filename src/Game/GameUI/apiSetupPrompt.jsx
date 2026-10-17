@@ -7,7 +7,7 @@ import {
   DEFAULT_PROVIDER,
   GEMINI_DEFAULT_CHAIN,
   OPENAI_DEFAULT_MODEL,
-  PROVIDER_OPTIONS,
+  providerOptionsFor,
   applyQuickAiSetup,
   getProviderMeta,
   getRecentModels,
@@ -158,7 +158,8 @@ const TutorialVideo = () => {
 
 const groupedProviders = () => {
   const groups = new Map();
-  for (const option of PROVIDER_OPTIONS) {
+  // The player's own Agent needs no key, so it is not set up here (ADR 0008).
+  for (const option of providerOptionsFor({ localServer: false })) {
     const name = option.group || "Providers";
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name).push(option);

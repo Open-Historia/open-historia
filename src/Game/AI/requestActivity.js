@@ -29,6 +29,8 @@
 export const REQUEST_WAITING = "waiting";
 export const REQUEST_THINKING = "thinking";
 export const REQUEST_WRITING = "writing";
+// Handed to the player's own Agent (ADR 0008): it waits on the player's `/skip`.
+export const REQUEST_AGENT = "agent";
 
 // How long a request is open before the row adds that this is normal.
 export const STILL_WORKING_AFTER_MS = 60000;
@@ -61,7 +63,7 @@ export const createRequestActivity = ({ now = () => Date.now() } = {}) => {
             chunks: request.chunks,
             reasoningChars: request.reasoningChars,
             answerChars: request.answerChars,
-            stillWorking: openMs >= STILL_WORKING_AFTER_MS,
+            stillWorking: request.state !== REQUEST_AGENT && openMs >= STILL_WORKING_AFTER_MS,
         };
     };
 
@@ -114,6 +116,12 @@ export const createRequestActivity = ({ now = () => Date.now() } = {}) => {
                     request.state = state;
                     tell();
                 },
+                // In the Agent queue, waiting for the player to type /skip.
+                agentWaiting() {
+                    if (!open.has(request.id) || request.state === REQUEST_AGENT) return;
+                    request.state = REQUEST_AGENT;
+                    tell();
+                },
                 close() {
                     if (open.delete(request.id)) tell();
                 },
@@ -164,6 +172,7 @@ export const describeRequestActivity = (snapshot) => {
     if (!snapshot) return "no request was open";
     const open = `open ${seconds(snapshot.openMs)}`;
     const which = `the open request (${snapshot.label ? `${snapshot.label}, ` : ""}${open})`;
+    if (snapshot.state === REQUEST_AGENT) return `${which} was waiting for the player's Agent to answer it`;
     const reasoning = count(snapshot.reasoningChars);
     const answer = count(snapshot.answerChars);
     if (answer) {
