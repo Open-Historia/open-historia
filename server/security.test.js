@@ -7,8 +7,10 @@ import { test } from "node:test";
 import {
   allowedCorsOrigin,
   crossOriginWriteAllowed,
+  codexRequestAllowed,
   isAllowedHubUrl,
   isLoopbackAddress,
+  isPrivateNetworkAddress,
   isMetadataAddress,
   parseByteRange,
   relayTargetAllowed,
@@ -37,6 +39,66 @@ test("isLoopbackAddress recognises local addresses only", () => {
   for (const no of ["192.168.1.5", "10.0.0.2", "::ffff:192.168.1.5", "", undefined, null]) {
     assert.equal(isLoopbackAddress(no), false, String(no));
   }
+});
+
+test("isPrivateNetworkAddress accepts private LAN ranges and rejects public addresses", () => {
+  for (const ok of [
+    "10.0.0.2",
+    "172.16.0.1",
+    "172.31.255.254",
+    "192.168.151.125",
+    "::ffff:192.168.1.5",
+    "fd12::1",
+    "fe80::1%12",
+  ]) {
+    assert.equal(isPrivateNetworkAddress(ok), true, ok);
+  }
+  for (const no of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "1.1.1.1", "2001:4860:4860::8888", ""]) {
+    assert.equal(isPrivateNetworkAddress(no), false, no);
+  }
+});
+
+test("codexRequestAllowed keeps normal mode local-only", () => {
+  assert.equal(
+    codexRequestAllowed({
+      remoteAddress: "127.0.0.1",
+      origin: "http://localhost:3000",
+      host: "localhost:3000",
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    codexRequestAllowed({
+      remoteAddress: "192.168.151.50",
+      origin: "http://192.168.151.125:3000",
+      host: "192.168.151.125:3000",
+    }).allowed,
+    false,
+  );
+});
+
+test("codexRequestAllowed rejects DNS-rebinding hosts even with a matching Origin", () => {
+  assert.equal(codexRequestAllowed({
+    method: "POST", remoteAddress: "127.0.0.1",
+    host: "evil.example:3000", origin: "http://evil.example:3000",
+  }).allowed, false);
+});
+
+test("codexRequestAllowed permits only same-origin browser requests in LAN mode", () => {
+  const base = {
+    method: "POST",
+    remoteAddress: "::ffff:192.168.151.50",
+    host: "192.168.151.125:3000",
+    allowPrivateLan: true,
+  };
+  assert.equal(codexRequestAllowed({ ...base, origin: "http://192.168.151.125:3000" }).allowed, true);
+  assert.equal(codexRequestAllowed({ ...base, origin: "https://evil.example" }).allowed, false);
+  assert.equal(codexRequestAllowed(base).allowed, false);
+  assert.equal(codexRequestAllowed({ ...base, method: "GET" }).allowed, true);
+  assert.equal(
+    codexRequestAllowed({ ...base, remoteAddress: "8.8.8.8", origin: "http://192.168.151.125:3000" }).allowed,
+    false,
+  );
 });
 
 test("crossOriginWriteAllowed: safe methods always pass", () => {
