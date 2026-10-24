@@ -20,7 +20,7 @@ import { normalizeSpyOp } from "./spycraft.js";
 import { normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
-import { resolvePolityIdentity } from "./polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
@@ -3372,6 +3372,23 @@ const normalizeWorldWars = (value) => {
     .slice(0, MAX_WORLD_WARS);
 };
 
+// One identity index per identity world. normalizeWorldState makes that world
+// afresh for each pass and only reads it, so the index built for its first
+// name holds for all the rest. Without this every relation and agreement row
+// built the index again, each time reading every polity and every region's
+// owner: a pass cost rows x regions, the game makes hundreds of passes in a
+// skip, and on a phone a big scenario froze the page for minutes (2026-10-23).
+const diplomaticIdentityIndexes = new WeakMap();
+const diplomaticIdentityIndexOf = (identityWorld) => {
+  if (!identityWorld || typeof identityWorld !== "object") return null;
+  let index = diplomaticIdentityIndexes.get(identityWorld);
+  if (!index) {
+    index = buildPolityIdentityIndex(identityWorld);
+    diplomaticIdentityIndexes.set(identityWorld, index);
+  }
+  return index;
+};
+
 const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const raw = normalizeOptionalString(token);
   if (!raw) return "";
@@ -3380,6 +3397,7 @@ const resolveWorldDiplomaticPolity = (token, identityWorld) => {
     requireActive: false,
     allowCoreMatch: true,
     allowStockBase: true,
+    identityIndex: diplomaticIdentityIndexOf(identityWorld),
   });
   return normalizeOptionalString(resolved?.resolved || toCountryName(raw) || raw);
 };
