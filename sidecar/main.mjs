@@ -125,6 +125,14 @@ const loadRegions = async () => {
 
 const regionIdOf = (feature) => clean(feature?.id ?? feature?.properties?.id);
 
+const flagFileFor = (code, flagsDir) => {
+  const url = engine.flagImageUrlFromGid(clean(code));
+  const alpha2 = /\/([a-z]{2}(?:-[a-z]{2,3})?)\.svg$/i.exec(String(url ?? ""))?.[1]?.toLowerCase();
+  if (!alpha2) return "";
+  const file = path.join(flagsDir, `${alpha2}.svg`);
+  return fs.existsSync(file) ? file : "";
+};
+
 const mapState = async () => {
   if (!regionCache.sha) await loadRegions();
   const bundle = await engine.readGameStateBundle({ force: true });
@@ -184,24 +192,100 @@ const methods = {
   hello: async () => ({ dataRoot, assetsDir, origin, standIn: process.env.OH_STANDIN_MODEL === "1" }),
   "library.list": async () => {
     const catalog = await api("/api/library");
+    const scenarios = list(catalog?.scenarios);
+    const games = list(catalog?.games);
+    const scenarioName = new Map(scenarios.map((scenario) => [clean(scenario?.id), clean(scenario?.name)]));
     return {
       activeGameId: clean(catalog?.activeGameId),
-      games: list(catalog?.games).map((game) => ({
+      games: games.map((game) => ({
         id: clean(game?.id),
         name: clean(game?.name),
-        scenarioName: clean(game?.scenarioName ?? game?.scenario?.name),
+        scenarioId: clean(game?.scenarioId),
+        scenarioName: scenarioName.get(clean(game?.scenarioId)) || clean(game?.heroTitle),
         country: clean(game?.country),
-        gameDate: clean(game?.gameDate),
-        updatedAt: clean(game?.updatedAt),
+        gameDate: clean(game?.currentDate ?? game?.gameDate),
+        round: Number(game?.round ?? game?.currentRound) || 1,
+        description: clean(game?.description),
+        eventCount: Number(game?.eventCount) || 0,
+        pendingActions: Number(game?.pendingActions) || 0,
+        coverImageUrl: clean(game?.ownCoverImageUrl || game?.coverImageUrl),
+        accentColor: clean(game?.accentColor) || "#2bc1f3",
+        archived: game?.archived === true,
+        lastPlayedAt: clean(game?.lastPlayedAt),
       })),
-      scenarios: list(catalog?.scenarios).map((scenario) => ({ id: clean(scenario?.id), name: clean(scenario?.name) })),
+      scenarios: scenarios.map((scenario) => ({
+        id: clean(scenario?.id),
+        name: clean(scenario?.name),
+        description: clean(scenario?.description),
+        heroSubtitle: clean(scenario?.heroSubtitle),
+        subtitle: clean(scenario?.subtitle),
+        coverImageUrl: clean(scenario?.coverImageUrl),
+        accentColor: clean(scenario?.accentColor) || "#2bc1f3",
+        builtIn: clean(scenario?.id) === "default" || scenario?.builtIn === true,
+        fromHub: Boolean(scenario?.hubOrigin),
+        games: games.filter((game) => clean(game?.scenarioId) === clean(scenario?.id)).length,
+        updatedAt: clean(scenario?.updatedAt),
+      })),
     };
   },
-  "game.create": async ({ scenarioId = "default", name = "" } = {}) => {
-    const created = await api("/api/games", { method: "POST", body: { name: clean(name) || undefined, scenarioId, setActive: true } });
+  "countries.list": async () => {
+    const catalog = await api("/api/library");
+    const flagsDir = path.join(repo, "public", "flags");
+    const seen = new Set();
+    const countries = [];
+    for (const [code, name] of Object.entries(catalog?.countryNames ?? {})) {
+      const label = clean(name);
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      countries.push({ name: label, flag: flagFileFor(code, flagsDir) });
+    }
+    countries.sort((a, b) => a.name.localeCompare(b.name));
+    return { countries, difficulties: engine.DIFFICULTY_LEVELS.map((level) => ({ id: level.id, label: level.label, emoji: level.emoji, blurb: level.blurb })) };
+  },
+  "game.create": async ({ scenarioId = "default", name = "", country = "", difficulty = "" } = {}) => {
+    const gamePatch = {};
+    if (clean(country)) gamePatch.country = clean(country);
+    if (clean(difficulty)) gamePatch.difficulty = clean(difficulty);
+    const created = await api("/api/games", { method: "POST", body: { name: clean(name) || undefined, scenarioId, setActive: true, ...(Object.keys(gamePatch).length ? { gamePatch } : {}) } });
     await engine.refreshLibraryCatalog({ force: true });
     regionCache = { sha: "", features: [] };
     return { id: clean(created?.id ?? created?.game?.id) };
+  },
+  "game.update": async ({ id, country = "", difficulty = "" }) => {
+    const gamePatch = {};
+    if (clean(country)) gamePatch.country = clean(country);
+    if (clean(difficulty)) gamePatch.difficulty = clean(difficulty);
+    await api(`/api/games/${encodeURIComponent(id)}`, { method: "PUT", body: { gamePatch } });
+    await engine.refreshLibraryCatalog({ force: true });
+    return gameView();
+  },
+  "game.delete": async ({ id }) => {
+    await api(`/api/games/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await engine.refreshLibraryCatalog({ force: true });
+    return true;
+  },
+  "game.flag": async ({ country = "" } = {}) => {
+    const catalog = await api("/api/library");
+    const wanted = clean(country);
+    const entry = Object.entries(catalog?.countryNames ?? {}).find(([, name]) => clean(name) === wanted);
+    return { flag: entry ? flagFileFor(entry[0], path.join(repo, "public", "flags")) : "" };
+  },
+  "map.cities": async () => {
+    const response = await fetch(engine.JSON_URLS.citiesGeojson || "/api/runtime/json/citiesGeojson");
+    if (!response.ok) return { cities: [] };
+    const parsed = await response.json().catch(() => null);
+    const cities = [];
+    for (const feature of list(parsed?.features)) {
+      const coordinates = feature?.geometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) continue;
+      const props = feature?.properties ?? {};
+      const name = clean(props.name ?? props.NAME ?? props.city);
+      if (!name) continue;
+      const capital = clean(props.capital).toLowerCase() === "primary" || props.capital === true;
+      const population = Number(props.population ?? props.POP_MAX ?? props.pop_max ?? props.pop) || 0;
+      cities.push([name, Number(coordinates[0]), Number(coordinates[1]), capital ? 1 : 0, population, Number(props.tier) || 3]);
+    }
+    return { cities };
   },
   "game.open": async ({ id }) => {
     await api("/api/games/active", { method: "PUT", body: { gameId: id } });
@@ -218,6 +302,18 @@ const methods = {
     expectedJump = { origin: originDate, target: engine.jumpTargetDate(originDate, Number(days) || 0), country: clean(bundle.game?.country) };
     const result = await engine.simulateTimelineJump({
       days: Number(days) || 0,
+      signal,
+      onProgress: (progress) => emit("turn.progress", { call: id, progress: JSON.parse(JSON.stringify(progress ?? null)) }),
+      onEvents: (events) => emit("turn.events", { call: id, events: list(events).map(eventView) }),
+    });
+    const view = await gameView();
+    return { summary: clean(result?.summary), view };
+  },
+  "skip.auto": async (_args, { signal, id }) => {
+    const bundle = await engine.readGameStateBundle({ force: true });
+    const originDate = clean(bundle.game?.gameDate);
+    expectedJump = { origin: originDate, target: engine.jumpTargetDate(originDate, 30), country: clean(bundle.game?.country) };
+    const result = await engine.simulateAutoJump({
       signal,
       onProgress: (progress) => emit("turn.progress", { call: id, progress: JSON.parse(JSON.stringify(progress ?? null)) }),
       onEvents: (events) => emit("turn.events", { call: id, events: list(events).map(eventView) }),

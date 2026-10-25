@@ -1,35 +1,27 @@
 extends Node
 
-const ACCENT := Color("#2bc1f3")
-const INK := Color("#e9e9ec")
-const SOFT := Color("#a3a5ad")
-const FAINT := Color("#6b6d74")
-const PROBLEM := Color("#ff8a80")
-const SKIPS := [["1 week", 7], ["1 month", 30], ["6 months", 182], ["1 year", 365]]
-const PROVIDERS := {"gemini": "Google Gemini", "openai": "OpenAI", "anthropic": "Anthropic"}
+const PROVIDERS := {"gemini": "Gemini — Google AI Studio / Gemini API", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 var engine: EngineLink
 var map_view: MapView
 var ui: Control
-var boot_panel: PanelContainer
+var boot: Control
 var boot_label: Label
-var library_panel: PanelContainer
-var games_list: VBoxContainer
-var library_status: Label
-var hud: Control
-var country_label: Label
-var date_label: Label
-var status_label: Label
-var events_list: VBoxContainer
-var region_panel: PanelContainer
-var region_title: Label
-var region_owner: Label
-var skip_buttons: Array[Button] = []
-var ai_panel: PanelContainer
-var ai_provider: OptionButton
-var ai_key: LineEdit
-var ai_status: Label
-var game_country := ""
+var menu: MainMenu
+var hud: Hud
+var picker: CountryPicker
+var settings: Control
+var settings_provider: OptionButton
+var settings_key: LineEdit
+var settings_status: Label
+var popup: GlassPanel
+var popup_title: Label
+var popup_owner: Label
+var info := {}
+var library := {}
+var game_id := ""
+var game_name := ""
+var creating_id := ""
 var skipping := false
 
 
@@ -43,20 +35,38 @@ func _ready() -> void:
 	layer.layer = 10
 	add_child(layer)
 	ui = Control.new()
-	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.theme = _make_theme()
 	layer.add_child(ui)
+	hud = Hud.new()
+	ui.add_child(hud)
+	_build_popup()
+	menu = MainMenu.new()
+	ui.add_child(menu)
+	picker = CountryPicker.new()
+	picker.map_view = map_view
+	ui.add_child(picker)
+	picker.visible = false
+	_build_settings()
 	_build_boot()
-	_build_library()
-	_build_hud()
-	_build_ai_panel()
-	_show(boot_panel)
+	_show("boot")
 	engine.engine_ready.connect(_on_engine_ready)
-	engine.engine_stopped.connect(_on_engine_stopped)
+	engine.engine_stopped.connect(func(message: String) -> void:
+		_show("boot")
+		boot_label.text = message)
 	engine.engine_event.connect(_on_engine_event)
+	menu.play_game.connect(_open_game)
+	menu.start_scenario.connect(_start_scenario)
+	menu.open_settings.connect(_open_settings)
+	menu.refresh_requested.connect(_refresh_library)
+	hud.exit_game.connect(_exit_game)
+	hud.open_menu.connect(_open_settings)
+	hud.skip_requested.connect(_skip)
+	hud.auto_skip_requested.connect(_auto_skip)
+	picker.chosen.connect(_on_country_chosen)
+	picker.cancelled.connect(_on_picker_cancelled)
 	map_view.region_clicked.connect(_on_region_clicked)
-	map_view.bake_failed.connect(func(message: String) -> void: _set_status(message, true))
+	map_view.bake_failed.connect(func(message: String) -> void: menu.set_status(message, true))
 	if not engine.start():
 		boot_label.text = "The game engine could not be started. Is Node.js installed?"
 
@@ -71,433 +81,318 @@ func _notification(what: int) -> void:
 		engine.request("presence", {"visible": false})
 
 
-func _make_theme() -> Theme:
-	var theme := Theme.new()
-	theme.default_font_size = 15
-	var panel := StyleBoxFlat.new()
-	panel.bg_color = Color("#17181ce8")
-	panel.border_color = Color("#2a2c32")
-	panel.set_border_width_all(1)
-	panel.set_corner_radius_all(10)
-	panel.set_content_margin_all(14)
-	theme.set_stylebox("panel", "PanelContainer", panel)
-	var card := panel.duplicate() as StyleBoxFlat
-	card.bg_color = Color("#1f2025")
-	card.set_content_margin_all(10)
-	card.set_corner_radius_all(8)
-	theme.set_type_variation("Card", "PanelContainer")
-	theme.set_stylebox("panel", "Card", card)
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color("#24262c")
-	normal.border_color = Color("#34363d")
-	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(8)
-	normal.content_margin_left = 14
-	normal.content_margin_right = 14
-	normal.content_margin_top = 7
-	normal.content_margin_bottom = 7
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color("#2d3037")
-	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color("#33363e")
-	var disabled := normal.duplicate() as StyleBoxFlat
-	disabled.bg_color = Color("#1c1d21")
-	disabled.border_color = Color("#26282d")
-	for state in [["normal", normal], ["hover", hover], ["pressed", pressed], ["disabled", disabled], ["focus", hover]]:
-		theme.set_stylebox(state[0], "Button", state[1])
-		theme.set_stylebox(state[0], "OptionButton", state[1])
-	theme.set_color("font_color", "Button", INK)
-	theme.set_color("font_hover_color", "Button", Color.WHITE)
-	theme.set_color("font_pressed_color", "Button", Color.WHITE)
-	theme.set_color("font_disabled_color", "Button", FAINT)
-	var accent := normal.duplicate() as StyleBoxFlat
-	accent.bg_color = ACCENT
-	accent.border_color = ACCENT
-	var accent_hover := accent.duplicate() as StyleBoxFlat
-	accent_hover.bg_color = ACCENT.lightened(0.15)
-	theme.set_type_variation("AccentButton", "Button")
-	for state in [["normal", accent], ["hover", accent_hover], ["pressed", accent], ["focus", accent_hover]]:
-		theme.set_stylebox(state[0], "AccentButton", state[1])
-	theme.set_color("font_color", "AccentButton", Color("#0b0c0f"))
-	theme.set_color("font_hover_color", "AccentButton", Color("#0b0c0f"))
-	theme.set_color("font_pressed_color", "AccentButton", Color("#0b0c0f"))
-	var field := normal.duplicate() as StyleBoxFlat
-	field.bg_color = Color("#111215")
-	theme.set_stylebox("normal", "LineEdit", field)
-	theme.set_stylebox("focus", "LineEdit", field)
-	theme.set_color("font_color", "Label", INK)
-	theme.set_color("font_color", "LineEdit", INK)
-	return theme
-
-
-func _label(text: String, size := 15, color := INK) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", size)
-	label.add_theme_color_override("font_color", color)
-	return label
-
-
-func _button(text: String, accent := false) -> Button:
-	var button := Button.new()
-	button.text = text
-	if accent:
-		button.theme_type_variation = "AccentButton"
-	return button
-
-
-func _center(panel: Control, width: float, height: float) -> void:
-	panel.custom_minimum_size = Vector2(width, height)
-
-
-func _centered(panel: Control) -> Control:
-	var holder := CenterContainer.new()
-	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.add_child(panel)
-	return holder
-
-
 func _build_boot() -> void:
-	boot_panel = PanelContainer.new()
-	_center(boot_panel, 520, 140)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
-	box.add_child(_label("Open Historia", 28))
-	boot_label = _label("Starting the game engine…", 15, SOFT)
+	boot = ColorRect.new()
+	(boot as ColorRect).color = UI.PAGE
+	boot.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var column := VBoxContainer.new()
+	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.add_theme_constant_override("separation", 14)
+	var mark := TextureRect.new()
+	mark.texture = UI.logo()
+	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	mark.custom_minimum_size = Vector2(96, 96)
+	column.add_child(mark)
+	boot_label = UI.label("Starting the game engine…", 13, UI.SOFT)
+	boot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	boot_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(boot_label)
-	boot_panel.add_child(box)
-	ui.add_child(_centered(boot_panel))
+	boot_label.custom_minimum_size.x = 520
+	column.add_child(boot_label)
+	centre.add_child(column)
+	boot.add_child(centre)
+	ui.add_child(boot)
 
 
-func _build_library() -> void:
-	library_panel = PanelContainer.new()
-	_center(library_panel, 680, 560)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 12)
-	box.add_child(_label("Open Historia", 30))
-	box.add_child(_label("Your games", 17, SOFT))
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	games_list = VBoxContainer.new()
-	games_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	games_list.add_theme_constant_override("separation", 8)
-	scroll.add_child(games_list)
-	box.add_child(scroll)
-	library_status = _label("", 14, SOFT)
-	library_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(library_status)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var create := _button("New game", true)
-	create.pressed.connect(_on_new_game)
-	row.add_child(create)
-	var ai := _button("AI connection")
-	ai.pressed.connect(_open_ai_panel)
-	row.add_child(ai)
-	box.add_child(row)
-	library_panel.add_child(box)
-	ui.add_child(_centered(library_panel))
+func _build_popup() -> void:
+	popup = GlassPanel.new(UI.HUD_BG_STRONG, 12, Vector4(14, 10, 14, 11))
+	popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	popup_title = UI.label("", 14, UI.WHITE, 700)
+	popup_owner = UI.label("", 12, Color(1, 1, 1, 0.6))
+	column.add_child(popup_title)
+	column.add_child(popup_owner)
+	popup.add_child(column)
+	popup.visible = false
+	hud.add_child(popup)
 
 
-func _build_hud() -> void:
-	hud = Control.new()
-	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(hud)
-
-	var top := PanelContainer.new()
-	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top.offset_left = 12
-	top.offset_right = -12
-	top.offset_top = 12
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 14)
-	country_label = _label("", 18)
-	bar.add_child(country_label)
-	date_label = _label("", 16, SOFT)
-	bar.add_child(date_label)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.add_child(spacer)
-	for skip in SKIPS:
-		var button := _button(skip[0])
-		var days: int = skip[1]
-		button.pressed.connect(func() -> void: _skip(days))
-		bar.add_child(button)
-		skip_buttons.append(button)
-	var home := _button("Library")
-	home.pressed.connect(_back_to_library)
-	bar.add_child(home)
-	top.add_child(bar)
-	hud.add_child(top)
-
-	status_label = _label("", 14, SOFT)
-	status_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	status_label.position = Vector2(26, 74)
-	status_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	status_label.add_theme_constant_override("outline_size", 4)
-	hud.add_child(status_label)
-
-	var side := PanelContainer.new()
-	side.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
-	side.offset_left = -372
-	side.offset_right = -12
-	side.offset_top = 76
-	side.offset_bottom = -12
-	var side_box := VBoxContainer.new()
-	side_box.add_theme_constant_override("separation", 8)
-	side_box.add_child(_label("Events", 17))
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	events_list = VBoxContainer.new()
-	events_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	events_list.add_theme_constant_override("separation", 8)
-	scroll.add_child(events_list)
-	side_box.add_child(scroll)
-	side.add_child(side_box)
-	hud.add_child(side)
-
-	region_panel = PanelContainer.new()
-	region_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	region_panel.offset_left = 12
-	region_panel.offset_top = -96
-	region_panel.offset_bottom = -12
-	region_panel.offset_right = 340
-	var region_box := VBoxContainer.new()
-	region_title = _label("", 17)
-	region_owner = _label("", 14, SOFT)
-	region_box.add_child(region_title)
-	region_box.add_child(region_owner)
-	region_panel.add_child(region_box)
-	region_panel.visible = false
-	hud.add_child(region_panel)
-	hud.visible = false
-
-
-func _build_ai_panel() -> void:
-	ai_panel = PanelContainer.new()
-	_center(ai_panel, 460, 240)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
-	box.add_child(_label("AI connection", 20))
-	ai_provider = OptionButton.new()
+func _build_settings() -> void:
+	settings = Control.new()
+	settings.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	settings.add_child(dim)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	settings.add_child(centre)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(420, 0)
+	var style := UI.box(Color8(30, 31, 35, 252), Color(1, 1, 1, 0.12), 14, 1, Vector4(20, 18, 20, 18))
+	UI.shadowed(style, Color(0, 0, 0, 0.5), 24, Vector2(0, 18))
+	panel.add_theme_stylebox_override("panel", style)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	column.add_child(UI.label("Set up your AI provider", 17, UI.WHITE, 800))
+	column.add_child(UI.wrapped("Open Historia writes every turn, advisor reply and diplomatic message with an AI model. Paste your details below and you are ready to play.", 12, Color(1, 1, 1, 0.65)))
+	column.add_child(UI.label("PROVIDER", 10, Color(1, 1, 1, 0.55), 700, "Arial", 1))
+	settings_provider = OptionButton.new()
 	for key in PROVIDERS:
-		ai_provider.add_item(PROVIDERS[key])
-		ai_provider.set_item_metadata(ai_provider.item_count - 1, key)
-	box.add_child(ai_provider)
-	ai_key = LineEdit.new()
-	ai_key.secret = true
-	ai_key.placeholder_text = "API key"
-	box.add_child(ai_key)
-	ai_status = _label("", 13, SOFT)
-	box.add_child(ai_status)
+		settings_provider.add_item(PROVIDERS[key])
+		settings_provider.set_item_metadata(settings_provider.item_count - 1, key)
+	settings_provider.custom_minimum_size.y = 32
+	settings_provider.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.3), Color(1, 1, 1, 0.14), 7, 1, Vector4(10, 0, 10, 0)))
+	settings_provider.add_theme_font_size_override("font_size", 12)
+	column.add_child(settings_provider)
+	column.add_child(UI.label("API KEY", 10, Color(1, 1, 1, 0.55), 700, "Arial", 1))
+	settings_key = LineEdit.new()
+	settings_key.secret = true
+	settings_key.placeholder_text = "Paste your API key"
+	settings_key.custom_minimum_size.y = 32
+	settings_key.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.3), Color(1, 1, 1, 0.14), 7, 1, Vector4(10, 0, 10, 0)))
+	settings_key.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.26), 7, 1, Vector4(10, 0, 10, 0)))
+	settings_key.add_theme_font_size_override("font_size", 12)
+	column.add_child(settings_key)
+	settings_status = UI.label("", 11, Color(1, 1, 1, 0.5))
+	column.add_child(settings_status)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var save := _button("Save", true)
-	save.pressed.connect(_save_ai)
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(UI.spacer())
+	var later := UI.button("Not now", "small")
+	later.pressed.connect(func() -> void: settings.visible = false)
+	row.add_child(later)
+	var save := UI.button("Save", "accent")
+	save.custom_minimum_size.y = 32
+	save.pressed.connect(_save_settings)
 	row.add_child(save)
-	var close := _button("Close")
-	close.pressed.connect(func() -> void: ai_panel.visible = false)
-	row.add_child(close)
-	box.add_child(row)
-	ai_panel.add_child(box)
-	ai_panel.visible = false
-	ui.add_child(_centered(ai_panel))
+	column.add_child(row)
+	panel.add_child(column)
+	centre.add_child(panel)
+	settings.visible = false
+	ui.add_child(settings)
 
 
-func _show(panel: Control) -> void:
-	for candidate in [boot_panel, library_panel]:
-		candidate.visible = candidate == panel
-	hud.visible = panel == hud
-	map_view.visible = panel == hud
+func _show(screen: String) -> void:
+	boot.visible = screen == "boot"
+	menu.visible = screen == "menu"
+	hud.visible = screen == "game"
+	map_view.visible = screen == "game" or picker.visible
+	map_view.input_enabled = screen == "game"
+	map_view.set_overlays_visible(screen == "game")
+	if screen != "game":
+		popup.visible = false
 
 
-func _on_engine_ready(_info: Dictionary) -> void:
+func _on_engine_ready(_data: Dictionary) -> void:
+	var hello := await engine.request("hello")
+	if hello.get("ok", false):
+		info = hello["result"]
+		menu.set_origin(str(info.get("origin", "")))
+		map_view.basemap.cache_dir = str(info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
 	await _refresh_library()
-
-
-func _on_engine_stopped(message: String) -> void:
-	_show(boot_panel)
-	boot_label.text = message
+	_show("menu")
 
 
 func _refresh_library() -> void:
-	_show(library_panel)
-	library_status.text = ""
 	var reply := await engine.request("library.list")
-	for child in games_list.get_children():
-		child.queue_free()
 	if not reply.get("ok", false):
-		library_status.text = str(reply.get("error", "The library could not be read."))
+		menu.set_status(str(reply.get("error", "The library could not be read.")), true)
 		return
-	var games: Array = reply["result"].get("games", [])
-	if games.is_empty():
-		games_list.add_child(_label("No games yet.", 15, SOFT))
-	for game in games:
-		var card := PanelContainer.new()
-		card.theme_type_variation = "Card"
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		var text := VBoxContainer.new()
-		text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		text.add_child(_label(str(game.get("name", "")), 16))
-		var details := [str(game.get("country", "")), str(game.get("gameDate", "")), str(game.get("scenarioName", ""))]
-		text.add_child(_label(" · ".join(details.filter(func(part: String) -> bool: return not part.is_empty())), 13, SOFT))
-		row.add_child(text)
-		var play := _button("Play", true)
-		var id := str(game.get("id", ""))
-		play.pressed.connect(func() -> void: _open_game(id))
-		row.add_child(play)
-		card.add_child(row)
-		games_list.add_child(card)
+	library = reply["result"]
+	menu.set_status("")
+	menu.set_library(library)
 
 
-func _on_new_game() -> void:
-	library_status.text = "Creating a game…"
-	var reply := await engine.request("game.create", {"scenarioId": "default"})
-	if not reply.get("ok", false):
-		library_status.text = str(reply.get("error", "The game could not be created."))
-		return
-	await _open_game(str(reply["result"].get("id", "")))
+func _game_named(id: String) -> Dictionary:
+	for game in library.get("games", []):
+		if str(game.get("id", "")) == id:
+			return game
+	return {}
 
 
-func _open_game(id: String) -> void:
-	library_status.text = "Opening the game…"
-	var opened := await engine.request("game.open", {"id": id})
-	if not opened.get("ok", false):
-		library_status.text = str(opened.get("error", "The game could not be opened."))
-		return
+func _load_map() -> bool:
 	var regions := await engine.request("map.regions")
 	if not regions.get("ok", false):
-		library_status.text = str(regions.get("error", "The map could not be read."))
-		return
-	library_status.text = "Drawing the map…"
+		menu.set_status(str(regions.get("error", "The map could not be read.")), true)
+		return false
 	map_view.load_regions(str(regions["result"]["file"]))
 	await map_view.baked
 	var state := await engine.request("map.state")
 	if state.get("ok", false):
 		map_view.set_state(state["result"])
-	_apply_view(opened["result"])
-	_show(hud)
-	map_view.focus_owner(game_country)
+	var cities := await engine.request("map.cities")
+	if cities.get("ok", false):
+		map_view.set_cities(cities["result"].get("cities", []))
+	return true
 
 
-func _apply_view(view: Dictionary) -> void:
-	game_country = str(view.get("country", ""))
-	country_label.text = game_country
-	date_label.text = _format_date(str(view.get("gameDate", "")))
-	for child in events_list.get_children():
-		child.queue_free()
-	var events: Array = view.get("events", [])
-	events.reverse()
-	for event in events:
-		events_list.add_child(_event_card(event))
+func _open_game(id: String) -> void:
+	menu.set_status("Opening the game…")
+	var opened := await engine.request("game.open", {"id": id})
+	if not opened.get("ok", false):
+		menu.set_status(str(opened.get("error", "The game could not be opened.")), true)
+		return
+	if not await _load_map():
+		return
+	await _refresh_library()
+	game_id = id
+	game_name = str(_game_named(id).get("name", ""))
+	await _enter_game(opened["result"])
 
 
-func _format_date(iso: String) -> String:
-	var parts := iso.split("-")
-	if parts.size() < 3:
-		return iso
-	var months := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-	var month := int(parts[1])
-	if month < 1 or month > 12:
-		return iso
-	return "%d %s %s" % [int(parts[2]), months[month - 1], parts[0]]
+func _enter_game(view: Dictionary) -> void:
+	hud.set_game(view, game_name)
+	var flag := await engine.request("game.flag", {"country": str(view.get("country", ""))})
+	if flag.get("ok", false):
+		hud.set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+	menu.set_status("")
+	_show("game")
+	map_view.focus_owner(str(view.get("country", "")))
 
 
-func _event_card(event: Dictionary) -> Control:
-	var card := PanelContainer.new()
-	card.theme_type_variation = "Card"
-	var box := VBoxContainer.new()
-	box.add_child(_label(_format_date(str(event.get("date", ""))), 12, ACCENT if event.get("playerRelated", false) else FAINT))
-	var title := _label(str(event.get("title", "")), 15)
-	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(title)
-	var description := _label(str(event.get("description", "")), 13, SOFT)
-	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(description)
-	card.add_child(box)
-	return card
+func _start_scenario(scenario_id: String) -> void:
+	menu.set_status("Preparing the map…")
+	var created := await engine.request("game.create", {"scenarioId": scenario_id})
+	if not created.get("ok", false):
+		menu.set_status(str(created.get("error", "The game could not be created.")), true)
+		return
+	creating_id = str(created["result"].get("id", ""))
+	if not await _load_map():
+		return
+	var countries := await engine.request("countries.list")
+	if not countries.get("ok", false):
+		menu.set_status(str(countries.get("error", "")), true)
+		return
+	var view := await engine.request("game.view")
+	var scenario_name := ""
+	for scenario in library.get("scenarios", []):
+		if str(scenario.get("id", "")) == scenario_id:
+			scenario_name = str(scenario.get("name", ""))
+	picker.default_country = str(view.get("result", {}).get("country", ""))
+	picker.set_scenario_name(scenario_name)
+	picker.visible = true
+	picker.open(countries["result"].get("countries", []), countries["result"].get("difficulties", []), map_view.owner_names())
+	map_view.visible = true
+	menu.set_status("")
 
 
-func _skip(days: int) -> void:
+func _on_country_chosen(country: String, difficulty: String) -> void:
+	picker.visible = false
+	menu.set_status("Starting the game…")
+	var updated := await engine.request("game.update", {"id": creating_id, "country": country, "difficulty": difficulty})
+	if not updated.get("ok", false):
+		menu.set_status(str(updated.get("error", "")), true)
+		return
+	await _refresh_library()
+	game_id = creating_id
+	game_name = str(_game_named(game_id).get("name", ""))
+	creating_id = ""
+	map_view.select_region(-1)
+	await _enter_game(updated["result"])
+
+
+func _on_picker_cancelled() -> void:
+	picker.visible = false
+	map_view.select_region(-1)
+	if not creating_id.is_empty():
+		await engine.request("game.delete", {"id": creating_id})
+		creating_id = ""
+	await _refresh_library()
+	_show("menu")
+
+
+func _exit_game() -> void:
+	await _refresh_library()
+	_show("menu")
+
+
+func _skip(days: float) -> void:
 	if skipping:
 		return
 	skipping = true
-	for button in skip_buttons:
-		button.disabled = true
-	_set_status("Starting the time skip…")
+	hud.set_busy(true)
+	hud.clear_events()
+	hud.open_events()
+	hud.set_status("Starting the time skip…")
 	var reply := await engine.request("skip", {"days": days})
-	skipping = false
-	for button in skip_buttons:
-		button.disabled = false
-	if not reply.get("ok", false):
-		_set_status(str(reply.get("error", "The time skip failed.")), true)
+	await _after_skip(reply)
+
+
+func _auto_skip() -> void:
+	if skipping:
 		return
-	_set_status("")
-	_apply_view(reply["result"]["view"])
+	skipping = true
+	hud.set_busy(true)
+	hud.clear_events()
+	hud.open_events()
+	hud.set_status("Starting the auto-jump…")
+	var reply := await engine.request("skip.auto")
+	await _after_skip(reply)
+
+
+func _after_skip(reply: Dictionary) -> void:
+	skipping = false
+	hud.set_busy(false)
+	if not reply.get("ok", false):
+		hud.set_status(str(reply.get("error", "The time skip failed.")), true)
+		return
+	hud.set_status("")
+	hud.set_game(reply["result"]["view"], game_name)
 	var state := await engine.request("map.state")
 	if state.get("ok", false):
 		map_view.set_state(state["result"])
 
 
-func _set_status(text: String, problem := false) -> void:
-	status_label.text = text
-	status_label.add_theme_color_override("font_color", PROBLEM if problem else SOFT)
-
-
 func _on_engine_event(name: String, data: Variant) -> void:
-	if name == "turn.progress" and typeof(data) == TYPE_DICTIONARY:
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	if name == "turn.progress":
 		var progress: Variant = data.get("progress")
 		if typeof(progress) == TYPE_DICTIONARY:
 			var label := str(progress.get("label", ""))
 			var detail := str(progress.get("detail", ""))
-			_set_status(label if detail.is_empty() else "%s — %s" % [label, detail])
-	elif name == "turn.events" and typeof(data) == TYPE_DICTIONARY:
-		for event in data.get("events", []):
-			events_list.add_child(_event_card(event))
-			events_list.move_child(events_list.get_child(events_list.get_child_count() - 1), 0)
+			hud.set_status(label if detail.is_empty() else "%s — %s" % [label, detail])
+	elif name == "turn.events":
+		hud.add_live_events(data.get("events", []))
 
 
 func _on_region_clicked(index: int) -> void:
 	map_view.select_region(index)
 	if index < 0:
-		region_panel.visible = false
+		popup.visible = false
 		return
-	region_title.text = map_view.region_name(index)
+	popup_title.text = map_view.region_name(index)
 	var owner := map_view.region_owner(index)
-	region_owner.text = owner if not owner.is_empty() else "Unclaimed"
-	region_panel.visible = true
+	popup_owner.text = owner if not owner.is_empty() else "Unclaimed"
+	popup.visible = true
+	popup.reset_size()
+	var mouse := get_viewport().get_mouse_position()
+	popup.position = (mouse + Vector2(14, 14)).clamp(Vector2(8, 80), get_viewport().get_visible_rect().size - popup.size - Vector2(8, 90))
 
 
-func _back_to_library() -> void:
-	region_panel.visible = false
-	await _refresh_library()
-
-
-func _open_ai_panel() -> void:
-	ai_panel.visible = true
-	ai_key.text = ""
+func _open_settings() -> void:
+	settings.visible = true
+	settings_key.text = ""
 	var reply := await engine.request("settings.ai.get")
 	if not reply.get("ok", false):
-		ai_status.text = str(reply.get("error", ""))
+		settings_status.text = str(reply.get("error", ""))
 		return
 	var provider := str(reply["result"].get("provider", "gemini"))
-	for index in range(ai_provider.item_count):
-		if str(ai_provider.get_item_metadata(index)) == provider:
-			ai_provider.select(index)
-	ai_status.text = "A key is saved for this provider." if reply["result"].get("hasKey", false) else "No key saved yet."
+	for index in range(settings_provider.item_count):
+		if str(settings_provider.get_item_metadata(index)) == provider:
+			settings_provider.select(index)
+	settings_status.text = "A key is saved for this provider." if reply["result"].get("hasKey", false) else "No key saved yet."
 
 
-func _save_ai() -> void:
-	var provider := str(ai_provider.get_item_metadata(ai_provider.selected))
-	var reply := await engine.request("settings.ai.set", {"provider": provider, "key": ai_key.text})
-	ai_key.text = ""
+func _save_settings() -> void:
+	var provider := str(settings_provider.get_item_metadata(settings_provider.selected))
+	var reply := await engine.request("settings.ai.set", {"provider": provider, "key": settings_key.text})
+	settings_key.text = ""
 	if not reply.get("ok", false):
-		ai_status.text = str(reply.get("error", ""))
+		settings_status.text = str(reply.get("error", ""))
 		return
-	ai_status.text = "Saved."
+	settings.visible = false

@@ -268,15 +268,54 @@ fn to_dictionary(map: &BakedMap) -> VarDictionary {
     let vertices: PackedVector2Array = map.vertices.iter().map(|p| Vector2::new(p[0], p[1])).collect();
     let uvs: PackedVector2Array = map.vertex_region.iter().map(|&region| Vector2::new(region as f32, 0.0)).collect();
     let indices: PackedInt32Array = map.indices.iter().map(|&value| value as i32).collect();
-    let border_vertices: PackedVector2Array = map.border_vertices.iter().map(|p| Vector2::new(p[0], p[1])).collect();
-    let border_uvs: PackedVector2Array = map
-        .border_regions
-        .iter()
-        .flat_map(|pair| {
+    let segments = map.border_regions.len();
+    let mut border_vertices = PackedVector2Array::new();
+    let mut border_uvs = PackedVector2Array::new();
+    let mut border_offsets = PackedVector2Array::new();
+    let mut border_indices = PackedInt32Array::new();
+    let mut border_sides = PackedColorArray::new();
+    border_vertices.resize(segments * 4);
+    border_uvs.resize(segments * 4);
+    border_offsets.resize(segments * 4);
+    border_indices.resize(segments * 6);
+    border_sides.resize(segments * 4);
+    {
+        let vertices = border_vertices.as_mut_slice();
+        let uvs = border_uvs.as_mut_slice();
+        let offsets = border_offsets.as_mut_slice();
+        let indices = border_indices.as_mut_slice();
+        let sides = border_sides.as_mut_slice();
+        for (segment, pair) in map.border_regions.iter().enumerate() {
+            let a = map.border_vertices[segment * 2];
+            let b = map.border_vertices[segment * 2 + 1];
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let length = (dx * dx + dy * dy).sqrt().max(1e-9);
+            let normal = Vector2::new(-dy / length, dx / length);
             let uv = Vector2::new(pair[0] as f32, pair[1] as f32);
-            [uv, uv]
-        })
-        .collect();
+            let base = segment * 4;
+            vertices[base] = Vector2::new(a[0], a[1]);
+            vertices[base + 1] = Vector2::new(a[0], a[1]);
+            vertices[base + 2] = Vector2::new(b[0], b[1]);
+            vertices[base + 3] = Vector2::new(b[0], b[1]);
+            offsets[base] = normal;
+            offsets[base + 1] = -normal;
+            offsets[base + 2] = normal;
+            offsets[base + 3] = -normal;
+            for corner in 0..4 {
+                uvs[base + corner] = uv;
+                let offset = if corner % 2 == 0 { normal } else { -normal };
+                sides[base + corner] = Color::from_rgba(offset.x * 0.5 + 0.5, offset.y * 0.5 + 0.5, if corner % 2 == 0 { 1.0 } else { 0.0 }, 1.0);
+            }
+            let first = (base) as i32;
+            let at = segment * 6;
+            indices[at] = first;
+            indices[at + 1] = first + 1;
+            indices[at + 2] = first + 2;
+            indices[at + 3] = first + 2;
+            indices[at + 4] = first + 1;
+            indices[at + 5] = first + 3;
+        }
+    }
     let adjacency: PackedInt32Array = map.adjacency.iter().flat_map(|pair| [pair[0] as i32, pair[1] as i32]).collect();
     let centroids: PackedVector2Array = map.centroids.iter().map(|p| Vector2::new(p[0], p[1])).collect();
     let areas: PackedFloat32Array = map.areas.iter().copied().collect();
@@ -291,6 +330,9 @@ fn to_dictionary(map: &BakedMap) -> VarDictionary {
     result.set(&"indices".to_variant(), &(indices).to_variant());
     result.set(&"border_vertices".to_variant(), &(border_vertices).to_variant());
     result.set(&"border_uvs".to_variant(), &(border_uvs).to_variant());
+    result.set(&"border_offsets".to_variant(), &(border_offsets).to_variant());
+    result.set(&"border_indices".to_variant(), &(border_indices).to_variant());
+    result.set(&"border_sides".to_variant(), &(border_sides).to_variant());
     result.set(&"adjacency".to_variant(), &(adjacency).to_variant());
     result.set(&"centroids".to_variant(), &(centroids).to_variant());
     result.set(&"areas".to_variant(), &(areas).to_variant());

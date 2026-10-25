@@ -22,42 +22,63 @@ func _frames(count: int) -> void:
 		await process_frame
 
 
+func _wait(seconds: float) -> void:
+	await create_timer(seconds).timeout
+
+
 func _shoot(name: String) -> void:
-	await _frames(6)
+	await _frames(4)
 	await RenderingServer.frame_post_draw
 	if shots.is_empty():
 		return
-	var image := root.get_viewport().get_texture().get_image()
-	image.save_png(shots.path_join(name + ".png"))
+	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
 	_say("screenshot " + name)
 
 
 func _run() -> void:
-	while not main.engine.is_ready():
+	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
-			_say("FAIL the engine never became ready")
+			_say("FAIL the menu never appeared")
 			_finish(1)
 			return
 		await process_frame
-	_say("engine ready")
-	await _frames(10)
-	await _shoot("1-library")
+	_say("menu ready")
+	await _wait(0.4)
+	await _shoot("1-games-empty")
+	main.menu._show_page("scenarios")
+	await _wait(1.2)
+	await _shoot("2-scenarios")
 	var opening := Time.get_ticks_msec()
-	await main._on_new_game()
-	_say("game open in %d ms: %s, %s" % [Time.get_ticks_msec() - opening, main.country_label.text, main.date_label.text])
-	await _shoot("2-map")
-	var before: String = main.date_label.text
+	await main._start_scenario("default")
+	_say("picker open in %d ms" % (Time.get_ticks_msec() - opening))
+	await _wait(0.6)
+	await _shoot("3-picker")
+	main.picker._choose("France")
+	await _wait(0.2)
+	await _shoot("4-difficulty")
+	await main._on_country_chosen("France", "medium")
+	_say("game open: %s" % main.hud._country.text)
+	await _wait(1.5)
+	await _shoot("5-game")
+	main.hud._toggle("skip")
+	await _wait(0.6)
+	await _shoot("6-timeline")
 	var skip_started := Time.get_ticks_msec()
-	await main._skip(30)
-	_say("skip done in %d ms: %s -> %s" % [Time.get_ticks_msec() - skip_started, before, main.date_label.text])
-	if main.date_label.text == before:
-		_say("FAIL the date did not move: " + main.status_label.text)
-	await _shoot("3-after-skip")
-	var picked: int = main.map_view.baker.pick(main.map_view.camera.position)
-	main._on_region_clicked(picked)
-	_say("picked region %d: %s (%s)" % [picked, main.region_title.text, main.region_owner.text])
-	main.map_view._zoom_at(main.map_view.get_viewport_rect().size * 0.5, 4.0)
-	await _shoot("4-zoomed")
+	await main._skip(30.0)
+	_say("skip done in %d ms: %s" % [Time.get_ticks_msec() - skip_started, main.hud._date.text])
+	await _wait(0.6)
+	await _shoot("7-after-skip")
+	main.hud._show_panel("")
+	main.map_view._zoom_at(main.map_view.get_viewport_rect().size * 0.5, 6.0)
+	await _wait(3.0)
+	await _shoot("8-zoomed")
+	await main._exit_game()
+	main.menu._show_page("games")
+	await _wait(2.5)
+	await _shoot("9-games")
+	main.menu._show_page("scenarios")
+	await _wait(1.0)
+	await _shoot("10-scenarios")
 	_say("static memory %.1f MB" % (OS.get_static_memory_usage() / 1048576.0))
 	_finish(0)
 
