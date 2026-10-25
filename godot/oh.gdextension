@@ -1,0 +1,14 @@
+[configuration]
+
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = true
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/oh_gdext.dll"
+windows.release.x86_64 = "res://bin/oh_gdext.dll"
+linux.debug.x86_64 = "res://bin/liboh_gdext.so"
+linux.release.x86_64 = "res://bin/liboh_gdext.so"
+macos.debug = "res://bin/liboh_gdext.dylib"
+macos.release = "res://bin/liboh_gdext.dylib"

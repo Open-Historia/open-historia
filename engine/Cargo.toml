@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/ohmap", "crates/oh_gdext"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+earcutr = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+godot = { version = "0.5.5", features = ["api-4-7"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"

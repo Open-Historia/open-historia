@@ -1,0 +1,28 @@
+config_version=5
+
+[application]
+
+config/name="Open Historia"
+run/main_scene="res://main.tscn"
+run/low_processor_mode=true
+run/low_processor_mode_sleep_usec=8000
+config/features=PackedStringArray("4.7")
+
+[display]
+
+window/size/viewport_width=1440
+window/size/viewport_height=900
+window/size/mode=0
+window/energy_saving/keep_screen_on=false
+window/stretch/aspect="expand"
+
+[gui]
+
+common/snap_controls_to_pixels=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.0627451, 0.105882, 0.152941, 1)
+anti_aliasing/quality/msaa_2d=1
