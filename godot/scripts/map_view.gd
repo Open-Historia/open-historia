@@ -7,26 +7,41 @@ signal bake_failed(message: String)
 
 const COLUMNS := 1024
 const WORLD_WIDTH := 4096.0
-const MIN_ZOOM := 0.3
+const MIN_ZOOM := 0.5946035575013605
 const MAX_ZOOM := 400.0
-const NEUTRAL_LAND := Color8(58, 60, 66)
+const NEUTRAL_LAND := Color8(88, 98, 110)
 const FILL_OPACITY := [[1.5, 0.46], [2.5, 0.50], [3.75, 0.56], [5.0, 0.62], [6.5, 0.68], [8.0, 0.72], [10.0, 0.78], [12.0, 0.82], [14.0, 0.84]]
 
 const FILL_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
 uniform sampler2D region_colors : filter_nearest;
+uniform sampler2D region_style : filter_nearest;
+uniform bool styled = false;
 uniform int columns = 1024;
 uniform int selected = -1;
 uniform float land_alpha = 0.5;
 varying vec4 tint;
+vec3 unpack_rgb(float packed) {
+	float value = floor(packed + 0.5);
+	return vec3(floor(value / 65536.0), mod(floor(value / 256.0), 256.0), mod(value, 256.0)) / 255.0;
+}
 void vertex() {
 	int region = int(UV.x + 0.5);
-	vec4 c = texelFetch(region_colors, ivec2(region % columns, region / columns), 0);
+	ivec2 cell = ivec2(region % columns, region / columns);
+	vec4 c = texelFetch(region_colors, cell, 0);
+	float alpha = land_alpha;
+	if (styled) {
+		vec4 style = texelFetch(region_style, cell, 0);
+		if (style.r >= 0.0) {
+			c.rgb = unpack_rgb(style.r);
+		}
+		alpha = min(1.0, land_alpha * style.g);
+	}
 	if (region == selected) {
 		c.rgb = mix(c.rgb, vec3(1.0), 0.35);
 	}
-	tint = vec4(c.rgb, land_alpha);
+	tint = vec4(c.rgb, c.a < 0.5 ? 0.0 : alpha);
 }
 void fragment() {
 	COLOR = tint;
@@ -37,6 +52,10 @@ const BORDER_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
 uniform sampler2D owner_ids : filter_nearest;
+uniform sampler2D region_style : filter_nearest;
+uniform bool styled = false;
+uniform int style_rows = 1;
+uniform bool province_outlines = true;
 uniform int columns = 1024;
 uniform float zoom_level = 2.0;
 uniform float pixel_world = 1.0;
@@ -45,8 +64,36 @@ varying vec4 tint;
 varying float edge;
 varying float core;
 varying float soft;
+varying float outset;
 vec3 owner_of(int region) {
 	return texelFetch(owner_ids, ivec2(region % columns, region / columns), 0).rgb;
+}
+vec3 unpack_rgb(float packed) {
+	float value = floor(packed + 0.5);
+	return vec3(floor(value / 65536.0), mod(floor(value / 256.0), 256.0), mod(value, 256.0)) / 255.0;
+}
+float province_width(float z) {
+	if (z <= 4.15) return 0.40;
+	if (z <= 5.0) return mix(0.40, 0.48, (z - 4.15) / 0.85);
+	if (z <= 6.5) return mix(0.48, 0.56, (z - 5.0) / 1.5);
+	if (z <= 8.0) return mix(0.56, 0.62, (z - 6.5) / 1.5);
+	if (z <= 12.0) return mix(0.62, 0.72, (z - 8.0) / 4.0);
+	return 0.72;
+}
+float province_opacity(float z) {
+	if (z <= 4.15) return 0.0;
+	if (z <= 4.45) return mix(0.0, 0.18, (z - 4.15) / 0.30);
+	if (z <= 4.90) return mix(0.18, 0.30, (z - 4.45) / 0.45);
+	if (z <= 5.50) return mix(0.30, 0.42, (z - 4.90) / 0.60);
+	if (z <= 7.0) return mix(0.42, 0.50, (z - 5.50) / 1.5);
+	if (z <= 12.0) return mix(0.50, 0.58, (z - 7.0) / 5.0);
+	return 0.58;
+}
+float shadow_blur(float z) {
+	if (z <= 1.0) return 0.7;
+	if (z <= 6.0) return mix(0.7, 1.15, (z - 1.0) / 5.0);
+	if (z <= 12.0) return mix(1.15, 1.5, (z - 6.0) / 6.0);
+	return 1.5;
 }
 float stops5(float z, float a, float b, float c, float d, float e) {
 	if (z <= 1.0) return a;
@@ -69,27 +116,38 @@ void vertex() {
 		if (shadow) {
 			width = stops5(zoom_level, 1.8, 2.5, 3.6, 4.7, 5.8);
 			tint = vec4(1.0 / 255.0, 4.0 / 255.0, 8.0 / 255.0, 0.72 * 0.52);
-			soft = mix(0.7, 1.5, clamp((zoom_level - 1.0) / 11.0, 0.0, 1.0)) + 1.0;
+			soft = shadow_blur(zoom_level) + 1.0;
 		} else {
 			width = stops5(zoom_level, 0.58, 0.92, 1.34, 1.72, 2.08);
 			tint = vec4(5.0 / 255.0, 8.0 / 255.0, 13.0 / 255.0, 0.96 * 0.94);
 		}
-	} else if (b >= 0 && !shadow) {
-		float opacity = 0.0;
-		if (zoom_level > 6.5) opacity = mix(0.0, 0.25, clamp(zoom_level - 6.5, 0.0, 1.0));
-		if (zoom_level > 7.5) opacity = mix(0.25, 0.38, clamp((zoom_level - 7.5) / 2.5, 0.0, 1.0));
-		if (zoom_level > 10.0) opacity = mix(0.38, 0.45, clamp((zoom_level - 10.0) / 2.0, 0.0, 1.0));
-		width = mix(0.25, 0.5, clamp((zoom_level - 6.5) / 5.5, 0.0, 1.0));
-		tint = vec4(8.0 / 255.0, 10.0 / 255.0, 14.0 / 255.0, opacity);
+	} else if (!shadow && province_outlines && zoom_level >= 4.15) {
+		vec4 stroke = vec4(205.0 / 255.0, 218.0 / 255.0, 228.0 / 255.0, 0.64);
+		float scale = 1.0;
+		if (styled) {
+			int owner_region = b >= 0 ? b : a;
+			vec4 style = texelFetch(region_style, ivec2(owner_region % columns, owner_region / columns), 0);
+			float own_scale = texelFetch(region_style, ivec2(owner_region % columns, owner_region / columns + style_rows), 0).r;
+			if (b >= 0 && own_scale <= 0.0) {
+				style = texelFetch(region_style, ivec2(a % columns, a / columns), 0);
+				own_scale = texelFetch(region_style, ivec2(a % columns, a / columns + style_rows), 0).r;
+			}
+			if (style.b >= 0.0) {
+				stroke = vec4(unpack_rgb(style.b), style.a);
+			}
+			scale = own_scale;
+		}
+		width = province_width(zoom_level) * scale;
+		tint = vec4(stroke.rgb, stroke.a * province_opacity(zoom_level));
 	}
 	core = width * 0.5;
-	float half_px = core + soft;
-	VERTEX += offset * half_px * pixel_world;
-	edge *= half_px;
+	outset = width > 0.0 ? core + 0.5 : 0.0;
+	VERTEX += offset * outset * pixel_world;
+	edge *= outset;
 }
 void fragment() {
 	float d = abs(edge);
-	float coverage = clamp((core + soft * 0.5 - d) / soft, 0.0, 1.0) * min(1.0, core * 2.0 + 0.35);
+	float coverage = clamp((outset - d) / soft, 0.0, 1.0);
 	COLOR = vec4(tint.rgb, tint.a * coverage);
 }
 """
@@ -115,7 +173,9 @@ var _owner_names: PackedStringArray = []
 var _owner_anchor: Array[Vector2] = []
 var _owner_area: PackedFloat32Array = []
 var _labels_layer: Control
-var _labels: Array[Label] = []
+var _labels_text: PolityTextLayer
+var _labels_engine: EngineLink
+var _labels_regions := ""
 var _cities: CityLayer
 var _dragging := false
 var _drag_distance := 0.0
@@ -161,7 +221,15 @@ func _material(code: String) -> ShaderMaterial:
 	return material
 
 
+var _loaded_file := ""
+var _last_bake: Dictionary = {}
+
+
 func load_regions(path: String) -> void:
+	if path == _loaded_file and _ready_to_draw:
+		baked.emit.call_deferred(_last_bake)
+		return
+	_loaded_file = path
 	_ready_to_draw = false
 	baker.bake_file(path, WORLD_WIDTH)
 
@@ -207,11 +275,62 @@ func focus_owner(owner_name: String) -> void:
 	_after_camera_move()
 
 
+var _fly: Tween
+
+
+func fit_lonlat_bounds(bounds: Array, max_level := 6.8, duration := 1.8) -> void:
+	if bounds.size() < 2 or not _ready_to_draw:
+		return
+	var south_west: Array = bounds[0]
+	var north_east: Array = bounds[1]
+	var west := float(south_west[0])
+	var south := float(south_west[1])
+	var east := float(north_east[0])
+	var north := float(north_east[1])
+	if east < west:
+		east += 360.0
+	if absf(east - west) < 0.35:
+		west -= 0.6
+		east += 0.6
+	if absf(north - south) < 0.35:
+		south -= 0.45
+		north += 0.45
+	var top_left := CityLayer.ohproject(west, north)
+	var bottom_right := CityLayer.ohproject(east, south)
+	if east > 180.0:
+		bottom_right.x = (east + 180.0) / 360.0 * WORLD_WIDTH
+	var view := get_viewport_rect().size
+	var short_side := minf(view.x, view.y)
+	var padding := clampf(roundf(short_side * 0.12), 16.0, 80.0) if short_side > 0.0 else 40.0
+	var span := (bottom_right - top_left).abs()
+	var fit := minf((view.x - 2.0 * padding) / maxf(span.x, 0.0001), (view.y - 2.0 * padding) / maxf(span.y, 0.0001))
+	var target_zoom: float = clamp(minf(fit, pow(2.0, max_level) / 8.0), MIN_ZOOM, MAX_ZOOM)
+	var target_center := (top_left + bottom_right) * 0.5
+	var start_center := camera.position
+	target_center.x += WORLD_WIDTH * round((start_center.x - target_center.x) / WORLD_WIDTH)
+	var start_zoom := camera.zoom.x
+	if _fly and _fly.is_valid():
+		_fly.kill()
+	if duration <= 0.0:
+		camera.position = target_center
+		camera.zoom = Vector2.ONE * target_zoom
+		_after_camera_move()
+		return
+	_fly = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	_fly.tween_method(func(t: float) -> void:
+		var level := lerpf(log(start_zoom), log(target_zoom), t)
+		camera.zoom = Vector2.ONE * exp(level)
+		camera.position = start_center.lerp(target_center, t)
+		_after_camera_move(), 0.0, 1.0, duration)
+
+
 func zoom_level() -> float:
 	return log(8.0 * camera.zoom.x) / log(2.0)
 
 
 func world_to_screen(point: Vector2) -> Vector2:
+	if globe_on and extras:
+		return extras.call("globe_world_to_screen", point)
 	var adjusted := point
 	adjusted.x += WORLD_WIDTH * round((camera.position.x - point.x) / WORLD_WIDTH)
 	return (adjusted - camera.position) * camera.zoom.x + get_viewport_rect().size * 0.5
@@ -269,12 +388,34 @@ func _on_baked(result: Dictionary) -> void:
 		_copies.append(copy)
 	visible = true
 	_ready_to_draw = true
-	baked.emit({"regions": _region_count, "triangles": (result["indices"] as PackedInt32Array).size() / 3, "borders": (result["border_indices"] as PackedInt32Array).size() / 6})
+	_last_bake = {"regions": _region_count, "triangles": (result["indices"] as PackedInt32Array).size() / 3, "borders": (result["border_indices"] as PackedInt32Array).size() / 6}
+	baked.emit(_last_bake)
+
+
+var _last_state: Dictionary = {}
+var _color_override: Dictionary = {}
+var _override_neutral := Color(0, 0, 0, 0)
+
+
+func set_owner_color_override(colors: Dictionary, neutral: Color) -> void:
+	_color_override = colors
+	_override_neutral = neutral
+	if not _last_state.is_empty():
+		set_state(_last_state)
+
+
+func fly_to_lonlat(lon: float, lat: float, level: float, duration := 1.6) -> void:
+	var span := 360.0 / pow(2.0, maxf(level, 0.0)) * 0.5
+	var lat_span := span * 0.6
+	fit_lonlat_bounds([[lon - span, lat - lat_span], [lon + span, lat + lat_span]], level, duration)
 
 
 func set_state(state: Dictionary) -> void:
 	if not _ready_to_draw:
 		return
+	_last_state = state
+	var previous_owners := _owners
+	var previous_names := _owner_names
 	var owners: Array = state.get("owners", [])
 	_owner_names = PackedStringArray(state.get("ownerNames", []))
 	var owner_colors: Array = state.get("ownerColors", [])
@@ -282,7 +423,12 @@ func set_state(state: Dictionary) -> void:
 	_owners.resize(_region_count)
 	var palette: Array[Color] = []
 	for rgb in owner_colors:
-		palette.append(Color8(int(rgb[0]), int(rgb[1]), int(rgb[2])))
+		palette.append(political_color(rgb))
+	if not _color_override.is_empty():
+		var names: Array = state.get("ownerNames", [])
+		for slot in range(palette.size()):
+			var shade: Array = _color_override.get(str(names[slot]) if slot < names.size() else "", [100, 116, 139])
+			palette[slot] = Color8(int(shade[0]), int(shade[1]), int(shade[2]))
 	for index in range(_region_count):
 		var owner := int(owners[index]) if index < owners.size() else -1
 		_owners[index] = owner
@@ -293,9 +439,11 @@ func set_state(state: Dictionary) -> void:
 			var id := owner + 1
 			_ids_image.set_pixel(x, y, Color8(id & 255, (id >> 8) & 255, (id >> 16) & 255, 255))
 		else:
-			_colors_image.set_pixel(x, y, NEUTRAL_LAND)
+			_colors_image.set_pixel(x, y, _override_neutral if not _color_override.is_empty() and _override_neutral.a > 0.0 else NEUTRAL_LAND)
 			_ids_image.set_pixel(x, y, Color(0, 0, 0, 1))
 	_place_owner_anchors()
+	if extras:
+		extras.call("state_applied", previous_owners, previous_names, palette)
 	_colors_texture.update(_colors_image)
 	_ids_texture.update(_ids_image)
 	_rebuild_labels()
@@ -357,62 +505,51 @@ func _place_owner_anchors() -> void:
 
 
 func _rebuild_labels() -> void:
-	for label in _labels:
-		label.queue_free()
-	_labels.clear()
-	for owner in range(_owner_names.size()):
-		var label := Label.new()
-		label.text = _owner_names[owner].to_upper()
-		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		label.add_theme_color_override("font_color", Color(250 / 255.0, 249 / 255.0, 244 / 255.0, 0.995))
-		label.add_theme_color_override("font_outline_color", Color(3 / 255.0, 4 / 255.0, 8 / 255.0, 0.98))
-		label.visible = false
-		_labels_layer.add_child(label)
-		_labels.append(label)
+	if _labels_text == null:
+		_labels_text = PolityTextLayer.new()
+		_labels_layer.add_child(_labels_text)
+	_labels_layer.move_child(_labels_text, 0)
 	_labels_layer.move_child(_cities, -1)
+	if _labels_engine == null:
+		var parent_engine: Variant = get_parent().get("engine") if get_parent() else null
+		if parent_engine is EngineLink:
+			_labels_engine = parent_engine
+	var regions_key := "%d|%s|%s" % [_region_count, _names[0] if not _names.is_empty() else "", _names[-1] if not _names.is_empty() else ""]
+	if regions_key != _labels_regions:
+		_labels_regions = regions_key
+		_labels_text.clear()
+	_labels_text.setup(self, _labels_engine)
+	_labels_text.refresh()
 
 
 func _update_labels() -> void:
-	if _labels.is_empty():
-		return
-	var zoom := camera.zoom.x
-	var view := get_viewport_rect().size
-	var fade: float = clamp(1.0 - (zoom_level() - 6.95) / (9.0 - 6.95), 0.0, 1.0)
-	for owner in range(_labels.size()):
-		var label := _labels[owner]
-		var area := _owner_area[owner] if owner < _owner_area.size() else 0.0
-		var size := sqrt(max(area, 0.0)) * zoom * 0.066
-		if size < 9.0 or fade <= 0.0:
-			label.visible = false
-			continue
-		var screen := world_to_screen(_owner_anchor[owner])
-		if screen.x < -400 or screen.y < -100 or screen.x > view.x + 400 or screen.y > view.y + 100:
-			label.visible = false
-			continue
-		var font_size := int(clamp(size, 9.0, 40.0))
-		label.add_theme_font_override("font", UI.font(400, "Georgia", int(round(font_size * 0.12))))
-		label.add_theme_font_size_override("font_size", font_size)
-		label.add_theme_constant_override("outline_size", max(3, int(font_size * 0.28)))
-		label.modulate.a = fade
-		label.reset_size()
-		label.position = screen - label.size * 0.5
-		label.visible = true
+	if _labels_text:
+		_labels_text.update_view()
 
 
 func _after_camera_move() -> void:
 	camera.position.x = fposmod(camera.position.x, WORLD_WIDTH)
 	camera.position.y = clamp(camera.position.y, 0.0, WORLD_WIDTH)
+	if extras:
+		extras.call("constrain_camera")
 	var level := zoom_level()
+	var render := render_view()
 	_fill_material.set_shader_parameter("land_alpha", _fill_opacity(level))
 	for material in [_border_material, _shadow_material]:
 		material.set_shader_parameter("zoom_level", level)
-		material.set_shader_parameter("pixel_world", 1.0 / camera.zoom.x)
-	basemap.update_view(camera.position, camera.zoom.x, get_viewport_rect().size)
+		material.set_shader_parameter("pixel_world", 1.0 / float(render[3] if render.size() > 3 else render[1]))
+	basemap.update_view(render[0], render[1], render[2])
 	_update_labels()
 	_cities.queue_redraw()
+	if extras:
+		extras.call("after_camera_move", level)
 
 
 func _fill_opacity(level: float) -> float:
+	if extras:
+		var custom := float(extras.call("fill_opacity_at", level))
+		if custom >= 0.0:
+			return custom
 	if level <= FILL_OPACITY[0][0]:
 		return FILL_OPACITY[0][1]
 	for index in range(1, FILL_OPACITY.size()):
@@ -435,6 +572,10 @@ func _zoom_at(screen_point: Vector2, factor: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _ready_to_draw or not input_enabled:
+		return
+	if _fly and _fly.is_valid() and (event is InputEventMouseButton or event is InputEventMagnifyGesture or event is InputEventPanGesture):
+		_fly.kill()
+	if extras and bool(extras.call("map_input", event)):
 		return
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
@@ -547,3 +688,212 @@ class CityLayer extends Control:
 				taken.append(box)
 				draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 4, Color(0.02, 0.03, 0.05, 0.92))
 				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0.98, 0.98, 0.96))
+
+
+func set_label_engine(link: EngineLink) -> void:
+	_labels_engine = link
+	if _labels_text:
+		_labels_text.setup(self, link)
+
+
+func polity_text() -> PolityTextLayer:
+	return _labels_text
+
+
+func refresh_polity_text() -> void:
+	if _labels_text:
+		_labels_text.refresh()
+
+
+func war_copies() -> Array[Node2D]:
+	return _copies
+
+
+func war_fill_mesh() -> Mesh:
+	return _war_mesh_with(_fill_material)
+
+
+func war_border_mesh() -> Mesh:
+	return _war_mesh_with(_border_material)
+
+
+func _war_mesh_with(material: Material) -> Mesh:
+	for copy in _copies:
+		if not is_instance_valid(copy):
+			continue
+		for child in copy.get_children():
+			if child is MeshInstance2D and (child as MeshInstance2D).material == material:
+				return (child as MeshInstance2D).mesh
+	return null
+
+
+func war_insert_under_borders(copy: Node2D, node: Node) -> void:
+	copy.add_child(node)
+	for child in copy.get_children():
+		if child is MeshInstance2D and (child as MeshInstance2D).material == _shadow_material:
+			copy.move_child(node, child.get_index())
+			return
+
+
+func war_insert_before_fills(node: Node) -> void:
+	add_child(node)
+	move_child(node, basemap.get_index() + 1)
+
+
+func war_region_count() -> int:
+	return _region_count
+
+
+func war_region_centroid(index: int) -> Vector2:
+	return _centroids[index] if index >= 0 and index < _centroids.size() else Vector2.ZERO
+
+
+func war_region_area(index: int) -> float:
+	return _areas[index] if index >= 0 and index < _areas.size() else 0.0
+
+
+func war_overlays_visible() -> bool:
+	return _labels_layer != null and _labels_layer.visible
+
+
+func war_cancel_drag() -> void:
+	_dragging = false
+	_drag_distance = 99.0
+
+
+func war_fill_opacity() -> float:
+	return _fill_opacity(zoom_level())
+
+
+var extras: Node = null
+var globe_on := false
+
+
+func attach_extras(node: Node) -> void:
+	extras = node
+
+
+func render_view() -> Array:
+	if extras:
+		var view: Variant = extras.call("render_view")
+		if view is Array and (view as Array).size() >= 3:
+			return view
+	return [camera.position, camera.zoom.x, get_viewport_rect().size]
+
+
+func screen_to_world(point: Vector2) -> Vector2:
+	if globe_on and extras:
+		return extras.call("globe_screen_to_world", point)
+	var half := get_viewport_rect().size * 0.5
+	return camera.position + (point - half) / camera.zoom.x
+
+
+func is_globe() -> bool:
+	return globe_on
+
+
+func screen_frame_at(point: Vector2) -> Transform2D:
+	if globe_on and extras:
+		return extras.call("globe_frame_at", point)
+	return Transform2D(Vector2(1, 0), Vector2(0, 1), world_to_screen(point))
+
+
+func extras_fill_material() -> ShaderMaterial:
+	return _fill_material
+
+
+func extras_border_materials() -> Array[ShaderMaterial]:
+	return [_border_material, _shadow_material]
+
+
+func extras_copies() -> Array[Node2D]:
+	return _copies
+
+
+func extras_meshes() -> Dictionary:
+	return {"fill": _war_mesh_with(_fill_material), "border": _war_mesh_with(_border_material)}
+
+
+func extras_child_index(copy: Node2D, kind: String) -> int:
+	var material: Material = _fill_material if kind == "fill" else (_shadow_material if kind == "shadow" else _border_material)
+	for child in copy.get_children():
+		if child is MeshInstance2D and (child as MeshInstance2D).material == material:
+			return child.get_index()
+	return -1
+
+
+func extras_region_count() -> int:
+	return _region_count
+
+
+func extras_owners() -> PackedInt32Array:
+	return _owners
+
+
+func extras_owner_names() -> PackedStringArray:
+	return _owner_names
+
+
+func extras_images() -> Dictionary:
+	return {"colors": _colors_image, "ids": _ids_image}
+
+
+func extras_commit_images() -> void:
+	if _colors_texture:
+		_colors_texture.update(_colors_image)
+	if _ids_texture:
+		_ids_texture.update(_ids_image)
+
+
+func extras_centroids() -> PackedVector2Array:
+	return _centroids
+
+
+func extras_areas() -> PackedFloat32Array:
+	return _areas
+
+
+func extras_ready() -> bool:
+	return _ready_to_draw
+
+
+func extras_click(screen: Vector2) -> void:
+	region_clicked.emit(baker.pick(screen_to_world(screen)))
+
+
+func extras_drag_state() -> Array:
+	return [_dragging, _drag_distance]
+
+
+func extras_set_drag_state(dragging: bool, distance: float) -> void:
+	_dragging = dragging
+	_drag_distance = distance
+
+
+func extras_stop_flight() -> void:
+	if _fly and _fly.is_valid():
+		_fly.kill()
+
+
+static func political_color(rgb: Array) -> Color:
+	var parts: Array[float] = []
+	for slot in range(3):
+		var value := float(rgb[slot]) if slot < rgb.size() else 0.0
+		parts.append(clampf(value if is_finite(value) else 0.0, 0.0, 255.0))
+	var luminance := 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+	var chroma: float = maxf(parts[0], maxf(parts[1], parts[2])) - minf(parts[0], minf(parts[1], parts[2]))
+	var boost := 0.05 if chroma < 18.0 else (0.18 if chroma < 150.0 else 0.09)
+	for slot in range(3):
+		parts[slot] = luminance + (parts[slot] - luminance) * (1.0 + boost)
+	var high: float = maxf(parts[0], maxf(parts[1], parts[2]))
+	var low: float = minf(parts[0], minf(parts[1], parts[2]))
+	var lightness := (high + low) / 510.0
+	if lightness < 0.30:
+		var lift := minf(0.22, (0.30 - lightness) * 0.7)
+		for slot in range(3):
+			parts[slot] += (255.0 - parts[slot]) * lift
+	elif lightness > 0.64:
+		var dim := minf(0.18, (lightness - 0.64) * 0.75)
+		for slot in range(3):
+			parts[slot] *= 1.0 - dim
+	return Color8(int(roundf(clampf(parts[0], 0.0, 255.0))), int(roundf(clampf(parts[1], 0.0, 255.0))), int(roundf(clampf(parts[2], 0.0, 255.0))))

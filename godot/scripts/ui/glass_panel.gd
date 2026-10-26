@@ -57,7 +57,6 @@ func _init(tint_color := UI.HUD_BG, corner := 14.0, inner := Vector4(0, 0, 0, 0)
 	border = border_color
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	var frame := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), int(corner), 1, inner)
-	UI.shadowed(frame, Color(0, 0, 0, 0.26), 14, Vector2(0, 10))
 	add_theme_stylebox_override("panel", frame)
 	if not _shader:
 		_shader = Shader.new()

@@ -26,7 +26,8 @@ func _ready() -> void:
 func start() -> bool:
 	var node := OS.get_environment("OH_NODE")
 	if node.is_empty():
-		node = "node"
+		var bundled := ProjectSettings.globalize_path("res://").path_join("../../runtime/node.exe").simplify_path()
+		node = bundled if FileAccess.file_exists(bundled) else "node"
 	var script := ProjectSettings.globalize_path("res://").path_join("../sidecar/main.mjs").simplify_path()
 	var override := OS.get_environment("OH_SIDECAR")
 	if not override.is_empty():

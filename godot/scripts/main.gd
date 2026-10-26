@@ -14,21 +14,28 @@ var settings: Control
 var settings_provider: OptionButton
 var settings_key: LineEdit
 var settings_status: Label
-var popup: GlassPanel
-var popup_title: Label
-var popup_owner: Label
 var info := {}
 var library := {}
 var game_id := ""
 var game_name := ""
-var creating_id := ""
-var skipping := false
+var picking_scenario := ""
+var sound: Node
+var in_game := false
+var last_activity := 0
+var background_timer: Timer
 
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
+	get_window().title = "Open Historia"
+	var mark := Image.load_from_file(UI.repo_path("public/icon-192.png"))
+	if mark:
+		DisplayServer.set_icon(mark)
 	engine = EngineLink.new()
 	add_child(engine)
+	sound = _make_node("res://scripts/audio/sound_engine.gd")
+	if sound:
+		add_child(sound)
 	map_view = MapView.new()
 	add_child(map_view)
 	var layer := CanvasLayer.new()
@@ -40,7 +47,7 @@ func _ready() -> void:
 	layer.add_child(ui)
 	hud = Hud.new()
 	ui.add_child(hud)
-	_build_popup()
+	hud.setup(engine, map_view)
 	menu = MainMenu.new()
 	ui.add_child(menu)
 	picker = CountryPicker.new()
@@ -59,16 +66,50 @@ func _ready() -> void:
 	menu.start_scenario.connect(_start_scenario)
 	menu.open_settings.connect(_open_settings)
 	menu.refresh_requested.connect(_refresh_library)
+	menu.engine = engine
+	menu.game_left.connect(func(id: String) -> void:
+		if id == game_id:
+			in_game = false)
 	hud.exit_game.connect(_exit_game)
 	hud.open_menu.connect(_open_settings)
-	hud.skip_requested.connect(_skip)
-	hud.auto_skip_requested.connect(_auto_skip)
-	picker.chosen.connect(_on_country_chosen)
+	hud.turn_landed.connect(_on_turn_landed)
+	picker.start.connect(_on_picker_start)
 	picker.cancelled.connect(_on_picker_cancelled)
-	map_view.region_clicked.connect(_on_region_clicked)
 	map_view.bake_failed.connect(func(message: String) -> void: menu.set_status(message, true))
+	background_timer = Timer.new()
+	background_timer.wait_time = 60.0
+	background_timer.timeout.connect(_background_tick)
+	add_child(background_timer)
+	background_timer.start()
+	last_activity = Time.get_ticks_msec()
 	if not engine.start():
 		boot_label.text = "The game engine could not be started. Is Node.js installed?"
+
+
+func _make_node(path: String) -> Node:
+	var script: Variant = load(path)
+	if script is GDScript and (script as GDScript).can_instantiate():
+		var made: Variant = (script as GDScript).new()
+		if made is Node:
+			return made
+	return null
+
+
+func _sound(method: String, args: Array = []) -> void:
+	if sound and is_instance_valid(sound) and sound.has_method(method):
+		sound.callv(method, args)
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton or event is InputEventKey or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventPanGesture:
+		last_activity = Time.get_ticks_msec()
+
+
+func _background_tick() -> void:
+	if not in_game or not engine.is_ready() or not hud.visible or not get_window().has_focus():
+		return
+	var present := Time.get_ticks_msec() - last_activity < 600000
+	engine.request("turn.background", {"diplomacy": present})
 
 
 func _notification(what: int) -> void:
@@ -106,20 +147,6 @@ func _build_boot() -> void:
 	ui.add_child(boot)
 
 
-func _build_popup() -> void:
-	popup = GlassPanel.new(UI.HUD_BG_STRONG, 12, Vector4(14, 10, 14, 11))
-	popup.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 2)
-	popup_title = UI.label("", 14, UI.WHITE, 700)
-	popup_owner = UI.label("", 12, Color(1, 1, 1, 0.6))
-	column.add_child(popup_title)
-	column.add_child(popup_owner)
-	popup.add_child(column)
-	popup.visible = false
-	hud.add_child(popup)
-
-
 func _build_settings() -> void:
 	settings = Control.new()
 	settings.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -133,7 +160,6 @@ func _build_settings() -> void:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(420, 0)
 	var style := UI.box(Color8(30, 31, 35, 252), Color(1, 1, 1, 0.12), 14, 1, Vector4(20, 18, 20, 18))
-	UI.shadowed(style, Color(0, 0, 0, 0.5), 24, Vector2(0, 18))
 	panel.add_theme_stylebox_override("panel", style)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 10)
@@ -183,17 +209,21 @@ func _show(screen: String) -> void:
 	map_view.visible = screen == "game" or picker.visible
 	map_view.input_enabled = screen == "game"
 	map_view.set_overlays_visible(screen == "game")
-	if screen != "game":
-		popup.visible = false
+	if screen == "menu":
+		_sound("enter_menu")
+	elif screen == "game":
+		_sound("enter_game")
 
 
 func _on_engine_ready(_data: Dictionary) -> void:
+	_sound("setup", [engine])
 	var hello := await engine.request("hello")
 	if hello.get("ok", false):
 		info = hello["result"]
 		menu.set_origin(str(info.get("origin", "")))
 		map_view.basemap.cache_dir = str(info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
 	await _refresh_library()
+	menu.refresh_trash()
 	_show("menu")
 
 
@@ -231,11 +261,18 @@ func _load_map() -> bool:
 
 
 func _open_game(id: String) -> void:
+	if in_game and id == game_id:
+		menu.set_status("")
+		_show("game")
+		return
+	in_game = false
 	menu.set_status("Opening the game…")
 	var opened := await engine.request("game.open", {"id": id})
 	if not opened.get("ok", false):
 		menu.set_status(str(opened.get("error", "The game could not be opened.")), true)
+		_sound("enter_menu")
 		return
+	_sound("enter_loading")
 	if not await _load_map():
 		return
 	await _refresh_library()
@@ -250,58 +287,62 @@ func _enter_game(view: Dictionary) -> void:
 	if flag.get("ok", false):
 		hud.set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
 	menu.set_status("")
+	in_game = true
 	_show("game")
 	map_view.focus_owner(str(view.get("country", "")))
+	hud.mount_panels(view)
+	await hud.enter_game()
 
 
 func _start_scenario(scenario_id: String) -> void:
+	in_game = false
 	menu.set_status("Preparing the map…")
-	var created := await engine.request("game.create", {"scenarioId": scenario_id})
-	if not created.get("ok", false):
-		menu.set_status(str(created.get("error", "The game could not be created.")), true)
+	var opened := await engine.request("picker.open", {"scenarioId": scenario_id})
+	if not opened.get("ok", false):
+		menu.set_status(str(opened.get("error", "The map could not be read.")), true)
 		return
-	creating_id = str(created["result"].get("id", ""))
-	if not await _load_map():
-		return
-	var countries := await engine.request("countries.list")
-	if not countries.get("ok", false):
-		menu.set_status(str(countries.get("error", "")), true)
-		return
-	var view := await engine.request("game.view")
-	var scenario_name := ""
-	for scenario in library.get("scenarios", []):
-		if str(scenario.get("id", "")) == scenario_id:
-			scenario_name = str(scenario.get("name", ""))
-	picker.default_country = str(view.get("result", {}).get("country", ""))
-	picker.set_scenario_name(scenario_name)
+	var data: Dictionary = opened["result"]
+	map_view.load_regions(str(data["map"]["file"]))
+	await map_view.baked
+	map_view.set_state(data["map"]["state"])
+	map_view.set_cities([])
+	picking_scenario = scenario_id
 	picker.visible = true
-	picker.open(countries["result"].get("countries", []), countries["result"].get("difficulties", []), map_view.owner_names())
+	picker.open(data)
 	map_view.visible = true
 	menu.set_status("")
 
 
-func _on_country_chosen(country: String, difficulty: String) -> void:
+func _on_picker_start(request: Dictionary) -> void:
 	picker.visible = false
+	map_view.select_region(-1)
 	menu.set_status("Starting the game…")
-	var updated := await engine.request("game.update", {"id": creating_id, "country": country, "difficulty": difficulty})
-	if not updated.get("ok", false):
-		menu.set_status(str(updated.get("error", "")), true)
+	_sound("enter_loading")
+	var args := request.duplicate()
+	args["scenarioId"] = picking_scenario
+	var started := await engine.request("picker.start", args)
+	if not started.get("ok", false):
+		menu.set_status(str(started.get("error", "The game could not be created.")), true)
+		_show("menu")
+		return
+	if not await _load_map():
+		_show("menu")
 		return
 	await _refresh_library()
-	game_id = creating_id
+	game_id = str(started["result"].get("id", ""))
 	game_name = str(_game_named(game_id).get("name", ""))
-	creating_id = ""
-	map_view.select_region(-1)
-	await _enter_game(updated["result"])
+	picking_scenario = ""
+	await _enter_game(started["result"].get("view", {}))
+
+
+func _on_country_chosen(country: String, difficulty: String) -> void:
+	await _on_picker_start({"country": country, "difficulty": difficulty})
 
 
 func _on_picker_cancelled() -> void:
 	picker.visible = false
+	picking_scenario = ""
 	map_view.select_region(-1)
-	if not creating_id.is_empty():
-		await engine.request("game.delete", {"id": creating_id})
-		creating_id = ""
-	await _refresh_library()
 	_show("menu")
 
 
@@ -310,68 +351,14 @@ func _exit_game() -> void:
 	_show("menu")
 
 
-func _skip(days: float) -> void:
-	if skipping:
-		return
-	skipping = true
-	hud.set_busy(true)
-	hud.clear_events()
-	hud.open_events()
-	hud.set_status("Starting the time skip…")
-	var reply := await engine.request("skip", {"days": days})
-	await _after_skip(reply)
+func _on_turn_landed(view: Dictionary) -> void:
+	hud.set_game(view, game_name)
+	_sound("refresh_war")
+	await _refresh_library()
 
 
-func _auto_skip() -> void:
-	if skipping:
-		return
-	skipping = true
-	hud.set_busy(true)
-	hud.clear_events()
-	hud.open_events()
-	hud.set_status("Starting the auto-jump…")
-	var reply := await engine.request("skip.auto")
-	await _after_skip(reply)
-
-
-func _after_skip(reply: Dictionary) -> void:
-	skipping = false
-	hud.set_busy(false)
-	if not reply.get("ok", false):
-		hud.set_status(str(reply.get("error", "The time skip failed.")), true)
-		return
-	hud.set_status("")
-	hud.set_game(reply["result"]["view"], game_name)
-	var state := await engine.request("map.state")
-	if state.get("ok", false):
-		map_view.set_state(state["result"])
-
-
-func _on_engine_event(name: String, data: Variant) -> void:
-	if typeof(data) != TYPE_DICTIONARY:
-		return
-	if name == "turn.progress":
-		var progress: Variant = data.get("progress")
-		if typeof(progress) == TYPE_DICTIONARY:
-			var label := str(progress.get("label", ""))
-			var detail := str(progress.get("detail", ""))
-			hud.set_status(label if detail.is_empty() else "%s — %s" % [label, detail])
-	elif name == "turn.events":
-		hud.add_live_events(data.get("events", []))
-
-
-func _on_region_clicked(index: int) -> void:
-	map_view.select_region(index)
-	if index < 0:
-		popup.visible = false
-		return
-	popup_title.text = map_view.region_name(index)
-	var owner := map_view.region_owner(index)
-	popup_owner.text = owner if not owner.is_empty() else "Unclaimed"
-	popup.visible = true
-	popup.reset_size()
-	var mouse := get_viewport().get_mouse_position()
-	popup.position = (mouse + Vector2(14, 14)).clamp(Vector2(8, 80), get_viewport().get_visible_rect().size - popup.size - Vector2(8, 90))
+func _on_engine_event(_name: String, _data: Variant) -> void:
+	pass
 
 
 func _open_settings() -> void:

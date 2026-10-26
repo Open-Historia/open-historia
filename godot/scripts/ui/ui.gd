@@ -43,6 +43,9 @@ const ICONS := {
 	"political": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21'/><line x1='9' y1='3' x2='9' y2='18'/><line x1='15' y1='6' x2='15' y2='21'/></svg>",
 	"diplomatic": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20'/><path d='M2 12h20'/></svg>",
 	"clock": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg>",
+	"calendar": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='5' width='16' height='15' rx='2'/><path d='M8 3v4M16 3v4M4 10h16'/></svg>",
+	"map": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21'/><line x1='9' y1='3' x2='9' y2='18'/><line x1='15' y1='6' x2='15' y2='21'/></svg>",
+	"projects": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8'/><path d='M8 12h8'/><path d='M8 16h5'/></svg>",
 	"star": "<svg viewBox='0 0 24 24'><path d='M12 2.8l2.7 6 6.5.6-4.9 4.3 1.5 6.4L12 16.8l-5.8 3.3 1.5-6.4-4.9-4.3 6.5-.6z' fill='#facc15' stroke='#1c1917' stroke-width='1.2' stroke-linejoin='round'/></svg>",
 }
 
@@ -107,13 +110,6 @@ static func box(bg: Color, border := Color(0, 0, 0, 0), radius := 0, border_widt
 	style.content_margin_right = margin.z
 	style.content_margin_bottom = margin.w
 	style.anti_aliasing = true
-	return style
-
-
-static func shadowed(style: StyleBoxFlat, color: Color, size: int, offset := Vector2.ZERO) -> StyleBoxFlat:
-	style.shadow_color = color
-	style.shadow_size = size
-	style.shadow_offset = offset
 	return style
 
 
@@ -202,8 +198,6 @@ static func button(text: String, preset := "header", icon_name := "") -> Button:
 	if preset == "accent":
 		hover.bg_color = ACCENT.lightened(0.12)
 		hover.border_color = hover.bg_color
-		shadowed(normal, Color(ACCENT, 0.2), 6, Vector2(0, 3))
-		shadowed(hover, Color(ACCENT, 0.28), 7, Vector2(0, 3))
 	else:
 		hover.bg_color = Color(bg.r, bg.g, bg.b, min(1.0, bg.a + 0.05))
 		hover.border_color = Color(1, 1, 1, min(1.0, (spec["border"] as Color).a + 0.1))
@@ -293,3 +287,52 @@ static func short_date(iso: String) -> String:
 	if parts.size() < 3:
 		return iso
 	return "%d/%d/%s" % [int(parts[1]), int(parts[2]), parts[0]]
+
+
+static func short_month_date(iso: String) -> String:
+	var parts := iso.split("-")
+	if parts.size() < 3:
+		return iso
+	var months := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	var month := int(parts[1])
+	if month < 1 or month > 12:
+		return iso
+	return "%s %d, %s" % [months[month - 1], int(parts[2]), parts[0]]
+
+
+static func markdown_to_bbcode(text: String) -> String:
+	var escaped := text.replace("[", "[lb]")
+	var lines := escaped.split("\n")
+	var out: PackedStringArray = []
+	var bold := RegEx.create_from_string("\\*\\*(.+?)\\*\\*")
+	var italic := RegEx.create_from_string("(?<![*\\w])\\*(?!\\s)(.+?)(?<!\\s)\\*(?![*\\w])")
+	for raw in lines:
+		var line: String = raw
+		var stripped := line.strip_edges()
+		if stripped.begins_with("### ") or stripped.begins_with("## ") or stripped.begins_with("# "):
+			line = "[b]%s[/b]" % stripped.lstrip("#").strip_edges()
+		elif stripped.begins_with("- ") or stripped.begins_with("* "):
+			line = "  • " + stripped.substr(2)
+		line = bold.sub(line, "[b]$1[/b]", true)
+		line = italic.sub(line, "[i]$1[/i]", true)
+		out.append(line)
+	return "\n".join(out)
+
+
+static func rich(text: String, size := 13, color := MUTED) -> RichTextLabel:
+	var node := RichTextLabel.new()
+	node.bbcode_enabled = true
+	node.fit_content = true
+	node.scroll_active = false
+	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	node.selection_enabled = false
+	node.mouse_filter = Control.MOUSE_FILTER_PASS
+	node.add_theme_font_override("normal_font", font(400))
+	node.add_theme_font_override("bold_font", font(700))
+	node.add_theme_font_override("italics_font", font(400))
+	node.add_theme_font_size_override("normal_font_size", size)
+	node.add_theme_font_size_override("bold_font_size", size)
+	node.add_theme_font_size_override("italics_font_size", size)
+	node.add_theme_color_override("default_color", color)
+	node.text = markdown_to_bbcode(text)
+	return node

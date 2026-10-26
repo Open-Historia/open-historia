@@ -7,6 +7,9 @@ run/main_scene="res://main.tscn"
 run/low_processor_mode=true
 run/low_processor_mode_sleep_usec=8000
 config/features=PackedStringArray("4.7")
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.0745098, 0.0745098, 0.0823529, 1)
+boot_splash/minimum_display_time=0
 
 [display]
 

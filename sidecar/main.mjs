@@ -133,10 +133,42 @@ const flagFileFor = (code, flagsDir) => {
   return fs.existsSync(file) ? file : "";
 };
 
-const mapState = async () => {
+let boundsCache = { sha: "", records: [] };
+
+const extendRing = (box, ring) => {
+  for (const point of list(ring)) {
+    const lon = Number(point?.[0]);
+    const lat = Number(point?.[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    if (lon < box[0]) box[0] = lon;
+    if (lat < box[1]) box[1] = lat;
+    if (lon > box[2]) box[2] = lon;
+    if (lat > box[3]) box[3] = lat;
+  }
+};
+
+const regionRecords = async () => {
+  if (!regionCache.sha) await loadRegions();
+  if (boundsCache.sha === regionCache.sha) return boundsCache.records;
+  const records = [];
+  for (const feature of regionCache.features) {
+    const id = regionIdOf(feature);
+    const geometry = feature?.geometry;
+    if (!id || !geometry) continue;
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.type === "MultiPolygon" ? list(geometry.coordinates) : [];
+    for (const polygon of polygons) extendRing(box, list(polygon)[0]);
+    if (!Number.isFinite(box[0])) continue;
+    records.push({ id, name: clean(feature?.properties?.name), bounds: [[box[0], box[1]], [box[2], box[3]]] });
+  }
+  boundsCache = { sha: regionCache.sha, records };
+  return records;
+};
+
+const mapState = async (worldOverride = null) => {
   if (!regionCache.sha) await loadRegions();
   const bundle = await engine.readGameStateBundle({ force: true });
-  const world = bundle.world ?? {};
+  const world = worldOverride ?? bundle.world ?? {};
   const colors = await engine.readJson(engine.JSON_URLS.colors, { defaultValue: {}, force: true });
   const resolve = engine.createOwnerRgbResolver(colors, world.polityOverrides);
   const overrides = world.regionOwnershipOverrides ?? {};
@@ -188,6 +220,61 @@ const gameView = async () => {
 
 const running = new Map();
 
+const INVOKABLE = {
+  gameplay: [
+    "simulateTimelineJump", "simulateAutoJump", "retryPendingJumpSegment", "retryPendingProjectsJump", "retryPendingChecksJump",
+    "retryHeldPlayerEvents", "heldSkipToRerun", "applyParkedTurn", "loadParkedTurn", "discardKeptTurn", "maybeGeneratePregameHistory",
+    "maybeOpenScenarioFronts", "rollBackToSnapshot", "canInterveneInLastTurn", "interveneAfterEvent", "createInteractive",
+    "declineInteractiveOffer", "answerDiplomacy", "advanceActiveInteractive", "rewindActiveInteractive", "endActiveInteractive",
+    "setAsideActiveInteractive", "runChatActionBatch", "checkDemandReply", "ensureCountryAssessed", "processPendingEventOutreach",
+    "generateActionSuggestions", "refinePlayerAction", "previewGameMasterCommand", "applyGameMasterPreview", "consolidateHistoryNow",
+    "ensureIntelligenceRated", "ensureMilitaryFigures", "readOpenedIntercepts", "generateCountryStatSheet", "pendingCountryStatSheet",
+    "generateCountryStats", "generateListenInFeed", "generateWarRoomReply", "warRoomRouteAttacks", "warRoomTransportWays", "warRoomChart",
+    "maybeSendIdleDiplomacy", "maybeGatherIntelligence", "prethinkFronts", "warRoomRehearse",
+  ],
+  gameState: [
+    "readWorldStateView", "readWorldState", "readActionsState", "readEventsState", "readInterceptsState", "readChatsState", "readGameStateBundle",
+  ],
+  assets: ["loadRollbackSnapshotIndex", "loadRollbackSnapshot"],
+  simulationStatus: ["getHeldTurn", "discardHeldTurn", "discardParkedTurn", "isSimulationBusy", "isGenerating", "isChatGenerationLikely", "getParkedTurn"],
+  requestBudget: ["requestDay", "savingRequests", "describeJumpCost", "backgroundAiAllowance"],
+  turnCommit: ["undoableTurns"],
+  diplomaticStance: ["buildDiplomaticStanceMap"],
+  providerConfig: ["applyQuickAiSetup", "describeEntry", "connectionDisplayName", "getEntryStatus"],
+  unitsController: ["requestUnitOrders", "disbandUnit"],
+  playerTurnFailures: ["describePlayerTurnFailures"],
+  aiMain: ["sendMessage", "loadHistory", "startChat", "sendDiplomaticMessage"],
+};
+
+const plain = (value) => {
+  const seen = new WeakSet();
+  return JSON.parse(JSON.stringify(value ?? null, (_key, item) => {
+    if (typeof item === "function" || typeof item === "symbol") return undefined;
+    if (typeof item === "bigint") return Number(item);
+    if (item instanceof Map) return Object.fromEntries(item);
+    if (item instanceof Set) return [...item];
+    if (item && typeof item === "object") {
+      if (seen.has(item)) return undefined;
+      seen.add(item);
+    }
+    return item;
+  }) ?? "null");
+};
+
+const reviveArgs = (args, { id, signal }) => (Array.isArray(args) ? args : []).map((arg) => {
+  const swap = (value) => {
+    if (!value || typeof value !== "object") return value;
+    if (value.$signal === true) return signal;
+    if (typeof value.$callback === "string") {
+      const name = value.$callback;
+      return (...payload) => emit("callback", { call: id, name, args: plain(payload) });
+    }
+    if (Array.isArray(value)) return value.map(swap);
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, swap(item)]));
+  };
+  return swap(arg);
+});
+
 const methods = {
   hello: async () => ({ dataRoot, assetsDir, origin, standIn: process.env.OH_STANDIN_MODEL === "1" }),
   "library.list": async () => {
@@ -212,6 +299,14 @@ const methods = {
         accentColor: clean(game?.accentColor) || "#2bc1f3",
         archived: game?.archived === true,
         lastPlayedAt: clean(game?.lastPlayedAt),
+        importedAt: clean(game?.importedAt),
+        updatedAt: clean(game?.updatedAt),
+        createdAt: clean(game?.createdAt),
+        playCount: Number(game?.playCount) || 0,
+        heroTitle: clean(game?.heroTitle),
+        eyebrow: clean(game?.eyebrow),
+        canDelete: game?.canDelete === true,
+        scenarioMissing: game?.scenarioMissing === true,
       })),
       scenarios: scenarios.map((scenario) => ({
         id: clean(scenario?.id),
@@ -332,6 +427,18 @@ const methods = {
     storage.flush();
     return methods["settings.ai.get"]();
   },
+  invoke: async ({ module, fn, args = [] }, { signal, id }) => {
+    if (!INVOKABLE[module]?.includes(fn)) throw new Error(`Not callable from the native app: ${module}.${fn}`);
+    const target = engine[module]?.[fn];
+    if (typeof target !== "function") throw new Error(`The engine has no ${module}.${fn}.`);
+    return plain(await target(...reviveArgs(args, { id, signal })));
+  },
+  "doc.read": async ({ key, view = false }) => {
+    if (key === "world" && view) return plain(await engine.gameState.readWorldStateView({ force: true }));
+    const url = engine.JSON_URLS[key];
+    if (!url) throw new Error(`Unknown document: ${key}`);
+    return plain(await engine.readJson(url, { defaultValue: null, force: true }));
+  },
   presence: async ({ visible }) => {
     setVisible(visible !== false);
     return true;
@@ -341,6 +448,22 @@ const methods = {
     return true;
   },
 };
+
+const handlersDir = path.join(here, "handlers");
+if (fs.existsSync(handlersDir)) {
+  const { addStandIn } = await import("./standin.js");
+  const standIn = process.env.OH_STANDIN_MODEL === "1";
+  const context = { engine, api, emit, plain, storage, clean, list, repo, dataRoot, cacheDir, gameView, mapState, regionRecords, setVisible, addStandIn, standIn, expectJump: (value) => { expectedJump = value; } };
+  for (const file of fs.readdirSync(handlersDir).filter((name) => name.endsWith(".mjs")).sort()) {
+    try {
+      const module = await import(pathToFileURL(path.join(handlersDir, file)).href);
+      Object.assign(methods, await module.register(context));
+    } catch (error) {
+      process.stderr.write(`[sidecar] ${file} was not loaded: ${error?.stack ?? error}\n`);
+      emit("sidecar.handlerFailed", { file, message: clean(error?.message) });
+    }
+  }
+}
 
 const handle = async (line) => {
   let message;
@@ -361,7 +484,7 @@ const handle = async (line) => {
     const result = await run(message.args ?? {}, { signal: controller.signal, id });
     send({ id, ok: true, result: result ?? null });
   } catch (error) {
-    send({ id, ok: false, error: clean(error?.message ?? error) || "Something went wrong." });
+    send({ id, ok: false, error: clean(error?.message ?? error) || "Something went wrong.", heldKind: clean(error?.heldKind), failures: plain(error?.playerFailures ?? null), aborted: error?.name === "AbortError" });
   } finally {
     running.delete(id);
   }
