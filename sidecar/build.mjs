@@ -52,3 +52,23 @@ await build({
   sourcemap: "linked",
 });
 console.log("labels bundle built");
+
+const { WORKER_ENTRIES } = await import("./workers.js");
+await build({
+  entryPoints: Object.entries(WORKER_ENTRIES).map(([name, source]) => ({ in: path.join(here, source), out: name.replace(/\.js$/, "") })),
+  outdir: path.join(here, "dist", "workers"),
+  outExtension: { ".js": ".mjs" },
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node22",
+  loader: { ".js": "jsx", ".jsx": "jsx" },
+  jsx: "automatic",
+  define: {
+    "import.meta.env": JSON.stringify({ VITE_OH_WEB: false, VITE_OH_NATIVE: false, MODE: "native", DEV: false, PROD: true, BASE_URL: "/" }),
+  },
+  banner: { js: "import { createRequire as __ohCreateRequire } from 'node:module'; const require = __ohCreateRequire(import.meta.url);" },
+  logLevel: "warning",
+  sourcemap: "linked",
+});
+console.log("worker bundles built");

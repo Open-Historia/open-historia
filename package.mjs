@@ -53,7 +53,7 @@ copy(godotSource, path.join(stage, "native", "godot"), (file, isDir) => {
 copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
 
 const sidecar = path.join(here, "sidecar");
-for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs"));
 

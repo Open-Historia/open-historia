@@ -7,6 +7,7 @@ import util from "node:util";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { installShims } from "./shims.js";
+import { installWorkerShim } from "./workers.js";
 import { installStandInModel } from "./standin.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,7 @@ const waitForServer = async () => {
 await waitForServer();
 
 const { storage, setVisible } = installShims({ origin, storageFile: path.join(nativeDir, "local-storage.json") });
+if (process.env.OH_NATIVE_WORKERS !== "0") installWorkerShim({ origin });
 let expectedJump = { origin: "", target: "", country: "" };
 if (process.env.OH_STANDIN_MODEL === "1") {
   installStandInModel({ expected: () => expectedJump });
@@ -247,15 +249,20 @@ const INVOKABLE = {
 };
 
 const plain = (value) => {
-  const seen = new WeakSet();
-  return JSON.parse(JSON.stringify(value ?? null, (_key, item) => {
-    if (typeof item === "function" || typeof item === "symbol") return undefined;
-    if (typeof item === "bigint") return Number(item);
-    if (item instanceof Map) return Object.fromEntries(item);
-    if (item instanceof Set) return [...item];
+  const holders = [];
+  const sources = [];
+  return JSON.parse(JSON.stringify(value ?? null, function (_key, raw) {
+    if (typeof raw === "function" || typeof raw === "symbol") return undefined;
+    if (typeof raw === "bigint") return Number(raw);
+    const item = raw instanceof Map ? Object.fromEntries(raw) : raw instanceof Set ? [...raw] : raw;
     if (item && typeof item === "object") {
-      if (seen.has(item)) return undefined;
-      seen.add(item);
+      while (holders.length > 0 && holders[holders.length - 1] !== this) {
+        holders.pop();
+        sources.pop();
+      }
+      if (sources.includes(raw)) return undefined;
+      holders.push(item);
+      sources.push(raw);
     }
     return item;
   }) ?? "null");

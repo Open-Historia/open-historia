@@ -82,8 +82,22 @@ func _scroll_to(workspace: Variant, text: String) -> void:
 	await _wait(0.3)
 
 
+func _find_text(node: Node, text: String) -> Control:
+	if node is CanvasItem and not (node as CanvasItem).visible:
+		return null
+	if node is Label and (node as Label).text.contains(text):
+		return node as Control
+	if node is Button and (node as Button).text.contains(text):
+		return node as Control
+	for child in node.get_children():
+		var found := _find_text(child, text)
+		if found:
+			return found
+	return null
+
+
 func _scroll_into_view(root_node: Node, text: String) -> bool:
-	var label := _find_label(root_node, text)
+	var label := _find_text(root_node, text)
 	if not label:
 		return false
 	var parent: Node = label.get_parent()
@@ -243,6 +257,20 @@ func _run() -> void:
 	await _wait(0.6)
 	_check("GM preview with the stand-in", bool(preview.get("ok", false)), str(preview.get("summary", preview.get("error", ""))))
 	await _shoot("m41-gm-preview")
+	await cheats.edit_country("France")
+	await _wait(0.8)
+	var editor_text := _all_text(cheats)
+	_check("Country Editor shows the Political World section", editor_text.contains("POLITICAL WORLD") and editor_text.contains("Government & political system") and editor_text.contains("Political traits · full supported catalog"))
+	await _shoot("m42-country-editor")
+	if await _scroll_into_view(cheats, "POLITICAL WORLD"):
+		await _shoot("m42b-political-world")
+	if await _scroll_into_view(cheats, "Political traits · full supported catalog (10)"):
+		await _shoot("m42c-political-traits")
+	await cheats.open_new_puppet()
+	await _wait(0.6)
+	var puppet_text := _all_text(cheats)
+	_check("Puppet States opens its new puppet state form", puppet_text.to_lower().contains("new puppet state") and puppet_text.contains("Make it a puppet state") and puppet_text.contains("Pick the overlord…"))
+	await _shoot("m43-puppet-new")
 	cheats.close()
 	await _wait(0.3)
 

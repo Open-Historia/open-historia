@@ -403,7 +403,7 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(chat, "generating_changed", func(generating: bool) -> void:
 			_chat_generating = generating
 			set_chat_badge(_chat_unread, _chat_generating))
-		_setup(chat, ctx)
+		_setup(chat, {"game": game, "map_view": _map, "hud": self, "right_offset": _right_offset})
 	var actions := _make("actions_panel")
 	if actions:
 		_add_panel("actions", actions)
@@ -421,8 +421,11 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(advisor, "open_actions", func() -> void: set_active_panel("actions"))
 		_hook(advisor, "open_projects", func() -> void: set_active_panel("projects"))
 		_hook(advisor, "open_chat", open_chat)
-		_hook(advisor, "open_thread", func(target: Dictionary, _draft: String) -> void:
-			open_chat_thread(str(target.get("threadId", target.get("chatId", "")))))
+		_hook(advisor, "open_thread", func(target: Dictionary, draft: String) -> void:
+			if not panels.has("chat"):
+				return
+			set_active_panel("chat")
+			_invoke(panels["chat"], "open_target", [target, draft]))
 		_hook(advisor, "focus_point", func(lng: float, lat: float, zoom: float) -> void: _map.fly_to_lonlat(lng, lat, zoom))
 		_hook(advisor, "width_changed", func(_width: float) -> void: _sync_inset())
 		_setup(advisor, ctx)
@@ -452,7 +455,7 @@ func mount_panels(game: Dictionary) -> void:
 	if chat_notices:
 		add_child(chat_notices)
 		_hook(chat_notices, "open_thread", open_chat_thread)
-		_setup(chat_notices, {"chat_panel": chat, "game": game})
+		_setup(chat_notices, {"chat_panel": chat, "game": game, "right_offset": _right_offset})
 	war_cards = _make("war_peace_cards")
 	if war_cards:
 		add_child(war_cards)
@@ -531,6 +534,10 @@ func _sync_inset() -> void:
 	if drawer.has_method("current_width"):
 		width = float(drawer.call("current_width"))
 	set_right_inset(width)
+
+
+func _right_offset() -> float:
+	return maxf(0.0, -_right_layer.position.x) if _right_layer else 0.0
 
 
 func set_right_inset(width: float) -> void:
