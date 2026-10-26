@@ -217,10 +217,8 @@ func _render_list(stack: VBoxContainer) -> void:
 		if _ticked.get(key, false):
 			total += float(offer.get("bytes", 0))
 		var row := CommunityKit.row(8)
-		var box := CheckBox.new()
+		var box := CommunityKit.checkbox("")
 		box.button_pressed = _ticked.get(key, false)
-		box.focus_mode = Control.FOCUS_NONE
-		box.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		box.toggled.connect(func(on: bool) -> void:
 			if on:
 				_ticked[key] = true

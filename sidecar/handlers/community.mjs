@@ -77,6 +77,8 @@ export const register = (ctx) => {
     hub: hub.HUB_URL,
     newPost: hub.HUB_NEW_POST_URL,
     discord: engine.cmLinks.DISCORD_URL,
+    reddit: engine.cmLinks.REDDIT_URL,
+    github: engine.cmLinks.GITHUB_URL,
     license: engine.edLicense.SCENARIO_LICENSE_URL,
   });
 
@@ -654,6 +656,7 @@ export const register = (ctx) => {
       await refreshLibrary();
       return { posts: shown.map(postView), library: statusesOf(shown), scenarios: publishable(), links: links() };
     },
+    "community.links": async () => links(),
     "community.library": async () => {
       await refreshLibrary();
       return { library: statusesOf(shown), scenarios: publishable() };

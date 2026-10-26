@@ -70,7 +70,10 @@ func primary_button(scenario: Dictionary) -> Button:
 	content.add_theme_constant_override("separation", 6)
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	content.add_child(CommunityKit.mark_rect("working" if updating else "update", 15))
+	if updating:
+		content.add_child(Spinner.new(15.0, Color(1, 1, 1, 0.95)))
+	else:
+		content.add_child(CommunityKit.mark_rect("update", 15))
 	var caption := UI.label("Updating…" if updating else "Update", 14, Color(1, 1, 1), 700)
 	caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	content.add_child(caption)

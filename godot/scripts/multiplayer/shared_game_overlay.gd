@@ -296,12 +296,10 @@ func _render_lobby(me: String) -> void:
 		pick_gap.add_child(pick_row)
 		stack.add_child(pick_gap)
 	if not me.is_empty() and not lobby.get("started", false):
-		var mine := HBoxContainer.new()
-		mine.add_theme_constant_override("separation", 8)
+		var mine := CommunityKit.flow(8, 6)
 		var words := _small("You play %s. %s" % [me, "Start when everyone is in." if role == "host" else "Waiting for the host to start."])
-		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		mine.add_child(words)
+		mine.add_child(CommunityKit.inline(words, mine))
 		if role != "host":
 			var change := _button("Change")
 			change.pressed.connect(func() -> void: _request("unpick", {}))
@@ -448,7 +446,13 @@ func _render_round(me: String) -> void:
 	_panel.add_child(stack)
 	add_child(_panel)
 	var view := get_viewport_rect().size
-	_place_top(_panel, 54.0, minf(view.x - 24.0, maxf(560.0, stack.get_combined_minimum_size().x + 24.0)))
+	var preferred := 0.0
+	var count := 0
+	for child in line.get_children():
+		preferred += (child as Control).get_combined_minimum_size().x
+		count += 1
+	preferred += 10.0 * maxf(0.0, float(count - 1)) + 26.0
+	_place_top(_panel, 54.0, minf(view.x - 24.0, preferred))
 	if timed or not str(_notice_label.text).is_empty():
 		_tick.start()
 

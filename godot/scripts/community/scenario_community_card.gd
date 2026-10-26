@@ -91,9 +91,7 @@ func _render() -> void:
 			block.add_child(_section_label("Community"))
 		var line := CommunityKit.flow(7, 7)
 		var words := CommunityDialog.quiet("If you publish this scenario to the hub from the Community tab, the changes people suggest on your post show here.")
-		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		words.custom_minimum_size.x = 200
-		line.add_child(words)
+		line.add_child(CommunityKit.inline(words, line))
 		var open_file := _button("Open a suggestion file")
 		open_file.pressed.connect(_open_file)
 		line.add_child(open_file)

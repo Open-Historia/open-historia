@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 const STAND_IN_REPLY = [
   "**The budget comes first.** Every other lever we hold hangs on the deficit, so I have queued the cabinet meeting we settled on and opened the consolidation plan on the board.",
   "",
@@ -465,6 +469,7 @@ export const register = (ctx) => {
         text: String(message.text ?? ""),
         md: normalizeMarkdown(String(message.text ?? "")),
         details: formatReportFields(fields).join("\n"),
+        reportFields: fields,
         hasDetail: Boolean(message.diagnostics && Object.keys(message.diagnostics).length > 0),
         date: formatAdvisorDate(message.time),
       };
@@ -675,6 +680,30 @@ export const register = (ctx) => {
       return plain({ notices: storedNotices, views, ...flags() });
     },
     "advisor.save": async ({ messages = [], json = "" } = {}) => saveMessages(list(fromWire(json, messages))),
+    "advisor.report": async ({ kind = "", title = "", fields = [] } = {}) => {
+      const debugLog = engine.debugLog;
+      const incident = { kind: String(kind), title: String(title), fields: list(fields).filter(Array.isArray) };
+      const loggingOn = Boolean(debugLog?.isDebugLogEnabled?.());
+      if (loggingOn) {
+        let report = "";
+        try {
+          report = await debugLog.buildLoggingFile({ incident });
+        } catch {
+          return { loggingOn, state: "failed" };
+        }
+        try {
+          const folder = process.env.OH_NATIVE_DOWNLOADS || path.join(os.homedir(), "Downloads", "Open Historia");
+          fs.mkdirSync(folder, { recursive: true });
+          const file = path.join(folder, debugLog.debugLogFilename(incident.kind));
+          fs.writeFileSync(file, report);
+          return { loggingOn, state: "saved", path: file };
+        } catch {
+          return { loggingOn, state: report ? "copied" : "failed", text: report || "" };
+        }
+      }
+      const text = debugLog?.buildIncidentReport?.(incident) ?? "";
+      return { loggingOn, state: text ? "copied" : "failed", text };
+    },
     "advisor.clear": async () => {
       engine.aiMain.startChat();
       return saveMessages([]);

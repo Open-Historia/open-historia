@@ -210,9 +210,7 @@ static func detail_row(view: Dictionary, read_only: bool, busy: bool, on_accept:
 			actions.add_child(undo)
 		else:
 			var gone := CommunityDialog.quiet("It can no longer be undone here: the game was closed after it was accepted. Change it back in the editor.")
-			gone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			gone.custom_minimum_size.x = 200
-			actions.add_child(gone)
+			actions.add_child(CommunityKit.inline(gone, actions))
 	else:
 		var accept := CommunityDialog.button("Accept", true)
 		CommunityKit.set_idle(accept, busy or status == "applied")

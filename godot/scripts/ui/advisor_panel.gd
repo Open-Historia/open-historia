@@ -31,7 +31,6 @@ const MARKER := Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.7)
 const SMALL_HEADING := Color(146 / 255.0, 193 / 255.0, 252 / 255.0, 0.9475)
 const TABLE_HEAD := Color(129 / 255.0, 184 / 255.0, 251 / 255.0, 0.202)
 const CHART_COLORS := ["#60a5fa", "#34d399", "#f472b6", "#fbbf24", "#94a3b8", "#f87171", "#38bdf8"]
-const REPORT_REASON := "Saving a bug report is not in the native app yet."
 const SAVE_TIP := "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
 const COPY_TIP := "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."
 const RETRY_PROJECTS_TEXT := "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing."
@@ -1165,10 +1164,51 @@ func _restyle_chip(button: Button, bg: Color, border: Color, ink: Color, pad: Ve
 		button.add_theme_color_override(name, UI.WHITE)
 
 
-func _report_button(tone: Color, ink: Color) -> Button:
-	var button := _chip("💾 Save logging file" if _logging_on else "Copy for a bug report", Color(0, 0, 0, 0), tone, ink)
-	UI.set_disabled_look(button, REPORT_REASON)
+func _report_button(tone: Color, ink: Color, incident: Dictionary, state: Dictionary) -> Button:
+	var button := _chip("", Color(0, 0, 0, 0), tone, ink)
+	state["report_button"] = button
+	_show_report_state(state)
+	button.pressed.connect(func() -> void: _send_report(incident, state))
 	return button
+
+
+func _report_label(report_state: String) -> String:
+	if _logging_on:
+		return str({"working": "Saving…", "saved": "✓ Saved — attach the file to your report", "copied": "✓ Log copied — paste it into your report", "failed": "Couldn't save — try again"}.get(report_state, "💾 Save logging file"))
+	return str({"working": "Copying…", "copied": "✓ Copied!", "failed": "Couldn't copy — try again"}.get(report_state, "Copy for a bug report"))
+
+
+func _show_report_state(state: Dictionary) -> void:
+	var button: Variant = state.get("report_button")
+	if not is_instance_valid(button) or not button is Button:
+		return
+	var report_state := str(state.get("report", "idle"))
+	var target: Button = button
+	target.text = _report_label(report_state)
+	target.tooltip_text = SAVE_TIP if _logging_on else COPY_TIP
+	target.disabled = report_state == "working"
+	target.mouse_default_cursor_shape = Control.CURSOR_ARROW if target.disabled else Control.CURSOR_POINTING_HAND
+
+
+func _send_report(incident: Dictionary, state: Dictionary) -> void:
+	if engine == null or str(state.get("report", "idle")) == "working":
+		return
+	state["report"] = "working"
+	_show_report_state(state)
+	var reply: Dictionary = await engine.request("advisor.report", incident)
+	var outcome := "failed"
+	if reply.get("ok", false) and typeof(reply["result"]) == TYPE_DICTIONARY:
+		var result: Dictionary = reply["result"]
+		outcome = str(result.get("state", "failed"))
+		_logging_on = bool(result.get("loggingOn", _logging_on))
+		var text := str(result.get("text", ""))
+		if outcome == "copied" and not text.is_empty():
+			DisplayServer.clipboard_set(text)
+	state["report"] = outcome
+	_show_report_state(state)
+	await get_tree().create_timer(3.0).timeout
+	state["report"] = "idle"
+	_show_report_state(state)
 
 
 func _bullet_line(bbcode: String, size: int, color: Color) -> Control:
@@ -1289,7 +1329,7 @@ func _projects_problem(message: Dictionary, state: Dictionary) -> Control:
 		var open := bool(state.get("broke_open", false))
 		var toggle := _chip(("Hide" if open else "Show") + " what broke", Color(0, 0, 0, 0), Color(1, 1, 1, 0.2), Color(1, 1, 1, 0.6))
 		buttons.add_child(toggle)
-		buttons.add_child(_report_button(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), AMBER_INK))
+		buttons.add_child(_report_button(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), AMBER_INK, {"kind": "advisor-board", "title": "Advisor's projects block could not be applied", "fields": [["Problem", kind], ["Detail", detail], ["What broke", excerpt]]}, state))
 		pre = _pre(excerpt, 144.0, 8.0)
 		pre.visible = open
 		toggle.pressed.connect(func() -> void:
@@ -1339,7 +1379,7 @@ func _error_details(view: Dictionary, retry_here: bool, state: Dictionary) -> Co
 			retry.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		retry.pressed.connect(_retry_turn)
 		buttons.add_child(retry)
-	buttons.add_child(_report_button(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.45), RED_INK))
+	buttons.add_child(_report_button(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.45), RED_INK, {"kind": "advisor-error", "title": "Advisor reply failed", "fields": view.get("reportFields", [])}, state))
 	var details: VBoxContainer = null
 	if bool(view.get("hasDetail", false)):
 		var open := bool(state.get("details_open", false))

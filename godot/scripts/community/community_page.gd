@@ -66,6 +66,7 @@ func _init() -> void:
 	_build_header()
 	_list_body = CommunityKit.column(0)
 	_list_view.add_child(_list_body)
+	add_child(CommunityKit.gap(48))
 	resized.connect(_fit)
 
 
@@ -75,13 +76,30 @@ func setup(link: EngineLink, extra := {}) -> void:
 
 
 func open() -> void:
+	_render()
+	if HubImages.cache_dir.is_empty():
+		var hello := await engine.request("hello")
+		if not is_instance_valid(self):
+			return
+		if hello.get("ok", false):
+			HubImages.use_data_root(str((hello["result"] as Dictionary).get("dataRoot", "")))
 	if not _loaded:
 		load_posts(false)
-	_render()
 
 
 func refresh() -> void:
 	load_posts(true)
+
+
+func refresh_library() -> void:
+	if not _loaded:
+		return
+	var reply := await engine.request("community.library")
+	if not is_instance_valid(self) or not reply.get("ok", false):
+		return
+	_library = reply["result"].get("library", _library)
+	_scenarios = reply["result"].get("scenarios", _scenarios)
+	_render()
 
 
 func load_posts(force: bool) -> void:
@@ -716,6 +734,8 @@ func _render_detail() -> void:
 	var react := CommunityKit.pill_button("👍 Like / 💬 Comment ↗")
 	react.pressed.connect(func() -> void: CommunityKit.open_url(url))
 	buttons.add_child(react)
+	for child in buttons.get_children():
+		(child as Control).size_flags_vertical = Control.SIZE_FILL
 	_detail_view.add_child(buttons)
 
 

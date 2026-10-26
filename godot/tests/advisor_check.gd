@@ -281,8 +281,20 @@ func _run() -> void:
 	var saved_after_error: Variant = await _doc("advisor")
 	_check("the error is saved with the transcript", typeof(saved_after_error) == TYPE_ARRAY and (saved_after_error as Array).size() == 6)
 	var report := _find_button(panel, "💾 Save logging file")
-	_check("the error offers its report button, dimmed with a reason", report != null and report.disabled and not report.tooltip_text.is_empty())
+	_check("the error offers its report button with the released tooltip", report != null and not report.disabled and report.tooltip_text == AdvisorPanel.SAVE_TIP)
 	await _shoot("advisor-10-error")
+	if report:
+		var downloads := OS.get_environment("OH_NATIVE_DOWNLOADS")
+		report.pressed.emit()
+		_check("the report saves the log", await _until(func() -> bool: return _find_button(panel, "✓ Saved — attach the file to your report") != null, 30.0))
+		var logs: Array = []
+		if not downloads.is_empty():
+			for file in DirAccess.get_files_at(downloads):
+				if file.ends_with("advisor-error.txt"):
+					logs.append(file)
+		_check("the log file lands in the downloads folder", downloads.is_empty() or logs.size() == 1, str(logs))
+		await _shoot("advisor-10b-report-saved")
+		_check("the button returns to its label", await _until(func() -> bool: return _find_button(panel, "💾 Save logging file") != null, 10.0))
 	var retry := _find_button(panel, "Retry")
 	_check("Retry is offered on the last error", retry != null)
 	if retry:

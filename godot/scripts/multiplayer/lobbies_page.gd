@@ -55,6 +55,7 @@ func _init() -> void:
 	_column.add_theme_constant_override("separation", 18)
 	_column.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	add_child(_column)
+	add_child(CommunityKit.gap(48))
 	resized.connect(_fit)
 
 
@@ -163,7 +164,11 @@ func _note(text: String, color := NOTE_INK) -> Label:
 
 
 func _field_label(text: String) -> Label:
-	return UI.label(text.to_upper(), 11, LABEL_INK, 600, "Arial", 0)
+	var label := UI.label(text.to_upper(), 12, LABEL_INK, 600)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.add_theme_constant_override("line_spacing", -2)
+	return label
 
 
 func _text_input(value: String, placeholder: String, max_length: int) -> LineEdit:
@@ -259,11 +264,13 @@ func _build_invite() -> PanelContainer:
 	code.text_changed.connect(func(value: String) -> void:
 		_code = value
 		_restyle_join())
+	code.text_submitted.connect(func(_value: String) -> void: _join())
 	_code_field = _field("Invite code", code)
 	_code_field.size_flags_horizontal = Control.SIZE_FILL
 	_invite_row.add_child(_code_field)
 	var name := _text_input(_join_name, "Player", 40)
 	name.text_changed.connect(func(value: String) -> void: _join_name = value)
+	name.text_submitted.connect(func(_value: String) -> void: _join())
 	_name_field = _field("Your name", name)
 	_name_field.size_flags_horizontal = Control.SIZE_FILL
 	_invite_row.add_child(_name_field)
@@ -302,7 +309,7 @@ func _restyle_join() -> void:
 
 
 func _join() -> void:
-	if _code.strip_edges().is_empty() or _shared_mode() != "off":
+	if not _state.get("webrtc", false) or _code.strip_edges().is_empty() or _shared_mode() != "off":
 		return
 	_join_error = ""
 	var reply := await engine.request("multiplayer.join", {"token": _code, "name": _join_name})
@@ -347,14 +354,8 @@ func _build_host() -> PanelContainer:
 		stack.add_child(_host_grid)
 		var check_row := MarginContainer.new()
 		check_row.add_theme_constant_override("margin_top", 14)
-		var check := CheckBox.new()
-		check.text = "Players may join a game already under way, taking a country the AI plays"
+		var check := CommunityKit.checkbox("Players may join a game already under way, taking a country the AI plays")
 		check.button_pressed = bool(_settings.get("allowMidGameJoin", true))
-		check.focus_mode = Control.FOCUS_NONE
-		check.add_theme_font_override("font", UI.font(400))
-		check.add_theme_font_size_override("font_size", 14)
-		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			check.add_theme_color_override(state, Color(1, 1, 1, 0.8))
 		check.toggled.connect(func(on: bool) -> void: _settings["allowMidGameJoin"] = on)
 		check_row.add_child(check)
 		stack.add_child(check_row)
@@ -408,6 +409,7 @@ func _number(key: String, low: int, high: int) -> SpinBox:
 	line.add_theme_font_override("font", UI.font(400))
 	line.add_theme_font_size_override("font_size", 14)
 	line.add_theme_color_override("font_color", FIELD_INK)
+	CommunityKit.bare_spinbox(spin)
 	spin.value_changed.connect(func(value: float) -> void: _settings[key] = int(value))
 	return spin
 
@@ -448,9 +450,7 @@ func _seats_field() -> VBoxContainer:
 	slider.custom_minimum_size.y = 40
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.focus_mode = Control.FOCUS_NONE
-	slider.add_theme_stylebox_override("slider", UI.box(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 999, 0, Vector4(0, 3, 0, 3)))
-	slider.add_theme_stylebox_override("grabber_area", UI.box(UI.ACCENT, Color(0, 0, 0, 0), 999, 0, Vector4(0, 3, 0, 3)))
-	slider.add_theme_stylebox_override("grabber_area_highlight", UI.box(UI.ACCENT, Color(0, 0, 0, 0), 999, 0, Vector4(0, 3, 0, 3)))
+	CommunityKit.chrome_slider(slider)
 	var holder := _field("Players: %d" % int(_settings.get("seats", seats_now)), slider, "Up to %d for now; up to %d is coming later." % [seats_now, max_seats])
 	var title := (holder.get_child(0) as MarginContainer).get_child(0) as Label
 	slider.value_changed.connect(func(value: float) -> void:

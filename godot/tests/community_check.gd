@@ -254,8 +254,20 @@ func _imports() -> void:
 	updates.setup(main.engine)
 	await updates.refresh()
 	_check(updates.reasons.is_empty(), "a current copy is offered no update")
+	var copy := page._copy_of(post)
+	var copy_id := str(copy.get("id", ""))
+	_check(not copy_id.is_empty(), "the library names its copy of the post")
+	await updates.update(copy_id)
+	_check(str(updates.notes.get(copy_id, "")).is_empty() and not updates.is_updating(copy_id), "Update takes the post's file again")
 	updates.queue_free()
 	await main.engine.request("community.standin.downloads", {"on": false})
+	var published: Dictionary = await main.engine.request("community.publish", {"scenarioId": "default"})
+	_check(published.get("ok", false), "Publish builds the scenario's file (nothing is posted)")
+	if published.get("ok", false):
+		var result: Dictionary = published["result"]
+		_check(FileAccess.file_exists(str(result.get("zipFile", ""))), "the .zip is written: %s" % str(result.get("fileName", "")))
+		_check(str(result.get("notice", "")).begins_with("\"default-scenario.zip\""), "publish notice: %s" % str(result.get("notice", "")).substr(0, 70))
+		_check(str(result.get("url", "")).begins_with("https://github.com/Open-Historia/Open-historia-scenarios/issues/new?template=scenario.yml&title="), "the prefilled post address")
 
 
 func _suggestions() -> void:
