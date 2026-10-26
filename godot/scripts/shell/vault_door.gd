@@ -63,6 +63,7 @@ var _sounds: VaultSounds
 var _depth: DepthLayer
 var _leaf_rects: Array[ColorRect] = []
 var _seams: SeamsLayer
+var _group: CanvasGroup
 var _wheel: WheelLayer
 var _knob: Button
 var _face_texture: ImageTexture
@@ -336,8 +337,12 @@ func _build_layers() -> void:
 		_leaf_rects.append(rect)
 	_seams = SeamsLayer.new()
 	add_child(_seams)
+	_group = CanvasGroup.new()
+	_group.fit_margin = 0.0
+	_group.clear_margin = 0.0
+	add_child(_group)
 	_wheel = WheelLayer.new()
-	add_child(_wheel)
+	_group.add_child(_wheel)
 	_knob = Button.new()
 	_knob.flat = true
 	_knob.focus_mode = Control.FOCUS_ALL
@@ -435,6 +440,8 @@ func _layout() -> void:
 	_knob.position = area / 2.0 - Vector2(side, side) / 2.0
 	_knob.size = Vector2(side, side)
 	_wheel.area = area
+	_wheel.position = Vector2.ZERO
+	_wheel.size = area
 
 
 func _notification(what: int) -> void:
@@ -531,10 +538,14 @@ func _process(_delta: float) -> void:
 				(_leaf_rects[index].material as ShaderMaterial).set_shader_parameter("offset", offset)
 			_depth.progress = progress
 			_depth.queue_redraw()
-	_wheel.area = area
-	_wheel.turn = turn
-	_wheel.shake = shake
-	_wheel.zoom = zoom
-	_wheel.self_modulate.a = alpha
-	_wheel.ring = _focus_visible and stage == "closed" and _knob.has_focus()
-	_wheel.queue_redraw()
+	var ring := _focus_visible and stage == "closed" and _knob.has_focus()
+	if alpha != _group.self_modulate.a:
+		_group.self_modulate.a = alpha
+	if area != _wheel.area or turn != _wheel.turn or shake != _wheel.shake or zoom != _wheel.zoom or ring != _wheel.ring:
+		_wheel.area = area
+		_wheel.size = area
+		_wheel.turn = turn
+		_wheel.shake = shake
+		_wheel.zoom = zoom
+		_wheel.ring = ring
+		_wheel.queue_redraw()

@@ -82,6 +82,21 @@ func _scroll_to(workspace: Variant, text: String) -> void:
 	await _wait(0.3)
 
 
+func _scroll_into_view(root_node: Node, text: String) -> bool:
+	var label := _find_label(root_node, text)
+	if not label:
+		return false
+	var parent: Node = label.get_parent()
+	while parent and not (parent is ScrollContainer):
+		parent = parent.get_parent()
+	if not parent:
+		return false
+	var scroll := parent as ScrollContainer
+	scroll.scroll_vertical = int(label.global_position.y - scroll.global_position.y + scroll.scroll_vertical - 12.0)
+	await _wait(0.3)
+	return true
+
+
 func _request(method: String, args := {}) -> Variant:
 	var reply: Dictionary = await main.engine.request(method, args)
 	if not reply.get("ok", false):
@@ -236,7 +251,18 @@ func _run() -> void:
 	console.setup(main.engine, {"export_dir": exports, "reveal_saved_files": false})
 	await console.open()
 	await _wait(0.5)
+	var recorded := int(console._data.get("count", 0))
+	_check("the console lists the AI calls made so far", recorded > 0 and bool(console._data.get("available", false)), "%d generation(s)" % recorded)
 	await _shoot("m50-console-generations")
+	var listed: Array = console._data.get("filtered", [])
+	if not listed.is_empty():
+		console._selected = str((listed[0] as Dictionary).get("id", ""))
+		await console.refresh()
+		await _wait(0.4)
+		_check("a generation opens with its prompt", not str(console._detail.get("systemPrompt", "")).is_empty())
+		await _shoot("m50b-console-detail")
+		console._selected = ""
+		console._detail = {}
 	for pair: Array in [["analytics", "m51-console-analytics"], ["models", "m52-console-models"], ["export", "m53-console-export"]]:
 		console.active_tab = str(pair[0])
 		console._render()
@@ -271,8 +297,19 @@ func _run() -> void:
 	await _wait(0.4)
 	await _shoot("m60-interactive-empty")
 	if not offered.is_empty():
-		await _request("cheats.interactive.offer", {"eventId": str(offered.get("id", "")), "title": str(offered.get("title", ""))})
-		await panel.refresh()
+		for attempt in range(6):
+			var busy_since := Time.get_ticks_msec()
+			while Time.get_ticks_msec() - busy_since < 60000:
+				var busy: Variant = await _request("invoke", {"module": "simulationStatus", "fn": "isSimulationBusy", "args": []})
+				if not bool(busy):
+					break
+				await _wait(0.5)
+			var made: Variant = await _request("cheats.interactive.offer", {"eventId": str(offered.get("id", "")), "title": str(offered.get("title", ""))})
+			_say("offer %d: %s" % [attempt + 1, str(made)])
+			await _wait(1.0)
+			await panel.refresh()
+			if typeof(panel._state.get("offer")) == TYPE_DICTIONARY:
+				break
 		await _wait(0.4)
 		_check("the offer shows", _all_text(panel).contains("The last time skip offers this moment to be played out"))
 		await _shoot("m61-interactive-offer")

@@ -755,9 +755,10 @@ export const register = (ctx) => {
         labels: list(derived.labels?.features).map((feature) => ({ group: feature.properties.group, color: feature.properties.color, regions: feature.properties.regions, lng: feature.geometry.coordinates[0], lat: feature.geometry.coordinates[1] })),
       };
     },
-    "mapextras.flood": async ({ changes = [], previousNames = [], previousOwners = [] } = {}) => {
+    "mapextras.flood": async ({ changes = [], previousNames = [], previousOwners = [], sha = "" } = {}) => {
       const startedAt = Date.now();
-      const shape = await ensureGeometry();
+      const warm = sha && regions.sha === sha && geometry.sha === sha && geometry.topology;
+      const shape = warm ? geometry : await ensureGeometry();
       const ownerAt = regionOwnerOf(previousNames, previousOwners);
       const changedSet = new Set(list(changes).map((change) => String(regions.ids[Number(change?.index)] ?? "")).filter(Boolean));
       const features = [];
@@ -877,5 +878,14 @@ export const register = (ctx) => {
     },
     "mapextras.wording": async ({ offer = null, atInstall = false } = {}) => engine.mxTiledWording.tiledBasemapWording(offer, { atInstall: Boolean(atInstall) }),
     "mapextras.formatBytes": async ({ bytes = 0 } = {}) => engine.mxTiled.formatBytes(bytes),
+    ...(ctx.standIn ? {
+      "mapextras.standin_freeze": async ({ indices = [] } = {}) => {
+        await loadRegions();
+        const world = await readWorld();
+        const ids = list(indices).map((index) => regions.ids[Number(index)]).filter(Boolean);
+        await engine.gameState.writeWorldState({ ...world, frozenRegions: ids });
+        return { ids };
+      },
+    } : {}),
   };
 };

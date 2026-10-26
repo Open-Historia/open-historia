@@ -217,5 +217,5 @@ func list_row(title: String, subtitle: String, selected: bool, right: Control, o
 	margin.add_child(row)
 	holder.add_child(margin)
 	holder.pressed.connect(func() -> void: on_press.call())
-	holder.custom_minimum_size.y = maxf(36.0, margin.get_combined_minimum_size().y)
+	holder.custom_minimum_size.y = 48.0 if not subtitle.is_empty() else 36.0
 	return holder

@@ -489,6 +489,7 @@ func _generation_row(record: Dictionary) -> Control:
 	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	button.custom_minimum_size.y = 30
+	button.clip_contents = true
 	var normal := UI.box(Color(0, 0, 0, 0.42) if selected else Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0)
 	var hover := UI.box(Color(0, 0, 0, 0.42) if selected else Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 0, 0)
 	for state in ["normal", "focus"]:
@@ -645,8 +646,8 @@ func _error_box(title: String, text: String) -> Control:
 
 
 func _rating(rating: int) -> Control:
-	var row := HFlowContainer.new()
-	row.add_theme_constant_override("h_separation", 2)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
 	for value in range(1, 11):
 		var on := rating >= value
 		var button := Button.new()

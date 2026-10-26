@@ -117,8 +117,8 @@ func _run() -> void:
 	await _wait(0.8)
 	await _shoot("w5-arrows-z7")
 	await _call("warmap.test.seed", {"a": "France", "b": "Germany", "phase": "extras", "gone": 120})
-	var german: Dictionary = await _call("warmap.test.regions", {"owner": "Germany"})
-	var french: Dictionary = await _call("warmap.test.regions", {"owner": "France"})
+	var german: Dictionary = await _call("warmap.test.regions", {"owner": "Germany", "near": [10.5, 51.5]})
+	var french: Dictionary = await _call("warmap.test.regions", {"owner": "France", "near": [5.6, 48.7]})
 	var group_regions: Array = (german.get("result", []) as Array).slice(0, 3)
 	var claimants := {}
 	for id in (french.get("result", []) as Array).slice(0, 2):
@@ -140,20 +140,14 @@ func _run() -> void:
 	await _focus([[5.0, 48.5], [8.5, 50.5]], 7.6)
 	await _wait(0.5)
 	await _shoot("w9-markers-z7")
+	await _focus([[3.4, 47.6], [6.4, 49.6]], 6.4)
+	await _wait(0.6)
+	await _shoot("w9b-disputed-air-wing")
 	var unit_id := ""
 	var target := Vector2.ZERO
 	for item in war.overlay._unit_hits:
 		var hit: Array = item
-		var at: Vector2 = hit[0]
-		if at.x > 60 and at.y > 120 and at.x < war.overlay.view.x - 60 and at.y < war.overlay.view.y - 160:
-			unit_id = str(hit[2])
-			target = at
-			break
-	if unit_id.is_empty():
-		await _focus([[3.0, 41.0], [9.0, 45.0]], 6.0)
-		await _wait(0.5)
-		for item in war.overlay._unit_hits:
-			var hit: Array = item
+		if str(hit[2]) == "native-test-fr-5":
 			unit_id = str(hit[2])
 			target = hit[0]
 			break

@@ -1710,6 +1710,7 @@ export const register = (ctx) => {
       session.details = saved?.data?.world ? saved : await loadDetails(session.scenarioId);
       session.scenarioTags = await lib.downloadScenarioJsonAsset(session.scenarioId, "tags").catch(() => session.scenarioTags);
       computeInputs(session);
+      await loadCheckpointInto(session);
     }
     return {
       view: genView(session, { withRows: true }),

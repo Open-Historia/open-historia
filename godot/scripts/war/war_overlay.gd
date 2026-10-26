@@ -174,6 +174,15 @@ func _free(box: Rect2) -> bool:
 	return true
 
 
+func _free_except(box: Rect2, own: Rect2) -> bool:
+	for other in _taken:
+		if other == own:
+			continue
+		if other.intersects(box):
+			return false
+	return true
+
+
 func _draw() -> void:
 	_unit_hits.clear()
 	_taken.clear()
@@ -227,9 +236,9 @@ func _draw_markers() -> void:
 			var glyph := str(marker.get("glyph", ""))
 			_text(at, glyph, shape_size, WarKit.faded(marker["color"], opacity), WarKit.faded(halo, opacity), 1.8, 400)
 			var glyph_box := _text_size(glyph, shape_size, 400)
-			var box := Rect2(at - glyph_box * 0.5 - Vector2(3, 3), glyph_box + Vector2(6, 6))
+			var box := Rect2(at - Vector2(glyph_box.x, shape_size) * 0.5 - Vector2(3, 3), Vector2(glyph_box.x, shape_size) + Vector2(6, 6))
 			_taken.append(box)
-			placed.append([marker, at])
+			placed.append([marker, at, box])
 	for entry in placed:
 		var marker: Dictionary = entry[0]
 		var at: Vector2 = entry[1]
@@ -251,7 +260,7 @@ func _draw_markers() -> void:
 				"right":
 					centre = at - Vector2(offset + box_size.x * 0.5, 0)
 			var box := Rect2(centre - box_size * 0.5 - Vector2(6, 6), box_size + Vector2(12, 12))
-			if not _free(box):
+			if not _free_except(box, entry[2]):
 				continue
 			_taken.append(box)
 			var opacity := float(marker.get("opacity", 1.0))
@@ -276,69 +285,83 @@ func _draw_fronts() -> void:
 	var kind_min := 6.5 if every_troop else 8.0
 	var name_min := 6.0 if every_troop else 7.5
 	var white := Color(1, 1, 1)
+	var highlight := int(war_room.get("highlight", -1))
 	if level < side_max:
 		var radius := WarKit.stops(level, SIDE_RADIUS)
+		var lit_radius := WarKit.stops(level, SIDE_LIT_RADIUS)
 		var count_size := roundi(WarKit.stops(level, SIDE_COUNT_SIZE))
-		var highlight := int(war_room.get("highlight", -1))
+		var placed_sides: Array = []
 		for item in sides:
 			var entry: Array = item
-			var lit := highlight >= 0 and int(entry[3]) == highlight and _in_war_room(entry, int(entry[7]), int(entry[2]))
-			var colour := WarKit.color_of(troop_colours[int(entry[4])] if int(entry[4]) < troop_colours.size() else null, 0.92)
 			for at in _copies(_screen(Vector2(entry[0], entry[1])), 30):
-				if lit:
-					var lit_radius := WarKit.stops(level, SIDE_LIT_RADIUS)
-					draw_circle(at, lit_radius, WarKit.faded(ACCENT, 0.38), true, -1.0, true)
-					draw_circle(at, lit_radius + 0.75, WarKit.faded(ACCENT, 0.95), false, 1.5, true)
-				draw_circle(at, radius, colour, true, -1.0, true)
-				draw_circle(at, radius + 0.75, white, false, 1.5, true)
-				_text(at, str(int(entry[5])), count_size, white, Color(0, 0, 0, 0.7), 1.0)
+				placed_sides.append([entry, at])
+		for placed in placed_sides:
+			var entry: Array = placed[0]
+			if highlight >= 0 and int(entry[3]) == highlight and _in_war_room(entry, int(entry[7]), int(entry[2])):
+				draw_circle(placed[1], lit_radius, WarKit.faded(ACCENT, 0.38), true, -1.0, true)
+				draw_circle(placed[1], lit_radius + 0.75, WarKit.faded(ACCENT, 0.95), false, 1.5, true)
+		for placed in placed_sides:
+			var entry: Array = placed[0]
+			var colour := WarKit.color_of(troop_colours[int(entry[4])] if int(entry[4]) < troop_colours.size() else null, 0.92)
+			draw_circle(placed[1], radius, colour, true, -1.0, true)
+			draw_circle(placed[1], radius + 0.75, white, false, 1.5, true)
+		for placed in placed_sides:
+			var entry: Array = placed[0]
+			_text(placed[1], str(int(entry[5])), count_size, white, Color(0, 0, 0, 0.7), 1.0)
 	if level < troop_min:
 		return
 	var picked: Array = war_room.get("selected", [])
-	var highlight_troop := int(war_room.get("highlight", -1))
 	var placed: Array = []
 	for item in troops:
 		var entry: Array = item
+		for at in _copies(_screen(Vector2(entry[0], entry[1])), 30):
+			placed.append([entry, at])
+	var lit_size := WarKit.stops(level, TROOP_LIT)
+	for item in placed:
+		var entry: Array = item[0]
+		if highlight >= 0 and int(entry[4]) == highlight and _in_war_room(entry, int(entry[12]), int(entry[2])):
+			draw_circle(item[1], lit_size, WarKit.faded(ACCENT, 0.5), true, -1.0, true)
+			draw_circle(item[1], lit_size + 1.0, WarKit.faded(ACCENT, 0.95), false, 2.0, true)
+	for item in placed:
+		var entry: Array = item[0]
+		if str(entry[8]) != "dug in":
+			continue
+		var rampart := WarKit.stops(level, RAMPART_NAMED if int(entry[9]) == 1 else RAMPART_PLAIN)
+		draw_circle(item[1], rampart, Color(16 / 255.0, 20 / 255.0, 28 / 255.0, 0.82), true, -1.0, true)
+		draw_circle(item[1], rampart + 0.6, Color(230 / 255.0, 235 / 255.0, 242 / 255.0, 0.9), false, 1.2, true)
+	for item in placed:
+		var entry: Array = item[0]
 		var named := int(entry[9]) == 1
 		var state := str(entry[8])
 		var strength := float(entry[7])
 		var radius := WarKit.stops(level, TROOP_NAMED if named else TROOP_PLAIN)
-		var rampart := WarKit.stops(level, RAMPART_NAMED if named else RAMPART_PLAIN)
 		var base := WarKit.color_of(troop_colours[int(entry[5])] if int(entry[5]) < troop_colours.size() else null)
 		var opacity := 0.35 if state == "spent" else lerpf(0.5, 0.95, clampf(strength / 60.0, 0.0, 1.0))
 		var stroke := Color("#ff6b6b") if state == "encircled" else (Color("#ffd24a") if state == "advancing" else white)
 		stroke.a = 0.4 if state == "spent" else 0.9
-		var in_room := _in_war_room(entry, int(entry[12]), int(entry[2]))
-		var lit := in_room and highlight_troop >= 0 and int(entry[4]) == highlight_troop
-		var is_picked := in_room and picked.has(int(entry[3]))
-		for at in _copies(_screen(Vector2(entry[0], entry[1])), 30):
-			if lit:
-				var lit_radius := WarKit.stops(level, TROOP_LIT)
-				draw_circle(at, lit_radius, WarKit.faded(ACCENT, 0.5), true, -1.0, true)
-				draw_circle(at, lit_radius + 1.0, WarKit.faded(ACCENT, 0.95), false, 2.0, true)
-			if state == "dug in":
-				draw_circle(at, rampart, Color(16 / 255.0, 20 / 255.0, 28 / 255.0, 0.82), true, -1.0, true)
-				draw_circle(at, rampart + 0.6, Color(230 / 255.0, 235 / 255.0, 242 / 255.0, 0.9), false, 1.2, true)
-			draw_circle(at, radius, WarKit.faded(base, opacity), true, -1.0, true)
-			var stroke_width := 1.8 if named else 1.0
-			draw_circle(at, radius + stroke_width * 0.5, stroke, false, stroke_width, true)
-			if is_picked:
-				draw_circle(at, rampart + 1.1, white, false, 2.2, true)
-			placed.append([entry, at])
+		var stroke_width := 1.8 if named else 1.0
+		draw_circle(item[1], radius, WarKit.faded(base, opacity), true, -1.0, true)
+		draw_circle(item[1], radius + stroke_width * 0.5, stroke, false, stroke_width, true)
+	if not picked.is_empty():
+		for item in placed:
+			var entry: Array = item[0]
+			if _in_war_room(entry, int(entry[12]), int(entry[2])) and picked.has(int(entry[3])):
+				var rampart := WarKit.stops(level, RAMPART_NAMED if int(entry[9]) == 1 else RAMPART_PLAIN)
+				draw_circle(item[1], rampart + 1.1, white, false, 2.2, true)
 	if level >= kind_min:
 		var kind_size := roundi(WarKit.stops(level, TROOP_KIND_SIZE))
-		for entry in placed:
-			var troop: Array = entry[0]
-			_text(entry[1], str(troop[6]), kind_size, white, Color(0, 0, 0, 0.65), 1.0)
+		for item in placed:
+			var entry: Array = item[0]
+			_text(item[1], str(entry[6]), kind_size, white, Color(0, 0, 0, 0.65), 1.0)
 	if level >= name_min:
 		var name_size := roundi(WarKit.stops(level, TROOP_NAME_SIZE))
-		var named_list: Array = placed.filter(func(entry: Array) -> bool: return int((entry[0] as Array)[9]) == 1 and not str((entry[0] as Array)[11]).is_empty())
+		var named_list: Array = placed.filter(func(item: Array) -> bool: return int((item[0] as Array)[9]) == 1 and not str((item[0] as Array)[11]).is_empty())
 		named_list.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Array)[7]) > float((b[0] as Array)[7]))
-		for entry in named_list:
-			var troop: Array = entry[0]
-			var text := str(troop[11])
+		for item in named_list:
+			var entry: Array = item[0]
+			var text := str(entry[11])
 			var box_size := _text_size(text, name_size)
-			var centre: Vector2 = entry[1] + Vector2(0, 1.2 * name_size)
+			var centre: Vector2 = item[1] + Vector2(0, 1.2 * name_size)
 			var box := Rect2(centre - box_size * 0.5 - Vector2(2, 2), box_size + Vector2(4, 4))
 			if not _free(box):
 				continue

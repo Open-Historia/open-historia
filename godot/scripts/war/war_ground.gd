@@ -252,18 +252,21 @@ func rebuild_copies() -> void:
 
 func set_walls(walls: Array) -> void:
 	_walls = walls
+	_arrow_cache.erase("walls")
 	_walls_painter.queue_redraw()
 
 
 func set_orders(orders: Array) -> void:
 	_orders = orders
+	_arrow_cache.erase("orders")
 	_orders_painter.queue_redraw()
 
 
 func set_arrows(arrows: Array, colours: Array) -> void:
 	_arrows = arrows
 	_arrow_colours = colours
-	_arrow_cache = {}
+	for key in ["shadow", "edge", "face", "outlines", "past"]:
+		_arrow_cache.erase(key)
 	_arrows_painter.queue_redraw()
 
 
@@ -282,8 +285,12 @@ func set_weather(weather: Dictionary) -> void:
 	var by_state := {}
 	for item in areas:
 		var area: Dictionary = item
-		var points := WarKit.points_of(area.get("points", []))
-		var indices := WarKit.ints_of(area.get("indices", []))
+		var floats := Marshalls.base64_to_raw(str(area.get("points", ""))).to_float32_array()
+		var points := PackedVector2Array()
+		points.resize(floats.size() / 2)
+		for at in range(points.size()):
+			points[at] = Vector2(floats[at * 2], floats[at * 2 + 1])
+		var indices := Marshalls.base64_to_raw(str(area.get("indices", ""))).to_int32_array()
 		var strength := float(area.get("strength", 0.0))
 		if area.get("wash", null) is Array:
 			var base := wash_points.size()
@@ -299,13 +306,19 @@ func set_weather(weather: Dictionary) -> void:
 		if not by_state.has(state):
 			by_state[state] = [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
 		var bucket: Array = by_state[state]
-		var start := (bucket[0] as PackedVector2Array).size()
-		(bucket[0] as PackedVector2Array).append_array(points)
+		var bucket_points: PackedVector2Array = bucket[0]
+		var bucket_colours: PackedColorArray = bucket[1]
+		var bucket_indices: PackedInt32Array = bucket[2]
+		var start := bucket_points.size()
+		bucket_points.append_array(points)
 		var tone := Color(1, 1, 1, strength)
 		for _index in range(points.size()):
-			(bucket[1] as PackedColorArray).append(tone)
+			bucket_colours.append(tone)
 		for value in indices:
-			(bucket[2] as PackedInt32Array).append(start + value)
+			bucket_indices.append(start + value)
+		bucket[0] = bucket_points
+		bucket[1] = bucket_colours
+		bucket[2] = bucket_indices
 	if not wash_indices.is_empty():
 		_weather_wash = _material(WASH_SHADER)
 		_mesh_copies(_mesh(wash_points, wash_colours, wash_indices), _weather_wash)
@@ -349,87 +362,111 @@ func _wall_width(factor: float, weight: float) -> float:
 	return WarKit.stops(level, WALL_STOPS) * factor * weight
 
 
+func _wall_batches() -> Array:
+	var pixel := 1.0 / maxf(zoom, 0.00001)
+	var layers: Array = []
+	for layer in ["rubble", "planned", "progress", "casing", "core", "teeth"]:
+		var into := WarKit.batch()
+		for item in _walls:
+			var wall: Dictionary = item
+			var part := str(wall.get("part", ""))
+			var weight := float(wall.get("weight", 1.0))
+			var points := WarKit.points_of(wall.get("line", []))
+			if points.size() < 2:
+				continue
+			match layer:
+				"rubble":
+					if part == "rubble":
+						var width := _wall_width(0.4, weight) * pixel
+						for dash in WarKit.dashes(points, 0.1 * width, 2.2 * width):
+							WarKit.disc(into, dash[0].lerp(dash[dash.size() - 1], 0.5), width * 0.5, pixel, WarKit.faded(WALL, 0.55))
+				"planned", "progress":
+					if part == layer:
+						var width := _wall_width(0.7, weight) * pixel
+						for dash in WarKit.dashes(points, 1.6 * width, 1.2 * width):
+							WarKit.stroke(into, dash, width, pixel, WarKit.faded(WALL, 0.38 if layer == "planned" else 0.78))
+				"casing":
+					if part == "wall":
+						WarKit.stroke(into, points, _wall_width(1.0, weight) * pixel, pixel, WarKit.faded(WALL, 0.92))
+				"core":
+					if part == "wall":
+						WarKit.stroke(into, points, _wall_width(0.28, weight) * pixel, pixel, WarKit.faded(STONE, 0.85))
+				"teeth":
+					if part == "wall":
+						var width := _wall_width(0.55, weight) * pixel
+						var shifted := WarKit.offset_line(points, _wall_width(0.75, weight) * pixel)
+						for dash in WarKit.dashes(shifted, width, width):
+							WarKit.stroke(into, dash, width, pixel, WarKit.faded(WALL, 0.92))
+		layers.append(into)
+	return layers
+
+
 func _paint_walls(node: Node2D) -> void:
 	if _walls.is_empty():
 		return
-	var pixel := 1.0 / maxf(zoom, 0.00001)
-	var order := ["rubble", "planned", "progress", "casing", "core", "teeth"]
+	if not _arrow_cache.has("walls"):
+		_arrow_cache["walls"] = _wall_batches()
+	var layers: Array = _arrow_cache["walls"]
+	var item := node.get_canvas_item()
 	for offset in [-MapView.WORLD_WIDTH, 0.0, MapView.WORLD_WIDTH]:
 		node.draw_set_transform(Vector2(offset, 0))
-		for layer in order:
-			for item in _walls:
-				var wall: Dictionary = item
-				var part := str(wall.get("part", ""))
-				var weight := float(wall.get("weight", 1.0))
-				var points := WarKit.points_of(wall.get("line", []))
-				if points.size() < 2:
-					continue
-				match layer:
-					"rubble":
-						if part == "rubble":
-							var width := _wall_width(0.4, weight)
-							for dash in WarKit.dashes(points, 0.1 * width * pixel, 2.2 * width * pixel):
-								_round_line(node, dash, WarKit.faded(WALL, 0.55), width * pixel)
-					"planned", "progress":
-						if part == layer:
-							var width := _wall_width(0.7, weight)
-							for dash in WarKit.dashes(points, 1.6 * width * pixel, 1.2 * width * pixel):
-								node.draw_polyline(dash, WarKit.faded(WALL, 0.38 if layer == "planned" else 0.78), width * pixel)
-					"casing":
-						if part == "wall":
-							node.draw_polyline(points, WarKit.faded(WALL, 0.92), _wall_width(1.0, weight) * pixel)
-					"core":
-						if part == "wall":
-							node.draw_polyline(points, WarKit.faded(STONE, 0.85), _wall_width(0.28, weight) * pixel)
-					"teeth":
-						if part == "wall":
-							var width := _wall_width(0.55, weight)
-							var shifted := WarKit.offset_line(points, _wall_width(0.75, weight) * pixel)
-							for dash in WarKit.dashes(shifted, width * pixel, width * pixel):
-								node.draw_polyline(dash, WarKit.faded(WALL, 0.92), width * pixel)
+		for into in layers:
+			WarKit.flush(item, into)
 	node.draw_set_transform(Vector2.ZERO)
 
 
-func _round_line(node: Node2D, points: PackedVector2Array, colour: Color, width: float) -> void:
-	if points.size() >= 2:
-		node.draw_polyline(points, colour, width)
-	node.draw_circle(points[0], width * 0.5, colour)
-	node.draw_circle(points[points.size() - 1], width * 0.5, colour)
-
-
 func _arrow_layers() -> Dictionary:
-	if not _arrow_cache.is_empty():
+	if _arrow_cache.has("face"):
 		return _arrow_cache
-	var shadow := [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
-	var edge := [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
-	var face := [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
-	var outlines: Array = []
-	var past: Array = []
+	var pixel := 1.0 / maxf(zoom, 0.00001)
+	var shadow := WarKit.batch()
+	var edge := WarKit.batch()
+	var face := WarKit.batch()
+	var outlines := WarKit.batch()
+	var past := WarKit.batch()
+	var past_width := WarKit.stops(level, PAST_WIDTH) * pixel
 	for item in _arrows:
 		var arrow: Dictionary = item
 		var alpha := float(arrow.get("alpha", 1.0))
-		var rgb := WarKit.color_of(_arrow_colours[int(arrow.get("rgb", 0))] if int(arrow.get("rgb", 0)) < _arrow_colours.size() else null)
+		var rgb_at := int(arrow.get("rgb", 0))
+		var rgb := WarKit.color_of(_arrow_colours[rgb_at] if rgb_at < _arrow_colours.size() else null)
 		if arrow.get("past", false):
-			past.append([WarKit.points_of(arrow.get("line", [])), WarKit.faded(rgb, 0.4 * alpha)])
+			WarKit.stroke(past, WarKit.points_of(arrow.get("line", [])), past_width, pixel, WarKit.faded(rgb, 0.4 * alpha))
 			continue
-		var dark := WarKit.color_of(_arrow_colours[int(arrow.get("dark", 0))] if int(arrow.get("dark", 0)) < _arrow_colours.size() else null)
+		var dark_at := int(arrow.get("dark", 0))
+		var dark := WarKit.color_of(_arrow_colours[dark_at] if dark_at < _arrow_colours.size() else null)
 		var points := WarKit.points_of(arrow.get("points", []))
 		var indices := WarKit.ints_of(arrow.get("indices", []))
-		for layer in [[shadow, WarKit.faded(CASING, 0.28 * alpha)], [edge, WarKit.faded(dark, 0.95 * alpha)], [face, WarKit.faded(rgb, 0.94 * alpha)]]:
-			var bucket: Array = layer[0]
-			var colour: Color = layer[1]
-			var start := (bucket[0] as PackedVector2Array).size()
-			(bucket[0] as PackedVector2Array).append_array(points)
-			for _index in range(points.size()):
-				(bucket[1] as PackedColorArray).append(colour)
-			for value in indices:
-				(bucket[2] as PackedInt32Array).append(start + value)
 		var ring := points.duplicate()
 		if ring.size() > 0:
 			ring.append(ring[0])
-		outlines.append([ring, WarKit.faded(dark, 0.94 * alpha)])
-	_arrow_cache = {"shadow": shadow, "edge": edge, "face": face, "outlines": outlines, "past": past}
+		_fill(shadow, points, indices, WarKit.faded(CASING, 0.28 * alpha))
+		WarKit.stroke(shadow, ring, pixel, pixel, WarKit.faded(CASING, 0.28 * alpha))
+		_fill(edge, points, indices, WarKit.faded(dark, 0.95 * alpha))
+		WarKit.stroke(edge, ring, pixel, pixel, WarKit.faded(dark, 0.95 * alpha))
+		_fill(face, points, indices, WarKit.faded(rgb, 0.94 * alpha))
+		WarKit.stroke(outlines, ring, pixel, pixel, WarKit.faded(dark, 0.94 * alpha))
+	_arrow_cache["shadow"] = shadow
+	_arrow_cache["edge"] = edge
+	_arrow_cache["face"] = face
+	_arrow_cache["outlines"] = outlines
+	_arrow_cache["past"] = past
 	return _arrow_cache
+
+
+func _fill(into: Array, points: PackedVector2Array, indices: PackedInt32Array, colour: Color) -> void:
+	var verts: PackedVector2Array = into[0]
+	var colours: PackedColorArray = into[1]
+	var out: PackedInt32Array = into[2]
+	var start := verts.size()
+	verts.append_array(points)
+	for _index in range(points.size()):
+		colours.append(colour)
+	for value in indices:
+		out.append(start + value)
+	into[0] = verts
+	into[1] = colours
+	into[2] = out
 
 
 func _paint_arrows(node: Node2D) -> void:
@@ -438,43 +475,45 @@ func _paint_arrows(node: Node2D) -> void:
 	var layers := _arrow_layers()
 	var pixel := 1.0 / maxf(zoom, 0.00001)
 	var item := node.get_canvas_item()
-	var past_width := WarKit.stops(level, PAST_WIDTH) * pixel
 	for offset in [-MapView.WORLD_WIDTH, 0.0, MapView.WORLD_WIDTH]:
 		node.draw_set_transform(Vector2(offset, 0))
-		for entry in layers["past"]:
-			var line: PackedVector2Array = entry[0]
-			if line.size() >= 2:
-				node.draw_polyline(line, entry[1], past_width)
-		for spec in [["shadow", Vector2(3, 4)], ["edge", Vector2(1.4, 2)], ["face", Vector2.ZERO]]:
-			var bucket: Array = layers[spec[0]]
-			if (bucket[2] as PackedInt32Array).is_empty():
-				continue
-			node.draw_set_transform(Vector2(offset, 0) + (spec[1] as Vector2) * pixel)
-			RenderingServer.canvas_item_add_triangle_array(item, bucket[2], bucket[0], bucket[1])
+		WarKit.flush(item, layers["past"])
+		node.draw_set_transform(Vector2(offset, 0) + Vector2(3, 4) * pixel)
+		WarKit.flush(item, layers["shadow"])
+		node.draw_set_transform(Vector2(offset, 0) + Vector2(1.4, 2) * pixel)
+		WarKit.flush(item, layers["edge"])
 		node.draw_set_transform(Vector2(offset, 0))
-		for entry in layers["outlines"]:
-			var ring: PackedVector2Array = entry[0]
-			if ring.size() >= 2:
-				node.draw_polyline(ring, entry[1], pixel)
+		WarKit.flush(item, layers["face"])
+		WarKit.flush(item, layers["outlines"])
 	node.draw_set_transform(Vector2.ZERO)
+
+
+func _order_batch() -> Array:
+	var pixel := 1.0 / maxf(zoom, 0.00001)
+	var into := WarKit.batch()
+	for item in _orders:
+		var order: Dictionary = item
+		var points := WarKit.points_of(order.get("line", []))
+		var colour := WarKit.color_of(order.get("rgb", null))
+		if str(order.get("kind", "")) == "heading":
+			if level < 3.0:
+				continue
+			for dash in WarKit.dashes(points, 3.0 * pixel, 3.0 * pixel):
+				WarKit.stroke(into, dash, 1.5 * pixel, pixel, WarKit.faded(colour, 0.6))
+		else:
+			for dash in WarKit.dashes(points, 3.6 * pixel, 3.6 * pixel):
+				WarKit.stroke(into, dash, 1.2 * pixel, pixel, WarKit.faded(colour, 0.35))
+	return into
 
 
 func _paint_orders(node: Node2D) -> void:
 	if _orders.is_empty():
 		return
-	var pixel := 1.0 / maxf(zoom, 0.00001)
+	if not _arrow_cache.has("orders"):
+		_arrow_cache["orders"] = _order_batch()
+	var into: Array = _arrow_cache["orders"]
+	var item := node.get_canvas_item()
 	for offset in [-MapView.WORLD_WIDTH, 0.0, MapView.WORLD_WIDTH]:
 		node.draw_set_transform(Vector2(offset, 0))
-		for item in _orders:
-			var order: Dictionary = item
-			var points := WarKit.points_of(order.get("line", []))
-			var colour := WarKit.color_of(order.get("rgb", null))
-			if str(order.get("kind", "")) == "heading":
-				if level < 3.0:
-					continue
-				for dash in WarKit.dashes(points, 3.0 * pixel, 3.0 * pixel):
-					node.draw_polyline(dash, WarKit.faded(colour, 0.6), 1.5 * pixel)
-			else:
-				for dash in WarKit.dashes(points, 3.6 * pixel, 3.6 * pixel):
-					node.draw_polyline(dash, WarKit.faded(colour, 0.35), 1.2 * pixel)
+		WarKit.flush(item, into)
 	node.draw_set_transform(Vector2.ZERO)

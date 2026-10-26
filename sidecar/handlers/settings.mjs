@@ -528,7 +528,7 @@ export const register = (ctx) => {
     return target;
   };
 
-  const telemetryModule = () => engine.telemetry ?? null;
+  const telemetryModule = () => engine.telemetry ?? engine.shellTelemetry ?? null;
 
   const telemetryRecords = async () => {
     const telemetry = telemetryModule();

@@ -18,6 +18,7 @@ var active_panel := ""
 var map_mode := "political"
 var _pill_subtitle: Label
 var _flag: TextureRect
+var _flag_fallback: Label
 var _flag_frame: GlassPanel
 var _advisor_frame: GlassPanel
 var _launchers := {}
@@ -34,6 +35,7 @@ var war_cards: Control
 var open_drawer := ""
 var _engine: EngineLink
 var _right_layer: Control
+var cheats: Node
 var _inset_tween: Tween
 var _map: MapView
 var _game: Dictionary = {}
@@ -100,7 +102,7 @@ func _flat_button(text: String, size := 13, weight := 600, ink := UI.BUTTON_INK)
 func _build_top_left() -> void:
 	var menu := _glass(UI.HUD_BUTTON, 14, Rect2(8, 8, 64, 64))
 	var menu_button := _flat_button("☰", 24, 800, UI.WHITE)
-	menu_button.tooltip_text = "Menu"
+	menu_button.tooltip_text = "Game menu"
 	menu_button.pressed.connect(func() -> void: open_menu.emit())
 	menu.add_child(menu_button)
 	var pill := _glass(UI.HUD_PILL, 13, Rect2(80, 8, 240, 45), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0))
@@ -257,6 +259,11 @@ func _build_bottom_right() -> void:
 	_flag.clip_contents = true
 	_flag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_flag_frame.add_child(_flag)
+	_flag_fallback = UI.label("🏳️", 24, UI.WHITE, 400, "Segoe UI Emoji")
+	_flag_fallback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_flag_fallback.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_flag_fallback.visible = false
+	_flag_frame.add_child(_flag_fallback)
 	var flag_button := _flat_button("", 12)
 	flag_button.tooltip_text = "Your country"
 	flag_button.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -291,6 +298,7 @@ func _build_bottom_right() -> void:
 			if _engine:
 				_engine.request("hud.setMapMode", {"mode": mode})
 			_apply_map_mode())
+		button.tooltip_text = "Political map mode" if mode == "political" else "Diplomatic map mode"
 		_mode_buttons[mode] = button
 		row.add_child(button)
 	toggle.add_child(row)
@@ -323,6 +331,8 @@ func set_game(view: Dictionary, game_name: String) -> void:
 
 func set_flag(texture: Texture2D) -> void:
 	_flag.texture = texture
+	_flag_fallback.visible = texture == null
+	_refresh_flag_badge()
 
 
 func enter_game() -> void:
@@ -381,8 +391,8 @@ func mount_panels(game: Dictionary) -> void:
 		add_child(map_cards)
 		move_child(map_cards, 0)
 		_hook(map_cards, "open_chat", open_chat)
-		_hook(map_cards, "open_country", func(name: String) -> void: show_country(name))
-		_hook(map_cards, "open_stats", func(name: String) -> void: show_country(name, "stats"))
+		_hook(map_cards, "open_stats", func(name: String) -> void: show_country(name))
+		_hook(map_cards, "flag_changed", func(_key: String) -> void: _reload_flag_and_map())
 		_setup(map_cards, ctx)
 	var chat := _make("chat_panel")
 	if chat:
@@ -446,6 +456,8 @@ func mount_panels(game: Dictionary) -> void:
 	war_cards = _make("war_peace_cards")
 	if war_cards:
 		add_child(war_cards)
+		if map_cards:
+			move_child(war_cards, map_cards.get_index() + 1)
 		_setup(war_cards, {"poll_seconds": 5.0, "game": game})
 	for entry in [["chat", "chat_panel"], ["actions", "actions_panel"], ["projects", "projects_panel"]]:
 		var tile: Button = _launchers.get(entry[0])
@@ -510,6 +522,7 @@ func close_drawer() -> void:
 
 
 func _sync_inset() -> void:
+	_refresh_flag_badge()
 	if open_drawer.is_empty() or not drawers.has(open_drawer):
 		set_right_inset(0.0)
 		return
@@ -586,8 +599,39 @@ func _apply_map_mode() -> void:
 func _on_region_clicked(index: int) -> void:
 	if not map_cards or not is_instance_valid(map_cards) or not visible:
 		return
+	if cheats and is_instance_valid(cheats) and cheats.has_method("is_picking") and cheats.call("is_picking") == true:
+		return
+	var mouse := get_viewport().get_mouse_position()
+	if map_cards.has_method("handle_screen_click"):
+		var handled: Variant = await map_cards.call("handle_screen_click", mouse)
+		if handled == true:
+			return
 	_map.select_region(index)
 	if index < 0:
 		_invoke(map_cards, "dismiss")
 		return
-	_invoke(map_cards, "show_region", [index, _map.region_name(index), _map.region_owner(index), get_viewport().get_mouse_position()])
+	if open_drawer == "country" and drawers.has("country"):
+		_invoke(drawers["country"], "on_region_selected", [_map.region_owner(index)])
+	_invoke(map_cards, "show_region", [index, _map.region_name(index), _map.region_owner(index), mouse])
+
+
+func _reload_flag_and_map() -> void:
+	if not _engine:
+		return
+	var flag := await _engine.request("game.flag", {"country": str(_game.get("country", ""))})
+	if flag.get("ok", false):
+		set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+	var state := await _engine.request("map.state")
+	if state.get("ok", false):
+		_map.set_state(state["result"])
+
+
+func _refresh_flag_badge() -> void:
+	if not _flag_frame:
+		return
+	var open := open_drawer == "country"
+	_flag_frame.set_tint(Color(75 / 255.0, 143 / 255.0, 251 / 255.0, 0.17) if open else UI.HUD_BUTTON)
+	var name := str(date_widget.status.get("playerCountry", _game.get("country", "")))
+	for child in _flag_frame.get_children():
+		if child is Button:
+			(child as Button).tooltip_text = "%s · Open country panel" % name

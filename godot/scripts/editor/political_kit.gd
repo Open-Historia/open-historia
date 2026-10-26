@@ -153,12 +153,42 @@ static func select(options: Array, value: String, on_change: Callable = Callable
 	return node
 
 
+static var _check_icons := {}
+
+
+static func check_icon(checked: bool, faded: bool) -> Texture2D:
+	var key := "%s:%s" % [checked, faded]
+	if _check_icons.has(key):
+		return _check_icons[key]
+	var svg := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'><rect x='1' y='1' width='14' height='14' rx='3.5' fill='#ffffff' fill-opacity='0.06' stroke='#ffffff' stroke-opacity='0.5' stroke-width='1.3'/></svg>"
+	if checked:
+		svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'><rect x='1' y='1' width='14' height='14' rx='3.5' fill='#2bc1f3'/><path d='M4.2 8.3l2.4 2.4 5-5.2' fill='none' stroke='#ffffff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/></svg>"
+	var image := Image.new()
+	if image.load_svg_from_string(svg, 1.0) != OK:
+		return null
+	if faded:
+		image.convert(Image.FORMAT_RGBA8)
+		for y in range(image.get_height()):
+			for x in range(image.get_width()):
+				var pixel := image.get_pixel(x, y)
+				pixel.a *= 0.45
+				image.set_pixel(x, y, pixel)
+	var texture := ImageTexture.create_from_image(image)
+	_check_icons[key] = texture
+	return texture
+
+
 static func check(text: String, value: bool, on_change: Callable = Callable(), size := 11, ink := Color(1, 1, 1, 0.62)) -> CheckBox:
 	var node := CheckBox.new()
 	node.text = text
 	node.button_pressed = value
 	node.focus_mode = Control.FOCUS_NONE
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	node.add_theme_icon_override("checked", check_icon(true, false))
+	node.add_theme_icon_override("unchecked", check_icon(false, false))
+	node.add_theme_icon_override("checked_disabled", check_icon(true, true))
+	node.add_theme_icon_override("unchecked_disabled", check_icon(false, true))
+	node.add_theme_constant_override("h_separation", 7)
 	node.add_theme_font_override("font", UI.font(400))
 	node.add_theme_font_size_override("font_size", size)
 	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color", "font_disabled_color"]:
@@ -240,6 +270,12 @@ static func section(title: String, open: bool, bg := Color(1, 1, 1, 0.025), bord
 		refresh.call())
 	state["refresh"] = refresh
 	return state
+
+
+static func remember(section_state: Dictionary, store: Dictionary, key: String) -> Dictionary:
+	var summary: Button = section_state["summary"]
+	summary.pressed.connect(func() -> void: store[key] = bool(section_state["open"]))
+	return section_state
 
 
 static func set_section_title(section_state: Dictionary, title: String) -> void:

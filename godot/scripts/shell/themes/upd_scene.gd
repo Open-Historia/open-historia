@@ -43,6 +43,7 @@ class Shape extends RefCounted:
 	var attr := Transform2D.IDENTITY
 	var css: Array = []
 	var offset := Vector2.ZERO
+	var zoom := 1.0
 	var uses_css := false
 	var origin_kind := "center"
 	var origin := Vector2.ZERO
@@ -61,6 +62,7 @@ class Shape extends RefCounted:
 	var transition_ms := 0.0
 	var transition_delay := 0.0
 	var transition_curve: CubicBezier
+	var offset_curve: CubicBezier
 
 
 class Painter extends Control:
@@ -183,8 +185,8 @@ static func motion(name: String, duration: float, delay := 0.0, timing := "cubic
 	return {"name": name, "duration": duration, "delay": delay, "timing": timing, "infinite": false, "vars": vars}
 
 
-static func forever(name: String, duration: float, delay := 0.0, timing := "linear", vars := {}) -> Dictionary:
-	return {"name": name, "duration": duration, "delay": delay, "timing": timing, "infinite": true, "vars": vars}
+static func forever(name: String, duration: float, delay := 0.0, timing := "linear", vars := {}, reverse := false) -> Dictionary:
+	return {"name": name, "duration": duration, "delay": delay, "timing": timing, "infinite": true, "vars": vars, "reverse": reverse}
 
 
 func _resolve_anim(spec: Dictionary) -> Dictionary:
@@ -217,6 +219,7 @@ func _resolve_anim(spec: Dictionary) -> Dictionary:
 		"delay": float(spec.get("delay", 0.0)),
 		"curve": CubicBezier.named(str(spec.get("timing", "linear"))),
 		"infinite": bool(spec.get("infinite", false)),
+		"reverse": bool(spec.get("reverse", false)),
 	}
 
 
@@ -260,6 +263,9 @@ func apply(shape: Shape, props: Dictionary) -> Shape:
 	if props.has("offset"):
 		shape.offset = props["offset"]
 		shape.uses_css = true
+	if props.has("zoom"):
+		shape.zoom = float(props["zoom"])
+		shape.uses_css = true
 	if props.has("origin"):
 		var spec: Variant = props["origin"]
 		if spec is Vector2:
@@ -278,6 +284,7 @@ func apply(shape: Shape, props: Dictionary) -> Shape:
 		shape.transition_ms = float(transition.get("ms", 0.0))
 		shape.transition_delay = float(transition.get("delay", 0.0))
 		shape.transition_curve = CubicBezier.named(str(transition.get("timing", "ease")))
+		shape.offset_curve = CubicBezier.named(str(transition.get("offset_timing", transition.get("timing", "ease"))))
 	if props.has("visible"):
 		shape.visible = bool(props["visible"])
 	shape.started = _now
@@ -548,6 +555,13 @@ func shift_to(shape: Shape, value: Vector2) -> void:
 	redraw()
 
 
+func zoom_to(shape: Shape, value: float) -> void:
+	_transition(shape, "zoom", shape.zoom, value)
+	shape.zoom = value
+	shape.uses_css = true
+	redraw()
+
+
 func _transition(shape: Shape, property: String, previous: Variant, target: Variant) -> void:
 	if still or shape.transition_ms <= 0.0:
 		shape.transitions.erase(property)
@@ -557,7 +571,8 @@ func _transition(shape: Shape, property: String, previous: Variant, target: Vari
 	if typeof(current) == typeof(target) and current == target:
 		shape.transitions.erase(property)
 		return
-	shape.transitions[property] = {"from": current, "to": target, "at": now, "duration": shape.transition_ms, "delay": shape.transition_delay, "curve": shape.transition_curve}
+	var curve := shape.offset_curve if property == "offset" and shape.offset_curve else shape.transition_curve
+	shape.transitions[property] = {"from": current, "to": target, "at": now, "duration": shape.transition_ms, "delay": shape.transition_delay, "curve": curve}
 
 
 func _current(shape: Shape, property: String, base: Variant, now: float) -> Variant:
@@ -580,6 +595,33 @@ func _current(shape: Shape, property: String, base: Variant, now: float) -> Vari
 	return lerpf(float(from), float(to), eased)
 
 
+func reshape_ellipse(shape: Shape, cx: float, cy: float, rx: float, ry: float) -> void:
+	var segments := clampi(roundi(maxf(rx, ry) * 1.4), 24, 160)
+	var points := PackedVector2Array()
+	for step in range(segments):
+		var angle := TAU * float(step) / float(segments)
+		points.append(Vector2(cx + cos(angle) * rx, cy + sin(angle) * ry))
+	_set_parts(shape, [points], [true])
+	shape.box_ready = false
+	redraw()
+
+
+func remove(parent: Shape, shape: Shape) -> void:
+	if parent and shape:
+		parent.children.erase(shape)
+		parent.box_ready = false
+	redraw()
+
+
+func set_anims(shape: Shape, specs: Array) -> void:
+	shape.anims.clear()
+	if not still:
+		for spec in specs:
+			shape.anims.append(_resolve_anim(spec))
+	shape.started = now_ms()
+	redraw()
+
+
 func restart(shape: Shape) -> void:
 	shape.started = now_ms()
 	for child in shape.children:
@@ -596,6 +638,8 @@ func _sample(anim: Dictionary, shape: Shape) -> Dictionary:
 		progress = fmod(elapsed, duration) / duration
 	else:
 		progress = minf(1.0, elapsed / duration)
+	if bool(anim.get("reverse", false)):
+		progress = 1.0 - progress
 	var curve: CubicBezier = anim["curve"]
 	var values := {}
 	var tracks: Dictionary = anim["tracks"]
@@ -687,7 +731,7 @@ func _around(shape: Shape, matrix: Transform2D) -> Transform2D:
 
 func _static_local(shape: Shape) -> Transform2D:
 	if shape.uses_css:
-		return _around(shape, Transform2D(0.0, shape.offset) * _ops_matrix(shape.css))
+		return _around(shape, Transform2D(0.0, shape.offset) * Transform2D(0.0, Vector2(shape.zoom, shape.zoom), 0.0, Vector2.ZERO) * _ops_matrix(shape.css))
 	return shape.attr
 
 
@@ -698,7 +742,8 @@ func _local(shape: Shape) -> Array:
 	var dash_override := false
 	if shape.uses_css:
 		var offset_now: Vector2 = _current(shape, "offset", shape.offset, _now)
-		matrix = _around(shape, Transform2D(0.0, offset_now) * _ops_matrix(shape.css))
+		var zoom_now := float(_current(shape, "zoom", shape.zoom, _now))
+		matrix = _around(shape, Transform2D(0.0, offset_now) * Transform2D(0.0, Vector2(zoom_now, zoom_now), 0.0, Vector2.ZERO) * _ops_matrix(shape.css))
 	for anim in shape.anims:
 		var values := _sample(anim, shape)
 		var order: Array = anim["order"]
@@ -893,6 +938,15 @@ func _draw_text(canvas: Control, shape: Shape, matrix: Transform2D, opacity: flo
 		at.x -= width
 	canvas.draw_set_transform_matrix(Transform2D.IDENTITY)
 	canvas.draw_string(shape.font, at, shape.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, tint)
+
+
+func chain_matrix(shapes: Array) -> Transform2D:
+	_now = now_ms()
+	var matrix := view_matrix()
+	for entry in shapes:
+		var shape: Shape = entry
+		matrix = matrix * (_local(shape)[0] as Transform2D)
+	return matrix
 
 
 func hit(point: Vector2, shape: Shape, parent := Transform2D.IDENTITY) -> bool:

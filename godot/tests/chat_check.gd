@@ -214,6 +214,20 @@ func _run() -> void:
 	await _wait(0.6)
 	_check("a long thread shows its last twelve", panel.conversation._box.get_child_count() > 0)
 	await _shoot("chat-9-earlier-messages")
+	panel.conversation._scroll.scroll_vertical = 0
+	await _wait(0.3)
+	await _shoot("chat-9b-earlier-messages-top")
+	panel.leave_active()
+	await _wait(0.3)
+	var group_id := ""
+	for chat in panel.chats:
+		if (chat.get("countries", []) as Array).size() == 2:
+			group_id = str(chat.get("id", ""))
+	await panel.open_thread(group_id, "Draft from the advisor: propose a joint naval exercise.")
+	await _wait(0.6)
+	_check("a draft lands in that thread's composer", panel.conversation.chat_id == group_id and panel.conversation._composer.text == "Draft from the advisor: propose a joint naval exercise.", panel.conversation._composer.text)
+	await _shoot("chat-9c-draft-in-composer")
+	panel.conversation._composer.text = ""
 	panel.leave_active()
 	await _wait(0.3)
 
@@ -237,10 +251,11 @@ func _run() -> void:
 			thread = (chat.get("messages", []) as Array).duplicate()
 	thread.append({"id": "msg-outreach-check", "role": "leader", "speaker": "Germany", "code": "DEU", "text": "Berlin would like to follow up on our talks about trade.", "time": panel.game_date})
 	await main.engine.request("chat.patch", {"id": target, "set": {"messages": thread}})
-	await _until(func() -> bool: return notices.count() > 0, 15.0)
+	var for_target := func() -> Array: return notices._items.filter(func(item: Variant) -> bool: return str((item as Dictionary).get("chatId", "")) == target)
+	await _until(func() -> bool: return not for_target.call().is_empty(), 15.0)
 	await _until(func() -> bool: return panel.unread_count() > 0, 10.0)
 	await _wait(0.8)
-	_check("an incoming letter is toasted", notices.count() == 1, "%d notices" % notices.count())
+	_check("an incoming letter is toasted", (for_target.call() as Array).size() == 1, "%d for the thread, %d in the centre" % [(for_target.call() as Array).size(), notices.count()])
 	_check("the dock badge counts the unread thread", panel.unread_count() == 1, "badge %d" % panel.unread_count())
 	_check("the HUD badge shows the count", main.hud._chat_badge.visible and main.hud._chat_badge_label.text == "1", main.hud._chat_badge_label.text)
 	await _shoot("chat-11-toast-and-bell")
@@ -248,10 +263,11 @@ func _run() -> void:
 	notices._render()
 	await _wait(0.5)
 	await _shoot("chat-12-bell-centre")
-	if notices._items.is_empty():
+	var toasted: Array = for_target.call()
+	if toasted.is_empty():
 		_finish()
 		return
-	notices._open_item(notices._items[0])
+	notices._open_item(toasted[0])
 	await _until(func() -> bool: return panel.is_open() and panel.conversation_visible(), 10.0)
 	await _wait(0.8)
 	_check("the toast opens its thread", ChatPanel.t(panel.active.get("id", "")) == target)
@@ -261,6 +277,50 @@ func _run() -> void:
 	await _wait(0.5)
 	await _shoot("chat-14-contacts-after")
 	_say("badge history: %s" % str(badge_counts))
+
+	var founded: Dictionary = await main.engine.request("institutions.found", {"founding": {"name": "Channel Compact", "shortName": "CC", "kind": "security_alliance", "purpose": "Mutual defence", "votingRule": "simple-majority", "minimumFoundingMembers": "2", "accessionMode": "approval", "allowObserver": true, "withdrawalMode": "unilateral", "withdrawalNoticeDays": "0", "expulsionMode": "approval", "dissolutionMode": "approval", "invitees": "Germany", "charterNote": ""}})
+	var hearing := str((founded.get("result", {}) as Dictionary).get("createdChatId", "")) if founded.get("ok", false) else ""
+	_check("an institution can be founded for the hearing test", not hearing.is_empty(), str(founded.get("error", "")))
+	if not hearing.is_empty():
+		await panel.reload()
+		await panel.open_thread(hearing)
+		await _until(func() -> bool: return panel.conversation_visible() and panel.conversation.chat_id == hearing and not panel.conversation.lifecycle_base.is_empty(), 15.0)
+		await _wait(0.6)
+		var hearing_view := panel.conversation
+		_check("the hearing reads as a membership negotiation", hearing_view._subtitle.text == "Institution membership negotiation", hearing_view._subtitle.text)
+		_check("the hearing composer addresses the accession table", hearing_view._composer.placeholder_text == "Address the accession table…")
+		await _shoot("chat-15-lifecycle-hearing")
+		hearing_view.lifecycle_continue()
+		await _until(func() -> bool: return hearing_view.loading, 10.0)
+		await _wait(0.1)
+		await _shoot("chat-15b-lifecycle-considering")
+		await _until(func() -> bool: return not hearing_view.loading and hearing_view.lifecycle_terminal(), 60.0)
+		await _wait(0.8)
+		_check("the invited government answers and the negotiation concludes", hearing_view.lifecycle_terminal() and hearing_view._subtitle.text == "Institution membership negotiation · concluded", hearing_view._subtitle.text)
+		await _shoot("chat-16-lifecycle-concluded")
+		await panel.leave_active()
+		await _wait(1.0)
+		_check("leaving a concluded hearing closes it", ChatPanel.t(panel.find_chat(hearing).get("status", "")) == "closed")
+		var institutions: Variant = panel.get("_institutions_view")
+		if institutions is Control:
+			panel._set_view("institutions")
+			await (institutions as Control).call("focus", "channel-compact", "council")
+			await _wait(0.8)
+			(institutions as Control).call("_open_council")
+			await _until(func() -> bool: return not panel.councils.is_empty(), 20.0)
+			await _wait(1.2)
+			_check("the Institutions tab embeds the council conversation", not panel.councils.is_empty())
+			await _shoot("chat-17-council")
+			if not panel.councils.is_empty():
+				var council: Object = panel.councils.values()[0]
+				var council_composer: TextEdit = council.get("_composer")
+				_check("the council composer addresses the council", council_composer.placeholder_text == "Address the council…", council_composer.placeholder_text)
+				council_composer.text = "The Compact should coordinate patrols in the Channel."
+				council.call("submit_from_composer")
+				await _until(func() -> bool: return council.get("loading") == true, 10.0)
+				await _until(func() -> bool: return council.get("loading") == false, 60.0)
+				await _wait(2.0)
+				await _shoot("chat-18-council-reply")
 	_finish()
 
 

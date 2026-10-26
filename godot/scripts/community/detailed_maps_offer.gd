@@ -228,22 +228,18 @@ func _render_list(stack: VBoxContainer) -> void:
 				_ticked.erase(key)
 			_render())
 		row.add_child(box)
-		var name := _line(str(offer.get("name", "")), 600)
-		name.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		var name := UI.label(str(offer.get("name", "")), 13, PANEL_INK, 600)
 		name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(name)
-		var size_text := _line(CommunityKit.format_bytes(float(offer.get("bytes", 0))), 400, 0.65)
-		size_text.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		var size_text := UI.label(CommunityKit.format_bytes(float(offer.get("bytes", 0))), 13, Color(PANEL_INK, PANEL_INK.a * 0.65))
 		size_text.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(size_text)
 		if offer.get("starting", false):
-			var starting := _line("★ the starting map", 400, 0.65)
-			starting.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			var starting := UI.label("★ the starting map", 13, Color(PANEL_INK, PANEL_INK.a * 0.65))
 			starting.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			row.add_child(starting)
 		if offer.get("have") != null and str(offer.get("have")) != "" and str(offer.get("have")) != "0":
-			var update := _line("an update", 400, 0.65)
-			update.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			var update := UI.label("an update", 13, Color(PANEL_INK, PANEL_INK.a * 0.65))
 			update.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			row.add_child(update)
 		choices.add_child(row)

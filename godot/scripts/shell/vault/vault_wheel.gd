@@ -1,4 +1,4 @@
-extends CanvasGroup
+extends Control
 
 const RING := Color("#d4d4d8")
 
@@ -12,8 +12,7 @@ var ring := false
 
 
 func _ready() -> void:
-	fit_margin = 0.0
-	clear_margin = 0.0
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 func side() -> float:

@@ -4,6 +4,7 @@ extends Control
 signal closed
 signal shown_changed(open: bool)
 signal open_chat(country: String)
+signal map_state_changed(state: Dictionary)
 
 const T := preload("res://scripts/ui/war_room_theme.gd")
 const W := preload("res://scripts/ui/war_room_words.gd")
@@ -116,6 +117,7 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 	rail.setup(store)
 	plates.setup(store)
 	store.changed.connect(_on_store)
+	store.changed.connect(_announce_map_state)
 	store.way_drawn.connect(_on_way)
 	rail.order.connect(_order_picked)
 	rail.release.connect(_release_picked)
@@ -142,6 +144,17 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 
 func is_open() -> bool:
 	return _open
+
+
+func map_state() -> Dictionary:
+	return {"open": bool(store.value("open")), "battlefield": str(store.value("battlefield")), "side": int(store.value("side")), "highlight": int(store.value("highlight")), "selected": (store.value("selected") as Array).duplicate()}
+
+
+func _announce_map_state(keys: PackedStringArray) -> void:
+	for key in ["open", "battlefield", "side", "highlight", "selected"]:
+		if key in keys:
+			map_state_changed.emit(map_state())
+			return
 
 
 func open() -> void:

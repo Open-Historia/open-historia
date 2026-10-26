@@ -209,3 +209,111 @@ static func flag(path: String) -> Texture2D:
 	var texture := ImageTexture.create_from_image(round_image)
 	_flags[path] = texture
 	return texture
+
+
+static func batch() -> Array:
+	return [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
+
+
+static func stroke(into: Array, line: PackedVector2Array, width: float, feather: float, colour: Color) -> void:
+	var points := PackedVector2Array()
+	for p in line:
+		if points.is_empty() or points[points.size() - 1].distance_squared_to(p) > 0.000000000001:
+			points.append(p)
+	var count := points.size()
+	if count < 2 or width <= 0.0 or colour.a <= 0.0:
+		return
+	var tone := colour
+	var drawn := width
+	if width < feather:
+		tone.a *= width / feather
+		drawn = feather
+	var inner := maxf(0.0, drawn * 0.5 - feather * 0.5)
+	var outer := drawn * 0.5 + feather * 0.5
+	var clear := Color(tone.r, tone.g, tone.b, 0.0)
+	var verts: PackedVector2Array = into[0]
+	var colours: PackedColorArray = into[1]
+	var indices: PackedInt32Array = into[2]
+	var base := verts.size()
+	for index in range(count):
+		var incoming := Vector2.ZERO
+		var outgoing := Vector2.ZERO
+		if index > 0:
+			var along_in := (points[index] - points[index - 1]).normalized()
+			incoming = Vector2(-along_in.y, along_in.x)
+		if index < count - 1:
+			var along_out := (points[index + 1] - points[index]).normalized()
+			outgoing = Vector2(-along_out.y, along_out.x)
+		var normal := incoming + outgoing
+		if normal.length_squared() < 0.000000000001:
+			normal = outgoing if incoming == Vector2.ZERO else incoming
+		normal = normal.normalized()
+		var scale := 1.0
+		if index > 0 and index < count - 1:
+			scale = 1.0 / maxf(normal.dot(incoming), 0.5)
+		var p := points[index]
+		verts.append(p + normal * outer * scale)
+		verts.append(p + normal * inner * scale)
+		verts.append(p - normal * inner * scale)
+		verts.append(p - normal * outer * scale)
+		colours.append(clear)
+		colours.append(tone)
+		colours.append(tone)
+		colours.append(clear)
+	for index in range(count - 1):
+		var a := base + index * 4
+		var b := a + 4
+		for k in range(3):
+			indices.append(a + k)
+			indices.append(a + k + 1)
+			indices.append(b + k + 1)
+			indices.append(a + k)
+			indices.append(b + k + 1)
+			indices.append(b + k)
+	into[0] = verts
+	into[1] = colours
+	into[2] = indices
+
+
+static func disc(into: Array, centre: Vector2, radius: float, feather: float, colour: Color) -> void:
+	if radius <= 0.0 or colour.a <= 0.0:
+		return
+	var verts: PackedVector2Array = into[0]
+	var colours: PackedColorArray = into[1]
+	var indices: PackedInt32Array = into[2]
+	var base := verts.size()
+	var steps := 16
+	var inner := maxf(0.0, radius - feather * 0.5)
+	var outer := radius + feather * 0.5
+	var clear := Color(colour.r, colour.g, colour.b, 0.0)
+	verts.append(centre)
+	colours.append(colour)
+	for step in range(steps):
+		var angle := TAU * step / steps
+		var direction := Vector2(cos(angle), sin(angle))
+		verts.append(centre + direction * inner)
+		colours.append(colour)
+		verts.append(centre + direction * outer)
+		colours.append(clear)
+	for step in range(steps):
+		var here := base + 1 + step * 2
+		var next := base + 1 + ((step + 1) % steps) * 2
+		indices.append(base)
+		indices.append(here)
+		indices.append(next)
+		indices.append(here)
+		indices.append(here + 1)
+		indices.append(next + 1)
+		indices.append(here)
+		indices.append(next + 1)
+		indices.append(next)
+	into[0] = verts
+	into[1] = colours
+	into[2] = indices
+
+
+static func flush(item: RID, into: Array) -> void:
+	var indices: PackedInt32Array = into[2]
+	if indices.is_empty():
+		return
+	RenderingServer.canvas_item_add_triangle_array(item, indices, into[0], into[1])

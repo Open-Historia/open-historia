@@ -117,6 +117,9 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	if not OS.get_environment("OH_WARROOM_COMPARE").is_empty():
+		await _compare()
+		return
 	await main._start_scenario("default")
 	await _wait(0.4)
 	main.picker._choose("France")
@@ -321,6 +324,49 @@ func _run() -> void:
 	for failure in failures:
 		_say("  failed: " + failure)
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _compare() -> void:
+	await main._open_game(OS.get_environment("OH_WARROOM_COMPARE"))
+	await _wait(2.0)
+	button = WarRoomButton.new()
+	main.ui.add_child(button)
+	button.setup(main.engine)
+	await button.refresh()
+	room = WarRoom.new()
+	main.ui.add_child(room)
+	await room.setup(main.engine, {"map_view": main.map_view})
+	room.shown_changed.connect(func(open: bool) -> void:
+		main.hud.visible = not open
+		button.set_room_open(open))
+	button.pressed.connect(room.toggle)
+	button.pressed.emit()
+	await _until(func() -> bool: return not room._record.is_empty(), 20.0)
+	await _wait(2.5)
+	await _shoot("cmp-01-open")
+	room._sections_scroll.scroll_vertical = 100000
+	await _wait(0.4)
+	await _shoot("cmp-02-drawer-bottom")
+	room._sections_scroll.scroll_vertical = 0
+	var generals: Array = room._record.get("generals", [])
+	if generals.size() > 1:
+		room.store.set_values({"selected": (generals[1] as Dictionary).get("troops", []), "highlight": 1})
+	await _wait(0.4)
+	await _shoot("cmp-03-picked")
+	room.store.set_values({"selected": []})
+	room.store.take_tool("deploy")
+	await _wait(0.4)
+	await _shoot("cmp-04-deploy-hint")
+	room.store.take_tool("pan")
+	room.store.set_values({"supply": true})
+	await _wait(1.0)
+	await _shoot("cmp-05-supply")
+	room.store.set_values({"supply": false})
+	await room._rehearse()
+	await _until(func() -> bool: return str(room._rehearsal.get("status", "")) != "running", 30.0)
+	await _wait(0.5)
+	await _shoot("cmp-06-rehearsed")
+	_finish(0)
 
 
 func _finish(code: int) -> void:

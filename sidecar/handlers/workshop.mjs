@@ -522,6 +522,7 @@ export const register = (ctx) => {
       counts: { regions: features(s).length, features: featureList(s).length, units: (s.doc.units || []).length, types: (s.doc.types || []).length },
       clipboardCount: clipboard?.regions?.features?.length ?? 0,
       militaryDefaults: s.initialMap?.militaryDefaults ?? null,
+      freezingCount: freezingCountOf(s),
     };
   };
 
@@ -549,6 +550,14 @@ export const register = (ctx) => {
     climateZones: s.doc.climateZones || [],
     freezingRegions: s.doc.freezingRegions || [],
   });
+
+  const freezingCountOf = (s) => {
+    const typesById = Object.fromEntries((s.doc.types || []).map((type) => [type.id, type]));
+    return (s.doc.freezingRegions || []).filter((rid) => {
+      const f = s.source.getFeatureById(String(rid));
+      return Boolean(f) && engine.wsRegionTypes.isWaterType(typesById[f.get("typeId")]);
+    }).length;
+  };
 
   const writeBakeFile = (s, fc) => {
     s.bakeSerial += 1;
@@ -2281,7 +2290,7 @@ export const register = (ctx) => {
       const s = need(id);
       const step = undoLib.membershipStep(s.doc.freezingRegions || [], setters(s).freezingRegions, list(ids).map(String), Boolean(on));
       if (step) pushCmd(s, step);
-      return delta(s, { war: true });
+      return delta(s, { war: true, doc: true });
     },
     "workshop.meta": async ({ session: id, patch = {} } = {}) => {
       const s = need(id);
@@ -2438,12 +2447,24 @@ export const register = (ctx) => {
         return { error: `Could not delete that basemap: ${error?.message || error}` };
       }
     },
-    "workshop.war.create": async ({ session: id, kind = "terrain", rings = null, points = null, owner = "" } = {}) => {
+    "workshop.war.create": async ({ session: id, kind = "terrain", rings = null, points = null, owner: given = "" } = {}) => {
+      let owner = given;
       const s = need(id);
       const war = engine.wsWarGeography;
       const field = war.WAR_LISTS[kind];
       if (!field) return delta(s, {});
       const rowsNow = s.doc[field] || [];
+      if (kind === "fortification" && !clean(owner) && Array.isArray(points) && points.length >= 2) {
+        const LineString = engine.wsOlLineString.default;
+        const geometry = new LineString(points.map((point) => fromLonLat([Number(point[0]), Number(point[1])])));
+        const owners = [];
+        for (let i = 0; i <= 48; i += 1) {
+          const hits = s.source.getFeaturesAtCoordinate(geometry.getCoordinateAt(i / 48));
+          const hitOwner = hits.length ? hits[hits.length - 1].get("owner") : null;
+          if (hitOwner) owners.push(String(hitOwner));
+        }
+        owner = engine.wsWarGeography.mostCommon(owners) || "";
+      }
       const row = kind === "terrain"
         ? war.newTerrainArea(mapDoc.newId("terrain"), rings, rowsNow)
         : kind === "fortification"
@@ -2462,6 +2483,35 @@ export const register = (ctx) => {
         const next = { ...(row || {}), ...fields };
         for (const [key, value] of Object.entries(fields)) if (value === undefined || value === null) delete next[key];
         return next;
+      }));
+      return delta(s, { war: true });
+    },
+    "workshop.war.patchItem": async ({ session: id, rowId = "", list: listName = "seasons", index = -1, fields = null, effects = null, weather = null, add = null, remove = false } = {}) => {
+      const s = need(id);
+      if (listName !== "seasons" && listName !== "events") return delta(s, {});
+      const mergeInto = (base, patch, dropZero = false) => {
+        const next = { ...(base && typeof base === "object" ? base : {}) };
+        for (const [key, value] of Object.entries(patch || {})) {
+          if (value === undefined || value === null || (dropZero && !(Number(value) > 0))) delete next[key];
+          else next[key] = value;
+        }
+        return next;
+      };
+      setters(s).climateZones((rows) => (rows || []).map((row) => {
+        if (row.id !== rowId) return row;
+        const items = Array.isArray(row[listName]) ? row[listName].slice() : [];
+        if (add && typeof add === "object") {
+          items.push(add);
+        } else if (Number.isInteger(index) && index >= 0 && index < items.length) {
+          if (remove) items.splice(index, 1);
+          else {
+            let item = mergeInto(items[index], fields);
+            if (effects) item = { ...item, effects: mergeInto(item.effects, effects) };
+            if (weather) item = { ...item, weather: mergeInto(item.weather, weather, true) };
+            items[index] = item;
+          }
+        } else return row;
+        return { ...row, [listName]: items };
       }));
       return delta(s, { war: true });
     },
@@ -2786,6 +2836,7 @@ export const register = (ctx) => {
       s.retries = 0;
       s.saveError = "";
       s.saveStatus = "saved";
+      if (feats.length) dirty(s);
       return delta(s, { all: true });
     },
     "workshop.documents.open": async ({ session: id, docId = "" } = {}) => {

@@ -297,7 +297,6 @@ func _restyle_join() -> void:
 		return
 	var idle := _code.strip_edges().is_empty() or _shared_mode() != "off"
 	_join_button.disabled = idle
-	_join_button.modulate.a = 0.5 if idle else 1.0
 	_join_button.tooltip_text = ""
 	_join_button.mouse_default_cursor_shape = Control.CURSOR_ARROW if idle else Control.CURSOR_POINTING_HAND
 
@@ -327,10 +326,7 @@ func _build_host() -> PanelContainer:
 	var has_game := typeof(game) == TYPE_DICTIONARY
 	_host_grid = null
 	if not has_game:
-		var top := MarginContainer.new()
-		top.add_theme_constant_override("margin_top", 13)
-		top.add_child(_note("Open a game first (the Games tab), then come back to host it."))
-		stack.add_child(top)
+		stack.add_child(_note("Open a game first (the Games tab), then come back to host it."))
 	else:
 		_host_grid = GridContainer.new()
 		_host_grid.columns = 4

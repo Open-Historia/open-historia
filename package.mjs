@@ -40,7 +40,7 @@ run(godotExe, ["--headless", "--path", path.join(here, "godot"), "--import"]);
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 
-copy(godotExe, path.join(stage, "runtime", "godot.exe"));
+copy(godotExe, path.join(stage, "runtime", "Open Historia.exe"));
 copy(process.execPath, path.join(stage, "runtime", "node.exe"));
 
 const godotSource = path.join(here, "godot");
@@ -54,7 +54,7 @@ copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
 
 const sidecar = path.join(here, "sidecar");
 for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
-copy(path.join(sidecar, "dist", "engine.mjs"), path.join(stage, "native", "sidecar", "dist", "engine.mjs"));
+copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs"));
 
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
@@ -119,11 +119,15 @@ icon.writeUInt16LE(32, 12);
 icon.writeUInt32LE(png.length, 14);
 icon.writeUInt32LE(22, 18);
 fs.writeFileSync(path.join(stage, "runtime", "open-historia.ico"), Buffer.concat([icon, png]));
+const framework = path.join(process.env.SystemRoot || "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319");
+const brand = path.join(out, "brand.exe");
+run(path.join(framework, "csc.exe"), ["/nologo", "/target:exe", "/optimize+", `/out:${brand}`, path.join(here, "installer", "Brand.cs")]);
+run(brand, [path.join(stage, "runtime", "Open Historia.exe"), path.join(stage, "runtime", "open-historia.ico"), "Open Historia"]);
 fs.writeFileSync(path.join(stage, ".oh-native-install"), `${new Date().toISOString()}\n`);
 
 const launcher = [
   "@echo off",
-  "start \"\" \"%~dp0runtime\\godot.exe\" --path \"%~dp0native\\godot\"",
+  "start \"\" \"%~dp0runtime\\Open Historia.exe\" --path \"%~dp0native\\godot\"",
   "",
 ].join("\r\n");
 fs.writeFileSync(path.join(stage, `${appName}.cmd`), launcher);
@@ -157,7 +161,6 @@ run(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), [
 console.log(`app.zip ${(fs.statSync(zip).size / 1048576).toFixed(1)} MB`);
 
 const target = path.join(out, `${appName} Setup.exe`);
-const framework = path.join(process.env.SystemRoot || "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319");
 run(path.join(framework, "csc.exe"), [
   "/nologo",
   "/target:winexe",

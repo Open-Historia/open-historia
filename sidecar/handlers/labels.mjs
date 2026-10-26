@@ -60,6 +60,7 @@ const runPolityTextWorker = async () => {
   let regionsFile = "";
   let baseOwners = [];
   const ownerLabels = new Map();
+  const session = crypto.randomUUID();
   let revision = 0;
   let snapshotDigest = "";
   let snapshot = [];
@@ -177,6 +178,7 @@ const runPolityTextWorker = async () => {
     }
     return {
       revision,
+      token: `${session}:${revision}`,
       changedOwners: changed.length,
       records: snapshot.map((record) => ({
         key: continuity.polityTextRecordKey(record),
@@ -247,7 +249,7 @@ const runPolityTextWorker = async () => {
     }
     if (solved > 0 || nextCache.size !== entryCache.size) cacheDirty = true;
     entryCache = nextCache;
-    return { revision, solved, entries };
+    return { revision, token: `${session}:${revision}`, solved, entries };
   };
 
   parentPort.on("message", (message) => {

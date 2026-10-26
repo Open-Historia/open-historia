@@ -4,16 +4,67 @@ extends Control
 signal laid_out(info: Dictionary)
 
 const RASTER_FONT_SIZE := 128
-const HALO_OUTLINE := 24
+const HALO_WIDTH_PX := 5.0
+const MSDF_PIXEL_RANGE := 16
 const WORLD_WIDTH := 4096.0
 const TEXT_COLOR := "rgba(250, 249, 244, 0.995)"
 const HALO_COLOR := "rgba(4, 6, 9, 0.96)"
+const RASTER_SHADER := """
+shader_type canvas_item;
+render_mode blend_mix;
+uniform vec4 fill_color = vec4(1.0);
+uniform vec4 halo_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float px_range = 16.0;
+uniform float halo_px = 5.0;
+uniform float max_footprint = 12.0;
+
+float median3(vec3 c) {
+	return max(min(c.r, c.g), min(max(c.r, c.g), c.b));
+}
+
+vec4 raster_texel(sampler2D atlas, vec2 uv) {
+	vec4 s = texture(atlas, uv);
+	float body = (min(median3(s.rgb), s.a) - 0.5) * px_range;
+	float outer = (s.a - 0.5) * px_range;
+	float fill = clamp(body + 0.5, 0.0, 1.0) * fill_color.a;
+	float halo = clamp(outer + halo_px + 0.5, 0.0, 1.0) * halo_color.a;
+	float alpha = fill + halo * (1.0 - fill);
+	vec3 color = alpha > 0.0 ? (fill_color.rgb * fill + halo_color.rgb * halo * (1.0 - fill)) / alpha : vec3(0.0);
+	return vec4(color, alpha);
+}
+
+void fragment() {
+	vec2 texels = 1.0 / TEXTURE_PIXEL_SIZE;
+	vec2 dx = dFdx(UV);
+	vec2 dy = dFdy(UV);
+	float span_x = length(dx * texels);
+	float span_y = length(dy * texels);
+	if (span_x > max_footprint) {
+		dx *= max_footprint / span_x;
+		span_x = max_footprint;
+	}
+	if (span_y > max_footprint) {
+		dy *= max_footprint / span_y;
+		span_y = max_footprint;
+	}
+	int taps = int(clamp(ceil(max(span_x, span_y)), 1.0, 4.0));
+	vec4 sum = vec4(0.0);
+	for (int i = 0; i < taps; i++) {
+		for (int j = 0; j < taps; j++) {
+			vec2 offset = ((float(i) + 0.5) / float(taps) - 0.5) * dx + ((float(j) + 0.5) / float(taps) - 0.5) * dy;
+			sum += raster_texel(TEXTURE, UV + offset);
+		}
+	}
+	COLOR = sum / float(taps * taps);
+}
+"""
 
 var map: MapView
 var engine: EngineLink
 var revision := 0
 var label_count := 0
 var last_error := ""
+var _token := ""
 var _families := PackedStringArray()
 var _measure_font: SystemFont
 var _draw_font: SystemFont
@@ -25,6 +76,7 @@ var _halo := Color(4 / 255.0, 6 / 255.0, 9 / 255.0, 0.96)
 var _hidden := false
 var _running := false
 var _again := false
+var _material: ShaderMaterial
 var _direct: Painter
 var _groups: Array[CanvasGroup] = []
 var _group_painters: Array[Painter] = []
@@ -47,9 +99,28 @@ class Painter extends Node2D:
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_direct = Painter.new()
-	_direct.layer = self
+	var shader := Shader.new()
+	shader.code = RASTER_SHADER
+	_material = ShaderMaterial.new()
+	_material.shader = shader
+	_material.set_shader_parameter("px_range", float(MSDF_PIXEL_RANGE))
+	_material.set_shader_parameter("halo_px", HALO_WIDTH_PX)
+	_apply_colors()
+	_direct = _painter()
 	add_child(_direct)
+
+
+func _painter() -> Painter:
+	var painter := Painter.new()
+	painter.layer = self
+	painter.material = _material
+	painter.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	return painter
+
+
+func _apply_colors() -> void:
+	_material.set_shader_parameter("fill_color", Vector4(_fill.r, _fill.g, _fill.b, _fill.a))
+	_material.set_shader_parameter("halo_color", Vector4(_halo.r, _halo.g, _halo.b, _halo.a))
 
 
 func setup(map_view: MapView, link: EngineLink) -> void:
@@ -81,7 +152,7 @@ func busy() -> bool:
 func clear() -> void:
 	_labels = []
 	label_count = 0
-	revision = 0
+	_token = ""
 	_states = PackedInt32Array([-1])
 	update_view()
 
@@ -99,13 +170,13 @@ func _refresh_once() -> void:
 	if fill != _fill or halo != _halo:
 		_fill = fill
 		_halo = halo
-		_states = PackedInt32Array([-1])
+		_apply_colors()
 	var families := PackedStringArray()
 	for family: Variant in result.get("fontFamilies", ["Georgia"]):
 		families.append(str(family))
 	var fonts_changed := _set_fonts(families)
-	var next_revision := int(result.get("revision", 0))
-	if next_revision == revision and not fonts_changed and not _labels.is_empty():
+	var token := str(result.get("token", ""))
+	if token == _token and not fonts_changed and not _labels.is_empty():
 		update_view()
 		return
 	var metrics := {}
@@ -137,7 +208,8 @@ func _refresh_once() -> void:
 	_labels = built
 	_extent = extent if extent.x <= extent.y else Vector2.ZERO
 	_states = PackedInt32Array([-1])
-	revision = next_revision
+	_token = token
+	revision += 1
 	label_count = _labels.size()
 	last_error = ""
 	update_view()
@@ -166,7 +238,7 @@ func _set_fonts(families: PackedStringArray) -> bool:
 	_draw_font.hinting = TextServer.HINTING_NONE
 	_draw_font.multichannel_signed_distance_field = true
 	_draw_font.msdf_size = 128
-	_draw_font.msdf_pixel_range = 16
+	_draw_font.msdf_pixel_range = MSDF_PIXEL_RANGE
 	_draw_font.generate_mipmaps = false
 	_measures.clear()
 	return true
@@ -394,8 +466,7 @@ func _assign(fading: Dictionary, direct: Array[int], copies: Array[float]) -> vo
 	var keys: Array = fading.keys()
 	while _groups.size() < keys.size():
 		var group := CanvasGroup.new()
-		var painter := Painter.new()
-		painter.layer = self
+		var painter := _painter()
 		group.add_child(painter)
 		add_child(group)
 		move_child(_direct, -1)
@@ -433,10 +504,7 @@ func paint(canvas: Node2D, items: Array[int], copies: Array[float]) -> void:
 			var scale := Vector2(size, size)
 			for index in range(anchors.size()):
 				canvas.draw_set_transform(anchors[index] + shift, angles[index], scale)
-				ts.font_draw_glyph_outline(rids[index], item_rid, RASTER_FONT_SIZE, HALO_OUTLINE, offsets[index], indices[index], _halo)
-			for index in range(anchors.size()):
-				canvas.draw_set_transform(anchors[index] + shift, angles[index], scale)
-				ts.font_draw_glyph(rids[index], item_rid, RASTER_FONT_SIZE, offsets[index], indices[index], _fill)
+				ts.font_draw_glyph(rids[index], item_rid, RASTER_FONT_SIZE, offsets[index], indices[index], Color.WHITE)
 	canvas.draw_set_transform_matrix(Transform2D.IDENTITY)
 
 

@@ -627,7 +627,27 @@ export const register = (ctx) => {
     .map((scenario) => ({ id: clean(scenario.id), name: String(scenario.name ?? ""), count: openSuggestionsOf(scenario).length }))
     .filter((row) => row.count > 0);
 
+  const standInMethods = {};
+  if (ctx.standIn) {
+    let stubDownloads = false;
+    let stubBundle = "";
+    const passOn = globalThis.fetch;
+    globalThis.fetch = async (input, init = undefined) => {
+      const url = typeof input === "string" || input instanceof URL ? String(input) : String(input?.url ?? "");
+      if (stubDownloads && url.includes("/api/hub/file?")) {
+        if (!stubBundle) stubBundle = JSON.stringify(await lib.exportScenarioBundle("default"));
+        return new Response(stubBundle, { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return passOn(input, init);
+    };
+    standInMethods["community.standin.downloads"] = async ({ on = true } = {}) => {
+      stubDownloads = on === true;
+      return true;
+    };
+  }
+
   return {
+    ...standInMethods,
     "community.posts": async ({ force = false } = {}) => {
       const posts = await hub.fetchHubPosts({ force: force === true });
       shown = list(posts);

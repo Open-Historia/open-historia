@@ -128,6 +128,7 @@ var _nav: VBoxContainer
 var _scroll: ScrollContainer
 var _content: VBoxContainer
 var _confirm_layer: Control
+var _confirm_holder: ConfirmAnswer
 var _icons := {}
 
 
@@ -212,8 +213,8 @@ func go_back() -> void:
 		return
 	_flush_writes()
 	if _confirm_layer and is_instance_valid(_confirm_layer):
-		_confirm_layer.queue_free()
-		_confirm_layer = null
+		if _confirm_holder:
+			_confirm_holder.answered.emit(false)
 		return
 	_closing = true
 	if from_rect.size.x > 0.0 and scope != "app":
@@ -1050,6 +1051,7 @@ func _confirm(text: String) -> bool:
 	row.add_child(UI.spacer())
 	var answer := [false]
 	var holder := ConfirmAnswer.new()
+	_confirm_holder = holder
 	var cancel := _button("Cancel", func() -> void: holder.answered.emit(false))
 	var ok := _button("OK", func() -> void: holder.answered.emit(true), "primary")
 	row.add_child(cancel)
@@ -1064,6 +1066,7 @@ func _confirm(text: String) -> bool:
 	if is_instance_valid(layer):
 		layer.queue_free()
 	_confirm_layer = null
+	_confirm_holder = null
 	return bool(answer[0])
 
 

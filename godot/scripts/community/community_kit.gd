@@ -18,7 +18,7 @@ const NOTICE_INK := Color("#bbf7d0")
 const ERROR_BG := Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.12)
 const ERROR_BORDER := Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.34)
 const ERROR_INK := Color("#fecaca")
-const NATURAL_LEADING := 1.15
+const NATURAL_LEADING := 1.12
 const PLACEHOLDER_COVER := "public/scenario-placeholder.webp"
 
 const MARKS := {
@@ -93,8 +93,15 @@ static func mark_rect(name: String, size := 16, color := Color(1, 1, 1)) -> Text
 	return rect
 
 
-static func leading(label: Label, size: float, factor: float) -> Label:
-	label.add_theme_constant_override("line_spacing", int(round(size * factor - size * NATURAL_LEADING)))
+static func leading(label: Label, size: float, factor: float, floor_height := 0.0) -> Label:
+	var spacing := maxi(0, int(round(size * factor - size * NATURAL_LEADING)))
+	label.add_theme_constant_override("line_spacing", spacing)
+	var box := StyleBoxEmpty.new()
+	box.content_margin_top = floorf(spacing * 0.5)
+	box.content_margin_bottom = spacing - floorf(spacing * 0.5)
+	label.add_theme_stylebox_override("normal", box)
+	if floor_height > 0.0:
+		label.custom_minimum_size.y = floor_height
 	return label
 
 

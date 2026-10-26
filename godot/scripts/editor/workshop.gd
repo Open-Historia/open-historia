@@ -806,9 +806,7 @@ func _render_footer() -> void:
 		badge.add_child(UI.label("Scenario unsaved", 11, Color("#fbbf24"), 700))
 		line.add_child(badge)
 	_footer.add_child(line)
-	var action := str(status.get("action", "")) if not _busy_action.is_empty() else _busy_action
-	if _busy_action.is_empty():
-		action = str(status.get("action", ""))
+	var action := _busy_action if not _busy_action.is_empty() else str(status.get("action", ""))
 	var dim := not action.is_empty() or not hydrated
 	var tip := "The scenario’s map is still loading" if not hydrated else ""
 	if _exit_ask:

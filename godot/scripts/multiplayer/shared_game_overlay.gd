@@ -299,7 +299,7 @@ func _render_lobby(me: String) -> void:
 		var mine := HBoxContainer.new()
 		mine.add_theme_constant_override("separation", 8)
 		var words := _small("You play %s. %s" % [me, "Start when everyone is in." if role == "host" else "Waiting for the host to start."])
-		words.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		mine.add_child(words)
 		if role != "host":

@@ -136,7 +136,7 @@ func refresh() -> void:
 
 
 func _on_engine_event(name: String, _data: Variant) -> void:
-	if _open and _busy.is_empty() and name in ["turn.landed", "interactive.changed"]:
+	if _open and _busy.is_empty() and name == "interactive.changed":
 		refresh()
 
 

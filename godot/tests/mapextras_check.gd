@@ -5,10 +5,13 @@ var shots := ""
 var started := 0
 var failures: PackedStringArray = []
 var finished := false
+var extras: MapExtras
+var only := ""
 
 
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
+	only = OS.get_environment("OH_MAPX_ONLY")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.add_child(main)
@@ -17,7 +20,7 @@ func _initialize() -> void:
 
 
 func _watchdog() -> void:
-	await create_timer(600.0).timeout
+	await create_timer(900.0).timeout
 	if not finished:
 		_say("FAIL the check did not finish in time")
 		_finish(1)
@@ -44,6 +47,15 @@ func _wait(seconds: float) -> void:
 	await create_timer(seconds).timeout
 
 
+func _until(condition: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if condition.call():
+			return true
+		await process_frame
+	return condition.call()
+
+
 func _shoot(name: String) -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
@@ -51,6 +63,42 @@ func _shoot(name: String) -> void:
 		return
 	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
 	_say("screenshot " + name)
+
+
+func _wants(step: String) -> bool:
+	return only.is_empty() or only.split(",").has(step)
+
+
+func _region_named(owner: String, preferred: String) -> int:
+	var view: MapView = main.map_view
+	var best := -1
+	var area := -1.0
+	for index in range(view.extras_region_count()):
+		if view.region_owner(index) != owner:
+			continue
+		if view.region_name(index) == preferred:
+			return index
+		if view._areas[index] > area:
+			area = view._areas[index]
+			best = index
+	return best
+
+
+func _regions_of(owner: String, limit: int) -> Array[int]:
+	var view: MapView = main.map_view
+	var found: Array[int] = []
+	for index in range(view.extras_region_count()):
+		if view.region_owner(index) == owner:
+			found.append(index)
+			if found.size() >= limit:
+				break
+	return found
+
+
+func _reload_state() -> void:
+	var state: Dictionary = await main.engine.request("map.state")
+	if bool(state.get("ok", false)):
+		main.map_view.set_state(state["result"])
 
 
 func _run() -> void:
@@ -64,20 +112,203 @@ func _run() -> void:
 	await main._start_scenario("default")
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
-	await _wait(3.0)
+	await _wait(1.0)
 	var view: MapView = main.map_view
-	await _shoot("base-1-start")
-	view.fly_to_lonlat(10.0, 50.0, 4.6, 0.0)
-	await _wait(3.0)
-	await _shoot("base-2-europe")
-	view.fly_to_lonlat(34.0, 45.0, 6.0, 0.0)
-	await _wait(3.0)
-	await _shoot("base-3-crimea")
+	extras = MapExtras.new()
+	main.hud.add_child(extras)
+	await extras.setup(main.engine, {"map_view": view, "game": {}})
+	await _until(func() -> bool: return not extras.world.is_empty(), 20.0)
+	_check(not extras.world.is_empty(), "the world's map extras were read")
+	_check(int(extras.world.get("regionCount", 0)) == view.extras_region_count(), "the sidecar's regions match the baked map (%d)" % view.extras_region_count())
+	_check((extras.world.get("claims", []) as Array).size() > 0, "disputed regions carry stripes (%d)" % (extras.world.get("claims", []) as Array).size())
+	_check(bool(extras.world.get("seasons", false)), "the default scenario has seasons and weather")
+	if _wants("flat"):
+		await _flat_checks()
+	if _wants("ice"):
+		await _ice_checks()
+	if _wants("groups"):
+		await _group_checks()
+	if _wants("flood"):
+		await _flood_checks()
+	if _wants("globe"):
+		await _globe_checks()
+	if _wants("styles"):
+		await _style_checks()
+	if _wants("offers"):
+		await _offer_checks()
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _flat_checks() -> void:
+	var view: MapView = main.map_view
+	view.fly_to_lonlat(10.0, 50.0, 4.6, 0.0)
+	await _until(func() -> bool: return extras.season._texture != null, 15.0)
+	_check(extras.season._texture != null, "the season tint picture arrived for %s" % extras.season.date)
+	await _wait(2.5)
+	await _shoot("flat-1-europe")
+	extras.apply_map_settings({"map_seasons_weather": false})
+	await _wait(0.5)
+	await _shoot("flat-2-europe-no-season")
+	extras.apply_map_settings({"map_seasons_weather": true})
+	view.fly_to_lonlat(34.0, 45.0, 6.0, 0.0)
+	await _wait(2.5)
+	await _shoot("flat-3-crimea-stripes")
+	view.fly_to_lonlat(2.3, 46.5, 7.2, 0.0)
+	await _wait(2.5)
+	await _shoot("flat-4-province-outlines")
+	view.camera.zoom = Vector2.ONE * 0.01
+	view.call("_after_camera_move")
+	_check(view.camera.zoom.x >= MapView.MIN_ZOOM - 0.0001, "the flat map stops at the game's minimum zoom (%.3f)" % view.zoom_level())
+	await _wait(2.0)
+	await _shoot("flat-5-min-zoom")
+
+
+func _ice_checks() -> void:
+	var view: MapView = main.map_view
+	var finland := _regions_of("Finland", 6)
+	var reply: Dictionary = await main.engine.request("mapextras.standin_freeze", {"indices": finland})
+	_check(bool(reply.get("ok", false)), "frozen water written to the world (%s)" % str(reply.get("result", reply.get("error", ""))))
+	await extras.refresh()
+	_check((extras.world.get("frozen", []) as Array).size() == finland.size(), "the map reads %d frozen regions" % finland.size())
+	await _until(func() -> bool: return extras.overlays._ice_patterns_loaded, 10.0)
+	view.fly_to_lonlat(25.0, 63.0, 5.2, 0.0)
+	await _wait(2.5)
+	await _shoot("ice-1-finland")
+	view.fly_to_lonlat(25.0, 63.0, 7.0, 0.0)
+	await _wait(2.0)
+	await _shoot("ice-2-finland-close")
+	await main.engine.request("mapextras.standin_freeze", {"indices": []})
+	await extras.refresh()
+
+
+func _group_checks() -> void:
+	var view: MapView = main.map_view
+	var saved: Dictionary = await main.engine.request("cheats.groups.save", {"name": "Nordic Pact", "color": "#3b82f6"})
+	_check(bool(saved.get("ok", false)), "a group was created (%s)" % str(saved.get("error", "")))
+	for owner in ["Sweden", "Norway"]:
+		for index in _regions_of(owner, 8):
+			await main.engine.request("cheats.groups.ops", {"name": "Nordic Pact", "action": "toggle", "index": index})
+	await extras.refresh()
+	_check((extras.world.get("groupRegions", []) as Array).size() > 0, "the group's regions reach the map (%d)" % (extras.world.get("groupRegions", []) as Array).size())
+	await _until(func() -> bool: return extras.overlays._line_mesh != null, 15.0)
+	_check(extras.overlays._line_mesh != null, "the group's outline was drawn from the frontier topology")
+	view.fly_to_lonlat(15.0, 62.0, 4.4, 0.0)
+	await _wait(2.5)
+	await _shoot("groups-1-nordic")
+	await main.engine.request("cheats.groups.ops", {"name": "Nordic Pact", "action": "erase"})
+	await extras.refresh()
+
+
+func _flood_checks() -> void:
+	var view: MapView = main.map_view
+	var target := _region_named("France", "Grand Est")
+	_check(target >= 0, "a French region to annex (%s)" % view.region_name(target))
+	view.fly_to_lonlat(6.0, 48.5, 5.6, 0.0)
+	await _wait(2.5)
+	await _shoot("flood-0-before")
+	var annexed: Dictionary = await main.engine.request("cheats.annex.region", {"index": target, "owner": "Germany", "ownerName": "Germany"})
+	_check(bool(annexed.get("ok", false)), "the region changed hands (%s)" % str(annexed.get("result", annexed.get("error", ""))))
+	await _reload_state()
+	_check(extras.flood.busy(), "a change of owner starts the conquest flood")
+	await _until(func() -> bool: return extras.flood._phase == "running", 5.0)
+	_say("flood mode %s, prepared in %d ms (computed in %d ms)" % [extras.flood.last_mode, extras.flood.last_elapsed_ms, extras.flood.last_compute_ms])
+	await _wait(0.12)
+	await _shoot("flood-1-mid")
+	await _until(func() -> bool: return not extras.flood.busy(), 5.0)
+	_check(not extras.flood.busy() and view.region_owner(target) == "Germany", "the flood finished and the region is Germany's")
+	await _wait(0.3)
+	await _shoot("flood-2-after")
+	var many := _regions_of("Belgium", 20)
+	for index in many:
+		await main.engine.request("cheats.annex.region", {"index": index, "owner": "France", "ownerName": "France"})
+	view.fly_to_lonlat(4.5, 50.6, 6.4, 0.0)
+	await _wait(2.0)
+	await _reload_state()
+	await _until(func() -> bool: return extras.flood._phase == "running", 5.0)
+	_say("second change: mode %s for %d regions, prepared in %d ms (computed in %d ms)" % [extras.flood.last_mode, many.size(), extras.flood.last_elapsed_ms, extras.flood.last_compute_ms])
+	await _wait(0.25)
+	await _shoot("flood-3-belgium-mid")
+	await _until(func() -> bool: return not extras.flood.busy(), 5.0)
+	await _wait(0.3)
+	await _shoot("flood-4-belgium-after")
+
+
+func _globe_checks() -> void:
+	var view: MapView = main.map_view
+	extras.apply_map_settings({"Globe": true})
+	await _frames(3)
+	_check(extras.globe.active and view.is_globe(), "the 3D globe switches on")
+	view.fly_to_lonlat(10.0, 30.0, 2.25, 0.0)
+	await _wait(3.0)
+	await _shoot("globe-1-far")
+	var centre := view.get_viewport_rect().size * 0.5
+	var world := view.screen_to_world(centre)
+	var back := view.world_to_screen(world)
+	_check(back.distance_to(centre) < 1.5, "a point on the globe projects back where it was picked (%.2f px)" % back.distance_to(centre))
+	var corner := view.screen_to_world(Vector2(4, 4))
+	_check(not extras.globe.screen_hits_globe(Vector2(4, 4)), "the corner of the screen is space, not the globe (%s)" % str(corner))
+	view.fly_to_lonlat(2.0, 47.0, 3.5, 0.0)
+	await _wait(3.0)
+	await _shoot("globe-2-europe")
+	view.fly_to_lonlat(2.0, 47.0, 6.0, 0.0)
+	await _wait(3.0)
+	await _shoot("globe-3-close")
+	view.fly_to_lonlat(2.35, 48.85, 11.4, 0.0)
+	await _wait(3.0)
+	await _shoot("globe-4-morph")
+	view.fly_to_lonlat(10.0, 30.0, 2.25, 0.0)
+	await _wait(1.0)
+	extras.globe.mark_interaction()
+	var before := view.camera.position.x
+	await _wait(4.2)
+	var moved := absf(view.camera.position.x - before)
+	_check(moved > 0.5, "the globe turns by itself when left alone (%.2f world units)" % moved)
+	extras.apply_map_settings({"map_disable_idle_rotation": true})
+	extras.globe.mark_interaction()
+	before = view.camera.position.x
+	await _wait(4.0)
+	_check(absf(view.camera.position.x - before) < 0.001, "the idle rotation stops when it is switched off")
+	extras.apply_map_settings({"map_disable_idle_rotation": false})
+	await _shoot("globe-5-turned")
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	_check(not extras.globe.active and not view.is_globe(), "the globe switches off again")
+	await _wait(1.0)
+	await _shoot("globe-6-flat-again")
+
+
+func _style_checks() -> void:
+	var view: MapView = main.map_view
+	view.fly_to_lonlat(10.0, 45.0, 3.6, 0.0)
+	for pick in ["atlas-relief-dark", "midnight-terrain", "imagery", "natgeo-dark", ""]:
+		await main.engine.request("mapextras.setGamePick", {"pick": pick})
+		extras.apply_map_settings({"gamePick": pick})
+		await extras.refresh_background()
+		await _wait(3.5)
+		await _shoot("style-%s" % (pick if not pick.is_empty() else "starting"))
+	extras.apply_map_settings({"Terrain": false})
+	await _wait(2.0)
+	await _shoot("style-no-terrain")
+	extras.apply_map_settings({"Terrain": true})
+
+
+func _offer_checks() -> void:
+	extras.offers.set_background({"missing": {"id": "test-relief", "name": "Test Relief", "version": 2, "bytes": 268435456}, "moreDetailedMaps": 1})
+	await _wait(1.0)
+	await _shoot("offer-1-missing")
+	extras.offers.set_background({"update": {"id": "test-relief", "name": "Test Relief", "version": 3, "have": 2, "needed": false, "bytes": 104857600}})
+	await _wait(1.0)
+	await _shoot("offer-2-update")
+	extras.offers.show_transition("atlas-relief")
+	await _wait(0.3)
+	await _shoot("offer-3-changing-basemap")
+	extras.offers.finish_transition()
+	extras.offers.set_background({})
 
 
 func _finish(code: int) -> void:
 	finished = true
+	_say("failures: %d" % failures.size())
 	main.engine.stop()
 	await _frames(2)
 	quit(code)

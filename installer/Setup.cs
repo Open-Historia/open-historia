@@ -107,7 +107,7 @@ namespace OpenHistoriaSetup
 
 		static void StopRunning(string folder)
 		{
-			foreach (var name in new[] { "godot", "node" })
+			foreach (var name in new[] { "Open Historia", "godot", "node" })
 			{
 				foreach (var process in Process.GetProcessesByName(name))
 				{
@@ -178,7 +178,7 @@ namespace OpenHistoriaSetup
 					return;
 				}
 				Say("Adding shortcuts…", 1f);
-				var godot = Path.Combine(target, "runtime", "godot.exe");
+				var godot = Path.Combine(target, "runtime", "Open Historia.exe");
 				var project = Path.Combine(target, "native", "godot");
 				var icon = Path.Combine(target, "runtime", "open-historia.ico");
 				var shellType = Type.GetTypeFromProgID("WScript.Shell");
@@ -198,7 +198,7 @@ namespace OpenHistoriaSetup
 				File.WriteAllText(uninstall, string.Join("\r\n", new[]
 				{
 					"$ErrorActionPreference = \"SilentlyContinue\"",
-					"Get-Process -Name godot | Where-Object { $_.Path -like \"" + target + "*\" } | Stop-Process -Force",
+					"Get-Process -Name \"Open Historia\" | Where-Object { $_.Path -like \"" + target + "*\" } | Stop-Process -Force",
 					"Get-Process -Name node | Where-Object { $_.Path -like \"" + target + "*\" } | Stop-Process -Force",
 					"Remove-Item (Join-Path ([Environment]::GetFolderPath(\"Programs\")) \"" + AppName + ".lnk\")",
 					"Remove-Item (Join-Path ([Environment]::GetFolderPath(\"Desktop\")) \"" + AppName + ".lnk\")",

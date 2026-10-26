@@ -47,7 +47,6 @@ static var _veil_shader: Shader
 
 var _content: VBoxContainer
 var _veil: ColorRect
-var _copy: BackBufferCopy
 
 
 func _init() -> void:
@@ -62,9 +61,6 @@ func _init() -> void:
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stack.add_child(_content)
 	_build_list()
-	_copy = BackBufferCopy.new()
-	_copy.copy_mode = BackBufferCopy.COPY_MODE_RECT
-	stack.add_child(_copy)
 	if not _veil_shader:
 		_veil_shader = Shader.new()
 		_veil_shader.code = VEIL_SHADER
@@ -93,9 +89,7 @@ func _init() -> void:
 	stack.resized.connect(func() -> void:
 		_content.size = Vector2(stack.size.x, _content.get_combined_minimum_size().y)
 		_veil.position = Vector2.ZERO
-		_veil.size = stack.size
-		_copy.rect = Rect2(Vector2.ZERO, stack.size)
-		cover.size = stack.size)
+		_veil.size = stack.size)
 	_content.minimum_size_changed.connect(func() -> void: stack.custom_minimum_size.y = _content.get_combined_minimum_size().y)
 	stack.custom_minimum_size.y = _content.get_combined_minimum_size().y
 

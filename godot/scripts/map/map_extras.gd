@@ -40,6 +40,10 @@ var settings := {
 	"gamePick": null,
 	"reduceMotion": false,
 	"transitionMode": "",
+	"constrained": false,
+	"hideCountryLabels": false,
+	"labelFont": "",
+	"mapMode": "political",
 }
 var world: Dictionary = {}
 var background: Dictionary = {}
@@ -99,6 +103,10 @@ func setup(link: EngineLink, context: Dictionary) -> void:
 		map_view.basemap.connect("loading_changed", offers.set_loading)
 	if map_view.extras_ready():
 		_build_slots()
+		flood.rebuild()
+		flood.capture()
+		overlays.rebuild()
+		season.rebuild()
 	if engine:
 		var reply: Dictionary = await engine.request("mapextras.settings")
 		if bool(reply.get("ok", false)) and reply.get("result") is Dictionary:

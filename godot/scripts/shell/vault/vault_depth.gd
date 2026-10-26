@@ -76,20 +76,45 @@ func _shadow(leaf: Dictionary) -> void:
 		_fill(points, Color(0, 0, 0, 0.16))
 
 
-func _fill(points: PackedVector2Array, color: Color) -> void:
-	if points.size() < 3:
+func _fill(given: PackedVector2Array, color: Color) -> void:
+	var count := given.size()
+	if count < 3:
 		return
 	var area := 0.0
-	for index in range(points.size()):
-		var a := points[index]
-		var b := points[(index + 1) % points.size()]
-		area += a.x * b.y - b.x * a.y
-	if absf(area) < 0.02:
+	for index in range(count):
+		area += given[index].cross(given[(index + 1) % count])
+	if absf(area) < 0.0001:
 		return
-	if points.size() == 4:
-		draw_primitive(points, PackedColorArray([color, color, color, color]), PackedVector2Array())
-	else:
-		draw_colored_polygon(points, color)
+	var points := PackedVector2Array(given)
+	if area < 0.0:
+		points.reverse()
+	var normals := PackedVector2Array()
+	for index in range(count):
+		var edge := points[(index + 1) % count] - points[index]
+		var length := edge.length()
+		normals.append(Vector2(edge.y, -edge.x) / length if length > 1e-6 else Vector2.ZERO)
+	var vertices := PackedVector2Array()
+	var colors := PackedColorArray()
+	var clear := Color(color, 0.0)
+	for index in range(count):
+		var before := normals[(index - 1 + count) % count]
+		var after := normals[index]
+		var sum := before + after
+		var offset := after * 0.5
+		if sum.length() > 1e-6:
+			var direction := sum.normalized()
+			offset = direction * minf(0.5 / maxf(direction.dot(after), 0.25), 2.0)
+		vertices.append(points[index] - offset)
+		colors.append(color)
+		vertices.append(points[index] + offset)
+		colors.append(clear)
+	var indices := PackedInt32Array()
+	for index in range(1, count - 1):
+		indices.append_array([0, 2 * index, 2 * (index + 1)])
+	for index in range(count):
+		var next := (index + 1) % count
+		indices.append_array([2 * index, 2 * next, 2 * next + 1, 2 * index, 2 * next + 1, 2 * index + 1])
+	RenderingServer.canvas_item_add_triangle_array(get_canvas_item(), indices, vertices, colors)
 
 
 func _quad(side: Dictionary, from: float, to: float, deep_from := 0.0, deep_to := 1.0) -> PackedVector2Array:

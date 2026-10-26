@@ -1,103 +1,65 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const EXTRA_MODULES = Object.freeze({
-  politicalKnowledge: "src/runtime/politicalKnowledge.js",
-  politicalPresentation: "src/runtime/politicalPresentation.js",
-  statsHistoricalTracking: "src/Game/GameUI/statsHistoricalTracking.js",
-  puppets: "src/runtime/puppets.js",
-  groups: "src/runtime/groups.js",
-  militaryPower: "src/runtime/militaryPower.js",
-  militaryRating: "src/Game/AI/militaryRating.js",
-  militaryStats: "src/runtime/militaryStats.js",
-  countryRanking: "src/Game/GameUI/countryRanking.js",
-  powerStatus: "src/runtime/powerStatus.js",
-  countryTags: "src/runtime/countryTags.js",
-  countryStats: "src/runtime/countryStats.js",
-  gameplaySchemas: "src/Game/AI/gameplaySchemas.js",
-  warSettings: "src/runtime/warSettings.js",
-  attrition: "src/runtime/attrition.js",
-  warResources: "src/runtime/warResources.js",
-  alliances: "src/runtime/alliances.js",
-  peaceTerms: "src/runtime/peaceTerms.js",
-  warWeariness: "src/runtime/warWeariness.js",
-  afterActionData: "src/Game/GameUI/afterActionData.js",
-  gameDates: "src/runtime/gameDates.js",
-  polityIdentity: "src/runtime/polityIdentity.js",
-  countryInfoPanel: "src/runtime/countryInfoPanel.js",
-  polityFlags: "src/runtime/polityFlags.js",
-  structurePlacement: "src/runtime/structurePlacement.js",
-  mapClaims: "src/runtime/mapClaims.js",
-  gameFeatures: "src/runtime/gameFeatures.js",
-  countryNames: "src/runtime/generated/countryNames.js",
-  regionInfo: "src/Game/Selection/regionInfo.js",
-  mapCards: "src/Game/Selection/mapCards.js",
-  scenarioCanon: "src/runtime/scenarioCanon.js",
-  ownerNames: "src/runtime/ownerNames.js",
-  regionNameFixes: "src/runtime/regionNameFixes.js",
-  listenIn: "src/runtime/listenIn.js",
-  i18n: "src/runtime/i18n.js",
-  communityFlags: "src/runtime/communityFlags.js",
-  gameFlagChoices: "src/Game/GameUI/gameFlagChoices.js",
-  hubFiles: "src/runtime/hubFiles.js",
+  politicalKnowledge: "ctPoliticalKnowledge",
+  politicalPresentation: "ctPoliticalPresentation",
+  statsHistoricalTracking: "ctStatsHistoricalTracking",
+  puppets: "ctPuppets",
+  groups: "ctGroups",
+  militaryPower: "ctMilitaryPower",
+  militaryRating: "ctMilitaryRating",
+  militaryStats: "ctMilitaryStats",
+  countryRanking: "ctCountryRanking",
+  powerStatus: "ctPowerStatus",
+  countryTags: "ctCountryTags",
+  countryStats: "ctCountryStats",
+  gameplaySchemas: "ctGameplaySchemas",
+  warSettings: "ctWarSettings",
+  attrition: "ctAttrition",
+  warResources: "ctWarResources",
+  alliances: "ctAlliances",
+  peaceTerms: "ctPeaceTerms",
+  warWeariness: "ctWarWeariness",
+  afterActionData: "ctAfterActionData",
+  gameDates: "ctGameDates",
+  polityIdentity: "ctPolityIdentity",
+  countryInfoPanel: "ctCountryInfoPanel",
+  polityFlags: "ctPolityFlags",
+  structurePlacement: "ctStructurePlacement",
+  mapClaims: "ctMapClaims",
+  gameFeatures: "ctGameFeatures",
+  countryNames: "ctCountryNames",
+  regionInfo: "ctRegionInfo",
+  mapCards: "ctMapCards",
+  scenarioCanon: "ctScenarioCanon",
+  ownerNames: "ctOwnerNames",
+  regionNameFixes: "ctRegionNameFixes",
+  listenIn: "ctListenIn",
+  i18n: "ctI18n",
+  communityFlags: "ctCommunityFlags",
+  gameFlagChoices: "ctGameFlagChoices",
+  hubFiles: "ctHubFiles",
 });
 
-let extrasPromise = null;
+let extrasFound = null;
 
-export const loadExtras = (ctx) => {
-  if (extrasPromise) return extrasPromise;
-  extrasPromise = (async () => {
-    const found = {};
-    const missing = [];
-    for (const name of Object.keys(EXTRA_MODULES)) {
-      if (ctx.engine[name] && typeof ctx.engine[name] === "object") found[name] = ctx.engine[name];
-      else missing.push(name);
-    }
-    if (!missing.length) return found;
-    const source = missing
-      .map((name) => `export * as ${name} from ${JSON.stringify(path.join(ctx.repo, EXTRA_MODULES[name]).replace(/\\/g, "/"))};`)
-      .join("\n");
-    const dir = path.join(ctx.cacheDir, "native-extras");
-    fs.mkdirSync(dir, { recursive: true });
-    for (const stale of fs.readdirSync(dir)) {
-      if (stale.startsWith("country-") && !stale.includes(`-${process.pid}.`)) {
-        try {
-          fs.rmSync(path.join(dir, stale), { force: true });
-        } catch {
-          continue;
-        }
-      }
-    }
-    const entry = path.join(dir, `country-${process.pid}.entry.mjs`);
-    const out = path.join(dir, `country-${process.pid}.mjs`);
-    fs.writeFileSync(entry, source);
-    const { build } = await import("esbuild");
-    await build({
-      entryPoints: [entry],
-      outfile: out,
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      target: "node22",
-      absWorkingDir: ctx.repo,
-      loader: { ".js": "jsx", ".jsx": "jsx" },
-      jsx: "automatic",
-      define: {
-        "import.meta.env": JSON.stringify({ VITE_OH_WEB: false, VITE_OH_NATIVE: false, MODE: "native", DEV: false, PROD: true, BASE_URL: "/" }),
-      },
-      banner: { js: "import { createRequire as __ohCreateRequire } from 'node:module'; const require = __ohCreateRequire(import.meta.url);" },
-      logLevel: "silent",
-    });
-    const module = await import(pathToFileURL(out).href);
-    for (const name of missing) found[name] = module[name];
-    return found;
-  })().catch((error) => {
-    extrasPromise = null;
-    throw error;
-  });
-  return extrasPromise;
+export const loadExtras = async (ctx) => {
+  if (extrasFound) return extrasFound;
+  const found = {};
+  const missing = [];
+  for (const [name, exported] of Object.entries(EXTRA_MODULES)) {
+    const module = ctx.engine[exported];
+    if (module && typeof module === "object") found[name] = module;
+    else missing.push(exported);
+  }
+  if (missing.length) {
+    console.error(`[country] engine bundle lacks ${missing.join(", ")}`);
+    throw new Error("This build of the app is missing part of the game engine.");
+  }
+  extrasFound = found;
+  return found;
 };
 
 export const asArray = (value) => (Array.isArray(value) ? value : []);

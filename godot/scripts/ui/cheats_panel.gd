@@ -18,10 +18,11 @@ const ROSE := Color("#fda4af")
 const GREEN := Color("#86efac")
 const AMBER := Color("#fbbf24")
 const BLUE_LINK := Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.82)
-const NOT_NATIVE_PUPPETS := "Changing puppet states is not in the native app yet."
-const NOT_NATIVE_POLITICS := "Political World editing is not in the native app yet."
 const NOT_NATIVE_FORCES := "The Force Manager is not in the native app yet."
-const NOT_NATIVE_CLIPBOARD := "Copying the political debug data is not in the native app yet."
+const PUPPET_KINDS := [["protectorate", "Protectorate"], ["satellite", "Puppet state"], ["client", "Client state"]]
+const PUPPET_SECRECY := [["open", "Openly known"], ["covert", "Covert"]]
+const REPRESENTATION_OPTIONS := [["electoral", "Electoral"], ["court_factions", "Court factions"], ["party_state", "Party state"], ["elite_factions", "Elite factions"], ["military_factions", "Military factions"], ["revolutionary_factions", "Revolutionary factions"], ["colonial", "Colonial"], ["none", "None"]]
+const REGIME_OPTIONS := [["democratic", "Democratic"], ["hybrid", "Hybrid"], ["authoritarian", "Authoritarian"], ["totalitarian", "Totalitarian"], ["theocratic", "Theocratic"], ["military", "Military"], ["colonial", "Colonial"], ["other", "Other"]]
 
 const TOOLS := [
 	{"id": "master-ai", "title": "GM Console", "subtitle": "Master AI · AI-assisted world intervention and canonical changes", "icon": "✦", "badge": "AI"},
@@ -105,6 +106,11 @@ var _ticker: Timer
 var _gm_preview_node: Control
 var _gm_generate_button: Button
 var _list_holder: VBoxContainer
+var _trait_inputs: Dictionary = {}
+var _trait_tags: Dictionary = {}
+var _trait_alias: Dictionary = {}
+var _traits_json_edit: TextEdit
+var _syncing := false
 
 
 func _ready() -> void:
@@ -238,6 +244,27 @@ func gm_preview(text: String, mode: String) -> Dictionary:
 	return {"ok": not view.is_empty(), "error": "" if not view.is_empty() else _status, "summary": str(view.get("summary", ""))}
 
 
+func edit_country(country: String) -> void:
+	await open_tool("edit-country")
+	var code := country
+	var wanted := country.strip_edges().to_lower()
+	for polity in _polities:
+		var entry: Dictionary = polity
+		if str(entry.get("code", "")).to_lower() == wanted or str(entry.get("name", "")).to_lower() == wanted:
+			code = str(entry.get("code", ""))
+			break
+	await _ce_load(code)
+
+
+func open_new_puppet() -> void:
+	await open_tool("puppets")
+	_s["pp_editing"] = ""
+	_s["pp_form"] = _pp_defaults()
+	_s["pp_armed"] = ""
+	_status = ""
+	_render()
+
+
 func _go(tool: String) -> void:
 	_tool = tool
 	_status = ""
@@ -345,6 +372,9 @@ func _render() -> void:
 	_gm_preview_node = null
 	_gm_generate_button = null
 	_list_holder = null
+	_trait_inputs = {}
+	_trait_tags = {}
+	_traits_json_edit = null
 	if _tool.is_empty():
 		_render_home()
 	else:
@@ -715,6 +745,7 @@ func _details(title: String, key: String, default_open: bool, parent: Container,
 	var inner := VBoxContainer.new()
 	inner.add_theme_constant_override("separation", 6)
 	inner.visible = opened
+	inner.set_meta("toggle", toggle)
 	parent.add_child(inner)
 	return inner
 
@@ -1546,7 +1577,23 @@ func _ce_load(code: String) -> void:
 		_s["ce_baseline"] = (result.get("form", {}) as Dictionary).duplicate()
 		_s["ce_components"] = int(result.get("componentCount", 0))
 		_s["ce_per_capita"] = result.get("perCapita")
-		_s["ce_political"] = bool(result.get("politicalExists", false))
+		var politics: Variant = result.get("politics")
+		if typeof(politics) == TYPE_DICTIONARY:
+			_s["ce_politics"] = (politics as Dictionary).duplicate(true)
+			_s["ce_politics_base"] = (politics as Dictionary).duplicate(true)
+		else:
+			_s.erase("ce_politics")
+			_s.erase("ce_politics_base")
+		_s["ce_registry"] = result.get("registry", [])
+		_s["ce_debug"] = result.get("debug") if typeof(result.get("debug")) == TYPE_DICTIONARY else {}
+		_s["ce_decision"] = str(result.get("decisionContext", ""))
+		_trait_alias = {}
+		for entry_value in _s["ce_registry"]:
+			var entry: Dictionary = entry_value
+			var key := str(entry.get("key", ""))
+			_trait_alias[_clean_trait_key(key)] = key
+			for alias in entry.get("aliases", []):
+				_trait_alias[_clean_trait_key(str(alias))] = key
 	else:
 		_status = "Failed: %s" % str(reply.get("error", ""))
 	_render()
@@ -1632,24 +1679,10 @@ func _render_country_form(target: String) -> void:
 	identity_column.add_child(color_row)
 	_body.add_child(identity[0])
 	_body.add_child(_gap(10))
-	var politics: Array = _field_box(5)
-	var politics_column: VBoxContainer = politics[1]
-	var politics_head := HBoxContainer.new()
-	politics_head.add_theme_constant_override("separation", 8)
-	var politics_text := VBoxContainer.new()
-	politics_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	politics_text.add_child(_section_label("Political World"))
-	politics_text.add_child(_note("Canonical political truth used by the Advisor, diplomacy, institutions and simulation. This is not a Stats-side copy.", 10, Color(1, 1, 1, 0.42)))
-	politics_head.add_child(politics_text)
-	var exists := bool(_s.get("ce_political", false))
-	politics_head.add_child(_pill_label("CANONICAL ACTOR" if exists else "NEW ACTOR", GREEN if exists else AMBER, Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.12) if exists else Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.28) if exists else Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.28)))
-	politics_column.add_child(politics_head)
-	for section_title in ["Government & political system", "Strategic outlook · goals, fears, ambitions, pressure", "Parties / political entities", "Power blocs / non-party actors", "Political traits · full supported catalog", "Advanced structured traits & perceptions", "Political Debug · prove what the simulator sees"]:
-		var dim := _btn("▸ " + str(section_title), "link", 11)
-		dim.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		UI.set_disabled_look(dim, NOT_NATIVE_POLITICS if section_title != "Political Debug · prove what the simulator sees" else NOT_NATIVE_CLIPBOARD)
-		politics_column.add_child(dim)
-	_body.add_child(politics[0])
+	if _s.has("ce_politics"):
+		var politics_box: Array = _field_box(6)
+		_render_politics(politics_box[1])
+		_body.add_child(politics_box[0])
 	var components := int(_s.get("ce_components", 0))
 	if components == 0:
 		_body.add_child(_gap(10))
@@ -1713,7 +1746,11 @@ func _render_country_form(target: String) -> void:
 	_enable(save, not _busy)
 	save.pressed.connect(func() -> void:
 		var code := _sv("ce_target")
-		var reply := await _run("cheats.country.save", {"code": code, "form": _sd("ce_form"), "baseline": _sd("ce_baseline"), "componentCount": int(_s.get("ce_components", 0)), "fallbackName": _name_of(code)})
+		var payload := {"code": code, "form": _sd("ce_form"), "baseline": _sd("ce_baseline"), "componentCount": int(_s.get("ce_components", 0)), "fallbackName": _name_of(code)}
+		if _s.has("ce_politics"):
+			payload["politics"] = _sd("ce_politics")
+			payload["politicsBaseline"] = _sd("ce_politics_base")
+		var reply := await _run("cheats.country.save", payload)
 		if reply.get("ok", false):
 			var message := _status
 			await refresh()
@@ -2212,12 +2249,39 @@ func _render_groups() -> void:
 	_status_line(_body)
 
 
+func _pp_defaults() -> Dictionary:
+	return {"overlord": "", "puppet": "", "kind": "satellite", "secrecy": "open", "loyalty": 50}
+
+
+func _pp_key(row: Dictionary) -> String:
+	return "%s→%s" % [str(row.get("overlord", "")), str(row.get("puppet", ""))]
+
+
+func _pp_current() -> Dictionary:
+	var editing := _sv("pp_editing")
+	if editing.is_empty():
+		return {}
+	for row_value in _sd("puppets").get("live", []):
+		var row: Dictionary = row_value
+		if _pp_key(row) == editing:
+			return row
+	return {}
+
+
 func _render_puppets() -> void:
 	_meta_header()
 	var data := _sd("puppets")
 	var intro: Array = _box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.17), 10, Vector4(10, 9, 10, 9))
 	(intro[1] as VBoxContainer).add_child(_note("A puppet stays a separate country with its own land; its overlord directs it. The rules are the ledger's: one overlord each, no puppet holds puppets of its own, and a secret once public stays public. The next time skip is told of each change.", 11, Color("#e4e4e7")))
 	_body.add_child(intro[0])
+	if _s.has("pp_editing"):
+		_render_puppet_editor(data)
+	else:
+		_render_puppet_list(data)
+	_status_line(_body)
+
+
+func _render_puppet_list(data: Dictionary) -> void:
 	_body.add_child(_gap(9))
 	var live: Array = data.get("live", [])
 	if not _s.has("puppets"):
@@ -2226,15 +2290,30 @@ func _render_puppets() -> void:
 		_body.add_child(_note("No country is anyone's puppet now.", 11, Color(1, 1, 1, 0.42)))
 	for row_value in live:
 		var row: Dictionary = row_value
-		var card: Array = _box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, Vector4(11, 8, 11, 8), 2)
-		(card[1] as VBoxContainer).add_child(_note(str(row.get("title", "")), 13, UI.WHITE, 750))
-		(card[1] as VBoxContainer).add_child(_note(str(row.get("meta", "")), 10, Color(1, 1, 1, 0.5), 500))
-		UI.set_disabled_look(card[0], NOT_NATIVE_PUPPETS)
-		_body.add_child(card[0])
+		var panel := PanelContainer.new()
+		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 2)
+		column.add_child(_note(str(row.get("title", "")), 13, UI.WHITE, 750))
+		column.add_child(_note(str(row.get("meta", "")), 10, Color(1, 1, 1, 0.5), 500))
+		panel.add_child(column)
+		_clickable(panel, UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, 1, Vector4(11, 8, 11, 8)), UI.box(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.2), 8, 1, Vector4(11, 8, 11, 8)), func() -> void:
+			_s["pp_editing"] = _pp_key(row)
+			_s["pp_form"] = {"overlord": str(row.get("overlord", "")), "puppet": str(row.get("puppet", "")), "kind": str(row.get("kind", "client")), "secrecy": "covert" if str(row.get("secrecy", "")) == "covert" else "open", "loyalty": clampi(int(row.get("loyalty", 50)), 0, 100)}
+			_s["pp_armed"] = ""
+			_status = ""
+			_render())
+		_body.add_child(panel)
 		_body.add_child(_gap(5))
 	_body.add_child(_gap(4))
 	var create := _btn("New puppet state", "primary")
-	UI.set_disabled_look(create, NOT_NATIVE_PUPPETS)
+	_enable(create, not _busy and _s.has("puppets"))
+	create.pressed.connect(func() -> void:
+		_s["pp_editing"] = ""
+		_s["pp_form"] = _pp_defaults()
+		_s["pp_armed"] = ""
+		_status = ""
+		_render())
 	_body.add_child(create)
 	var ended: Array = data.get("ended", [])
 	if not ended.is_empty():
@@ -2244,7 +2323,582 @@ func _render_puppets() -> void:
 		for line in ended:
 			inner.add_child(_note(str(line), 11, Color(1, 1, 1, 0.5)))
 		_body.add_child(holder)
-	_status_line(_body)
+
+
+func _render_puppet_editor(data: Dictionary) -> void:
+	var is_new := _sv("pp_editing").is_empty()
+	var form := _sd("pp_form")
+	var current := _pp_current()
+	_body.add_child(_gap(9))
+	var back := _btn("← All puppet states")
+	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	back.pressed.connect(func() -> void:
+		_s.erase("pp_editing")
+		_s["pp_armed"] = ""
+		_status = ""
+		_render())
+	_body.add_child(back)
+	_body.add_child(_gap(9))
+	var box: Array = _field_box(4)
+	var column: VBoxContainer = box[1]
+	column.add_child(_section_label("New puppet state" if is_new else "%s → %s" % [str(form.get("overlord", "")), str(form.get("puppet", ""))]))
+	var save := _btn("Make it a puppet state" if is_new else "Save", "primary")
+	var sync_save := func() -> void:
+		var draft := _sd("pp_form")
+		_enable(save, not _busy and (not is_new or (not str(draft.get("overlord", "")).is_empty() and not str(draft.get("puppet", "")).is_empty())))
+	if is_new:
+		column.add_child(_field_label("Overlord", 4))
+		column.add_child(_polity_select(str(form.get("overlord", "")), "Pick the overlord…", func(code: String) -> void:
+			var draft := _sd("pp_form")
+			draft["overlord"] = code
+			sync_save.call()))
+		column.add_child(_field_label("Puppet"))
+		column.add_child(_polity_select(str(form.get("puppet", "")), "Pick the puppet…", func(code: String) -> void:
+			var draft := _sd("pp_form")
+			draft["puppet"] = code
+			sync_save.call()))
+	column.add_child(_field_label("Kind", 9 if is_new else 4))
+	column.add_child(_select(PUPPET_KINDS, str(form.get("kind", "satellite")), "", func(value: String) -> void:
+		var draft := _sd("pp_form")
+		draft["kind"] = value))
+	if is_new:
+		column.add_child(_field_label("Known"))
+		column.add_child(_select(PUPPET_SECRECY, str(form.get("secrecy", "open")), "", func(value: String) -> void:
+			var draft := _sd("pp_form")
+			draft["secrecy"] = value))
+	column.add_child(_field_label("Loyalty"))
+	var loyalty: int = clampi(int(form.get("loyalty", 50)), 0, 100)
+	var coup := int(data.get("coupLoyalty", 35))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.step = 1
+	slider.value = loyalty
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	slider.focus_mode = Control.FOCUS_NONE
+	var value_label := UI.label(str(loyalty), 12, UI.WHITE)
+	value_label.custom_minimum_size.x = 32
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var warning := _note("This low, the puppet starts plotting against its overlord.", 11, AMBER)
+	warning.visible = loyalty < coup
+	slider.value_changed.connect(func(next: float) -> void:
+		var draft := _sd("pp_form")
+		draft["loyalty"] = int(next)
+		value_label.text = str(int(next))
+		warning.visible = int(next) < coup)
+	row.add_child(slider)
+	row.add_child(value_label)
+	column.add_child(row)
+	column.add_child(warning)
+	if str(current.get("secrecy", "")) == "covert":
+		column.add_child(_note("Covert: only the two of them know, until someone's spies find out.", 11, Color(1, 1, 1, 0.5)))
+	column.add_child(_gap(6))
+	sync_save.call()
+	save.pressed.connect(func() -> void: _pp_change("install" if is_new else "edit"))
+	column.add_child(save)
+	_body.add_child(box[0])
+	if current.is_empty():
+		return
+	var armed := _sv("pp_armed")
+	var overlord := str(current.get("overlord", ""))
+	var puppet := str(current.get("puppet", ""))
+	_body.add_child(_gap(9))
+	if str(current.get("secrecy", "")) == "covert":
+		var reveal := _btn("Make it public")
+		_enable(reveal, not _busy)
+		reveal.pressed.connect(func() -> void: _pp_change("reveal"))
+		_body.add_child(reveal)
+		_body.add_child(_gap(6))
+	var release := _btn("Release %s — click again to confirm" % puppet if armed == "release" else "Release")
+	release.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_enable(release, not _busy)
+	release.pressed.connect(func() -> void:
+		if _sv("pp_armed") != "release":
+			_s["pp_armed"] = "release"
+			_render()
+			return
+		_pp_change("release"))
+	_body.add_child(release)
+	_body.add_child(_gap(6))
+	var annex := _btn("Annex %s and all its land into %s — click again to confirm" % [puppet, overlord] if armed == "annex" else "Annex", "danger")
+	annex.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	(annex.get_theme_stylebox("normal") as StyleBoxFlat).border_color = Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.5)
+	annex.add_theme_color_override("font_color", FAIL_INK)
+	_enable(annex, not _busy)
+	annex.pressed.connect(func() -> void:
+		if _sv("pp_armed") != "annex":
+			_s["pp_armed"] = "annex"
+			_render()
+			return
+		_pp_change("annex"))
+	_body.add_child(annex)
+
+
+func _pp_change(op: String) -> void:
+	var form := _sd("pp_form")
+	var current := _pp_current()
+	var overlord := str(form.get("overlord", "")) if op == "install" or current.is_empty() else str(current.get("overlord", ""))
+	var puppet := str(form.get("puppet", "")) if op == "install" or current.is_empty() else str(current.get("puppet", ""))
+	var names := {overlord: _name_of(overlord), puppet: _name_of(puppet)}
+	var reply := await _run("cheats.puppets.change", {"op": op, "overlord": overlord, "puppet": puppet, "kind": str(form.get("kind", "satellite")), "secrecy": str(form.get("secrecy", "open")), "loyalty": int(form.get("loyalty", 50)), "names": names})
+	if reply.get("ok", false):
+		if bool((reply["result"] as Dictionary).get("closeEditor", false)):
+			_s.erase("pp_editing")
+		if op == "release" or op == "annex":
+			_s["pp_armed"] = ""
+	await _load_into("cheats.puppets.get", {}, "puppets")
+	if op == "annex" and reply.get("ok", false):
+		await refresh()
+	_render()
+
+
+func _cp() -> Dictionary:
+	return _sd("ce_politics")
+
+
+func _cp_field(label: String, field: Control) -> Control:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_child(UI.label(label.to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
+	column.add_child(field)
+	return column
+
+
+func _cp_line(label: String, key: String) -> Control:
+	return _cp_field(label, _line(str(_cp().get(key, "")), "", func(text: String) -> void:
+		var politics := _cp()
+		politics[key] = text))
+
+
+func _cp_select(label: String, key: String, options: Array, placeholder: String) -> Control:
+	return _cp_field(label, _select(options, str(_cp().get(key, "")), placeholder, func(value: String) -> void:
+		var politics := _cp()
+		politics[key] = value))
+
+
+func _cp_area(label: String, key: String, placeholder := "", rows := 4) -> Control:
+	return _cp_field(label, _area(str(_cp().get(key, "")), placeholder, rows, func(text: String) -> void:
+		var politics := _cp()
+		politics[key] = text))
+
+
+func _cp_entry_set(list_key: String, index: int, key: String, value: Variant) -> void:
+	var entries: Array = _cp().get(list_key, [])
+	if index >= 0 and index < entries.size():
+		var entry: Dictionary = entries[index]
+		entry[key] = value
+
+
+func _cp_entry_line(list_key: String, index: int, label: String, key: String, on_change: Callable = Callable()) -> Control:
+	var entries: Array = _cp().get(list_key, [])
+	var entry: Dictionary = entries[index]
+	return _cp_field(label, _line(str(entry.get(key, "")), "", func(text: String) -> void:
+		_cp_entry_set(list_key, index, key, text)
+		if on_change.is_valid():
+			on_change.call()))
+
+
+func _cp_entry_area(list_key: String, index: int, label: String, key: String) -> Control:
+	var entries: Array = _cp().get(list_key, [])
+	var entry: Dictionary = entries[index]
+	return _cp_field(label, _area(str(entry.get(key, "")), "", 3, func(text: String) -> void: _cp_entry_set(list_key, index, key, text)))
+
+
+func _cp_party_title(party: Dictionary, index: int) -> String:
+	var name := str(party.get("name", ""))
+	var title := name if not name.is_empty() else "Political entity %d" % (index + 1)
+	if bool(party.get("ruling", false)):
+		title += " · Government"
+	elif bool(party.get("coalition", false)):
+		title += " · Coalition"
+	return title
+
+
+func _cp_bloc_title(bloc: Dictionary, index: int) -> String:
+	var name := str(bloc.get("name", ""))
+	return name if not name.is_empty() else "Power bloc %d" % (index + 1)
+
+
+func _base36(value: int) -> String:
+	var digits := "0123456789abcdefghijklmnopqrstuvwxyz"
+	if value <= 0:
+		return "0"
+	var out := ""
+	var rest := value
+	while rest > 0:
+		out = digits[rest % 36] + out
+		rest = floori(rest / 36.0)
+	return out
+
+
+func _now_id() -> String:
+	return _base36(int(Time.get_unix_time_from_system() * 1000.0))
+
+
+func _render_politics(column: VBoxContainer) -> void:
+	var politics := _cp()
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	var head_text := VBoxContainer.new()
+	head_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head_text.add_child(_section_label("Political World"))
+	head_text.add_child(_note("Canonical political truth used by the Advisor, diplomacy, institutions and simulation. This is not a Stats-side copy.", 10, Color(1, 1, 1, 0.42)))
+	head.add_child(head_text)
+	var exists := bool(politics.get("exists", false))
+	head.add_child(_pill_label("CANONICAL ACTOR" if exists else "NEW ACTOR", GREEN if exists else AMBER, Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.12) if exists else Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.28) if exists else Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.28)))
+	column.add_child(head)
+	var government := _details("Government & political system", "cp_government", true, column, 12, 850)
+	var grid := _two_columns()
+	for pair in [["Government form", "governmentForm"], ["Government ideology", "governmentIdeology"], ["Head of state", "headOfState"], ["Head of government", "headOfGovernment"], ["Operative political leader", "politicalLeader"], ["Government status", "governmentStatus"], ["Coalition / cabinet name", "coalitionName"], ["Political system type", "politicalSystemType"]]:
+		grid.add_child(_cp_line(str(pair[0]), str(pair[1])))
+	grid.add_child(_cp_select("Representation model", "politicalRepresentation", REPRESENTATION_OPTIONS, "Auto / unspecified"))
+	grid.add_child(_cp_select("Regime character", "regimeCharacter", REGIME_OPTIONS, "Unspecified"))
+	grid.add_child(_cp_line("Government approval / 100", "approval"))
+	grid.add_child(_cp_line("Political stability / 100", "politicalStability"))
+	government.add_child(grid)
+	government.add_child(_cp_line("Public system label", "politicalSystemLabel"))
+	government.add_child(_cp_area("Political-system notes", "politicalSystemNotes"))
+	var outlook := _details("Strategic outlook · goals, fears, ambitions, pressure", "cp_outlook", true, column, 12, 850)
+	outlook.add_child(_note("One item per line. These are canonical causal inputs, not flavor text.", 10, Color(1, 1, 1, 0.38)))
+	outlook.add_child(_cp_area("Goals", "goalsText", "One goal per line"))
+	outlook.add_child(_cp_area("Fears", "fearsText", "One fear per line"))
+	outlook.add_child(_cp_area("Ambitions", "ambitionsText", "One ambition per line"))
+	outlook.add_child(_cp_area("Domestic pressure notes", "domesticPressuresText", "One pressure per line"))
+	_render_parties(column)
+	_render_blocs(column)
+	_render_trait_catalog(column)
+	var advanced := _details("Advanced structured traits & perceptions", "cp_json", false, column, 12, 850)
+	advanced.add_child(_note("Raw JSON remains available for power users and legacy extension traits. Registered canonical trait keys stay synchronized with the controls above whenever this JSON is valid.", 10, Color(1, 1, 1, 0.44)))
+	var traits_json := _area(str(politics.get("traitsJson", "{}")), "", 10, func(text: String) -> void:
+		if not _syncing:
+			_cp_traits_json(text))
+	_mono(traits_json)
+	_traits_json_edit = traits_json
+	advanced.add_child(_cp_field("Traits JSON", traits_json))
+	var perceptions_json := _area(str(politics.get("perceptionsJson", "{}")), "", 12, func(text: String) -> void:
+		var current := _cp()
+		current["perceptionsJson"] = text)
+	_mono(perceptions_json)
+	advanced.add_child(_cp_field("Perceptions JSON", perceptions_json))
+	_render_political_debug(column)
+
+
+func _mono(edit: TextEdit) -> void:
+	edit.add_theme_font_override("font", UI.font(400, "Consolas"))
+	edit.add_theme_font_size_override("font_size", 10)
+
+
+func _render_parties(column: VBoxContainer) -> void:
+	var parties: Array = _cp().get("parties", [])
+	var section := _details("Parties / political entities (%d)" % parties.size(), "cp_parties", true, column, 12, 850)
+	section.add_child(_note("Ruling and coalition membership writes directly to canonical government party IDs.", 10, Color(1, 1, 1, 0.38)))
+	for index in range(parties.size()):
+		var party: Dictionary = parties[index]
+		var card: Array = _box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.08), 9, Vector4(8, 4, 8, 8), 5)
+		var inner := _details(_cp_party_title(party, index), "cp_party_%d" % index, false, card[1], 11, 800)
+		var toggle: Button = inner.get_meta("toggle")
+		var retitle := func() -> void:
+			if is_instance_valid(toggle):
+				toggle.text = toggle.text.substr(0, 2) + _cp_party_title(party, index)
+		var grid := _two_columns()
+		grid.add_child(_cp_entry_line("parties", index, "Name", "name", retitle))
+		grid.add_child(_cp_entry_line("parties", index, "Short name", "shortName"))
+		grid.add_child(_cp_entry_line("parties", index, "Leader", "leader"))
+		grid.add_child(_cp_entry_line("parties", index, "Ideology", "ideology"))
+		grid.add_child(_cp_entry_line("parties", index, "Support (%)", "supportPercent"))
+		grid.add_child(_cp_entry_line("parties", index, "Influence (%)", "influencePercent"))
+		inner.add_child(grid)
+		var flags := HBoxContainer.new()
+		flags.add_theme_constant_override("separation", 14)
+		var ruling := bool(party.get("ruling", false))
+		flags.add_child(_check("Ruling / government", ruling, func(on: bool) -> void:
+			_cp_entry_set("parties", index, "ruling", on)
+			_render()))
+		var coalition := _check("Coalition partner", bool(party.get("coalition", false)), func(on: bool) -> void:
+			_cp_entry_set("parties", index, "coalition", on)
+			_render())
+		coalition.disabled = ruling
+		flags.add_child(coalition)
+		inner.add_child(flags)
+		inner.add_child(_cp_entry_area("parties", index, "Public description", "publicDescription"))
+		inner.add_child(_cp_entry_area("parties", index, "Public priorities · one per line", "publicPrioritiesText"))
+		inner.add_child(_cp_entry_area("parties", index, "Foreign-policy outlook · one per line", "publicForeignPolicyText"))
+		var remove := _btn("Remove political entity")
+		remove.add_theme_color_override("font_color", FAIL_INK)
+		remove.add_theme_color_override("font_hover_color", FAIL_INK)
+		remove.pressed.connect(func() -> void:
+			var entries: Array = _cp().get("parties", [])
+			if index < entries.size():
+				entries.remove_at(index)
+			_render())
+		inner.add_child(remove)
+		section.add_child(card[0])
+	var add := _btn("+ Add political entity")
+	add.pressed.connect(func() -> void:
+		var politics := _cp()
+		var entries: Array = politics.get("parties", [])
+		entries.append({"id": "custom-party-" + _now_id(), "name": "New political entity", "shortName": "", "leader": "", "ideology": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "supportPercent": "", "influencePercent": "", "influenceLabel": "", "ruling": false, "coalition": false})
+		politics["parties"] = entries
+		_render())
+	section.add_child(add)
+
+
+func _render_blocs(column: VBoxContainer) -> void:
+	var blocs: Array = _cp().get("powerBlocs", [])
+	var section := _details("Power blocs / non-party actors (%d)" % blocs.size(), "cp_blocs", false, column, 12, 850)
+	for index in range(blocs.size()):
+		var bloc: Dictionary = blocs[index]
+		var card: Array = _box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.08), 9, Vector4(8, 4, 8, 8), 5)
+		var inner := _details(_cp_bloc_title(bloc, index), "cp_bloc_%d" % index, false, card[1], 11, 800)
+		var toggle: Button = inner.get_meta("toggle")
+		var retitle := func() -> void:
+			if is_instance_valid(toggle):
+				toggle.text = toggle.text.substr(0, 2) + _cp_bloc_title(bloc, index)
+		var grid := _two_columns()
+		for pair in [["Name", "name"], ["Short name", "shortName"], ["Kind", "kind"], ["Status", "status"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]]:
+			grid.add_child(_cp_entry_line("powerBlocs", index, str(pair[0]), str(pair[1]), retitle if str(pair[1]) == "name" else Callable()))
+		grid.add_child(_cp_entry_line("powerBlocs", index, "Influence (%)", "influencePercent"))
+		inner.add_child(grid)
+		inner.add_child(_cp_entry_area("powerBlocs", index, "Public description", "publicDescription"))
+		inner.add_child(_cp_entry_area("powerBlocs", index, "Public priorities · one per line", "publicPrioritiesText"))
+		inner.add_child(_cp_entry_area("powerBlocs", index, "Foreign-policy outlook · one per line", "publicForeignPolicyText"))
+		var remove := _btn("Remove power bloc")
+		remove.add_theme_color_override("font_color", FAIL_INK)
+		remove.add_theme_color_override("font_hover_color", FAIL_INK)
+		remove.pressed.connect(func() -> void:
+			var entries: Array = _cp().get("powerBlocs", [])
+			if index < entries.size():
+				entries.remove_at(index)
+			_render())
+		inner.add_child(remove)
+		section.add_child(card[0])
+	var add := _btn("+ Add power bloc")
+	add.pressed.connect(func() -> void:
+		var politics := _cp()
+		var entries: Array = politics.get("powerBlocs", [])
+		entries.append({"id": "custom-bloc-" + _now_id(), "name": "New power bloc", "shortName": "", "kind": "", "status": "", "leader": "", "ideology": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "influencePercent": "", "influenceLabel": ""})
+		politics["powerBlocs"] = entries
+		_render())
+	section.add_child(add)
+
+
+func _render_trait_catalog(column: VBoxContainer) -> void:
+	var registry: Array = _s.get("ce_registry", [])
+	var section := _details("Political traits · full supported catalog (%d)" % registry.size(), "cp_traits", true, column, 12, 850)
+	section.add_child(_rich("Every supported Political World trait is listed here. Blank means [b]not specified[/b], not 0. Values run from 0 to 100 and shape how this government behaves.", 10, Color(1, 1, 1, 0.46)))
+	var grid := _two_columns()
+	var values: Dictionary = _cp().get("traitValues", {})
+	for entry_value in registry:
+		var entry: Dictionary = entry_value
+		var key := str(entry.get("key", ""))
+		var raw := str(values.get(key, ""))
+		var card: Array = _box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.08), 9, Vector4(8, 8, 8, 8), 4)
+		var inner: VBoxContainer = card[1]
+		var top := HBoxContainer.new()
+		top.add_theme_constant_override("separation", 6)
+		var name := UI.label(str(entry.get("label", "")).to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1)
+		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name.clip_text = true
+		top.add_child(name)
+		var tag := UI.label("", 9, GREEN, 800)
+		_trait_tags[key] = tag
+		top.add_child(tag)
+		inner.add_child(top)
+		var input := _line(raw, "unset", func(text: String) -> void: _cp_trait(key, text))
+		_trait_inputs[key] = input
+		inner.add_child(input)
+		inner.add_child(_note(str(entry.get("description", "")), 9, Color(1, 1, 1, 0.42)))
+		inner.add_child(UI.label(key, 9, Color(1, 1, 1, 0.4), 400, "Consolas"))
+		grid.add_child(card[0])
+		_trait_tag_update(key, raw)
+	section.add_child(grid)
+
+
+func _trait_tag_update(key: String, raw: String) -> void:
+	var tag: Variant = _trait_tags.get(key)
+	if not (tag is Label) or not is_instance_valid(tag):
+		return
+	var label: Label = tag
+	var is_set := not raw.is_empty()
+	label.text = "SET" if is_set else "UNSET"
+	label.add_theme_color_override("font_color", GREEN if is_set else Color(1, 1, 1, 0.35))
+
+
+func _clean_trait_key(value: String) -> String:
+	var out := ""
+	for character in value.to_lower():
+		if (character >= "a" and character <= "z") or (character >= "0" and character <= "9"):
+			out += character
+	return out
+
+
+func _canonical_trait(raw: String) -> String:
+	return str(_trait_alias.get(_clean_trait_key(raw), ""))
+
+
+func _normalize_trait(value: Variant) -> Variant:
+	if value == null or typeof(value) == TYPE_BOOL:
+		return null
+	var text := str(value).strip_edges()
+	if text.is_empty() or not text.is_valid_float():
+		return null
+	var rounded: float = round(clampf(text.to_float(), 0.0, 100.0) * 10.0) / 10.0
+	if is_equal_approx(rounded, floor(rounded)):
+		return int(rounded)
+	return rounded
+
+
+func _parse_object(text: String) -> Variant:
+	var source := text.strip_edges()
+	if source.is_empty():
+		source = "{}"
+	var json := JSON.new()
+	if json.parse(source) != OK:
+		return null
+	var data: Variant = json.data
+	return data if typeof(data) == TYPE_DICTIONARY else null
+
+
+func _jsonify(value: Variant) -> Variant:
+	if typeof(value) == TYPE_FLOAT:
+		var number: float = value
+		if is_finite(number) and absf(number) < 1e15 and is_equal_approx(number, floor(number)):
+			return int(number)
+		return number
+	if typeof(value) == TYPE_DICTIONARY:
+		var out: Dictionary = {}
+		var source: Dictionary = value
+		for key in source.keys():
+			out[key] = _jsonify(source[key])
+		return out
+	if typeof(value) == TYPE_ARRAY:
+		var items: Array = []
+		for item in value:
+			items.append(_jsonify(item))
+		return items
+	return value
+
+
+func _pretty_json(value: Variant) -> String:
+	return JSON.stringify(_jsonify(value), "  ", false)
+
+
+func _cp_trait(key: String, value: String) -> void:
+	var politics := _cp()
+	var values: Dictionary = politics.get("traitValues", {})
+	values[key] = value
+	politics["traitValues"] = values
+	_trait_tag_update(key, value)
+	var parsed: Variant = _parse_object(str(politics.get("traitsJson", "{}")))
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var raw: Dictionary = parsed
+	for raw_key in raw.keys():
+		if _canonical_trait(str(raw_key)) == key:
+			raw.erase(raw_key)
+	var normalized: Variant = _normalize_trait(value)
+	if normalized != null:
+		raw[key] = normalized
+	politics["traitsJson"] = _pretty_json(raw)
+	if is_instance_valid(_traits_json_edit):
+		_syncing = true
+		_traits_json_edit.text = str(politics["traitsJson"])
+		_syncing = false
+
+
+func _cp_traits_json(text: String) -> void:
+	var politics := _cp()
+	politics["traitsJson"] = text
+	var parsed: Variant = _parse_object(text)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var raw: Dictionary = parsed
+	var values: Dictionary = {}
+	for entry_value in _s.get("ce_registry", []):
+		values[str((entry_value as Dictionary).get("key", ""))] = ""
+	for raw_key in raw.keys():
+		var key := _canonical_trait(str(raw_key))
+		if key.is_empty():
+			continue
+		var normalized: Variant = _normalize_trait(raw[raw_key])
+		if normalized != null:
+			values[key] = str(normalized)
+	politics["traitValues"] = values
+	for key in values.keys():
+		var input: Variant = _trait_inputs.get(key)
+		if input is LineEdit and is_instance_valid(input) and (input as LineEdit).text != str(values[key]):
+			(input as LineEdit).text = str(values[key])
+		_trait_tag_update(str(key), str(values[key]))
+
+
+func _mono_box(text: String, max_height: float) -> TextEdit:
+	var node := TextEdit.new()
+	node.text = text
+	node.editable = false
+	node.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style := UI.box(Color(0, 0, 0, 0.3), Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 9, 9, 9))
+	for state in ["normal", "focus", "read_only"]:
+		node.add_theme_stylebox_override(state, style)
+	node.add_theme_font_override("font", UI.font(400, "Consolas"))
+	node.add_theme_font_size_override("font_size", 10)
+	node.add_theme_color_override("font_readonly_color", Color(1, 1, 1, 0.72))
+	node.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
+	node.custom_minimum_size.y = min(max_height, float(text.count("\n") + 1) * 14.0 + 22.0)
+	return node
+
+
+func _render_political_debug(column: VBoxContainer) -> void:
+	var debug := _sd("ce_debug")
+	var section := _details("Political Debug · prove what the simulator sees", "cp_debug", false, column, 12, 850)
+	section.add_child(_note("Read-only canonical and derived state. This includes values the editor cannot directly modify, plus the complete supported trait catalog with unset dimensions preserved.", 10, Color(1, 1, 1, 0.45)))
+	var buttons := HFlowContainer.new()
+	buttons.add_theme_constant_override("h_separation", 6)
+	buttons.add_theme_constant_override("v_separation", 6)
+	for spec in [["Copy full Political World JSON", "actor", "Copied full Political World JSON."], ["Copy decision capsule", "decision", "Copied Political Decision Context capsule."], ["Copy numeric/debug snapshot", "snapshot", "Copied political numeric/debug snapshot."]]:
+		var copy := _btn(str(spec[0]), "plain", 12)
+		var source := str(spec[1])
+		var done := str(spec[2])
+		copy.pressed.connect(func() -> void:
+			var text := _sv("ce_decision") if source == "decision" else str(_sd("ce_debug").get(source, "null"))
+			DisplayServer.clipboard_set(text)
+			_status = done
+			_render())
+		buttons.add_child(copy)
+	section.add_child(buttons)
+	section.add_child(_gap(4))
+	section.add_child(_section_label("All supported traits · current canonical values"))
+	var grid := _two_columns()
+	grid.add_theme_constant_override("v_separation", 5)
+	var traits: Array = debug.get("traits", [])
+	if traits.is_empty():
+		for entry_value in _s.get("ce_registry", []):
+			var entry: Dictionary = entry_value
+			traits.append({"key": entry.get("key", ""), "label": entry.get("label", ""), "value": null})
+	for trait_value in traits:
+		var trait_row: Dictionary = trait_value
+		var cell: Array = _box(Color(1, 1, 1, 0.025), Color(0, 0, 0, 0), 7, Vector4(7, 5, 7, 5), 0)
+		var line := HBoxContainer.new()
+		var label := UI.label(str(trait_row.get("label", "")), 10, UI.WHITE)
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		label.clip_text = true
+		line.add_child(label)
+		var value: Variant = trait_row.get("value")
+		line.add_child(UI.label("unset" if value == null else str(value), 10, Color(1, 1, 1, 0.34) if value == null else Color(1, 1, 1, 0.82), 400, "Consolas"))
+		(cell[1] as VBoxContainer).add_child(line)
+		grid.add_child(cell[0])
+	section.add_child(grid)
+	for spec in [["Decision authority · derived/native", "decisionAuthority", 208.0], ["Behavioral disposition · stored", "storedDisposition", 208.0], ["Behavioral disposition · derived now", "derivedDisposition", 208.0], ["Full Political World JSON", "actor", 352.0]]:
+		section.add_child(_field_label(str(spec[0]), 6))
+		section.add_child(_mono_box(str(debug.get(str(spec[1]), "null")), float(spec[2])))
+	section.add_child(_field_label("Political decision context · debug", 6))
+	var context_box := _mono_box(_sv("ce_decision"), 18.0 * 14.0 + 22.0)
+	context_box.custom_minimum_size.y = 18.0 * 14.0 + 22.0
+	section.add_child(context_box)
 
 
 func _feature_kind_label(kind: String) -> String:

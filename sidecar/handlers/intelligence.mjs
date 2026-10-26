@@ -393,18 +393,20 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
 
   const commitSpies = async (compute) => {
     need("simulationStatus", "assertNoTurnRunning")();
-    const game = await engine.gameState.readGameData({ force: true });
-    const player = asText(game?.country);
-    const gameDate = asText(game?.gameDate);
-    const fresh = await engine.gameState.readWorldState({ force: true });
-    const next = compute(fresh, { player, gameDate });
-    const committed = { ...fresh, spies: next, spySeal: seal().isSeal(fresh?.spySeal) ? fresh.spySeal : seal().newSeal() };
-    const ops = engine.projects.spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: player });
-    const toWrite = ops.length
-      ? engine.gameState.applyProjectOpsToWorld({ date: gameDate, ops, playerCountry: player, world: committed }).world
-      : committed;
-    await engine.gameState.writeWorldState(toWrite);
-    return { player, gameDate, world: fresh };
+    return engine.gameState.runInCanonicalWriteQueue(async () => {
+      const game = await engine.gameState.readGameData({ force: true });
+      const player = asText(game?.country);
+      const gameDate = asText(game?.gameDate);
+      const fresh = await engine.gameState.readWorldState({ force: true });
+      const next = compute(fresh, { player, gameDate });
+      const committed = { ...fresh, spies: next, spySeal: seal().isSeal(fresh?.spySeal) ? fresh.spySeal : seal().newSeal() };
+      const ops = engine.projects.spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: player });
+      const toWrite = ops.length
+        ? engine.gameState.applyProjectOpsToWorld({ date: gameDate, ops, playerCountry: player, world: committed }).world
+        : committed;
+      await engine.gameState.writeWorldState(toWrite);
+      return { player, gameDate, world: fresh };
+    });
   };
 
   const spyById = (world, id) => S().normalizeSpies(world?.spies).find((spy) => spy.id === id) || null;

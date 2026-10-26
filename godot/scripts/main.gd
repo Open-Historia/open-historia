@@ -20,6 +20,10 @@ var game_id := ""
 var game_name := ""
 var picking_scenario := ""
 var sound: Node
+var game_menu: Node
+var debug_console: Node
+var interactive: Node
+var cheats: Node
 var in_game := false
 var last_activity := 0
 var background_timer: Timer
@@ -54,6 +58,13 @@ func _ready() -> void:
 	picker.map_view = map_view
 	ui.add_child(picker)
 	picker.visible = false
+	game_menu = _mount("res://scripts/ui/game_menu.gd")
+	debug_console = _mount("res://scripts/ui/debug_console.gd")
+	interactive = _mount("res://scripts/ui/interactive_panel.gd")
+	cheats = _make_node("res://scripts/ui/cheats_panel.gd")
+	if cheats:
+		hud.add_child(cheats)
+		hud.cheats = cheats
 	_build_settings()
 	_build_boot()
 	_show("boot")
@@ -64,14 +75,23 @@ func _ready() -> void:
 	engine.engine_event.connect(_on_engine_event)
 	menu.play_game.connect(_open_game)
 	menu.start_scenario.connect(_start_scenario)
-	menu.open_settings.connect(_open_settings)
+	menu.open_settings.connect(func() -> void:
+		if game_menu:
+			game_menu.call("open_app_settings")
+		else:
+			_open_settings())
 	menu.refresh_requested.connect(_refresh_library)
 	menu.engine = engine
 	menu.game_left.connect(func(id: String) -> void:
 		if id == game_id:
 			in_game = false)
 	hud.exit_game.connect(_exit_game)
-	hud.open_menu.connect(_open_settings)
+	hud.open_menu.connect(func() -> void:
+		if game_menu:
+			game_menu.call("toggle")
+		else:
+			_open_settings())
+	_wire_overlays()
 	hud.turn_landed.connect(_on_turn_landed)
 	picker.start.connect(_on_picker_start)
 	picker.cancelled.connect(_on_picker_cancelled)
@@ -84,6 +104,72 @@ func _ready() -> void:
 	last_activity = Time.get_ticks_msec()
 	if not engine.start():
 		boot_label.text = "The game engine could not be started. Is Node.js installed?"
+
+
+func _mount(path: String, setup_now := true) -> Node:
+	var node := _make_node(path)
+	if not node:
+		return null
+	ui.add_child(node)
+	if setup_now and node.has_method("setup"):
+		node.call("setup", engine, {})
+	return node
+
+
+func _hook(node: Object, signal_name: String, target: Callable) -> void:
+	if node and node.has_signal(signal_name):
+		node.connect(signal_name, target)
+
+
+func _call(node: Object, method: String, args: Array = []) -> Variant:
+	if node and is_instance_valid(node) and node.has_method(method):
+		return node.callv(method, args)
+	return null
+
+
+func _wire_overlays() -> void:
+	_hook(game_menu, "open_library", func() -> void:
+		await _exit_game()
+		_call(menu, "_show_page", ["games"]))
+	_hook(game_menu, "open_events", func() -> void: hud.set_active_panel("history"))
+	_hook(game_menu, "open_cheats", func() -> void: _call(cheats, "open"))
+	_hook(game_menu, "open_debug_console", func() -> void: _call(debug_console, "open"))
+	_hook(game_menu, "setting_changed", _on_setting_changed)
+	hud.map_mode_changed.connect(func(mode: String) -> void: _call(game_menu, "set_map_mode", [mode]))
+	hud.open_interactive.connect(func() -> void: _call(interactive, "open"))
+	_hook(interactive, "open_timeline", func() -> void: hud.set_active_panel("history"))
+	_hook(interactive, "world_changed", _world_changed)
+	_hook(cheats, "open_interactive", func() -> void: _call(interactive, "open"))
+	_hook(cheats, "world_changed", _world_changed)
+	_hook(cheats, "country_changed", func(_country: String) -> void: _world_changed())
+
+
+func _on_setting_changed(key: String, value: Variant) -> void:
+	if key == "map_mode":
+		hud.set_map_mode(str(value))
+		hud._apply_map_mode()
+	elif key in ["map_hide_country_labels", "map_label_font"]:
+		_call(map_view, "refresh_polity_text")
+	elif key == "map_disable_event_camera":
+		await hud.date_widget.refresh_status()
+
+
+func _world_changed() -> void:
+	if not in_game:
+		return
+	var state := await engine.request("map.state")
+	if state.get("ok", false):
+		map_view.set_state(state["result"])
+	var view := await engine.request("game.view")
+	if view.get("ok", false):
+		hud.set_game(view["result"], game_name)
+		var flag := await engine.request("game.flag", {"country": str(view["result"].get("country", ""))})
+		if flag.get("ok", false):
+			hud.set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+	await hud.date_widget.refresh_status()
+	hud.date_widget._render_all()
+	hud.refresh_panels()
+	_call(game_menu, "refresh")
 
 
 func _make_node(path: String) -> Node:
@@ -291,7 +377,10 @@ func _enter_game(view: Dictionary) -> void:
 	_show("game")
 	map_view.focus_owner(str(view.get("country", "")))
 	hud.mount_panels(view)
+	_call(cheats, "setup", [engine, {"map_view": map_view, "game": view, "forces_available": false}])
+	_call(game_menu, "refresh")
 	await hud.enter_game()
+	_call(game_menu, "maybe_show_ai_setup", [game_id])
 
 
 func _start_scenario(scenario_id: String) -> void:
@@ -353,6 +442,7 @@ func _exit_game() -> void:
 
 func _on_turn_landed(view: Dictionary) -> void:
 	hud.set_game(view, game_name)
+	_call(game_menu, "refresh")
 	_sound("refresh_war")
 	await _refresh_library()
 

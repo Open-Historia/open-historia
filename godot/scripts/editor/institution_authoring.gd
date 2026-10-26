@@ -39,6 +39,7 @@ var _badge_select: OptionButton
 var _logo_url_input: LineEdit
 var _syncing := false
 var _listed_new := false
+var _open_states := {}
 
 
 func _init() -> void:
@@ -164,7 +165,7 @@ func _open_manager() -> void:
 	_manager = PoliticalManager.new("Scenario authoring", "Institutions", _subtitle(), 1312.0, 704.0, 0.26, 256.0, "Close Institutions manager")
 	_host().add_child(_manager)
 	_manager.close_requested.connect(_close_manager)
-	_manager.escape_pressed.connect(_close_manager)
+	_manager.escape_pressed.connect(_escape_manager)
 	var search := PoliticalKit.input(_query, "Search institutions...", func(value: String) -> void:
 		_query = value
 		_render_list())
@@ -186,6 +187,17 @@ func _close_manager() -> void:
 	if _manager:
 		_manager.queue_free()
 		_manager = null
+	_open_states.clear()
+	_message = ""
+
+
+func _escape_manager() -> void:
+	if _dirty and not await EditorKit.ask(_host(), "Discard unsaved institution edits?"):
+		return
+	if _manager:
+		_manager.queue_free()
+		_manager = null
+	_open_states.clear()
 	_message = ""
 
 
@@ -491,7 +503,7 @@ func _update_message() -> void:
 
 
 func _render_sections() -> void:
-	var identity := PoliticalKit.section("Identity & lifecycle", true)
+	var identity := PoliticalKit.remember(PoliticalKit.section("Identity & lifecycle", bool(_open_states.get("identity", true))), _open_states, "identity")
 	_manager.main_body.add_child(identity["panel"])
 	var identity_content: VBoxContainer = identity["content"]
 	identity_content.add_child(PoliticalKit.gap(3))
@@ -503,7 +515,7 @@ func _render_sections() -> void:
 	grid.add_child(PoliticalKit.field("Dissolved", PoliticalKit.input(str(_draft.get("dissolvedDate", "")), "Leave blank if active", func(value: String) -> void: _edit("dissolvedDate", value))))
 	identity_content.add_child(grid)
 
-	_members_section = PoliticalKit.section(_members_title(), true)
+	_members_section = PoliticalKit.remember(PoliticalKit.section(_members_title(), bool(_open_states.get("members", true))), _open_states, "members")
 	_manager.main_body.add_child(_members_section["panel"])
 	var members: VBoxContainer = _members_section["content"]
 	members.add_child(PoliticalKit.text("Add the polities that belong to this institution when the scenario begins. Existing member roles and statuses are preserved for members that remain in the list.", 10, Color(1, 1, 1, 0.44)))
@@ -513,7 +525,7 @@ func _render_sections() -> void:
 	members.add_child(_picker)
 	_chips_holder = VBoxContainer.new()
 	members.add_child(_chips_holder)
-	var bulk := PoliticalKit.section("Advanced bulk edit member list", false, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, Vector4(0, 0, 0, 0), 10, 750, Color(1, 1, 1, 0.5))
+	var bulk := PoliticalKit.remember(PoliticalKit.section("Advanced bulk edit member list", bool(_open_states.get("bulk", false)), Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, Vector4(0, 0, 0, 0), 10, 750, Color(1, 1, 1, 0.5)), _open_states, "bulk")
 	var on_bulk := func(value: String) -> void:
 		if _syncing:
 			return
@@ -526,7 +538,7 @@ func _render_sections() -> void:
 	members.add_child(_unmatched_holder)
 	_render_members(false)
 
-	var visual := PoliticalKit.section("Visual identity", false)
+	var visual := PoliticalKit.remember(PoliticalKit.section("Visual identity", bool(_open_states.get("visual", false))), _open_states, "visual")
 	_manager.main_body.add_child(visual["panel"])
 	var visual_content: VBoxContainer = visual["content"]
 	var visual_row := HBoxContainer.new()
@@ -579,7 +591,7 @@ func _render_sections() -> void:
 	visual_content.add_child(PoliticalKit.gap(3))
 	visual_content.add_child(visual_row)
 
-	var advanced := PoliticalKit.section("Advanced details", false)
+	var advanced := PoliticalKit.remember(PoliticalKit.section("Advanced details", bool(_open_states.get("advanced", false))), _open_states, "advanced")
 	_manager.main_body.add_child(advanced["panel"])
 	var advanced_content: VBoxContainer = advanced["content"]
 	advanced_content.add_child(PoliticalKit.field("Aliases", PoliticalKit.input(str(_draft.get("aliasesText", "")), "Comma-separated alternate names", func(value: String) -> void: _edit("aliasesText", value))))

@@ -301,7 +301,51 @@ func _run() -> void:
 	_check("the list shows the new institution", _shows(institutions, "Baltic Union") and _shows(institutions, "Your institutions (1)"))
 	await _shoot("inst-17-list")
 	_say("lifecycle chats opened: %s; councils opened: %s" % [", ".join(opened_chats), ", ".join(opened_councils)])
+	await _hosted_in_chat_panel()
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _hosted_in_chat_panel() -> void:
+	var panels: Variant = main.hud.get("panels")
+	if typeof(panels) != TYPE_DICTIONARY or not (panels as Dictionary).has("chat"):
+		_say("the Diplomacy panel is not mounted; skipping the hosted views")
+		return
+	var chat: Control = (panels as Dictionary)["chat"]
+	frame.visible = false
+	chat.call("open")
+	await _wait(0.8)
+	chat.call("_set_view", "spy")
+	await _wait(2.5)
+	var hosted_intel: Control = null
+	var hosted_institutions: Control = null
+	for node: Node in chat.find_children("*", "VBoxContainer", true, false):
+		if node is IntelligenceView:
+			hosted_intel = node as Control
+		elif node is InstitutionsView:
+			hosted_institutions = node as Control
+	_check("the Diplomacy panel hosts the Intelligence view", hosted_intel != null and hosted_intel.is_visible_in_tree())
+	if hosted_intel:
+		await _shoot_plain("host-01-intelligence")
+		(hosted_intel as IntelligenceView).show_section("operations")
+		await _shoot_plain("host-02-operations")
+	chat.call("navigate_institution", "baltic-union", "council")
+	await _wait(3.0)
+	_check("the Diplomacy panel hosts the Institutions view on the Council", hosted_institutions != null and hosted_institutions.is_visible_in_tree() and (hosted_institutions as InstitutionsView)._section == "council")
+	if hosted_institutions:
+		_check("the Council embeds the Diplomacy panel's conversation", (hosted_institutions as InstitutionsView)._embedded != null)
+		await _shoot_plain("host-03-council")
+		chat.call("navigate_institution", "baltic-union", "overview")
+		await _wait(2.0)
+		await _shoot_plain("host-04-institution")
+
+
+func _shoot_plain(name: String) -> void:
+	await _frames(6)
+	await RenderingServer.frame_post_draw
+	if shots.is_empty():
+		return
+	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
+	_say("screenshot " + name)
 
 
 func _finish(code: int) -> void:

@@ -319,9 +319,13 @@ func _render_list() -> void:
 		_list_body.add_child(_scenario_row("🔍 Results (%d)" % results.size(), results, "No scenarios match your search.", "grid"))
 		return
 	var pinned: Array = _browse.get("pinned", [])
+	var above := 11.0
 	if not pinned.is_empty():
 		_list_body.add_child(_scenario_row("📌 Featured", pinned, "", "scroll"))
-	_list_body.add_child(_browse_header())
+		above = 18.0
+	elif _list_body.get_child_count() > 0:
+		above = 14.0
+	_list_body.add_child(_browse_header(maxf(0.0, 22.0 - above)))
 	_list_body.add_child(_scenario_row("", _browse.get("browse", []), "No community scenarios in this view.", "grid"))
 
 
@@ -382,9 +386,9 @@ func _skeleton_card() -> Control:
 	return card
 
 
-func _browse_header() -> Control:
+func _browse_header(top: float) -> Control:
 	var holder := MarginContainer.new()
-	holder.add_theme_constant_override("margin_top", 22)
+	holder.add_theme_constant_override("margin_top", int(round(top)))
 	holder.add_theme_constant_override("margin_bottom", 13)
 	var line := CommunityKit.row(11)
 	var words := CommunityKit.column(4)
@@ -551,13 +555,13 @@ func _card(post: Dictionary, fill: bool) -> Control:
 		badge_row.add_child(badge)
 	stack.add_child(badge_row)
 	var description_text := str(post.get("description", ""))
-	var description := CommunityKit.leading(UI.wrapped(description_text if not description_text.is_empty() else "No description.", 13, Color(244 / 255.0, 244 / 255.0, 246 / 255.0, 0.72), 400, 2), 13, 1.45)
-	description.custom_minimum_size.y = 38
+	var description := CommunityKit.leading(UI.wrapped(description_text if not description_text.is_empty() else "No description.", 13, Color(244 / 255.0, 244 / 255.0, 246 / 255.0, 0.72), 400, 2), 13, 1.45, 38.0)
+	description.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	description.clip_text = true
 	stack.add_child(description)
-	stack.add_child(UI.spacer(false))
 	var footer := CommunityKit.flow(7, 7)
 	footer.custom_minimum_size.y = 30
+	footer.size_flags_vertical = Control.SIZE_EXPAND | Control.SIZE_SHRINK_END
 	var stats := CommunityKit.row(7)
 	stats.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if post.get("installs") != null:

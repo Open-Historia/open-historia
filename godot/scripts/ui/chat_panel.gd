@@ -95,6 +95,7 @@ var _flags_pending: Dictionary = {}
 var _placed_inset := 0.0
 var _loading_data := false
 var _reload_again := false
+var _local_edits := 0
 var _last_badge := -1
 var _last_generating := false
 var _list_render_queued := false
@@ -303,6 +304,8 @@ func open_target(target: Dictionary, draft_text := "") -> void:
 			view_key = "institutions"
 			_focus_institution(institution_id, "council" if target_type == "institution-council" else "members")
 			render_all()
+		if engine:
+			engine.request("chat.log", {"message": "Advisor draft target could not resolve an exact %s thread." % target_type, "detail": {"institutionId": t(target.get("institutionId", "")), "caseId": case_id, "threadId": thread_id}, "problem": true})
 		return
 	if not roster_loaded:
 		await _load_roster()
@@ -329,7 +332,10 @@ func open_target(target: Dictionary, draft_text := "") -> void:
 	set_active(created)
 
 
-func open_thread(chat_id: String) -> void:
+func open_thread(chat_id: String, draft_text := "") -> void:
+	var id := chat_id.strip_edges()
+	if id.is_empty():
+		return
 	if not is_open():
 		open_requested.emit()
 		set_open(true)
@@ -337,10 +343,29 @@ func open_thread(chat_id: String) -> void:
 	while not loaded and waited < 900:
 		waited += 1
 		await get_tree().process_frame
-	for chat in open_chats():
-		if t(chat.get("id", "")) == chat_id:
-			open_chat_from_list(chat)
-			return
+	if draft_text.is_empty():
+		for chat in open_chats():
+			if t(chat.get("id", "")) == id:
+				open_chat_from_list(chat)
+				return
+		return
+	var found := find_chat(id)
+	if found.is_empty():
+		await reload()
+		found = find_chat(id)
+	if found.is_empty():
+		return
+	if not t(found.get("institutionId", "")).is_empty() and not is_lifecycle(found):
+		await open_target({"targetType": "institution-council", "institutionId": t(found.get("institutionId", "")), "threadId": id}, draft_text)
+		return
+	if is_lifecycle(found):
+		await open_target({"targetType": "institution-lifecycle", "institutionId": t(found.get("lifecycleInstitutionId", "")), "threadId": id}, draft_text)
+		return
+	held_unread = ""
+	set_read_state(shown_chat(found), true)
+	view_key = "chats"
+	draft = {"chat_id": id, "text": draft_text}
+	set_active(found)
 
 
 func render_council(channel_id: String) -> Control:
@@ -359,6 +384,9 @@ func render_council(channel_id: String) -> Control:
 		reload()
 		channel = {"id": id, "institutionId": "pending", "countries": [], "messages": []}
 	view.show_chat(channel)
+	if t(draft.get("chat_id", "")) == id:
+		view.apply_draft(t(draft.get("text", "")))
+		draft = {}
 	return view
 
 
@@ -464,9 +492,12 @@ func reload() -> void:
 		_reload_again = true
 		return
 	_loading_data = true
+	var edits_before := _local_edits
 	var reply := await engine.request("chat.load")
 	_loading_data = false
-	if reply.get("ok", false):
+	if edits_before != _local_edits:
+		_reload_again = true
+	elif reply.get("ok", false):
 		_apply_load(d(reply.get("result", {})))
 	if _reload_again:
 		_reload_again = false
@@ -666,6 +697,7 @@ func _write_seen() -> void:
 func persist(method: String, args: Dictionary) -> void:
 	if not engine or load_failed:
 		return
+	_local_edits += 1
 	var reply := await engine.request(method, args)
 	var failed: bool = reply.get("ok", false) != true
 	if failed != save_failed:
@@ -691,6 +723,7 @@ func on_messages_update(chat_id: String, messages: Array) -> void:
 
 
 func on_thread_update(chat_id: String, update: Dictionary, committed := false) -> void:
+	_local_edits += 1
 	var found := false
 	for index in range(chats.size()):
 		if t(chats[index].get("id", "")) == chat_id:
@@ -714,11 +747,14 @@ func on_thread_update(chat_id: String, update: Dictionary, committed := false) -
 
 
 func local_thread_update(chat_id: String, update: Dictionary) -> void:
+	_local_edits += 1
 	for index in range(chats.size()):
 		if t(chats[index].get("id", "")) == chat_id:
 			chats[index] = _merge_thread(chats[index], update)
 			if t(active.get("id", "")) == chat_id:
 				active = chats[index]
+	if t(active.get("id", "")) == chat_id and conversation_visible() and conversation.chat_id == chat_id:
+		conversation.show_chat(active)
 	_refresh_council_props(chat_id)
 
 
@@ -755,6 +791,7 @@ func adopt_chat_result(reply: Dictionary, chat_id: String) -> void:
 
 
 func adopt_institutional_result(result: Dictionary) -> void:
+	_local_edits += 1
 	var list: Variant = result.get("chats")
 	if typeof(list) == TYPE_ARRAY:
 		chats = list
@@ -1627,6 +1664,7 @@ func delete_chat(id: String) -> void:
 	if t(active.get("id", "")) == id:
 		active = {}
 		conversation_unmounted()
+		held_unread = ""
 		active_chat_changed.emit(active_chat_id())
 	render_all()
 
@@ -1636,6 +1674,10 @@ func leave_active() -> void:
 		return
 	var terminal := false
 	if is_lifecycle(active):
+		var leaving_hearing := t(active.get("id", ""))
+		await conversation.world_changed()
+		if active.is_empty() or t(active.get("id", "")) != leaving_hearing:
+			return
 		terminal = conversation.lifecycle_terminal_for_leave()
 	var institution_id := t(active.get("institutionId", ""))
 	var leaving_id := t(active.get("id", ""))
@@ -2925,6 +2967,8 @@ class Conversation extends VBoxContainer:
 	var lifecycle_reveal := false
 	var staged_speaker: Dictionary = {}
 	var lifecycle_token := 0
+	var _last_thread_signature := ""
+	var _rendered_signature := ""
 	var _header: PanelContainer
 	var _header_flags: HBoxContainer
 	var _title: Label
@@ -3038,10 +3082,6 @@ class Conversation extends VBoxContainer:
 				panel.delete_chat(chat_id)
 			else:
 				confirm_delete = true
-				refresh_chrome())
-		_trash.mouse_exited.connect(func() -> void:
-			if confirm_delete:
-				confirm_delete = false
 				refresh_chrome())
 		row.add_child(_trash)
 		var close := ChatPanel.text_button("✕", 16, Color(1, 1, 1, 0.4), UI.WHITE, 400, Color(1, 1, 1, 0.08))
@@ -3197,27 +3237,52 @@ class Conversation extends VBoxContainer:
 		_update_send()
 
 
+	func _input(event: InputEvent) -> void:
+		if not confirm_delete or not is_visible_in_tree():
+			return
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+			if not _trash.get_global_rect().has_point((event as InputEventMouseButton).global_position):
+				confirm_delete = false
+				refresh_chrome()
+
+
 	func show_chat(next: Dictionary) -> void:
 		var next_id := ChatPanel.t(next.get("id", ""))
 		if next_id != chat_id:
 			_mount(next)
 			return
 		chat = next
+		var signature := _thread_signature(next)
+		var thread_changed := signature != _last_thread_signature
+		_last_thread_signature = signature
+		var rendered := false
 		if not loading and not lifecycle_reveal and reveal.is_empty():
 			var saved := panel.without_unseen(ChatPanel.a(next.get("messages", [])))
 			var changed := saved.size() != messages_ref.size() or _messages_signature(saved) != _messages_signature(messages_ref)
+			var grew := saved.size() > messages_ref.size()
 			messages_ref = saved
 			if not embedded and changed:
 				messages = saved
 			if changed:
-				render_messages(saved.size() > messages.size() or embedded)
+				render_messages(grew or embedded)
+				rendered = true
+		if not rendered and _messages_signature(presented()) != _rendered_signature:
+			render_messages(true)
+			rendered = true
+		if thread_changed and not rendered:
+			render_messages(false)
 		refresh_chrome()
+
+
+	func _thread_signature(source: Dictionary) -> String:
+		return JSON.stringify([ChatPanel.a(source.get("polls", [])), ChatPanel.a(source.get("demands", [])), ChatPanel.t(source.get("title", "")), ChatPanel.a(source.get("countries", [])).size()])
 
 
 	func _mount(next: Dictionary) -> void:
 		stop_reveal()
 		chat = next
 		chat_id = ChatPanel.t(next.get("id", ""))
+		_last_thread_signature = _thread_signature(next)
 		var saved := ChatPanel.a(next.get("messages", []))
 		messages_ref = saved
 		messages = saved
@@ -3240,7 +3305,7 @@ class Conversation extends VBoxContainer:
 		lifecycle_base = {}
 		_composer.text = ""
 		fit_composer()
-		_load_history()
+		_load_history(true)
 		refresh_chrome()
 		render_messages(true)
 		world_changed()
@@ -3275,10 +3340,18 @@ class Conversation extends VBoxContainer:
 		refresh_chrome()
 
 
-	func _load_history() -> void:
+	func _load_history(announce := false) -> void:
 		if panel.engine == null or chat_id.is_empty():
 			return
-		panel.engine.request("chat.history", {"messages": panel.without_unseen(messages_ref)})
+		var args := {"messages": panel.without_unseen(messages_ref)}
+		if announce:
+			var names: Array = []
+			for country in countries():
+				names.append(ChatPanel.t(country.get("name", "")))
+			args["chatId"] = chat_id
+			args["names"] = names
+			args["saved"] = messages_ref.size()
+		panel.engine.request("chat.history", args)
 
 
 	func apply_draft(text: String) -> void:
@@ -3828,7 +3901,7 @@ class Conversation extends VBoxContainer:
 			_finish_loading()
 			world_changed()
 			return true
-		var turn := {"chat_id": id, "campaign_id": ChatPanel.t(outcome.get("campaignId", "")), "events": ChatPanel.a(outcome.get("baseEvents", [])), "written": false, "committed": committed, "running": true, "left": []}
+		var turn := {"chat_id": id, "campaign_id": ChatPanel.t(outcome.get("campaignId", "")), "events": ChatPanel.a(outcome.get("baseEvents", [])), "written": false, "committed": committed, "running": true, "left": [], "first": true}
 		var first := ChatPanel.d(steps[0])
 		var wrote: bool = await add_turn_events(turn, ChatPanel.a(first.get("events", [])), null if committed else outcome.get("cursors"), true)
 		_finish_loading()
@@ -3843,7 +3916,7 @@ class Conversation extends VBoxContainer:
 	func _finish_loading() -> void:
 		loading = false
 		speaking = {}
-		update_composer()
+		refresh_chrome()
 		render_messages(true)
 
 
@@ -3870,7 +3943,7 @@ class Conversation extends VBoxContainer:
 		var shown := base.duplicate()
 		shown.append(by_id.get(ChatPanel.t(ChatPanel.d(plan[0]).get("id", "")), {}))
 		messages = shown
-		update_composer()
+		refresh_chrome()
 		render_messages(true)
 		for index in range(1, plan.size()):
 			var row := ChatPanel.d(plan[index])
@@ -3893,7 +3966,7 @@ class Conversation extends VBoxContainer:
 		messages = full
 		staged_speaker = {}
 		lifecycle_reveal = false
-		update_composer()
+		refresh_chrome()
 		render_messages(true)
 
 
@@ -3913,7 +3986,7 @@ class Conversation extends VBoxContainer:
 		loading = true
 		update_composer()
 		render_messages(true)
-		var reply := await panel.engine.request("chat.lifecycleDecision", {"institutionId": ChatPanel.t(chat.get("lifecycleInstitutionId", "")), "caseId": ChatPanel.t(mine.get("id", "")), "decision": decision, "player": panel.player, "date": panel.game_date})
+		var reply := await panel.engine.request("chat.lifecycleDecision", {"chatId": chat_id, "institutionId": ChatPanel.t(chat.get("lifecycleInstitutionId", "")), "caseId": ChatPanel.t(mine.get("id", "")), "decision": decision, "player": panel.player, "date": panel.game_date})
 		if reply.get("ok", false):
 			var result := ChatPanel.d(reply.get("result", {}))
 			panel.adopt_institutional_result(result)
@@ -3934,7 +4007,8 @@ class Conversation extends VBoxContainer:
 	func add_turn_events(turn: Dictionary, events: Array, cursors: Variant = null, on_screen := true) -> bool:
 		if turn.is_empty() or panel.engine == null:
 			return false
-		var reply := await panel.engine.request("chat.step", {"chatId": turn["chat_id"], "campaignId": turn["campaign_id"], "turnLog": turn["events"], "wroteAny": turn["written"], "events": events, "cursors": cursors, "committed": turn["committed"]})
+		var reply := await panel.engine.request("chat.step", {"chatId": turn["chat_id"], "campaignId": turn["campaign_id"], "turnLog": turn["events"], "wroteAny": turn["written"], "events": events, "cursors": cursors, "committed": turn["committed"], "first": turn.get("first", false) == true})
+		turn["first"] = false
 		if not reply.get("ok", false):
 			return false
 		var result := ChatPanel.d(reply.get("result", {}))
@@ -4017,7 +4091,7 @@ class Conversation extends VBoxContainer:
 				events.append_array(ChatPanel.a(ChatPanel.d(step).get("events", [])))
 			await add_turn_events(turn, events)
 			return
-		var reply := await panel.engine.request("chat.cutin", {"player": panel.player, "steps": unsaid})
+		var reply := await panel.engine.request("chat.cutin", {"chatId": ChatPanel.t(turn.get("chat_id", "")), "player": panel.player, "steps": unsaid})
 		var note := ChatPanel.t(reply.get("result", "")) if reply.get("ok", false) else ""
 		if not note.is_empty():
 			action_feedback = note if action_feedback.is_empty() else "%s\n\n%s" % [action_feedback, note]
@@ -4132,10 +4206,14 @@ class Conversation extends VBoxContainer:
 		for at in range(messages_ref.size()):
 			if at != index:
 				rest.append(messages_ref[at])
-		push_messages(rest)
 		if plan.get("group", false) == true:
+			panel.engine.request("chat.log", {"message": "Retrying the table's turn in chat #%s." % chat_id, "verbose": true})
+			push_messages(rest)
 			await run_group_turn(ChatPanel.t(plan.get("text", "")), rest)
 			return
+		var leader_name := ChatPanel.t(ChatPanel.d(plan.get("country", {})).get("name", ""))
+		panel.engine.request("chat.log", {"message": "Retrying %s's reply in chat #%s." % [leader_name if not leader_name.is_empty() else "a leader", chat_id], "verbose": true})
+		push_messages(rest)
 		await fetch_leader_response(ChatPanel.d(plan.get("country", {})), ChatPanel.t(plan.get("playerMessage", "")))
 
 
@@ -4144,6 +4222,7 @@ class Conversation extends VBoxContainer:
 			return
 		ChatPanel.clear(_box)
 		var source := presented()
+		_rendered_signature = _messages_signature(source)
 		var entries: Array = []
 		for index in range(source.size()):
 			var message := ChatPanel.d(source[index])
@@ -4334,13 +4413,18 @@ class Conversation extends VBoxContainer:
 			var alpha := 0.04 + 0.96 * base.a
 			bg = Color((accent.r * 0.04 + base.r * 0.96 * base.a) / alpha, (accent.g * 0.04 + base.g * 0.96 * base.a) / alpha, (accent.b * 0.04 + base.b * 0.96 * base.a) / alpha, alpha)
 			border = Color(1, 1, 1, 0.08)
-		var style := UI.box(bg, border, 13, 1, Vector4(13, 10, 13, 10))
+		var style := UI.box(bg, border, 13, 1, Vector4(0, 0, 0, 0))
 		if is_player:
 			style.corner_radius_bottom_right = 3
 		else:
 			style.corner_radius_bottom_left = 3
 		bubble.add_theme_stylebox_override("panel", style)
-		if not is_player and not is_error:
+		var inner := MarginContainer.new()
+		inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var leader := not is_player and not is_error
+		for side in [["margin_left", 14 if leader else 13], ["margin_right", 13], ["margin_top", 10], ["margin_bottom", 10]]:
+			inner.add_theme_constant_override(side[0], side[1])
+		if leader:
 			var stripe := Panel.new()
 			stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var stripe_style := StyleBoxFlat.new()
@@ -4360,13 +4444,14 @@ class Conversation extends VBoxContainer:
 			body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			body.add_theme_constant_override("line_spacing", 5)
 			body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			bubble.add_child(body)
+			inner.add_child(body)
 			for line in text.split("\n"):
 				natural = maxf(natural, UI.font(400).get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x)
 		else:
 			var rendered := ChatPanel.markdown_view(text, 14)
 			natural = float(rendered.get_meta("natural_width", 0.0)) * (1.04 if text.contains("**") else 1.0)
-			bubble.add_child(rendered)
+			inner.add_child(rendered)
+		bubble.add_child(inner)
 		var bubble_width := clampf(maxf(natural + 32.0, label_width), 40.0, max_width)
 		column.custom_minimum_size.x = bubble_width
 		var copy := ChatPanel.icon_button("copy", 12, Color(1, 1, 1, 0.46), Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.94), Color(1, 1, 1, 0.09))

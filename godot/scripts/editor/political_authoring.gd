@@ -34,6 +34,7 @@ var _traits_json_edit: TextEdit
 var _syncing := false
 var _parties_section: Dictionary = {}
 var _blocs_section: Dictionary = {}
+var _open_states := {}
 
 
 func _init() -> void:
@@ -161,6 +162,7 @@ func _dispose_manager() -> void:
 	if _manager:
 		_manager.queue_free()
 		_manager = null
+	_open_states.clear()
 	_dirty = false
 	_message = ""
 	_draft = _loaded_draft.duplicate(true)
@@ -331,7 +333,7 @@ func _section_note(text: String) -> Label:
 
 
 func _render_sections() -> void:
-	var government := PoliticalKit.section("Government & political system", true)
+	var government := PoliticalKit.remember(PoliticalKit.section("Government & political system", bool(_open_states.get("government", true))), _open_states, "government")
 	_manager.main_body.add_child(government["panel"])
 	var content: VBoxContainer = government["content"]
 	content.add_child(PoliticalKit.gap(3))
@@ -352,7 +354,7 @@ func _render_sections() -> void:
 	content.add_child(grid)
 	content.add_child(_textarea_field("Political-system notes", "politicalSystemNotes"))
 
-	var outlook := PoliticalKit.section("Strategic outlook", false)
+	var outlook := PoliticalKit.remember(PoliticalKit.section("Strategic outlook", bool(_open_states.get("outlook", false))), _open_states, "outlook")
 	_manager.main_body.add_child(outlook["panel"])
 	var outlook_content: VBoxContainer = outlook["content"]
 	outlook_content.add_child(_section_note("One item per line. These are canonical causal inputs, not flavor text."))
@@ -363,15 +365,15 @@ func _render_sections() -> void:
 	outlook_grid.add_child(_textarea_field("Domestic pressure notes", "domesticPressuresText", "One pressure per line"))
 	outlook_content.add_child(outlook_grid)
 
-	_parties_section = PoliticalKit.section(_parties_title(), false)
+	_parties_section = PoliticalKit.remember(PoliticalKit.section(_parties_title(), bool(_open_states.get("parties", false))), _open_states, "parties")
 	_manager.main_body.add_child(_parties_section["panel"])
 	_render_parties()
 
-	_blocs_section = PoliticalKit.section(_blocs_title(), false)
+	_blocs_section = PoliticalKit.remember(PoliticalKit.section(_blocs_title(), bool(_open_states.get("blocs", false))), _open_states, "blocs")
 	_manager.main_body.add_child(_blocs_section["panel"])
 	_render_blocs()
 
-	var traits := PoliticalKit.section("Political traits · full supported catalog (%d)" % _traits.size(), false)
+	var traits := PoliticalKit.remember(PoliticalKit.section("Political traits · full supported catalog (%d)" % _traits.size(), bool(_open_states.get("traits", false))), _open_states, "traits")
 	_manager.main_body.add_child(traits["panel"])
 	var traits_content: VBoxContainer = traits["content"]
 	traits_content.add_child(UI.rich("Every supported trait is shown. Blank means **not specified**, not 0. Values run from 0 to 100.", 10, Color(1, 1, 1, 0.44)))
@@ -380,7 +382,7 @@ func _render_sections() -> void:
 		traits_grid.add_child(_trait_card(entry))
 	traits_content.add_child(traits_grid)
 
-	var structured := PoliticalKit.section("Advanced structured traits & perceptions", false)
+	var structured := PoliticalKit.remember(PoliticalKit.section("Advanced structured traits & perceptions", bool(_open_states.get("structured", false))), _open_states, "structured")
 	_manager.main_body.add_child(structured["panel"])
 	var structured_content: VBoxContainer = structured["content"]
 	structured_content.add_child(_section_note("Raw JSON remains available for legacy or extension traits and structured perceptions. Registered traits stay synchronized with the controls above while this JSON is valid."))
@@ -391,7 +393,7 @@ func _render_sections() -> void:
 	structured_grid.add_child(PoliticalKit.field("Perceptions JSON", perceptions))
 	structured_content.add_child(structured_grid)
 
-	var debug := PoliticalKit.section("Advanced saved state · read-only", false)
+	var debug := PoliticalKit.remember(PoliticalKit.section("Advanced saved state · read-only", bool(_open_states.get("debug", false))), _open_states, "debug")
 	_manager.main_body.add_child(debug["panel"])
 	var debug_content: VBoxContainer = debug["content"]
 	debug_content.add_child(_section_note("This shows exactly what the scenario currently stores. Values calculated by the game are read-only here."))
@@ -456,7 +458,8 @@ func _render_parties() -> void:
 	var parties: Array = _draft.get("parties", [])
 	for index in range(parties.size()):
 		var party: Dictionary = parties[index]
-		var nested := PoliticalKit.section(_party_title(party, index), false, Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.075), 10, Vector4(9, 8, 9, 9), 12, 800)
+		var party_key := "party:" + str(party.get("_editorKey", index))
+		var nested := PoliticalKit.remember(PoliticalKit.section(_party_title(party, index), bool(_open_states.get(party_key, false)), Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.075), 10, Vector4(9, 8, 9, 9), 12, 800), _open_states, party_key)
 		var refresh_title := func() -> void: PoliticalKit.set_section_title(nested, _party_title(party, index))
 		var inner: VBoxContainer = nested["content"]
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)
@@ -517,7 +520,8 @@ func _render_blocs() -> void:
 	var blocs: Array = _draft.get("powerBlocs", [])
 	for index in range(blocs.size()):
 		var bloc: Dictionary = blocs[index]
-		var nested := PoliticalKit.section(_bloc_title(bloc, index), false, Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.075), 10, Vector4(9, 8, 9, 9), 12, 800)
+		var bloc_key := "bloc:" + str(bloc.get("_editorKey", index))
+		var nested := PoliticalKit.remember(PoliticalKit.section(_bloc_title(bloc, index), bool(_open_states.get(bloc_key, false)), Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.075), 10, Vector4(9, 8, 9, 9), 12, 800), _open_states, bloc_key)
 		var refresh_title := func() -> void: PoliticalKit.set_section_title(nested, _bloc_title(bloc, index))
 		var inner: VBoxContainer = nested["content"]
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)

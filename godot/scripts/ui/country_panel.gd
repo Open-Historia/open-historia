@@ -1159,7 +1159,7 @@ func _render_diplomacy() -> void:
 		var metric: Dictionary = item
 		var cell := card(CARD_BG, CARD_BORDER, 10, Vector4(10, 9, 10, 9))
 		var inner := column(3)
-		inner.add_child(clipped(str(metric.get("label", "")), 9, Color(1, 1, 1, 0.4), 800))
+		inner.add_child(text(str(metric.get("label", "")), 9, Color(1, 1, 1, 0.4), 800))
 		inner.add_child(UI.label(str(metric.get("value", "")), 16, tone(str(metric.get("tone", ""))), 900))
 		cell.add_child(inner)
 		metrics.add_child(cell)
@@ -2461,6 +2461,8 @@ class StatChart extends Control:
 			return
 		var layout := _layout()
 		var scale: float = layout[0]
+		if scale <= 0.01:
+			return
 		var offset: Vector2 = layout[1]
 		var at := func(x: float, y: float) -> Vector2: return offset + Vector2(x, y) * scale
 		var plot: Array = model.get("plot", [78, 34, 788, 378])

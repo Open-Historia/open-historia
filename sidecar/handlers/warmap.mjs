@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import earcut from "earcut";
 
 const WORLD = 4096;
 const RAD = Math.PI / 180;
@@ -57,14 +56,15 @@ const lineOf = (coordinates) => {
   return out;
 };
 
-const triangulate = (rings) => {
+const triangulateWith = (writer, rings) => {
+  const counts = [];
   const flat = [];
-  const holes = [];
   let before = null;
-  rings.forEach((ring, index) => {
-    if (index > 0) holes.push(flat.length / 2);
+  for (const ring of rings) {
     const list = Array.isArray(ring) ? ring : [];
     const count = list.length > 1 && list[0][0] === list[list.length - 1][0] && list[0][1] === list[list.length - 1][1] ? list.length - 1 : list.length;
+    if (count < 3) continue;
+    counts.push(count);
     for (let at = 0; at < count; at += 1) {
       let lng = Number(list[at][0]);
       const lat = Number(list[at][1]);
@@ -72,11 +72,13 @@ const triangulate = (rings) => {
       before = lng;
       flat.push(round2(projectLng(lng)), round2(projectLat(lat)));
     }
-  });
-  if (flat.length < 6) return null;
-  const indices = earcut(flat, holes.length ? holes : null, 2);
+  }
+  if (!counts.length || flat.length < 6) return null;
+  const points = [];
+  const indices = [];
+  writer([counts.length, ...counts, ...flat], 0, points, indices, 0);
   if (!indices.length) return null;
-  return { points: flat, indices, outer: holes.length ? holes[0] : flat.length / 2 };
+  return { points, indices };
 };
 
 const polygonsOf = (geometry) => {
@@ -102,6 +104,7 @@ export const register = (ctx) => {
   const codec = engine.wrCodec;
   const frames = engine.wrFrame;
   const colours = engine.wmOwnerColors;
+  const triangulate = (rings) => triangulateWith(engine.wmOlBuffers.writePolygonTrianglesToBuffers, rings);
 
   const state = {
     gameId: "",
@@ -601,15 +604,24 @@ export const register = (ctx) => {
     return out;
   };
 
-  const weatherOf = (world, game, gameId) => {
+  let weatherCache = { key: "", value: null };
+  const weatherOf = (world, game, gameId, known = "") => {
     const settings = engine.mapSettings;
     const switchedOn = settings.getMapSettingDefaultOn(settings.MAP_SETTING_KEYS.seasonsWeather);
     const effectsOn = settings.getMapSettingDefaultOn(settings.MAP_SETTING_KEYS.weatherEffects);
     const zones = engine.wmGeographyDefaults.climateZonesOf(world);
     const weatherOn = engine.wrSettings.warSettingsOf(world).mechanics.weather;
     const shown = switchedOn && effectsOn && weatherOn !== false && list(zones).length > 0;
-    if (!shown) return { areas: [], patterns: {} };
     const date = clean(game?.gameDate || game?.startDate);
+    const key = shown
+      ? crypto.createHash("sha1").update([gameId, date, JSON.stringify(world?.zoneWeather ?? null), JSON.stringify(zones)].join("|")).digest("hex").slice(0, 20)
+      : "none";
+    if (known && known === key) return { key, same: true };
+    if (weatherCache.key === key && weatherCache.value) return weatherCache.value;
+    if (!shown) {
+      weatherCache = { key, value: { key, areas: [], patterns: {} } };
+      return weatherCache.value;
+    }
     const weather = engine.wmWeatherPatches.zoneWeatherById(world?.zoneWeather ?? null, date, engine.wmZoneWeather.zoneWeatherFor({ climateZones: zones }, { seed: gameId, date }));
     const areas = engine.wmWeatherPatches.weatherPatchFeatures({ zones, weather }).areas;
     const out = [];
@@ -626,8 +638,8 @@ export const register = (ctx) => {
           pattern: props.pattern ? String(props.pattern) : "",
           wash: props.wash ? colours.parseColorToRgb(props.wash) : null,
           washOpacity: Number(props.washOpacity) || 0,
-          points: shape.points,
-          indices: shape.indices,
+          points: b64(Float32Array.from(shape.points)),
+          indices: b64(Int32Array.from(shape.indices)),
         });
       }
     }
@@ -639,7 +651,8 @@ export const register = (ctx) => {
         return { id: engine.wmMapPatterns.weatherImageId(weatherState, layer), width: image.width, height: image.height, data: b64(Uint8Array.from(image.data)) };
       });
     }
-    return { areas: out, patterns };
+    weatherCache = { key, value: { key, areas: out, patterns } };
+    return weatherCache.value;
   };
 
   const groupsOf = (world, regions) => {
@@ -768,6 +781,7 @@ export const register = (ctx) => {
   };
 
   const frameOf = ({ days = [], zoom = 5 } = {}) => {
+    const began = performance.now();
     const kit = state.colourKit;
     if (!kit) return { arrows: [], troops: [], sides: [], colours: [] };
     const drawn = [];
@@ -821,10 +835,10 @@ export const register = (ctx) => {
       }
       outTroops.push([x, y, props.side, props.index, props.command, palette.of(props.rgb), props.glyph, props.strength, props.state, props.named ? 1 : 0, props.moving ? 1 : 0, props.label || "", battlefield]);
     }
-    return { arrows: outArrows, troops: outTroops, sides: outSides, colours: palette.list, zoom: level };
+    return { arrows: outArrows, troops: outTroops, sides: outSides, colours: palette.list, zoom: level, ms: Math.round((performance.now() - began) * 10) / 10 };
   };
 
-  const describe = async ({ stage = null, mode = "political", have = [], planned = false } = {}) => {
+  const describe = async ({ stage = null, mode = "political", have = [], planned = false, weatherKey = "" } = {}) => {
     const live = await readLive();
     const gameId = activeGameId();
     if (gameId !== state.gameId) {
@@ -914,7 +928,7 @@ export const register = (ctx) => {
       transports: transportsOf(live.world, live.game, gameId, planned === true),
       seas: seasOf(live.world, live.game),
       walls: wallsOf(live.world, live.game),
-      weather: weatherOf(live.world, live.game, gameId),
+      weather: weatherOf(live.world, live.game, gameId, clean(weatherKey)),
       groups: groupsOf(shownWorld, regions),
       groupTint: GROUP_AREA_TINT_OPACITY,
       disputed: disputedOf(shownWorld, regions, kit),
@@ -976,6 +990,12 @@ export const register = (ctx) => {
         km: 900, gone: Number(phaseGone ?? 0), status: "moving", speed: 600, raise: 3,
       }];
       next.groups = { ...(world.groups ?? {}), "Rhine Liberation Front": { name: "Rhine Liberation Front", color: "#06b6d4", description: "A test group." } };
+      const begun = engine.gameDates.addGameDays?.(date, -20) || date;
+      next.fortifications = [...list(world.fortifications).filter((wall) => !String(wall?.id ?? "").startsWith("native-test-")), {
+        id: "native-test-w1", name: "Ligne Maginot", owner: a, level: 8, points: [[5.9, 49.5], [6.6, 49.3], [7.3, 49.1], [7.9, 48.98]], breaches: [[60, 85]],
+      }, {
+        id: "native-test-w2", name: "Westwall", owner: b, level: 6, points: [[7.2, 49.75], [7.8, 49.45], [8.15, 49.05]], building: { since: begun, days: 60 },
+      }];
     }
     await engine.gameState.writeWorldState(next);
     return true;
@@ -1008,12 +1028,26 @@ export const register = (ctx) => {
       await engine.gameState.writeWorldState(next);
       return true;
     },
-    "warmap.test.regions": async ({ owner = "" } = {}) => {
+    "warmap.test.index": async ({ id = "" } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
+      const map = await ctx.mapState();
+      const at = regionIndexOf(map.sha).index.get(clean(id));
+      return at === undefined ? -1 : at;
+    },
+    "warmap.test.regions": async ({ owner = "", near = null } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
       const map = await ctx.mapState();
       const regions = regionIndexOf(map.sha);
-      const ids = [...regions.index.entries()].sort((left, right) => left[1] - right[1]).map(([id]) => id);
       const wanted = fold(owner);
-      return ids.filter((id, at) => map.owners[at] >= 0 && fold(map.ownerNames[map.owners[at]]) === wanted).slice(0, 400);
+      const records = await ctx.regionRecords();
+      const centre = Array.isArray(near) && near.length >= 2 ? [Number(near[0]), Number(near[1])] : null;
+      const kept = records.filter((entry) => {
+        const at = regions.index.get(entry.id);
+        return at !== undefined && map.owners[at] >= 0 && fold(map.ownerNames[map.owners[at]]) === wanted;
+      });
+      const middle = (entry) => [(entry.bounds[0][0] + entry.bounds[1][0]) / 2, (entry.bounds[0][1] + entry.bounds[1][1]) / 2];
+      if (centre) kept.sort((left, right) => Math.hypot(middle(left)[0] - centre[0], middle(left)[1] - centre[1]) - Math.hypot(middle(right)[0] - centre[0], middle(right)[1] - centre[1]));
+      return kept.slice(0, 400).map((entry) => entry.id);
     },
   };
 };

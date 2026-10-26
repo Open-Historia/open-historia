@@ -59,6 +59,7 @@ var _press_distance := 0.0
 var _serial := 0
 var _stage: Variant = null
 var _retry_full := false
+var _weather_key := ""
 
 
 func setup(link: EngineLink, map_view: MapView) -> void:
@@ -161,6 +162,7 @@ func clear() -> void:
 	_air = []
 	_strikes_playing = false
 	_overlay_signature = ""
+	_weather_key = ""
 	paint.clear()
 	ground.clear()
 	overlay.units = []
@@ -188,7 +190,7 @@ func _load() -> void:
 		return
 	_serial += 1
 	var serial := _serial
-	var args := {"mode": mode, "have": [] if _retry_full else paint.have_runs(), "planned": bool(war_room.get("open", false))}
+	var args := {"mode": mode, "have": [] if _retry_full else paint.have_runs(), "planned": bool(war_room.get("open", false)), "weatherKey": _weather_key}
 	_retry_full = false
 	if _stage != null:
 		args["stage"] = _stage
@@ -213,6 +215,8 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 		_transport_moves = []
 		_entries = []
 		paint.clear()
+	if first and bool((state.get("weather", {}) as Dictionary).get("same", false)):
+		_weather_key = ""
 	_state = state
 	reduce_motion = bool(state.get("reduceMotion", false))
 	_base_map = state.get("map", {})
@@ -237,8 +241,10 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 		"labels": _with_world(seas.get("labels", [])),
 	}
 	ground.set_walls(state.get("walls", []))
-	if fresh or first:
-		ground.set_weather(state.get("weather", {}))
+	var weather: Dictionary = state.get("weather", {})
+	if not bool(weather.get("same", false)) and str(weather.get("key", "")) != _weather_key:
+		_weather_key = str(weather.get("key", ""))
+		ground.set_weather(weather)
 	var groups: Array = state.get("groups", [])
 	paint.set_groups(groups, float(state.get("groupTint", 0.2)))
 	ground.set_groups(groups)

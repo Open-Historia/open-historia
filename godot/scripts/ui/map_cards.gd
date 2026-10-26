@@ -302,7 +302,7 @@ func _process(_delta: float) -> void:
 		var height := _floating.get_combined_minimum_size().y
 		if not is_equal_approx(_floating.size.y, height):
 			_floating.size = Vector2(_floating.size.x, height)
-		_floating.position = Vector2(round(screen.x - _floating_width * 0.5), round(screen.y - _floating_lift - height + _floating_rise))
+		_floating.position = Vector2(round(screen.x - max(_floating_width, _floating.size.x) * 0.5), round(screen.y - _floating_lift - height + _floating_rise))
 
 
 func _close_floating() -> void:
@@ -884,7 +884,8 @@ func _build_feature(animate: bool) -> void:
 	var titles := Country.column(1)
 	titles.add_child(Country.text(str(_feature.get("name", "")), 13, UI.WHITE, 700))
 	var kinds := Country.flow(5, 3)
-	kinds.add_child(UI.label(str(_feature.get("kind", "")), 11, Color(1, 1, 1, 0.6)))
+	var kind_label := UI.label(str(_feature.get("kind", "")), 11, Color(1, 1, 1, 0.6))
+	kinds.add_child(kind_label)
 	var status: Variant = _feature.get("status")
 	if typeof(status) == TYPE_DICTIONARY:
 		var tint := Country.tone(str((status as Dictionary).get("color", "")))
@@ -955,6 +956,13 @@ func _build_feature(animate: bool) -> void:
 	stack.add_child(margin)
 	card.add_child(stack)
 	_mount_floating(card, "feature", width, 14.0, animate)
+	var over := card.get_combined_minimum_size().x - width
+	if over > 0.5:
+		var natural := kind_label.get_combined_minimum_size().x
+		kind_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		kind_label.custom_minimum_size.x = max(24.0, natural - over)
+		card.reset_size()
+		card.size.x = width
 
 
 func _detail_row(label: String, value: String) -> Control:

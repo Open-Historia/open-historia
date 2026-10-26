@@ -41,6 +41,8 @@ const MAX_GROUPS = 64;
 const NPC_REACTION_GRACE_MS = 12000;
 const IMPORTANCE_WEIGHT = { critical: 3, high: 2, major: 2 };
 const PUPPET_KIND_LABELS = { protectorate: "protectorate", satellite: "puppet state", client: "client state" };
+const PUPPET_COUP_LOYALTY = 35;
+const puppetKindLabel = (kind) => PUPPET_KIND_LABELS[String(kind ?? "").trim()] || String(kind ?? "").trim();
 
 const text = (value) => String(value ?? "").trim();
 const cleanEventText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -99,7 +101,13 @@ const changedEditorFields = (form = {}, loaded = {}) => {
   return new Set([...keys].filter((key) => String(form?.[key] ?? "") !== String(loaded?.[key] ?? "")));
 };
 
-const countryStatPatchFromForm = ({ form = {}, changed = new Set() } = {}) => {
+const actorLeaderName = (actor) => {
+  const leader = actor?.government?.headOfGovernment || actor?.government?.headOfState || actor?.leader;
+  if (!leader) return "";
+  return String(typeof leader === "string" ? leader : leader?.name || "").trim();
+};
+
+const countryStatPatchFromForm = ({ form = {}, changed = new Set(), politicalActor = null } = {}) => {
   const number = (key, bounds) => (changed.has(key) ? editorNumber(form[key], bounds) : null);
   const field = (key) => (changed.has(key) ? String(form[key] ?? "").trim() : "");
   const populationM = number("populationM", { min: 0.001, max: 20000, label: "Population (millions)" });
@@ -131,9 +139,13 @@ const countryStatPatchFromForm = ({ form = {}, changed = new Set() } = {}) => {
       gdpBreakdown = { agriculture: shares[0], industry: shares[1], services: shares[2] };
     }
   }
+  const government = String(politicalActor?.government?.form ?? "").trim();
+  const leader = politicalActor ? actorLeaderName(politicalActor) : "";
   const patch = {
     ...(field("capital") ? { capital: field("capital") } : {}),
     ...(field("continent") ? { continent: field("continent") } : {}),
+    ...(government ? { government } : {}),
+    ...(leader ? { leader } : {}),
     ...(stability == null ? {} : { stability }),
     ...(Object.keys(indices).length ? { indices } : {}),
     ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
@@ -1494,19 +1506,39 @@ export const register = (ctx) => {
         industry: value(sheet?.gdpBreakdown?.industry),
         services: value(sheet?.gdpBreakdown?.services),
       };
+      const politicsApi = engine.countryEditorPolitical;
+      const politics = politicsApi?.politicalEditorStateFromWorld ? plain(politicsApi.politicalEditorStateFromWorld(world, code)) : null;
+      const snapshot = politicsApi?.politicalDebugSnapshotFromWorld ? plain(politicsApi.politicalDebugSnapshotFromWorld(world, code)) : null;
+      const decisionContext = engine.politicalDecisionContext?.buildPoliticalDecisionContext?.(world, code, { maxChars: 12000 })?.text || "";
+      const pretty = (value) => JSON.stringify(value ?? null, null, 2);
       return {
         form,
         componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
         perCapita: Number.isFinite(perCapita) ? perCapita : null,
-        politicalExists: Boolean(world?.politicalActors?.[code]),
+        politics,
+        registry: list(engine.politicalTraitRegistry?.POLITICAL_TRAIT_REGISTRY).map((entry) => ({
+          key: entry.key, label: entry.label, description: entry.description, min: entry.min, max: entry.max, aliases: list(entry.aliases),
+        })),
+        debug: snapshot
+          ? {
+            traits: list(snapshot.traitCatalog?.traits).map((trait) => ({ key: trait.key, label: trait.label, value: trait.value == null ? null : String(trait.value) })),
+            decisionAuthority: pretty(snapshot.decisionAuthority),
+            storedDisposition: pretty(snapshot.storedDisposition),
+            derivedDisposition: pretty(snapshot.derivedDisposition),
+            actor: pretty(snapshot.actor),
+            snapshot: pretty(snapshot),
+          }
+          : null,
+        decisionContext,
       };
     },
 
-    "cheats.country.save": async ({ code, form = {}, baseline = {}, componentCount = 0, fallbackName = "" }) => {
+    "cheats.country.save": async ({ code, form = {}, baseline = {}, politics = null, politicsBaseline = null, componentCount = 0, fallbackName = "" }) => {
       if (!code) throw new Error("Pick a country first.");
       const world = await readWorld();
       const existing = world.polityOverrides?.[code] ?? {};
       const changed = changedEditorFields(form, baseline);
+      const politicsChanged = Boolean(politics) && JSON.stringify(politics ?? null) !== JSON.stringify(politicsBaseline ?? null);
       const requestedName = changed.has("name") ? String(form.name ?? "").trim() : "";
       const colorHex = changed.has("color") ? String(form.color ?? "").trim() : "";
       const nextName = requestedName || existing.name || fallbackName || code;
@@ -1515,6 +1547,10 @@ export const register = (ctx) => {
         ...(world.polityOverrides || {}),
         [code]: { ...existing, aliases, code, name: nextName, ...(hexToRgb(colorHex) ? { color: colorHex.startsWith("#") ? colorHex : `#${colorHex}` } : {}) },
       };
+      if (politicsChanged && typeof engine.countryEditorPolitical?.applyPoliticalEditorStateToWorld !== "function") {
+        throw new Error("The Political World editor is not available in this build.");
+      }
+      const nextPoliticalActor = politicsChanged ? engine.countryEditorPolitical.applyPoliticalEditorStateToWorld(world, code, politics) : null;
       const previousName = String(existing.name || fallbackName || code).trim();
       const sheetBefore = world.countryStats?.[code] ?? null;
       const headlineBefore = {
@@ -1525,7 +1561,7 @@ export const register = (ctx) => {
       };
       const hasComponentBaseline = Number(componentCount) > 0;
       let nextSheet = world.countryStats?.[code] ?? null;
-      const patch = hasComponentBaseline ? countryStatPatchFromForm({ form, changed }) : null;
+      const patch = hasComponentBaseline ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor }) : null;
       if (patch) {
         nextSheet = gs.applyCountryStatPatchToWorld(world, code, patch);
         const reputation = Number(nextSheet?.indices?.internationalReputation);
@@ -1549,7 +1585,13 @@ export const register = (ctx) => {
           ? `stability ${headlineBefore.stability ?? "unset"} → ${Number(nextSheet.stability)}`
           : "",
       ].filter(Boolean);
-      await noteGmChange(hasComponentBaseline ? "stats" : "polity", `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}.`);
+      const politicalSummary = [nextPoliticalActor?.government?.form, nextPoliticalActor?.government?.ideology]
+        .map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
+      await noteGmChange(hasComponentBaseline ? "stats" : "polity",
+        `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}Political World ${politicalSummary}` : ""}.`);
+      if (typeof globalThis.dispatchEvent === "function" && typeof CustomEvent === "function") {
+        globalThis.dispatchEvent(new CustomEvent("oh:country-stats-updated", { detail: { country: code } }));
+      }
       return hasComponentBaseline
         ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
         : `${nextName} identity updated. Generate a Stats baseline before editing national statistics.`;
@@ -1731,19 +1773,85 @@ export const register = (ctx) => {
 
     "cheats.puppets.get": async () => {
       const world = await readWorld();
-      const rows = list(world?.puppets).filter((row) => isRecord(row) && cleanEventText(row.overlord) && cleanEventText(row.puppet));
-      const live = (row) => (cleanEventText(row.status) || "active") === "active";
+      const tool = engine.puppetStatesTool;
+      const rows = typeof tool?.gmPuppetRows === "function" ? tool.gmPuppetRows(world) : { live: [], ended: [] };
       const loyalty = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Math.round(Number(value)))) : 50);
-      const kindName = (kind) => capitalize(PUPPET_KIND_LABELS[kind || "client"] || kind || "client");
+      const kindName = (kind) => capitalize(puppetKindLabel(kind || "client"));
       return {
-        live: rows.filter(live).map((row) => ({
-          overlord: row.overlord,
-          puppet: row.puppet,
+        editable: typeof tool?.applyGmPuppetChange === "function",
+        coupLoyalty: PUPPET_COUP_LOYALTY,
+        live: list(rows.live).map((row) => ({
+          overlord: String(row.overlord ?? ""),
+          puppet: String(row.puppet ?? ""),
+          kind: String(row.kind || "client"),
+          secrecy: row.secrecy === "covert" ? "covert" : "open",
+          loyalty: loyalty(row.loyalty),
           title: `${row.overlord} → ${row.puppet}`,
           meta: `${kindName(row.kind)} · ${row.secrecy === "covert" ? "Covert" : "Openly known"} · Loyalty ${loyalty(row.loyalty)}`,
         })),
-        ended: rows.filter((row) => !live(row)).map((row) => `${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`),
+        ended: list(rows.ended).map((row) => `${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`),
       };
+    },
+
+    "cheats.puppets.change": async ({ op, overlord = "", puppet = "", kind = "satellite", secrecy = "open", loyalty = 50, names = {} }) => {
+      const tool = engine.puppetStatesTool;
+      if (typeof tool?.applyGmPuppetChange !== "function") throw new Error("The puppet ledger is not available in this build.");
+      const nameOf = (code) => names?.[code] || code;
+      const game = await readGame();
+      const apply = async (change) => {
+        const latest = await readWorld();
+        let regionCatalog = [];
+        if (change.op === "install") {
+          const catalog = await assets.loadRegionCatalog().catch(() => []);
+          regionCatalog = typeof engine.promptContext?.filterToRenderedRegions === "function"
+            ? engine.promptContext.filterToRenderedRegions(catalog, latest)
+            : catalog;
+        }
+        const result = tool.applyGmPuppetChange(latest, change, {
+          regionCatalog,
+          date: game?.gameDate || game?.startDate || "",
+          round: game?.round || 0,
+        });
+        if (result.error) throw new Error(result.error);
+        if (!result.summary) return false;
+        await gs.writeWorldState(result.world);
+        await noteGmChange("puppets", result.summary);
+        return true;
+      };
+      if (op === "install") {
+        await apply({ op: "install", overlord, puppet, kind, secrecy, loyalty: Number(loyalty) });
+        return { message: `${nameOf(puppet)} now answers to ${nameOf(overlord)} as its ${puppetKindLabel(kind)}.`, closeEditor: true };
+      }
+      const world = await readWorld();
+      const current = list(tool.gmPuppetRows(world).live).find((row) => String(row.overlord) === String(overlord) && String(row.puppet) === String(puppet)) ?? null;
+      if (!current) throw new Error("That arrangement has ended since you opened it.");
+      if (op === "edit") {
+        const changed = await apply({ op: "edit", overlord: current.overlord, puppet: current.puppet, kind, loyalty: Number(loyalty) });
+        return { message: changed ? `Saved ${current.overlord}'s hold on ${current.puppet}.` : "Nothing to change.", closeEditor: false };
+      }
+      if (op === "reveal") {
+        await apply({ op: "reveal", overlord: current.overlord, puppet: current.puppet });
+        return { message: `${current.overlord}'s hold on ${current.puppet} is public now.`, closeEditor: false };
+      }
+      if (op === "release") {
+        await apply({ op: "release", overlord: current.overlord, puppet: current.puppet });
+        return { message: `${current.puppet} is free of ${current.overlord}.`, closeEditor: true };
+      }
+      if (op === "annex") {
+        await apply({ op: "annex", overlord: current.overlord, puppet: current.puppet });
+        const count = await transferWholeCountry(current.puppet, current.overlord, game);
+        if (!count) {
+          return { message: `${current.puppet} no longer answers to ${current.overlord} as a puppet, but no regions were found under its name: move its land with Annex Country.`, closeEditor: true };
+        }
+        await noteGmChange("territory", `Annexed the whole of ${current.puppet} into ${current.overlord} by hand (${count} regions).`);
+        return {
+          message: count === 1
+            ? `${current.puppet} annexed into ${current.overlord} (1 region). The map updates within a few seconds.`
+            : `${current.puppet} annexed into ${current.overlord} (${count} regions). The map updates within a few seconds.`,
+          closeEditor: true,
+        };
+      }
+      throw new Error("That is not a change the ledger makes.");
     },
 
     "cheats.features.get": async () => {
