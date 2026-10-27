@@ -42,6 +42,7 @@ namespace OpenHistoriaImageCodec
 				var parts = line.Split('\t');
 				output.WriteLine(parts.Length < 2 ? "failed\tThe request was malformed." : Convert(parts[0], parts[1]));
 			}
+			Sequence.Stop();
 			return 0;
 		}
 
@@ -83,12 +84,59 @@ namespace OpenHistoriaImageCodec
 			return format == PixelFormats.Bgra32 || format == PixelFormats.Pbgra32 || format == PixelFormats.Rgba64 || format == PixelFormats.Prgba64 || format == PixelFormats.Rgba128Float || format == PixelFormats.Prgba128Float;
 		}
 
-		static string Convert(string source, string target)
+		static string Failure(Exception error)
+		{
+			return (IsMissing(error) ? "missing\t" : "failed\t") + Clean(error.GetType().Name + ": " + error.Message);
+		}
+
+		static bool WritePng(byte[] pixels, int width, int height, string target)
 		{
 			var partial = target + ".part";
 			try
 			{
+				var image = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+				var encoder = new PngBitmapEncoder();
+				encoder.Frames.Add(BitmapFrame.Create(image));
+				Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target)));
+				using (var stream = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None))
+				{
+					encoder.Save(stream);
+				}
+				if (File.Exists(target)) File.Delete(target);
+				File.Move(partial, target);
+				return true;
+			}
+			catch (Exception)
+			{
+				try
+				{
+					if (File.Exists(partial)) File.Delete(partial);
+				}
+				catch (IOException)
+				{
+				}
+				throw;
+			}
+		}
+
+		static string Convert(string source, string target)
+		{
+			try
+			{
 				var bytes = File.ReadAllBytes(source);
+				var sequence = Sequence.Read(bytes);
+				if (sequence != null)
+				{
+					try
+					{
+						var answer = Sequence.Convert(bytes, sequence, target, WritePng);
+						if (answer.StartsWith("ok\t", StringComparison.Ordinal) || !sequence.HasStill) return answer;
+					}
+					catch (Exception error)
+					{
+						if (!sequence.HasStill) return Failure(error);
+					}
+				}
 				var frame = Decode(bytes);
 				var width = frame.PixelWidth;
 				var height = frame.PixelHeight;
@@ -115,28 +163,12 @@ namespace OpenHistoriaImageCodec
 						}
 					}
 				}
-				var image = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, buffer, width * 4);
-				var encoder = new PngBitmapEncoder();
-				encoder.Frames.Add(BitmapFrame.Create(image));
-				Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target)));
-				using (var stream = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None))
-				{
-					encoder.Save(stream);
-				}
-				if (File.Exists(target)) File.Delete(target);
-				File.Move(partial, target);
-				return "ok\t" + width + "\t" + height + "\t" + alpha;
+				WritePng(buffer, width, height, target);
+				return "ok\t" + width + "\t" + height + "\t" + alpha + "\t1\t-1\t";
 			}
 			catch (Exception error)
 			{
-				try
-				{
-					if (File.Exists(partial)) File.Delete(partial);
-				}
-				catch (IOException)
-				{
-				}
-				return (IsMissing(error) ? "missing\t" : "failed\t") + Clean(error.GetType().Name + ": " + error.Message);
+				return Failure(error);
 			}
 		}
 

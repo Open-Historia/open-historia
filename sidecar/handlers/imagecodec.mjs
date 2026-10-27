@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const codecDir = path.resolve(here, "..", "imagecodec");
-export const IMAGE_CODEC_SOURCE = path.join(codecDir, "ImageCodec.cs");
+export const IMAGE_CODEC_SOURCES = ["ImageCodec.cs", "Sequence.cs"].map((name) => path.join(codecDir, name));
 export const IMAGE_CODEC_EXE = "oh-imagecodec.exe";
 const SHIPPED = path.join(codecDir, IMAGE_CODEC_EXE);
 const REQUEST_MS = 60_000;
@@ -27,7 +27,7 @@ export const imageCodecCompileArgs = (target) => {
     `/reference:${path.join(framework, "WPF", "PresentationCore.dll")}`,
     `/reference:${path.join(framework, "WPF", "WindowsBase.dll")}`,
     `/reference:${path.join(framework, "System.Xaml.dll")}`,
-    IMAGE_CODEC_SOURCE,
+    ...IMAGE_CODEC_SOURCES,
   ];
 };
 
@@ -61,8 +61,10 @@ const compile = (cacheDir) => {
   built = (async () => {
     if (process.platform !== "win32") throw codecError(NO_WINDOWS, true);
     if (fs.existsSync(SHIPPED)) return SHIPPED;
-    if (!fs.existsSync(IMAGE_CODEC_SOURCE)) throw codecError(NO_WINDOWS, true);
-    const tag = crypto.createHash("sha256").update(fs.readFileSync(IMAGE_CODEC_SOURCE)).digest("hex").slice(0, 12);
+    if (!IMAGE_CODEC_SOURCES.every((file) => fs.existsSync(file))) throw codecError(NO_WINDOWS, true);
+    const hash = crypto.createHash("sha256");
+    for (const file of IMAGE_CODEC_SOURCES) hash.update(fs.readFileSync(file));
+    const tag = hash.digest("hex").slice(0, 12);
     const dir = path.join(cacheDir, "imagecodec");
     const target = path.join(dir, `oh-imagecodec-${tag}.exe`);
     if (fs.existsSync(target)) return target;
@@ -138,15 +140,29 @@ const ask = async (cacheDir, source, target) => {
   });
 };
 
-const pngSize = (file) => {
-  const head = Buffer.alloc(24);
-  const handle = fs.openSync(file, "r");
+const readManifest = (dir, sha) => {
   try {
-    fs.readSync(handle, head, 0, 24, 0);
-  } finally {
-    fs.closeSync(handle);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, `${sha}.json`), "utf8"));
+    const frames = (Array.isArray(manifest.frames) ? manifest.frames : []).map((name) => path.join(dir, path.basename(String(name))));
+    if (!frames.length || !frames.every((frame) => fs.existsSync(frame))) return null;
+    return {
+      png: frames[0],
+      frames,
+      durations: (Array.isArray(manifest.durations) ? manifest.durations : []).map(Number),
+      loops: Number.isFinite(Number(manifest.loops)) ? Number(manifest.loops) : -1,
+      width: Number(manifest.width) || 0,
+      height: Number(manifest.height) || 0,
+    };
+  } catch {
+    return null;
   }
-  return { width: head.readUInt32BE(16), height: head.readUInt32BE(20) };
+};
+
+const writeManifest = (dir, sha, manifest) => {
+  const file = path.join(dir, `${sha}.json`);
+  const partial = `${file}.${process.pid}.part`;
+  fs.writeFileSync(partial, JSON.stringify(manifest));
+  fs.renameSync(partial, file);
 };
 
 export const convertAvif = async ({ bytes = null, file = "", cacheDir }) => {
@@ -154,7 +170,8 @@ export const convertAvif = async ({ bytes = null, file = "", cacheDir }) => {
   const sha = crypto.createHash("sha256").update(buffer).digest("hex");
   const dir = path.join(cacheDir, "avif");
   const png = path.join(dir, `${sha}.png`);
-  if (fs.existsSync(png)) return { png, sha, ...pngSize(png), cached: true };
+  const known = readManifest(dir, sha);
+  if (known) return { ...known, sha, cached: true };
   if (missing) throw codecError(missing, true);
   if (unreadable.has(sha)) throw codecError(unreadable.get(sha), false);
   if (inflight.has(sha)) return inflight.get(sha);
@@ -171,7 +188,16 @@ export const convertAvif = async ({ bytes = null, file = "", cacheDir }) => {
         throw error;
       }
       const [status, ...rest] = reply.split("\t");
-      if (status === "ok") return { png, sha, width: Number(rest[0]) || 0, height: Number(rest[1]) || 0, cached: false };
+      if (status === "ok") {
+        const width = Number(rest[0]) || 0;
+        const height = Number(rest[1]) || 0;
+        const count = Math.max(1, Number(rest[3]) || 1);
+        const names = Array.from({ length: count }, (_, index) => (index === 0 ? `${sha}.png` : `${sha}.${index}.png`));
+        const durations = String(rest[5] ?? "").split(",").filter(Boolean).map(Number);
+        const loops = rest[4] !== undefined && Number.isFinite(Number(rest[4])) ? Number(rest[4]) : -1;
+        writeManifest(dir, sha, { width, height, frames: names, durations, loops });
+        return { png, sha, width, height, frames: names.map((name) => path.join(dir, name)), durations, loops, cached: false };
+      }
       if (status === "missing" && isAvif(buffer)) {
         missing = NO_CODEC;
         throw codecError(NO_CODEC, true);
@@ -193,7 +219,7 @@ export const register = ({ cacheDir, clean }) => ({
     try {
       if (!clean(data) && !clean(file)) throw codecError("No image was given.", false);
       const result = await convertAvif({ bytes: clean(data) ? Buffer.from(String(data), "base64") : null, file: clean(file), cacheDir });
-      return { ok: true, png: result.png, width: result.width, height: result.height, cached: result.cached };
+      return { ok: true, png: result.png, width: result.width, height: result.height, frames: result.frames, durations: result.durations, loops: result.loops, cached: result.cached };
     } catch (error) {
       return { ok: false, missing: error?.codecMissing === true, error: clean(error?.message) || "The image could not be read." };
     }

@@ -140,10 +140,11 @@ func _decoded(url: String, image: Variant) -> void:
 
 
 static func _convert_avif(owner: WeakRef, url: String, body: PackedByteArray) -> void:
-	var image: Image = await ImageLoader.avif_image(body)
+	var data: Dictionary = await ImageLoader.avif_frames(body)
+	var frames: Array = data.get("frames", [])
 	var loader := owner.get_ref() as HubImages
 	if loader != null:
-		loader._decoded(url, _fit(image) if image != null else null)
+		loader._decoded(url, data if frames.size() > 1 else (_fit(frames[0]) if frames.size() == 1 else null))
 
 
 static func _decode_any(body: PackedByteArray) -> Variant:
@@ -151,7 +152,13 @@ static func _decode_any(body: PackedByteArray) -> Variant:
 		var frames := ImageLoader.gif_frames(body)
 		return frames if not (frames.get("frames", []) as Array).is_empty() else null
 	if ImageLoader.is_avif(body):
-		var cached := ImageLoader.avif_cached(body)
+		var known := ImageLoader.avif_cached_frames(body)
+		var frames: Array = known.get("frames", [])
+		if frames.size() > 1:
+			return known
+		if frames.size() == 1:
+			return _fit(frames[0])
+		var cached := ImageLoader.avif_cached(body) if not ImageLoader.is_avif_sequence(body) else null
 		return _fit(cached) if cached != null else body
 	return decode_image(body)
 

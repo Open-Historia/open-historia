@@ -128,6 +128,36 @@ func _run() -> void:
 	else:
 		_say("note no second AVIF beside the sample; the placeholder path was not exercised")
 
+	var rotated := FileAccess.get_file_as_bytes(OS.get_environment("OH_AVIF_ROTATED"))
+	if ImageLoader.is_avif(rotated):
+		var turned_size := ImageLoader.avif_size(rotated)
+		var turned := await ImageLoader.decode_async(main, rotated)
+		var turned_image := turned.get_image() if turned else null
+		_check(turned_image != null and Vector2i(turned_image.get_size()) == turned_size and turned_size.y > turned_size.x, "a quarter-turned AVIF comes out upright-turned, %s as its size was read" % str(turned_size))
+		_check(turned_image != null and turned_image.get_pixel(0, 0).a < 0.05 and turned_image.get_pixel(turned_size.x / 2, 12).a > 0.95, "its transparency is turned with it")
+	else:
+		_say("note OH_AVIF_ROTATED is not set; the rotated sample was not exercised")
+
+	var animated_bytes := FileAccess.get_file_as_bytes(OS.get_environment("OH_AVIF_ANIMATED"))
+	if ImageLoader.is_avif(animated_bytes):
+		_check(ImageLoader.is_avif_sequence(animated_bytes) and not ImageLoader.is_avif_sequence(body), "an image sequence is told apart from a still")
+		var moving := await ImageLoader.decode_async(main, animated_bytes)
+		var anim := moving as AnimatedTexture
+		var summary := "%d frames, one_shot %s, %.2f s" % [anim.frames, anim.one_shot, anim.get_frame_duration(0)] if anim else "not animated"
+		_check(anim != null and anim.frames == 9 and anim.one_shot and is_equal_approx(anim.get_frame_duration(0), 0.3), "the animated AVIF becomes an AnimatedTexture: 3 frames of 0.3 s played 3 times, then it stops (%s)" % summary)
+		var first_frame := anim.get_frame_texture(0).get_image() if anim else null
+		_check(first_frame != null and first_frame.get_pixel(0, 0).a < 0.05 and first_frame.get_pixel(first_frame.get_width() / 2, 12).a > 0.9, "its alpha track is applied to every frame")
+		var again := ImageLoader.decode(animated_bytes)
+		_check(again is AnimatedTexture and (again as AnimatedTexture).frames == 9, "the synchronous decode reads the cached frames")
+	else:
+		_say("note OH_AVIF_ANIMATED is not set; animated AVIF was not exercised")
+	var looping_bytes := FileAccess.get_file_as_bytes(OS.get_environment("OH_AVIF_LOOPING"))
+	if ImageLoader.is_avif(looping_bytes):
+		var held := ImageLoader.decode(looping_bytes)
+		_check(held is AnimatedTexture, "a sequence that is not converted yet gets an animated placeholder")
+		var filled := await _until(func() -> bool: return held is AnimatedTexture and (held as AnimatedTexture).frames == 3, 30.0)
+		_check(filled and not (held as AnimatedTexture).one_shot and is_equal_approx((held as AnimatedTexture).get_frame_duration(1), 0.04), "it fills in with 3 frames of 0.04 s that loop forever")
+
 	var clock := Time.get_ticks_msec()
 	var texture := await ImageLoader.decode_async(main, body)
 	_check(_transparent_and_solid(texture), "decode_async draws the AVIF with its transparency in %d ms" % (Time.get_ticks_msec() - clock))
@@ -177,6 +207,45 @@ func _run() -> void:
 	_check(on_card and _transparent_and_solid(_cover_texture(covers[0])), "the scenario card shows the AVIF cover")
 	await _wait(0.5)
 	await _shoot("avif-02-scenario-card")
+	await RenderingServer.frame_post_draw
+	var shot := root.get_viewport().get_texture().get_image()
+	var live := _find_all(main.menu, func(entry: Node) -> bool: return entry is CoverRect and (entry as CoverRect).is_visible_in_tree() and _cover_texture(entry) != null and _cover_texture(entry).get_width() == 1189, [])
+	_check(not live.is_empty(), "a card with the AVIF cover is on screen to look at")
+	if not live.is_empty():
+		var card: Control = live[0]
+		var centre: Vector2 = card.get_global_transform_with_canvas() * (card.size * 0.5)
+		var brightest := 0.0
+		for dy in range(-8, 9):
+			for dx in range(-8, 9):
+				brightest = maxf(brightest, shot.get_pixel(clampi(int(centre.x) + dx, 0, shot.get_width() - 1), clampi(int(centre.y) + dy, 0, shot.get_height() - 1)).r)
+		_check(brightest > 0.25, "the placeholder picture shows through the cover's transparent middle, as React layers them (%.2f)" % brightest)
+	var animated_cover := OS.get_environment("OH_AVIF_ANIMATED")
+	if FileAccess.file_exists(animated_cover):
+		OS.set_environment("OH_EDITOR_PICK", "*=" + animated_cover)
+		await editor.open_scenario("default")
+		editor._go_section("assets")
+		await _wait(0.6)
+		var upload_again := _button(editor._content, "Upload")
+		if upload_again:
+			upload_again.pressed.emit()
+		var moving_previews := []
+		var preview_moves := await _until(func() -> bool:
+			moving_previews.clear()
+			_find_all(editor._content, func(entry: Node) -> bool: return entry is TextureRect and (entry as TextureRect).is_visible_in_tree() and (entry as TextureRect).texture is AnimatedTexture, moving_previews)
+			return not moving_previews.is_empty(), 30.0)
+		_check(preview_moves and editor._error.is_empty(), "the drawer accepts an animated AVIF cover and previews it as an animation (%s)" % editor._error)
+		await _shoot("avif-03-animated-drawer")
+		editor.close_editor()
+		await _wait(0.8)
+		main.menu._show_page("scenarios")
+		var moving_cards := []
+		var card_moves := await _until(func() -> bool:
+			moving_cards.clear()
+			_find_all(main.menu, func(entry: Node) -> bool: return entry is CoverRect and (entry as CoverRect).is_visible_in_tree() and _cover_texture(entry) is AnimatedTexture, moving_cards)
+			return not moving_cards.is_empty(), 40.0)
+		_check(card_moves, "the scenario card plays the animated AVIF cover")
+		await _wait(0.4)
+		await _shoot("avif-04-animated-card")
 	_finish()
 
 

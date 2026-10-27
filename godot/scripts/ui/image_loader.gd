@@ -67,10 +67,10 @@ func _deliver_gif(url: String, frames: Dictionary) -> void:
 
 
 static func _deliver_avif(owner: WeakRef, url: String, body: PackedByteArray) -> void:
-	var image: Image = await avif_image(body)
+	var data: Dictionary = await avif_frames(body)
 	var loader := owner.get_ref() as ImageLoader
 	if loader != null:
-		loader._deliver_image(url, image)
+		loader._deliver(url, texture_from_gif(data))
 
 
 func _deliver(url: String, texture: Texture2D) -> void:
@@ -99,6 +99,22 @@ static func is_avif(body: PackedByteArray) -> bool:
 	return false
 
 
+static func is_avif_sequence(body: PackedByteArray) -> bool:
+	if not is_avif(body) or body.slice(8, 12).get_string_from_ascii() == "avif":
+		return false
+	var at := 0
+	while at + 8 <= body.size():
+		var size := (body[at] << 24) | (body[at + 1] << 16) | (body[at + 2] << 8) | body[at + 3]
+		if body.slice(at + 4, at + 8).get_string_from_ascii() == "moov":
+			return true
+		if size == 1 and at + 16 <= body.size() and body[at + 8] == 0 and body[at + 9] == 0 and body[at + 10] == 0 and body[at + 11] == 0:
+			size = (body[at + 12] << 24) | (body[at + 13] << 16) | (body[at + 14] << 8) | body[at + 15]
+		if size < 8:
+			return false
+		at += size
+	return false
+
+
 static func avif_size(body: PackedByteArray) -> Vector2i:
 	var limit := mini(body.size(), 65536) - 16
 	var at := body.find(0x69, 8)
@@ -107,9 +123,27 @@ static func avif_size(body: PackedByteArray) -> Vector2i:
 			var width := (body[at + 8] << 24) | (body[at + 9] << 16) | (body[at + 10] << 8) | body[at + 11]
 			var height := (body[at + 12] << 24) | (body[at + 13] << 16) | (body[at + 14] << 8) | body[at + 15]
 			if width > 0 and height > 0 and width <= 65535 and height <= 65535:
-				return Vector2i(width, height)
+				return Vector2i(height, width) if _avif_turned(body, limit) else Vector2i(width, height)
 		at = body.find(0x69, at + 1)
+	var start := (body[0] << 24) | (body[1] << 16) | (body[2] << 8) | body[3]
+	at = body.find(0x61, maxi(start, 8))
+	while at >= 0 and at <= limit - 16:
+		if body[at + 1] == 0x76 and body[at + 2] == 0x30 and body[at + 3] == 0x31:
+			var track_width := (body[at + 28] << 8) | body[at + 29]
+			var track_height := (body[at + 30] << 8) | body[at + 31]
+			if track_width > 0 and track_height > 0:
+				return Vector2i(track_width, track_height)
+		at = body.find(0x61, at + 1)
 	return Vector2i.ZERO
+
+
+static func _avif_turned(body: PackedByteArray, limit: int) -> bool:
+	var at := body.find(0x69, 8)
+	while at >= 0 and at <= limit:
+		if body[at + 1] == 0x72 and body[at + 2] == 0x6F and body[at + 3] == 0x74:
+			return (body[at + 4] & 1) == 1
+		at = body.find(0x69, at + 1)
+	return false
 
 
 static func avif_key(body: PackedByteArray) -> String:
@@ -129,6 +163,63 @@ static func avif_cached(body: PackedByteArray) -> Image:
 	if image.load_png_from_buffer(FileAccess.get_file_as_bytes(file)) != OK or image.is_empty():
 		return null
 	return image
+
+
+static func avif_cached_frames(body: PackedByteArray) -> Dictionary:
+	if avif_dir.is_empty():
+		return {}
+	var manifest_path := avif_dir.path_join(avif_key(body) + ".json")
+	if not FileAccess.file_exists(manifest_path):
+		return {}
+	var manifest: Variant = JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
+	return _frames_from(avif_dir, manifest) if manifest is Dictionary else {}
+
+
+static func _frames_from(dir: String, manifest: Dictionary) -> Dictionary:
+	var names: Array = manifest.get("frames", []) if manifest.get("frames") is Array else []
+	var durations: Array = manifest.get("durations", []) if manifest.get("durations") is Array else []
+	var frames: Array = []
+	var delays := PackedFloat32Array()
+	var pixels := 0
+	for index in range(names.size()):
+		if frames.size() >= AnimatedTexture.MAX_FRAMES:
+			break
+		var image := Image.new()
+		if image.load_png_from_buffer(FileAccess.get_file_as_bytes(dir.path_join(str(names[index]).get_file()))) != OK or image.is_empty():
+			break
+		var area := image.get_width() * image.get_height()
+		if not frames.is_empty() and pixels + area > GIF_PIXEL_BUDGET:
+			break
+		pixels += area
+		frames.append(image)
+		delays.append(float(durations[index]) if index < durations.size() else 0.1)
+	if frames.is_empty():
+		return {}
+	return {"frames": frames, "delays": delays, "loops": int(manifest.get("loops", -1))}
+
+
+static func avif_frames(body: PackedByteArray) -> Dictionary:
+	var cached := avif_cached_frames(body)
+	if not cached.is_empty() or avif_missing:
+		return cached
+	var engine := _avif_link()
+	if engine == null:
+		return {}
+	var reply: Dictionary = await engine.request("image.avif", {"data": Marshalls.raw_to_base64(body)})
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply.get("result") is Dictionary else {}
+	if not result.get("ok", false):
+		if result.get("missing", false):
+			avif_missing = true
+		return {}
+	var png := str(result.get("png", "")).replace("\\", "/")
+	if png.is_empty():
+		return {}
+	if avif_dir.is_empty():
+		avif_dir = png.get_base_dir()
+	var names: Array = []
+	for frame in (result.get("frames", [png]) if result.get("frames") is Array else [png]):
+		names.append(str(frame).replace("\\", "/").get_file())
+	return _frames_from(png.get_base_dir(), {"frames": names, "durations": result.get("durations", []), "loops": result.get("loops", -1)})
 
 
 static func avif_image(body: PackedByteArray) -> Image:
@@ -156,17 +247,33 @@ static func avif_image(body: PackedByteArray) -> Image:
 
 
 static func avif_texture(body: PackedByteArray) -> Texture2D:
-	var cached := avif_cached(body)
-	if cached != null:
-		return ImageTexture.create_from_image(cached)
+	var cached := avif_cached_frames(body)
+	if not cached.is_empty():
+		return texture_from_gif(cached)
+	var sequence := is_avif_sequence(body)
+	var still := avif_cached(body)
+	if still != null and not sequence:
+		return ImageTexture.create_from_image(still)
 	if avif_missing or _avif_link() == null:
-		return null
+		return ImageTexture.create_from_image(still) if still != null else null
 	var texture := ImageTexture.create_from_image(Image.create_empty(1, 1, false, Image.FORMAT_RGBA8))
 	var size := avif_size(body)
 	if size.x > 0 and size.y > 0:
 		texture.set_size_override(size)
+	if sequence:
+		var animated := AnimatedTexture.new()
+		animated.frames = 1
+		animated.set_frame_texture(0, texture)
+		_fill_avif_animation(animated, body)
+		return animated
 	_fill_avif(texture, body)
 	return texture
+
+
+static func _fill_avif_animation(animated: AnimatedTexture, body: PackedByteArray) -> void:
+	var data: Dictionary = await avif_frames(body)
+	if not data.is_empty():
+		_animate(animated, data)
 
 
 static func _fill_avif(texture: ImageTexture, body: PackedByteArray) -> void:
@@ -215,8 +322,8 @@ static func decode(body: PackedByteArray) -> Texture2D:
 
 static func decode_async(host: Node, body: PackedByteArray) -> Texture2D:
 	if is_avif(body):
-		var image: Image = await avif_image(body)
-		return ImageTexture.create_from_image(image) if image != null and is_instance_valid(host) else null
+		var data: Dictionary = await avif_frames(body)
+		return texture_from_gif(data) if is_instance_valid(host) else null
 	if not is_gif(body):
 		return decode(body)
 	var frames := [{}]
@@ -246,13 +353,26 @@ static func texture_from_gif(data: Dictionary) -> Texture2D:
 		return null
 	if frames.size() == 1:
 		return ImageTexture.create_from_image(frames[0])
-	var delays: PackedFloat32Array = data.get("delays", PackedFloat32Array())
 	var animated := AnimatedTexture.new()
-	animated.frames = mini(frames.size(), AnimatedTexture.MAX_FRAMES)
-	for index in range(animated.frames):
-		animated.set_frame_texture(index, ImageTexture.create_from_image(frames[index]))
-		animated.set_frame_duration(index, delays[index] if index < delays.size() else 0.1)
+	_animate(animated, data)
 	return animated
+
+
+static func _animate(animated: AnimatedTexture, data: Dictionary) -> void:
+	var frames: Array = data.get("frames", [])
+	var delays: PackedFloat32Array = data.get("delays", PackedFloat32Array())
+	var loops := int(data.get("loops", -1))
+	var kept := mini(frames.size(), AnimatedTexture.MAX_FRAMES)
+	var plays := loops + 1 if loops > 0 and kept * (loops + 1) <= AnimatedTexture.MAX_FRAMES else 1
+	var textures: Array = []
+	for index in range(kept):
+		textures.append(ImageTexture.create_from_image(frames[index]))
+	animated.frames = kept * plays
+	for index in range(kept * plays):
+		var source := index % kept
+		animated.set_frame_texture(index, textures[source])
+		animated.set_frame_duration(index, delays[source] if source < delays.size() else 0.1)
+	animated.one_shot = kept > 1 and (loops == 0 or plays > 1)
 
 
 static func gif_frames(body: PackedByteArray, budget := GIF_PIXEL_BUDGET) -> Dictionary:
