@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
+import { execFile } from "node:child_process";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 
 const RAD = Math.PI / 180;
 const FLOOD_FIELD_LIMIT = 8;
@@ -9,6 +14,123 @@ const MAX_ANCESTOR_LEVELS = 6;
 const GAME_PICK_PREFIX = "map_basemap_pick:";
 const STARTING_PICK_STORED = "start";
 const BACKGROUND_SEA = "#0b1a2b";
+const NATGEO_CACHE_VERSION = "v1";
+const here = path.dirname(fileURLToPath(import.meta.url));
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion:reduce)";
+const BASEMAP_GROUP_LABELS = { own: "This scenario's maps", builtin: "Built-in maps" };
+const BASEMAP_OPTION_LABELS = {
+  starting: "{{name}} (starting map)",
+  detailed: "{{name}} (detailed map)",
+  detailedToDownload: "{{name}} (detailed map, {{size}} to download)",
+  detailedNotHere: "{{name}} (detailed map, not on this device)",
+};
+const PERFORMANCE_LABELS = { constrained: "Low memory", full: "Full" };
+const IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+const PICTURE_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(githubusercontent\.com|github\.com|arcgisonline\.com|arcgis\.com|githubassets\.com)\//i;
+const HUB_URL = "https://github.com/Open-Historia/Open-historia-scenarios";
+
+const fillSlots = (template, values) => String(template).replace(/\{\{(\w+)\}\}/g, (_, key) => String(values?.[key] ?? ""));
+
+const motionScript = "Add-Type -Namespace OH -Name Spi -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SystemParametersInfo(uint a, uint b, ref bool c, uint d);'; $v = $true; [void][OH.Spi]::SystemParametersInfo(0x1042, 0, [ref]$v, 0); if ($v) { 'on' } else { 'off' }";
+
+const probeReducedMotion = () => new Promise((resolve) => {
+  const settle = (value) => resolve(Boolean(value));
+  try {
+    if (process.platform === "win32") {
+      const encoded = Buffer.from(motionScript, "utf16le").toString("base64");
+      execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { timeout: 10000, windowsHide: true }, (error, stdout) => settle(!error && String(stdout).trim().toLowerCase() === "off"));
+    } else if (process.platform === "darwin") {
+      execFile("defaults", ["read", "com.apple.universalaccess", "reduceMotion"], { timeout: 5000 }, (error, stdout) => settle(!error && String(stdout).trim() === "1"));
+    } else {
+      execFile("gsettings", ["get", "org.gnome.desktop.interface", "enable-animations"], { timeout: 5000 }, (error, stdout) => settle(!error && String(stdout).trim() === "false"));
+    }
+  } catch {
+    settle(false);
+  }
+});
+
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+const crc32 = (bytes) => {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i += 1) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
+const pngChunk = (type, data) => {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+};
+
+const encodePng = (width, height, rgba) => {
+  const rows = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    rows[y * (width * 4 + 1)] = 0;
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(rows, y * (width * 4 + 1) + 1);
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", zlib.deflateSync(rows)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+};
+
+const fillRingsEvenOdd = (rgba, width, height, rings, color) => {
+  const samples = 4;
+  const coverage = new Float32Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let s = 0; s < samples; s += 1) {
+      const sy = y + (s + 0.5) / samples;
+      const crossings = [];
+      for (const ring of rings) {
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+          const [ax, ay] = ring[j];
+          const [bx, by] = ring[i];
+          if ((ay > sy) === (by > sy)) continue;
+          crossings.push(ax + ((sy - ay) * (bx - ax)) / (by - ay));
+        }
+      }
+      crossings.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < crossings.length; k += 2) {
+        const x0 = Math.max(0, crossings[k]);
+        const x1 = Math.min(width, crossings[k + 1]);
+        for (let x = Math.floor(x0); x < Math.ceil(x1); x += 1) {
+          const left = Math.max(x0, x);
+          const right = Math.min(x1, x + 1);
+          if (right > left) coverage[y * width + x] += (right - left) / samples;
+        }
+      }
+    }
+  }
+  const [r, g, b, a = 1] = color;
+  for (let i = 0; i < coverage.length; i += 1) {
+    const alpha = Math.min(1, coverage[i]) * a;
+    if (alpha <= 0) continue;
+    const o = i * 4;
+    rgba[o] = Math.round(rgba[o] * (1 - alpha) + r * alpha);
+    rgba[o + 1] = Math.round(rgba[o + 1] * (1 - alpha) + g * alpha);
+    rgba[o + 2] = Math.round(rgba[o + 2] * (1 - alpha) + b * alpha);
+    rgba[o + 3] = 255;
+  }
+};
 
 const polygonsOf = (geometry) => {
   if (geometry?.type === "Polygon") return [geometry.coordinates];
@@ -202,6 +324,8 @@ export const register = (ctx) => {
     const world = await engine.readJson(engine.JSON_URLS.world, { defaultValue: {}, force: true });
     return world && typeof world === "object" ? world : {};
   };
+
+  const readShown = async () => (ctx.shownWorld && typeof ctx.shownWorld === "object" ? ctx.shownWorld : readWorld());
 
   const readGame = async () => {
     const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
@@ -668,7 +792,413 @@ export const register = (ctx) => {
     };
   };
 
+  let systemReduced = false;
+  let motionProbe = null;
+  const baseMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = (query) => {
+    const media = typeof baseMatchMedia === "function" ? baseMatchMedia(query) : { matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
+    if (String(query ?? "").replace(/\s+/g, "") === REDUCED_MOTION_QUERY) return { ...media, matches: systemReduced, media: String(query) };
+    return media;
+  };
+  const refreshMotion = () => {
+    if (!motionProbe) {
+      motionProbe = probeReducedMotion().then((value) => {
+        const changed = value !== systemReduced;
+        systemReduced = value;
+        motionProbe = null;
+        if (changed) emit("mapextras.systemMotion", { reduced: value });
+        return value;
+      });
+    }
+    return motionProbe;
+  };
+  void refreshMotion();
+  setInterval(() => { void refreshMotion(); }, 60000).unref?.();
+
+  const scenarioMaps = (world) => engine.mxBasemapPick.scenarioMapsOfWorld({
+    background: world?.background ?? null,
+    basemap: world?.basemap || null,
+    allowedBasemaps: Array.isArray(world?.allowedBasemaps) ? world.allowedBasemaps.map(String) : null,
+    ownBasemaps: engine.assets.decodeOwnBasemaps(engine.assets.encodeOwnBasemaps(world?.ownBasemaps)),
+  });
+
+  const libraryEntry = (bm) => ({
+    id: clean(bm?.id),
+    name: clean(bm?.name),
+    kind: clean(bm?.kind),
+    thumbnail: typeof bm?.thumbnail === "string" ? bm.thumbnail : "",
+    size: engine.mxTiled.formatBytes(bm?.bytes) || "",
+    official: bm?.official ? { id: clean(bm.official.id), version: Number(bm.official.version) || 0 } : null,
+    community: Boolean(bm?.source?.community),
+    communityUrl: clean(bm?.source?.url) || "",
+  });
+
+  const downloadsDir = () => {
+    const configured = clean(process.env.OH_NATIVE_DOWNLOADS);
+    if (configured) return configured;
+    const home = process.env.USERPROFILE || process.env.HOME || ".";
+    return path.join(home, "Downloads", "Open Historia");
+  };
+
+  const safeName = (name) => (clean(name) || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
+
+  const vectorThumbnail = (geojson, maxDim = 220) => {
+    const features = list(geojson?.features);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const feature of features) {
+      for (const rings of polygonsOf(feature?.geometry)) {
+        for (const ring of rings) {
+          for (const point of list(ring)) {
+            minX = Math.min(minX, point[0]);
+            maxX = Math.max(maxX, point[0]);
+            minY = Math.min(minY, point[1]);
+            maxY = Math.max(maxY, point[1]);
+          }
+        }
+      }
+    }
+    if (!Number.isFinite(minX)) return null;
+    const w = maxX - minX || 1;
+    const h = maxY - minY || 1;
+    const scale = Math.min(maxDim / w, maxDim / h);
+    const width = Math.max(1, Math.round(w * scale));
+    const height = Math.max(1, Math.round(h * scale));
+    const rgba = new Uint8Array(width * height * 4);
+    const sea = parseRgb(BACKGROUND_SEA);
+    for (let i = 0; i < width * height; i += 1) {
+      rgba[i * 4] = sea[0];
+      rgba[i * 4 + 1] = sea[1];
+      rgba[i * 4 + 2] = sea[2];
+      rgba[i * 4 + 3] = 255;
+    }
+    for (const feature of features) {
+      const fill = parseRgb(feature?.properties?.fill) ?? parseRgb("#33435c");
+      const rings = [];
+      for (const polygon of polygonsOf(feature?.geometry)) {
+        for (const ring of polygon) rings.push(list(ring).map(([x, y]) => [(x - minX) * scale, height - (y - minY) * scale]));
+      }
+      if (rings.length) fillRingsEvenOdd(rgba, width, height, rings, [fill[0], fill[1], fill[2], 1]);
+    }
+    return `data:image/png;base64,${encodePng(width, height, rgba).toString("base64")}`;
+  };
+
+  let natgeoWorker = null;
+  let natgeoStyle = null;
+  let natgeoCall = 0;
+  const natgeoWaiting = new Map();
+  const natgeoDir = () => path.join(cacheDir, "natgeo", NATGEO_CACHE_VERSION);
+
+  const loadNatgeoStyle = async () => {
+    if (natgeoStyle) return natgeoStyle;
+    const file = path.join(natgeoDir(), "style.json");
+    let source = null;
+    if (fs.existsSync(file)) {
+      try {
+        source = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch {
+        source = null;
+      }
+    }
+    if (!source) {
+      const response = await fetch(engine.mxNatGeo.NATGEO_VECTOR_STYLE_URL);
+      if (!response.ok) throw new Error(`The National Geographic style answered ${response.status}.`);
+      source = await response.json();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(source));
+    }
+    const built = engine.mxNatGeo.buildNatGeoDarkStyle(source);
+    const vector = Object.entries(built.sources ?? {}).find(([, value]) => value?.type === "vector");
+    const template = list(vector?.[1]?.tiles)[0] ?? "";
+    natgeoStyle = {
+      template,
+      maxzoom: Number(vector?.[1]?.maxzoom) || 16,
+      layers: list(built.layers).filter((layer) => layer?.source === vector?.[0] && ["fill", "line", "symbol"].includes(layer?.type)),
+    };
+    return natgeoStyle;
+  };
+
+  const natgeoRender = async (message) => {
+    if (!natgeoWorker) {
+      natgeoWorker = new Worker(path.join(here, "natgeo_worker.cjs"));
+      natgeoWorker.unref();
+      natgeoWorker.on("message", (reply) => {
+        const settle = natgeoWaiting.get(reply?.id);
+        if (!settle) return;
+        natgeoWaiting.delete(reply.id);
+        settle(reply);
+      });
+      natgeoWorker.on("error", (error) => {
+        for (const settle of natgeoWaiting.values()) settle({ error: String(error?.message ?? error) });
+        natgeoWaiting.clear();
+        natgeoWorker = null;
+      });
+      natgeoWorker.postMessage({ type: "style", layers: natgeoStyle.layers });
+    }
+    natgeoCall += 1;
+    const id = natgeoCall;
+    return new Promise((resolve) => {
+      natgeoWaiting.set(id, resolve);
+      natgeoWorker.postMessage({ ...message, type: "tile", id }, message.pbf ? [message.pbf] : []);
+    });
+  };
+
+  const natgeoTile = async (z, x, y) => {
+    const style = await loadNatgeoStyle();
+    const dir = path.join(natgeoDir(), String(z), String(x));
+    const base = path.join(dir, String(y));
+    if (fs.existsSync(`${base}.json`)) {
+      const read = (suffix) => (fs.existsSync(`${base}.${suffix}.png`) ? fs.readFileSync(`${base}.${suffix}.png`).toString("base64") : "");
+      return { fills: read("fills"), lines: read("lines"), labels: JSON.parse(fs.readFileSync(`${base}.json`, "utf8")) };
+    }
+    const url = style.template.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
+    let pbf = null;
+    try {
+      const response = await fetch(url);
+      if (response.ok) pbf = new Uint8Array(await response.arrayBuffer());
+      else if (response.status !== 404) throw new Error(`The National Geographic tiles answered ${response.status}.`);
+    } catch (error) {
+      if (!pbf) throw error;
+    }
+    let result = { fills: null, lines: null, labels: [] };
+    if (pbf && pbf.byteLength) {
+      const bytes = pbf.byteOffset === 0 && pbf.byteLength === pbf.buffer.byteLength ? pbf.buffer : pbf.slice().buffer;
+      const reply = await natgeoRender({ z, x, y, pbf: bytes });
+      if (reply?.error) throw new Error(reply.error);
+      result = reply;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    if (result.fills) fs.writeFileSync(`${base}.fills.png`, Buffer.from(result.fills));
+    if (result.lines) fs.writeFileSync(`${base}.lines.png`, Buffer.from(result.lines));
+    fs.writeFileSync(`${base}.json`, JSON.stringify(result.labels ?? []));
+    return {
+      fills: result.fills ? Buffer.from(result.fills).toString("base64") : "",
+      lines: result.lines ? Buffer.from(result.lines).toString("base64") : "",
+      labels: result.labels ?? [],
+    };
+  };
+
   return {
+    "mapextras.systemMotion": async ({ fresh = false } = {}) => ({ reduced: fresh ? await refreshMotion() : systemReduced }),
+    "mapextras.deviceProfile": async ({ value } = {}) => {
+      const profile = engine.mxDeviceProfile;
+      if (value !== undefined) {
+        profile.setDeviceProfileOverride(value === "constrained" || value === "full" ? value : "");
+        storage.flush();
+        const next = profile.getDeviceProfileOverride();
+        try {
+          engine.debugLog?.logSettingChange?.("Performance mode", PERFORMANCE_LABELS[next] ?? "Auto");
+        } catch {
+          storage.flush();
+        }
+      }
+      return { mode: profile.getDeviceProfileOverride(), running: Boolean(profile.isConstrainedDevice()) };
+    },
+    "mapextras.basemapChoices": async () => {
+      const world = await readWorld();
+      const maps = scenarioMaps(world);
+      const settings = settingsValues();
+      const shown = engine.mxBasemapPick.basemapShownFor({ maps, gamePick: settings.gamePick, defaultBasemap: settings.defaultBasemap, useDefault: settings.defaultBasemapOn });
+      const lookups = await engine.mxDetailedOffers.lookUpDetailedMaps(maps.filter((map) => map.kind === "detailed")).catch(() => []);
+      const status = Object.fromEntries(list(lookups).map(({ map, installed, official }) => {
+        const latest = official?.versions?.[official.versions.length - 1] || null;
+        return [map.pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
+      }));
+      const labelOf = (map) => {
+        if (map.starting) return fillSlots(BASEMAP_OPTION_LABELS.starting, { name: map.name });
+        if (map.kind !== "detailed") return map.name;
+        const here = status[map.pick];
+        if (!here || here.have) return fillSlots(BASEMAP_OPTION_LABELS.detailed, { name: map.name });
+        return here.bytes
+          ? fillSlots(BASEMAP_OPTION_LABELS.detailedToDownload, { name: map.name, size: engine.mxTiled.formatBytes(here.bytes) })
+          : fillSlots(BASEMAP_OPTION_LABELS.detailedNotHere, { name: map.name });
+      };
+      const own = maps.filter((map) => !map.starting && map.kind !== "builtin");
+      const builtin = maps.filter((map) => !map.starting && map.kind === "builtin");
+      const grouped = own.length > 0 && builtin.length > 0;
+      const option = (map) => ({ pick: map.pick, label: labelOf(map) });
+      const options = maps.length ? [option(maps[0])] : [];
+      if (grouped) {
+        options.push({ header: BASEMAP_GROUP_LABELS.own }, ...own.map(option), { header: BASEMAP_GROUP_LABELS.builtin }, ...builtin.map(option));
+      } else {
+        options.push(...[...own, ...builtin].map(option));
+      }
+      const offers = engine.mxDetailedOffers.detailedMapOffers(list(lookups), { optionalUpdates: true });
+      const onScreen = offers.some((offer) => offer.pick === shown.pick);
+      const view = engine.mxMapProjection.mapViewOf(world?.projection);
+      return {
+        options,
+        only: maps.length === 1,
+        shownPick: shown.pick,
+        offers: offers.map((offer) => ({ ...offer, size: engine.mxTiled.formatBytes(offer.bytes), ticked: onScreen ? offer.pick === shown.pick : Boolean(offer.starting) })),
+        line: offers.length ? engine.mxDetailedOffers.detailedMapsDownloadLine(offers) : "",
+        noGlobe: Boolean(view.noGlobe),
+      };
+    },
+    "mapextras.library": async () => {
+      const books = await engine.cmBasemapLibrary.listBasemaps().catch(() => []);
+      return { entries: list(books).map(libraryEntry) };
+    },
+    "mapextras.libraryUsers": async ({ id = "" } = {}) => ({ users: list(await engine.mxTiled.listTiledBasemapUsers(clean(id)).catch(() => [])).map((user) => ({ name: clean(user?.name) })) }),
+    "mapextras.libraryDelete": async ({ id = "" } = {}) => {
+      await engine.cmBasemapLibrary.deleteBasemap(clean(id));
+      return { ok: true };
+    },
+    "mapextras.libraryAdd": async ({ file = "", name = "", thumbnail = null, aspect = null } = {}) => {
+      const target = String(file || "");
+      if (!target || !fs.existsSync(target)) throw new Error("That file could not be read.");
+      const extension = path.extname(target).toLowerCase();
+      const title = clean(name) || path.basename(target).replace(/\.[^.]+$/, "") || "My basemap";
+      if (extension === ".pmtiles") {
+        const blob = await fs.openAsBlob(target);
+        const meta = await engine.mxTiled.uploadTiledBasemap(blob, { name: title });
+        return { added: libraryEntry({ ...meta, kind: "tiled" }), kind: "tiled" };
+      }
+      if (IMAGE_TYPES[extension]) {
+        const bytes = fs.readFileSync(target);
+        const dataUrl = `data:${IMAGE_TYPES[extension]};base64,${bytes.toString("base64")}`;
+        const meta = await engine.cmBasemapLibrary.createBasemap({
+          name: title,
+          kind: "image",
+          aspect: Number(aspect) > 0 ? Number(aspect) : null,
+          thumbnail: typeof thumbnail === "string" && thumbnail.startsWith("data:image/") ? thumbnail : null,
+          contentHash: await engine.cmBasemapLibrary.sha256Hex(dataUrl),
+          payload: { dataUrl },
+        });
+        return { added: libraryEntry(meta), kind: "image" };
+      }
+      if (extension !== ".geojson" && extension !== ".json") throw new Error("That file can only be used as a reference inside the Map Editor.");
+      let geojson = JSON.parse(fs.readFileSync(target, "utf8"));
+      if (geojson?.type === "Feature") geojson = { type: "FeatureCollection", features: [geojson] };
+      if (geojson?.type !== "FeatureCollection" || !list(geojson.features).length) throw new Error("That file has no shapes in it.");
+      const meta = await engine.cmBasemapLibrary.createBasemap({
+        name: title,
+        kind: "vector",
+        thumbnail: vectorThumbnail(geojson),
+        contentHash: await engine.cmBasemapLibrary.sha256Hex(JSON.stringify(geojson)),
+        payload: { geojson },
+      });
+      return { added: libraryEntry(meta), kind: "vector" };
+    },
+    "mapextras.libraryPublish": async ({ id = "" } = {}) => {
+      const books = list(await engine.cmBasemapLibrary.listBasemaps().catch(() => []));
+      const meta = books.find((entry) => entry.id === clean(id));
+      if (!meta) throw new Error("That basemap is not in Your basemaps any more.");
+      if (meta.kind === "tiled") {
+        if (meta.official) {
+          return { message: `"${meta.name}" is already on the list of detailed maps (version ${meta.official.version}). Scenarios you publish with it offer it to players. To release a new version, edit the map's post on the hub with the new download link.` };
+        }
+        return {
+          url: engine.mxTiled.officialBasemapSubmissionUrl(meta),
+          message: "Players only download detailed maps from the hub's list. On the GitHub page that opened, paste a direct download link to your .pmtiles file and say who made it, then submit. The hub checks it within minutes and adds it to the list. Until then, players of scenarios you publish with it see the basemap.",
+        };
+      }
+      const payload = await engine.cmBasemapLibrary.getBasemapPayload(meta.id);
+      const kind = meta.kind === "vector" ? "vector" : "image";
+      const safe = safeName(meta.name);
+      let fileName = "";
+      let bytes = null;
+      if (kind === "image") {
+        const match = String(payload?.dataUrl ?? "").match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+        if (!match) throw new Error("This basemap has no image to publish.");
+        const mime = match[1] || "image/png";
+        bytes = match[2] ? Buffer.from(match[3], "base64") : Buffer.from(decodeURIComponent(match[3]));
+        const ext = mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : mime.includes("gif") ? "gif" : "png";
+        fileName = `${safe}.${ext}`;
+      } else {
+        if (!payload?.geojson) throw new Error("This vector basemap has no geometry to publish.");
+        const zip = new JSZip();
+        zip.file("basemap.geojson", JSON.stringify(payload.geojson));
+        bytes = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+        fileName = `${safe}.zip`;
+      }
+      const dir = downloadsDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const saved = path.join(dir, fileName);
+      fs.writeFileSync(saved, bytes);
+      const technical = `Basemap-Hash: ${meta.contentHash || ""}\nBasemap-Kind: ${kind}`;
+      const query = [
+        "template=basemap.yml",
+        `title=${encodeURIComponent(`[Basemap] ${meta.name || "Untitled basemap"}`)}`,
+        `name=${encodeURIComponent(meta.name || "")}`,
+        `author=${encodeURIComponent(meta.author || "")}`,
+        `technical=${encodeURIComponent(technical)}`,
+      ].join("&");
+      return {
+        url: `${HUB_URL}/issues/new?${query}`,
+        file: saved,
+        message: `"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the "Basemap image" box, then submit.`,
+      };
+    },
+    "mapextras.officialMaps": async ({ refresh = false } = {}) => {
+      const official = await engine.mxTiled.fetchOfficialBasemaps({ refresh: Boolean(refresh) });
+      const books = list(await engine.cmBasemapLibrary.listBasemaps().catch(() => []));
+      const entries = list(official?.basemaps).map((entry) => {
+        const installed = books.find((bm) => bm.kind === "tiled" && bm.official?.id === entry.id);
+        return {
+          id: clean(entry.id),
+          name: clean(entry.name),
+          author: clean(entry.author),
+          license: clean(entry.license),
+          versions: list(entry.versions).map((version) => ({ version: Number(version.version) || 0, bytes: Number(version.bytes) || 0, size: engine.mxTiled.formatBytes(version.bytes), preview: clean(version.preview), notes: clean(version.notes) })),
+          have: Number(installed?.official?.version) || 0,
+        };
+      });
+      return { entries, error: clean(official?.error) };
+    },
+    "mapextras.communityMaps": async ({ force = false } = {}) => {
+      const posts = list(await engine.communityBasemaps.fetchCommunityBasemaps({ force: Boolean(force) }));
+      const books = list(await engine.cmBasemapLibrary.listBasemaps().catch(() => []));
+      const hashes = new Set(books.flatMap((bm) => [bm.contentHash, bm.source?.hash]).filter(Boolean).map((hash) => String(hash).toLowerCase()));
+      const urls = new Set(books.map((bm) => bm.source?.url).filter(Boolean));
+      return {
+        posts: posts.map((post) => ({
+          id: String(post.id ?? ""),
+          title: clean(post.title),
+          author: clean(post.author),
+          kind: clean(post.kind),
+          picture: clean(post.pictureUrl),
+          fromScenario: Boolean(post.fromScenario),
+          installable: Boolean(engine.communityBasemaps.basemapPostInstallable(post)),
+          installed: Boolean((post.contentHash && hashes.has(String(post.contentHash).toLowerCase())) || (post.url && urls.has(post.url))),
+        })),
+      };
+    },
+    "mapextras.communityInstall": async ({ id = "" } = {}) => {
+      const posts = list(await engine.communityBasemaps.fetchCommunityBasemaps({ force: false }));
+      const post = posts.find((entry) => String(entry.id ?? "") === String(id));
+      if (!post) throw new Error("That post is not on the hub any more.");
+      const meta = await engine.communityBasemaps.installCommunityBasemap(post);
+      return { added: libraryEntry(meta) };
+    },
+    "mapextras.picture": async ({ url = "" } = {}) => {
+      const target = String(url || "");
+      if (target.startsWith("data:image/")) return { data: target.replace(/^data:[^,]*,/, "") };
+      if (!PICTURE_HOSTS.test(target)) return { data: "" };
+      const dir = path.join(cacheDir, "maps-pictures");
+      const file = path.join(dir, `${crypto.createHash("sha1").update(target).digest("hex")}.img`);
+      if (fs.existsSync(file)) return { data: fs.readFileSync(file).toString("base64") };
+      try {
+        const response = await fetch(target);
+        if (!response.ok) return { data: "" };
+        const bytes = Buffer.from(await response.arrayBuffer());
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, bytes);
+        return { data: bytes.toString("base64") };
+      } catch {
+        return { data: "" };
+      }
+    },
+    "mapextras.natgeoTile": async ({ z = 0, x = 0, y = 0 } = {}) => {
+      const tz = Math.max(0, Math.min(16, Math.round(Number(z) || 0)));
+      const count = 2 ** tz;
+      const tx = ((Math.round(Number(x) || 0) % count) + count) % count;
+      const ty = Math.round(Number(y) || 0);
+      if (ty < 0 || ty >= count) return { fills: "", lines: "", labels: [] };
+      return natgeoTile(tz, tx, ty);
+    },
     "mapextras.settings": async () => settingsValues(),
     "mapextras.setGamePick": async ({ pick = "" } = {}) => {
       const settings = settingsValues();
@@ -678,7 +1208,7 @@ export const register = (ctx) => {
       return settingsValues();
     },
     "mapextras.world": async () => {
-      const [world, game, colors] = await Promise.all([readWorld(), readGame(), readColors()]);
+      const [world, game, colors] = await Promise.all([readShown(), readGame(), readColors()]);
       await loadRegions();
       void warmGeometry();
       const frozen = engine.mxIceFeatures.iceRegionIds({ frozen: world?.frozenRegions }).frozen.map(indexOf).filter((index) => index >= 0);
@@ -726,7 +1256,7 @@ export const register = (ctx) => {
       return { tint: mp().ICE_TINT, ice };
     },
     "mapextras.groupAreas": async () => {
-      const world = await readWorld();
+      const world = await readShown();
       const shape = await ensureGeometry();
       const { groups, areas } = groupsOf(world);
       if (!Object.keys(areas ?? {}).length) return { fills: [], outlines: [], labels: [] };

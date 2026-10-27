@@ -1,58 +1,6 @@
 class_name WarGround
 extends Node2D
 
-const OUTLINE_SHADER := """
-shader_type canvas_item;
-render_mode unshaded;
-uniform sampler2D groups : filter_nearest, repeat_disable;
-uniform sampler2D colours : filter_nearest, repeat_disable;
-uniform int columns = 1024;
-uniform float pixel_world = 1.0;
-uniform float width_px = 2.0;
-uniform float soft_px = 1.0;
-uniform bool casing = false;
-uniform float opacity = 0.95;
-varying vec4 tint;
-varying float edge;
-varying float core;
-varying float soft;
-
-int group_of(int region) {
-	if (region < 0) {
-		return 0;
-	}
-	return int(texelFetch(groups, ivec2(region % columns, region / columns), 0).r * 255.0 + 0.5);
-}
-
-void vertex() {
-	int a = int(UV.x + 0.5);
-	int b = int(floor(UV.y + 0.5));
-	vec2 offset = COLOR.rg * 2.0 - 1.0;
-	edge = COLOR.b * 2.0 - 1.0;
-	int ga = group_of(a);
-	int gb = b >= 0 ? group_of(b) : 0;
-	float width = 0.0;
-	tint = vec4(0.0);
-	soft = soft_px;
-	if (ga != gb) {
-		int g = ga > 0 ? ga : gb;
-		vec3 c = texelFetch(colours, ivec2(g - 1, 0), 0).rgb;
-		width = width_px;
-		tint = casing ? vec4(5.0 / 255.0, 8.0 / 255.0, 13.0 / 255.0, 0.9 * opacity) : vec4(c, opacity);
-	}
-	core = width * 0.5;
-	float half_px = core + soft;
-	VERTEX += offset * half_px * pixel_world;
-	edge *= half_px;
-}
-
-void fragment() {
-	float d = abs(edge);
-	float coverage = clamp((core + soft * 0.5 - d) / soft, 0.0, 1.0);
-	COLOR = vec4(tint.rgb, tint.a * coverage);
-}
-"""
-
 const WASH_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
@@ -82,8 +30,6 @@ void fragment() {
 }
 """
 
-const OUTLINE_WIDTH := [[1, 1.1], [3, 1.6], [6, 2.4], [9, 3.0], [12, 3.6]]
-const CASING_WIDTH := [[1, 2.4], [3, 3.2], [6, 4.4], [9, 5.4], [12, 6.4]]
 const WALL := Color("#1d1915")
 const STONE := Color("#b9ad94")
 const WALL_STOPS := [[3, 2.6], [6, 5.0], [9, 8.0], [12, 11.0]]
@@ -105,14 +51,6 @@ class Painter extends Node2D:
 var map: MapView
 var level := 2.0
 var zoom := 1.0
-var _outline_nodes: Array[MeshInstance2D] = []
-var _outline_material: ShaderMaterial
-var _casing_material: ShaderMaterial
-var _group_image: Image
-var _group_texture: ImageTexture
-var _group_colours: Image
-var _group_colours_texture: ImageTexture
-var _groups_on := false
 var _walls_painter: Painter
 var _weather_root: Node2D
 var _weather_wash: ShaderMaterial
@@ -129,18 +67,6 @@ var _arrow_cache := {}
 func setup(map_view: MapView) -> void:
 	map = map_view
 	z_index = 1
-	_outline_material = _material(OUTLINE_SHADER)
-	_casing_material = _material(OUTLINE_SHADER)
-	_casing_material.set_shader_parameter("casing", true)
-	_casing_material.set_shader_parameter("soft_px", 1.6)
-	_group_image = Image.create_empty(1024, 4, false, Image.FORMAT_R8)
-	_group_texture = ImageTexture.create_from_image(_group_image)
-	_group_colours = Image.create_empty(256, 1, false, Image.FORMAT_RGBA8)
-	_group_colours_texture = ImageTexture.create_from_image(_group_colours)
-	for material in [_outline_material, _casing_material]:
-		material.set_shader_parameter("groups", _group_texture)
-		material.set_shader_parameter("colours", _group_colours_texture)
-		material.set_shader_parameter("columns", 1024)
 	_walls_painter = _painter(_paint_walls)
 	_weather_root = Node2D.new()
 	add_child(_weather_root)
@@ -168,7 +94,6 @@ func clear() -> void:
 	_orders = []
 	_arrows = []
 	_arrow_cache = {}
-	set_groups([])
 	for child in _weather_root.get_children():
 		child.queue_free()
 	_redraw_all()
@@ -177,17 +102,10 @@ func clear() -> void:
 func set_view(next_level: float, next_zoom: float) -> void:
 	level = next_level
 	zoom = next_zoom
-	var pixel := 1.0 / maxf(zoom, 0.00001)
-	_outline_material.set_shader_parameter("pixel_world", pixel)
-	_casing_material.set_shader_parameter("pixel_world", pixel)
-	_outline_material.set_shader_parameter("width_px", WarKit.stops(level, OUTLINE_WIDTH))
-	_casing_material.set_shader_parameter("width_px", WarKit.stops(level, CASING_WIDTH))
-	_casing_material.set_shader_parameter("opacity", 0.4)
-	_outline_material.set_shader_parameter("opacity", 0.95)
 	if _weather_wash:
 		_weather_wash.set_shader_parameter("factor", WarKit.stops(level, WASH_STOPS))
 	for material in _weather_patterns:
-		material.set_shader_parameter("zoom", zoom)
+		material.set_shader_parameter("zoom", pow(2.0, floorf(level)) / 8.0)
 		material.set_shader_parameter("factor", WarKit.stops(level, PATTERN_STOPS))
 	_arrow_cache = {}
 	_redraw_all()
@@ -197,57 +115,6 @@ func _redraw_all() -> void:
 	for painter in [_walls_painter, _arrows_painter, _orders_painter]:
 		if painter:
 			painter.queue_redraw()
-
-
-func set_groups(groups: Array) -> void:
-	var count := map.war_region_count() if map else 0
-	var rows: int = maxi(1, int(ceil(float(maxi(count, 1)) / 1024.0)))
-	if _group_image.get_height() != rows:
-		_group_image = Image.create_empty(1024, rows, false, Image.FORMAT_R8)
-		_group_texture = ImageTexture.create_from_image(_group_image)
-		for material in [_outline_material, _casing_material]:
-			material.set_shader_parameter("groups", _group_texture)
-	_group_image.fill(Color(0, 0, 0, 1))
-	_group_colours.fill(Color(0, 0, 0, 1))
-	var id := 0
-	for item in groups:
-		var group: Dictionary = item
-		id += 1
-		if id > 255:
-			break
-		_group_colours.set_pixel(id - 1, 0, WarKit.color_of(group.get("color", [225, 29, 72])))
-		for value in group.get("regions", []):
-			var index := int(value)
-			_group_image.set_pixel(index % 1024, index / 1024, Color8(id, 0, 0, 255))
-	_group_texture.update(_group_image)
-	_group_colours_texture.update(_group_colours)
-	var on := id > 0
-	if on != _groups_on or (on and _outline_nodes.is_empty()):
-		_groups_on = on
-		rebuild_copies()
-
-
-func rebuild_copies() -> void:
-	for node in _outline_nodes:
-		if is_instance_valid(node):
-			node.queue_free()
-	_outline_nodes.clear()
-	if not _groups_on or map == null:
-		return
-	var border := map.war_border_mesh()
-	if border == null:
-		return
-	var at := 0
-	for material in [_casing_material, _outline_material]:
-		for offset in [-MapView.WORLD_WIDTH, 0.0, MapView.WORLD_WIDTH]:
-			var node := MeshInstance2D.new()
-			node.mesh = border
-			node.material = material
-			node.position = Vector2(offset, 0)
-			add_child(node)
-			move_child(node, at)
-			at += 1
-			_outline_nodes.append(node)
 
 
 func set_walls(walls: Array) -> void:

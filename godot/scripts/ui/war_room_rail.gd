@@ -407,16 +407,32 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 		var field := UI.box(Color(0, 0, 0, 0.5), T.SUNK_LINE, 3, 1, Vector4(T.px(0.4), T.px(0.2), T.px(0.4), T.px(0.2)))
 		_count_input.add_theme_stylebox_override("normal", field)
 		_count_input.add_theme_stylebox_override("focus", field)
+		var most := int(props.get("reinforce_most", 60))
 		_count_input.text_changed.connect(func(value: String) -> void:
 			var cleaned := ""
 			for character in value:
 				if character in "0123456789":
 					cleaned += character
+			if not cleaned.is_empty() and int(cleaned) > most:
+				cleaned = str(most)
 			if cleaned != value:
 				var caret := _count_input.caret_column
 				_count_input.text = cleaned
 				_count_input.caret_column = mini(caret, cleaned.length())
 			store.state["deploy_count"] = cleaned)
+		_count_input.gui_input.connect(func(event: InputEvent) -> void:
+			if not (event is InputEventKey) or not (event as InputEventKey).pressed:
+				return
+			var key := (event as InputEventKey).keycode
+			if key != KEY_UP and key != KEY_DOWN:
+				return
+			var now := _count_input.text
+			var step := 1 if key == KEY_UP else -1
+			var next := clampi((0 if now.is_empty() else int(now)) + step, 0, most)
+			_count_input.text = str(next)
+			_count_input.caret_column = _count_input.text.length()
+			store.state["deploy_count"] = _count_input.text
+			_count_input.accept_event())
 		count_row.add_child(_count_input)
 		column.add_child(T.pad(count_row, Vector4(0, 0, 0, T.px(0.2))))
 		column.add_child(T.pad(T.text("Empty calls up as many as a usual draft; 0 calls up none.", 0.74, T.BONE_FAINT), Vector4(0, 0, 0, T.px(0.35))))

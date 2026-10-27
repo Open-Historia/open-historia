@@ -16,6 +16,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -93,6 +94,36 @@ func _host(view: Control) -> void:
 	column.add_child(view)
 
 
+
+func _idle() -> void:
+	var idle_by := Time.get_ticks_msec() + 90000
+	while Time.get_ticks_msec() < idle_by:
+		var busy: Dictionary = await main.engine.request("invoke", {"module": "simulationStatus", "fn": "isSimulationBusy", "args": []})
+		if busy.get("result", false) != true:
+			return
+		await _wait(0.5)
+
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 120000:
@@ -101,12 +132,14 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	await _wait(0.4)
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
 	_say("game open")
 	await _wait(1.0)
+	await _idle()
 	frame = PanelFrame.new("Diplomacy", "Conversations, institutions and statecraft", "bottom", 928.0)
 	frame.scroll.visible = false
 	column = frame.scroll.get_parent() as VBoxContainer
@@ -152,12 +185,20 @@ func _run() -> void:
 	_check("the dossier opens on Germany", intel._section == "countries" and str(intel._model.get("selected", "")) == "Germany")
 	_check("the dossier says Active network", _shows(intel, "Active network · since"))
 	await _shoot("intel-06-dossier")
+	var seeded_flag: Dictionary = await main.engine.request("mapcards.flags.apply", {"polity": {"name": "Germany"}, "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="})
+	await intel.refresh()
+	await _wait(0.4)
+	var dossier_flag := str((intel._model.get("dossier", {}) as Dictionary).get("flag", ""))
+	_check("a flag chosen in this game reaches the dossier, as React resolves it", bool((seeded_flag.get("result", {}) as Dictionary).get("ok", false)) and dossier_flag.ends_with(".png") and FileAccess.file_exists(dossier_flag), "%s %s" % [str(seeded_flag), dossier_flag])
+	_check("and is drawn, not the white flag", ChatPanel.flag_texture(dossier_flag, 28) != null)
+	await _shoot("intel-06b-dossier-custom-flag")
 	intel.show_section("operations")
 	var networks: Array = intel._model.get("networks", [])
 	var spy_id := str((networks[0] as Dictionary).get("id", "")) if not networks.is_empty() else ""
 	intel._order_draft[spy_id] = {"kind": "sabotage", "text": "the naval yards at Kiel"}
 	intel._render()
 	await _shoot("intel-07-operations-draft")
+	await _idle()
 	await intel._give_order(spy_id)
 	var mission: Variant = null
 	var waited := Time.get_ticks_msec()

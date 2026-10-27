@@ -97,6 +97,137 @@ func _skip(days: int) -> void:
 	await _sync_map()
 
 
+func _extras() -> Node:
+	return main.get("map_extras") as Node
+
+
+func _flood() -> Object:
+	var extras := _extras()
+	var flood: Variant = extras.get("flood") if extras else null
+	return flood as Object if flood is Object else null
+
+
+func _flood_token() -> int:
+	var flood := _flood()
+	return int(flood.get("_token")) if flood else -1
+
+
+func _flood_mode() -> String:
+	var flood := _flood()
+	return str(flood.get("last_mode")) if flood else ""
+
+
+func _flooding() -> bool:
+	var flood := _flood()
+	return flood != null and bool(flood.call("busy"))
+
+
+func _patch(image: Image, centre: Vector2, half: int) -> Color:
+	var sum := Color(0, 0, 0, 0)
+	var count := 0
+	for y in range(int(centre.y) - half, int(centre.y) + half):
+		for x in range(int(centre.x) - half, int(centre.x) + half):
+			if x >= 0 and y >= 0 and x < image.get_width() and y < image.get_height():
+				sum += image.get_pixel(x, y)
+				count += 1
+	return sum / float(maxi(count, 1))
+
+
+func _painted_world() -> Vector2:
+	for run in war.paint.have_runs():
+		var field: WarPaint.Field = war.paint.field(str(run))
+		if field == null or not field.shown or field.viewport == null:
+			continue
+		var image := field.viewport.get_texture().get_image()
+		var width := image.get_width()
+		var height := image.get_height()
+		var best := Vector2.INF
+		var nearest := INF
+		for y in range(0, height, 3):
+			for x in range(0, width, 3):
+				if image.get_pixel(x, y).a < 0.98:
+					continue
+				var ok := true
+				for d in [Vector2i(-6, 0), Vector2i(6, 0), Vector2i(0, -6), Vector2i(0, 6)]:
+					var step: Vector2i = d
+					var px: int = x + step.x
+					var py: int = y + step.y
+					if px < 0 or py < 0 or px >= width or py >= height or image.get_pixel(px, py).a < 0.98:
+						ok = false
+						break
+				if not ok:
+					continue
+				var distance := Vector2(x - width * 0.5, y - height * 0.5).length()
+				if distance < nearest:
+					nearest = distance
+					best = Vector2(x + 0.5, y + 0.5)
+		if best != Vector2.INF:
+			return field.rect.position + Vector2(best.x / width * field.rect.size.x, best.y / height * field.rect.size.y)
+	return Vector2.INF
+
+
+func _paint_shows(label: String, shot: String, unlit := false) -> void:
+	var spot := _painted_world()
+	if spot == Vector2.INF:
+		_check(label, false, "no painted pixel found")
+		return
+	main.map_view.camera.position = spot
+	main.map_view.camera.zoom = Vector2.ONE * pow(2.0, 8.6) / 8.0
+	main.map_view.call("_after_camera_move")
+	var light: CanvasLayer = null
+	if unlit:
+		var globe_view: Variant = _extras().get("globe")
+		var layer: Variant = (globe_view as Object).get("_light_layer") if globe_view is Object else null
+		if layer is CanvasLayer:
+			light = layer
+			light.visible = false
+	await _wait(2.0)
+	var at: Vector2 = main.map_view.world_to_screen(spot)
+	await _shoot(shot)
+	var with_paint := _patch(root.get_viewport().get_texture().get_image(), at, 4)
+	for node in war.paint._copy_nodes:
+		(node as CanvasItem).visible = false
+	await _frames(4)
+	await RenderingServer.frame_post_draw
+	var without := _patch(root.get_viewport().get_texture().get_image(), at, 4)
+	war.paint._sync_visibility()
+	if light:
+		light.visible = true
+	var gap_colour := maxf(absf(with_paint.r - without.r), maxf(absf(with_paint.g - without.g), absf(with_paint.b - without.b)))
+	_check(label, gap_colour > 0.03, "%s painted, %s without the paint" % [with_paint.to_html(false), without.to_html(false)])
+
+
+func _globe_pass() -> void:
+	var extras := _extras()
+	if extras == null or not extras.has_method("apply_map_settings"):
+		_check("the globe can be switched on", false)
+		return
+	extras.call("apply_map_settings", {"Globe": true, "map_disable_idle_rotation": true})
+	await _frames(3)
+	await _focus([[1.5, 46.5], [10.0, 51.0]], 6.3)
+	await _wait(1.0)
+	var target: Variant = war.overlay.unit_positions.get("native-test-fr-5", null)
+	var gap := INF
+	if target is Vector2:
+		var expected: Vector2 = main.map_view.world_to_screen(target)
+		for item in war.overlay._unit_hits:
+			var hit: Array = item
+			if str(hit[2]) == "native-test-fr-5":
+				gap = minf(gap, (hit[0] as Vector2).distance_to(expected))
+	_check("the war overlay follows the globe", main.map_view.is_globe() and war.overlay.globe and gap < 1.0, "%.2f px off" % gap)
+	await _shoot("w13-globe-z6")
+	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
+	await _wait(1.0)
+	await _shoot("w14-globe-z8")
+	await _focus([[-25.0, 30.0], [40.0, 65.0]], 2.6)
+	await _wait(1.0)
+	await _shoot("w15-globe-far")
+	await _paint_shows("painted ground is drawn on the globe", "w16-globe-paint", true)
+	extras.call("apply_map_settings", {"Globe": false})
+	await _frames(3)
+	await _wait(0.5)
+
+
 func _focus(bounds: Array, level: float) -> void:
 	main.map_view.fit_lonlat_bounds(bounds, level, 0.0)
 	await _wait(0.4)
@@ -142,12 +273,14 @@ func _run() -> void:
 			painted += 1
 	_check("a 30-day run has painted ground", painted > 0, "%d painted" % painted)
 	_check("the new run plays", war.playing())
+	var play_token := _flood_token()
 	await _focus([[4.5, 47.5], [10.0, 51.0]], 6.3)
 	await _wait(1.2)
 	await _shoot("w2-playing")
 	while war.playing():
 		await process_frame
 	await _wait(0.6)
+	_check("front playback queues no conquest flood", _flood_token() == play_token, "%d started while playing" % (_flood_token() - play_token))
 	await _shoot("w3-played-z6")
 	_check("troops are drawn", (war.overlay.troops as Array).size() > 0 or (war.overlay.sides as Array).size() > 0, "%d troops, %d sides" % [(war.overlay.troops as Array).size(), (war.overlay.sides as Array).size()])
 	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
@@ -156,6 +289,7 @@ func _run() -> void:
 	await _focus([[5.0, 48.0], [9.5, 50.5]], 7.0)
 	await _wait(0.8)
 	await _shoot("w5-arrows-z7")
+	await _paint_shows("painted ground is drawn on the map", "w5b-paint-z8")
 	await _call("warmap.test.seed", {"a": "France", "b": "Germany", "phase": "extras", "gone": 120})
 	var german: Dictionary = await _call("warmap.test.regions", {"owner": "Germany", "near": [10.5, 51.5]})
 	var french: Dictionary = await _call("warmap.test.regions", {"owner": "France", "near": [5.6, 48.7]})
@@ -219,17 +353,19 @@ func _run() -> void:
 	await _shoot("w9d-unit-card")
 	if cards:
 		cards.call("dismiss_all")
+	await _globe_pass()
 	var pfalz: Dictionary = await _call("warmap.test.regions", {"owner": "Germany", "near": [7.6, 49.4]})
+	await _focus([[6.4, 48.6], [9.4, 50.4]], 7.2)
+	await _until(func() -> bool: return not _flooding(), 8.0)
+	var before_conquest := _flood_token()
 	await _call("warmap.test.owner", {"ids": (pfalz.get("result", []) as Array).slice(0, 2), "owner": "France"})
 	await war.refresh()
-	war.paint._transition_started = Time.get_ticks_msec() + 100000
-	var transition: Variant = war._state.get("transitions", null)
-	_check("a conquest floods the region", transition is Dictionary and str((transition as Dictionary).get("kind", "")) == "flood")
-	await _focus([[6.4, 48.6], [9.4, 50.4]], 7.2)
-	war.paint._transition_started = Time.get_ticks_msec() - 160
+	await _wait(0.2)
 	await _shoot("w9c-conquest-flood")
-	war.paint._transition_started = Time.get_ticks_msec() - 100000
-	await _wait(0.4)
+	await _until(func() -> bool: return not _flooding(), 8.0)
+	await _wait(0.5)
+	var floods := _flood_token() - before_conquest
+	_check("one conquest floods exactly once", floods == 1 and _flood_mode() == "flood", "%d run(s), %s" % [floods, _flood_mode()])
 	main.hud.set_map_mode("diplomatic", true)
 	await main.hud._apply_map_mode()
 	await _wait(1.2)
@@ -264,9 +400,7 @@ func _run() -> void:
 
 
 func _finish(code: int) -> void:
-	if war != null:
-		await _until(func() -> bool: return not war.paint.transition_running(), 3.0)
-		await _frames(3)
+	await _wait(1.0)
 	main.engine.stop()
 	await _wait(0.5)
 	quit(code)

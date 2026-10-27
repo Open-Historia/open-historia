@@ -1887,8 +1887,6 @@ func _render_council(selected: Dictionary) -> void:
 	var open := _button("Opening…" if _busy == "council" else "Open council channel", {"bg": GREY_RAISED, "border": GREY_BORDER_STRONG, "ink": GREY_TEXT, "size": 0.64, "weight": 760, "pad": Vector4(_sp(0.65), _sp(0.45), _sp(0.65), _sp(0.45)), "radius": 9})
 	open.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_lock(open, not _busy.is_empty())
-	if not channel_id.is_empty():
-		UI.set_disabled_look(open, "The Council conversation is not in the native app yet.")
 	open.pressed.connect(_open_council)
 	card_column.add_child(open)
 	card.add_child(card_column)

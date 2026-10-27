@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const NEUTRAL = [130, 130, 138];
 const GROUP_TINT_ALPHA = 0.3;
@@ -68,6 +71,343 @@ const normalizePolityKeyedMap = (input, polities) => {
 
 const FLAGCDN = /^https?:\/\/flagcdn\.com\/(?:(?:[wh]\d+|\d+x\d+)\/)?([a-z]{2}(?:-[a-z]{2,3})?)\.(svg|png|webp|jpe?g)(?:[?#].*)?$/i;
 
+const NAME_FIELD_PRIORITY = ["name", "region_name", "regionName", "province_name", "provinceName", "display_name", "displayName", "label", "title", "NAME", "Name"];
+const ID_FIELD_PRIORITY = ["__featureId", "__objectKey", "id", "regionId", "region_id", "provinceId", "province_id", "province", "gid", "gid0", "GID_0", "GID_1", "GID_2", "OBJECTID", "FID", "ADM0_A3", "ADM1_CODE", "ADM2_CODE"];
+const validFeatureCollection = (value) => value && value.type === "FeatureCollection" && Array.isArray(value.features);
+const primitiveKey = (value) => {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+    const text = String(value).trim();
+    return text ? text : null;
+  }
+  return null;
+};
+const featureFieldValue = (feature, field) => {
+  if (field === "__featureId") return feature?.id;
+  return feature?.properties?.[field];
+};
+const recordFieldValue = (record, field) => record?.[field];
+const flattenMetadataFeature = (feature) => ({
+  ...(feature?.properties && typeof feature.properties === "object" ? feature.properties : {}),
+  ...(feature?.id != null ? { __featureId: feature.id } : {}),
+});
+const objectMapToRecords = (value) =>
+  Object.entries(value || {})
+    .filter(([, row]) => row && typeof row === "object" && !Array.isArray(row))
+    .map(([key, row]) => ({ ...row, __objectKey: key }));
+const extractMetadataRecords = (parsed) => {
+  if (Array.isArray(parsed)) return parsed.filter((row) => row && typeof row === "object" && !Array.isArray(row));
+  if (validFeatureCollection(parsed)) return parsed.features.map(flattenMetadataFeature);
+  if (!parsed || typeof parsed !== "object") return [];
+  const preferredContainers = ["regions", "provinces", "records", "items", "data", "features"];
+  for (const key of preferredContainers) {
+    const nested = parsed[key];
+    if (Array.isArray(nested)) {
+      if (key === "features" && nested.some((row) => row?.type === "Feature")) {
+        return nested.map((row) => (row?.type === "Feature" ? flattenMetadataFeature(row) : row)).filter((row) => row && typeof row === "object" && !Array.isArray(row));
+      }
+      return nested.filter((row) => row && typeof row === "object" && !Array.isArray(row));
+    }
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const rows = objectMapToRecords(nested);
+      if (rows.length) return rows;
+    }
+  }
+  return objectMapToRecords(parsed);
+};
+const collectFields = (rows, { feature = false } = {}) => {
+  const counts = new Map();
+  const limit = Math.min(rows.length, 5000);
+  for (let i = 0; i < limit; i += 1) {
+    const row = rows[i];
+    if (feature) {
+      if (row?.id != null) counts.set("__featureId", (counts.get("__featureId") || 0) + 1);
+      const props = row?.properties;
+      if (!props || typeof props !== "object") continue;
+      for (const [key, value] of Object.entries(props)) if (primitiveKey(value) != null) counts.set(key, (counts.get(key) || 0) + 1);
+    } else {
+      if (!row || typeof row !== "object") continue;
+      for (const [key, value] of Object.entries(row)) if (primitiveKey(value) != null) counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const priorityIndex = (field) => {
+    const exact = ID_FIELD_PRIORITY.indexOf(field);
+    if (exact >= 0) return exact;
+    const lower = field.toLowerCase();
+    const fuzzy = ID_FIELD_PRIORITY.findIndex((x) => x.toLowerCase() === lower);
+    return fuzzy >= 0 ? fuzzy : 999;
+  };
+  return [...counts.entries()]
+    .sort((a, b) => priorityIndex(a[0]) - priorityIndex(b[0]) || b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([field]) => field)
+    .slice(0, 80);
+};
+const chooseNameField = (fields) => {
+  for (const preferred of NAME_FIELD_PRIORITY) {
+    const exact = fields.find((field) => field === preferred);
+    if (exact) return exact;
+  }
+  for (const preferred of NAME_FIELD_PRIORITY) {
+    const lower = preferred.toLowerCase();
+    const fuzzy = fields.find((field) => field.toLowerCase() === lower);
+    if (fuzzy) return fuzzy;
+  }
+  const containsName = fields.find((field) => /(^|[_-])name([_-]|$|\d)/i.test(field) || /name/i.test(field));
+  return containsName || null;
+};
+const scoreJoinPair = (features, records, geoField, metaField) => {
+  const metaValues = new Set();
+  for (const row of records) {
+    const key = primitiveKey(recordFieldValue(row, metaField));
+    if (key != null) metaValues.add(key);
+  }
+  if (!metaValues.size) return 0;
+  let matches = 0;
+  let seen = 0;
+  for (const feature of features) {
+    const key = primitiveKey(featureFieldValue(feature, geoField));
+    if (key == null) continue;
+    seen += 1;
+    if (metaValues.has(key)) matches += 1;
+  }
+  if (!seen) return 0;
+  const coverage = matches / Math.max(1, features.length);
+  const precision = matches / Math.max(1, seen);
+  return matches + coverage * features.length * 0.35 + precision * features.length * 0.15;
+};
+const chooseJoinPair = (features, records, geoFields, metaFields, requestedGeo = "auto", requestedMeta = "auto") => {
+  const geoCandidates = requestedGeo !== "auto" ? [requestedGeo] : geoFields.slice(0, 32);
+  const metaCandidates = requestedMeta !== "auto" ? [requestedMeta] : metaFields.slice(0, 32);
+  let best = null;
+  for (const geoField of geoCandidates) {
+    for (const metaField of metaCandidates) {
+      const score = scoreJoinPair(features, records, geoField, metaField);
+      if (score <= 0) continue;
+      const idBonus =
+        (ID_FIELD_PRIORITY.some((x) => x.toLowerCase() === geoField.toLowerCase()) ? 0.25 : 0) +
+        (ID_FIELD_PRIORITY.some((x) => x.toLowerCase() === metaField.toLowerCase()) ? 0.25 : 0);
+      const row = { geoField, metaField, score: score + idBonus };
+      if (!best || row.score > best.score) best = row;
+    }
+  }
+  return best;
+};
+const cleanMetadataRecord = (record) => {
+  const out = {};
+  for (const [key, value] of Object.entries(record || {})) {
+    if (key.startsWith("__")) continue;
+    if (value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+};
+const normalizeFeatureName = (feature, preferredField = "auto", metadataRecord = null) => {
+  const props = feature.properties || (feature.properties = {});
+  const metadataFields = metadataRecord ? Object.keys(metadataRecord).filter((key) => !key.startsWith("__")) : [];
+  const featureFields = Object.keys(props);
+  let field = preferredField !== "auto" ? preferredField : null;
+  let value = null;
+  if (field) {
+    value = metadataRecord?.[field];
+    if (value == null) value = props[field];
+  } else {
+    const metadataNameField = chooseNameField(metadataFields);
+    if (metadataNameField) {
+      field = metadataNameField;
+      value = metadataRecord?.[field];
+    }
+    if (value == null) {
+      const featureNameField = chooseNameField(featureFields);
+      if (featureNameField) {
+        field = featureNameField;
+        value = props[field];
+      }
+    }
+  }
+  if (value != null && String(value).trim()) {
+    props.name = String(value).trim();
+    return { imported: true, field };
+  }
+  return { imported: false, field: null };
+};
+const normalizeOwnerColor = (value) => {
+  if (value == null || String(value).trim() === "") return null;
+  const match = /^#?([a-f0-9]{6})$/i.exec(String(value).trim());
+  return match ? `#${match[1].toUpperCase()}` : false;
+};
+const firstExistingFlagForCandidates = (flags, candidates) => {
+  const source = flags && typeof flags === "object" && !Array.isArray(flags) ? flags : {};
+  const index = new Map(
+    Object.entries(source)
+      .filter(([key, value]) => String(key || "").trim() && String(value || "").trim())
+      .map(([key, value]) => [String(key).trim().toLowerCase(), value]),
+  );
+  for (const candidate of candidates || []) {
+    const key = String(candidate || "").trim().toLowerCase();
+    if (!key) continue;
+    const value = index.get(key);
+    if (value) return value;
+  }
+  return null;
+};
+const normalizeImportTagList = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v || "").trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(/[;,|]/).map((v) => v.trim()).filter(Boolean);
+  return [];
+};
+const boolish = (value) => {
+  if (value === true || value === 1) return true;
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "true" || text === "yes" || text === "1" || text === "primary" || text === "capital";
+};
+const CITY_SYMBOL_TIER = { square: 1, flag: 2, cross: 2, "full-flag": 3 };
+const cityPointName = (props) => {
+  for (const key of ["name", "city", "label", "title", "NAME", "Name"]) {
+    const text = String(props?.[key] ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+};
+const isExplicitCityPoint = (feature) => {
+  if (feature?.geometry?.type !== "Point") return false;
+  const props = feature?.properties || {};
+  const markerType = String(props.markerType ?? props.marker_type ?? "").trim().toLowerCase();
+  if (markerType === "city") return true;
+  const tags = normalizeImportTagList(props.tags).map((tag) => tag.toLowerCase());
+  return tags.includes("city") || tags.includes("capital");
+};
+const buildPolityResolver = (polities) => {
+  const records = polities && typeof polities === "object" && !Array.isArray(polities) ? polities : {};
+  const exactKeys = new Map();
+  const exactAliases = new Map();
+  const foldedAliases = new Map();
+  const addAlias = (map, alias, key) => {
+    const text = String(alias || "").trim();
+    if (!text) return;
+    const set = map.get(text) || new Set();
+    set.add(key);
+    map.set(text, set);
+  };
+  for (const key of Object.keys(records)) {
+    const stableKey = String(key || "").trim();
+    if (!stableKey) continue;
+    exactKeys.set(stableKey, stableKey);
+  }
+  for (const [key, record] of Object.entries(records)) {
+    const stableKey = String(key || "").trim();
+    if (!stableKey) continue;
+    const aliases = [stableKey, record?.name, ...(Array.isArray(record?.aliases) ? record.aliases : [])];
+    for (const alias of aliases) {
+      const text = String(alias || "").trim();
+      if (!text) continue;
+      addAlias(exactAliases, text, stableKey);
+      addAlias(foldedAliases, text.toLocaleLowerCase(), stableKey);
+    }
+  }
+  return (value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (exactKeys.has(text)) return exactKeys.get(text);
+    const exact = exactAliases.get(text);
+    if (exact?.size === 1) return [...exact][0];
+    const folded = foldedAliases.get(text.toLocaleLowerCase());
+    if (folded?.size === 1) return [...folded][0];
+    return text;
+  };
+};
+const embeddedPolityRowsFromGeoJSON = (value) => {
+  if (Array.isArray(value)) return value.filter((row) => row && typeof row === "object" && !Array.isArray(row)).map((row) => ({ ...row }));
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).filter(([, row]) => row && typeof row === "object" && !Array.isArray(row)).map(([key, row]) => ({ key, ...row }));
+};
+const embeddedPolityIndex = (rows) => {
+  const map = new Map();
+  for (const row of rows || []) {
+    const candidates = [row?.key, row?.stableKey, row?.stable_key, row?.name, ...(Array.isArray(row?.aliases) ? row.aliases : [])];
+    for (const candidate of candidates) {
+      const text = String(candidate || "").trim().toLocaleLowerCase();
+      if (!text || map.has(text)) continue;
+      map.set(text, row);
+    }
+  }
+  return map;
+};
+const safeStamp = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+};
+const cityFeatureToGeoJSON = (feature) => {
+  if (!Array.isArray(feature?.coord) || feature.coord.length < 2) return null;
+  const lon = Number(feature.coord[0]);
+  const lat = Number(feature.coord[1]);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  const tags = Array.isArray(feature.tags) ? feature.tags : [];
+  if (!tags.includes("city") && !tags.includes("capital")) return null;
+  return {
+    type: "Feature",
+    ...(feature.id != null ? { id: feature.id } : {}),
+    geometry: { type: "Point", coordinates: [lon, lat] },
+    properties: {
+      markerType: "city",
+      name: feature.name || "",
+      displaySymbol: feature.symbol || "square",
+      tags,
+      capital: tags.includes("capital"),
+      population: Number(feature.population || 0),
+      tier: Number(feature.tier || 0) || undefined,
+      owner: feature.owner || undefined,
+      sourceRegionId: feature.sourceRegionId || feature.regionId || undefined,
+      scale: feature.scale,
+      labelScale: feature.labelScale,
+      labelPlacement: feature.labelPlacement,
+    },
+  };
+};
+
+const ENGINE_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist", "engine.mjs");
+const RASTER_PIXEL_CAP = 30000000;
+
+const runProvinceRasterWorker = async () => {
+  for (const method of ["log", "info", "debug", "warn"]) {
+    console[method] = (...args) => process.stderr.write(`${args.map(String).join(" ")}\n`);
+  }
+  const { bundle, rawFile, width, height, options } = workerData;
+  try {
+    const pixels = width * height;
+    if (pixels > RASTER_PIXEL_CAP) throw new Error(`Raster is too large (${pixels.toLocaleString()} pixels). Current safety cap is ${RASTER_PIXEL_CAP.toLocaleString()}.`);
+    const raw = fs.readFileSync(rawFile);
+    if (raw.length !== pixels * 4) throw new Error("Raster pixel buffer does not match its dimensions.");
+    const colors = new Int32Array(pixels);
+    for (let i = 0, at = 0; i < pixels; i += 1, at += 4) {
+      colors[i] = raw[at + 3] === 0 ? -1 : ((raw[at] << 16) | (raw[at + 1] << 8) | raw[at + 2]);
+    }
+    const engine = await import(pathToFileURL(bundle).href);
+    const result = engine.wsProvinceRaster.vectorizeColorGrid(width, height, colors, options, (fraction, message) => parentPort.postMessage({ type: "progress", fraction, message }));
+    parentPort.postMessage({ type: "done", result });
+  } catch (error) {
+    parentPort.postMessage({ type: "error", message: error?.message || String(error) });
+  }
+};
+
+if (!isMainThread && workerData?.ohProvinceRaster) await runProvinceRasterWorker();
+
+const runReprojectWorker = async () => {
+  const { bundle, rawFile, width, height, outFile, from, to, bounds, outWidth, outHeight } = workerData;
+  try {
+    const raw = fs.readFileSync(rawFile);
+    if (raw.length !== width * height * 4) throw new Error("The basemap picture could not be read.");
+    const engine = await import(pathToFileURL(bundle).href);
+    const out = engine.wsProjectionImage.reprojectPixels({ width, height, data: raw }, { from, to, bounds, width: outWidth, height: outHeight });
+    fs.writeFileSync(outFile, Buffer.from(out.data.buffer, out.data.byteOffset, out.data.byteLength));
+    parentPort.postMessage({ type: "done", result: { width: outWidth, height: outHeight } });
+  } catch (error) {
+    parentPort.postMessage({ type: "error", message: error?.message || String(error) });
+  }
+};
+
+if (!isMainThread && workerData?.ohReproject) await runReprojectWorker();
+
 export const register = (ctx) => {
   const { engine, emit, plain, clean, list, cacheDir, repo } = ctx;
   const lib = engine.library;
@@ -90,6 +430,7 @@ export const register = (ctx) => {
 
   let session = null;
   let clipboard = null;
+  let flagPosts = [];
   try {
     const stored = JSON.parse(fs.readFileSync(clipboardFile, "utf8"));
     clipboard = engine.wsRegionClipboard.isRegionClipboard(stored) ? stored : null;
@@ -2272,6 +2613,503 @@ export const register = (ctx) => {
     };
   };
 
+  const uniqueStandardFlag = (candidates) => {
+    const codes = new Set();
+    for (const candidate of candidates || []) {
+      const code = engine.wsPolityIdentity.resolveStockCountryCode(candidate);
+      if (code) codes.add(code);
+    }
+    if (codes.size !== 1) return null;
+    return engine.countryFlags.flagImageUrlFromGid([...codes][0]);
+  };
+
+  const embeddedFlagForRecord = (record) => {
+    if (!record || typeof record !== "object") return null;
+    const direct = String(record.flag ?? record.flagUrl ?? record.flag_url ?? record.flagDataUrl ?? "").trim();
+    if (direct) return direct;
+    const flagCode = String(record.flagCode ?? record.flag_code ?? "").trim();
+    return flagCode ? engine.countryFlags.flagImageUrlFromGid(flagCode) : null;
+  };
+
+  const collectImportedPolities = (features, polities, flags, embeddedPolityRows = [], { materializeStandardFlags = true } = {}) => {
+    const resolvePolity = buildPolityResolver(polities);
+    const embeddedIndex = embeddedPolityIndex(embeddedPolityRows);
+    const owners = new Map();
+    const invalidColors = [];
+    let resolvedOwners = 0;
+    let colorsWithoutOwner = 0;
+    let preservedExistingFlags = 0;
+    let embeddedFlags = 0;
+    for (const feature of features || []) {
+      const props = feature?.properties || (feature.properties = {});
+      const importedOwner = primitiveKey(props.owner);
+      const rawColor = props.ownerColor;
+      if (!importedOwner) {
+        if (rawColor != null && String(rawColor).trim()) colorsWithoutOwner += 1;
+        continue;
+      }
+      const stableKey = resolvePolity(importedOwner);
+      if (stableKey !== importedOwner) {
+        props.owner = stableKey;
+        resolvedOwners += 1;
+      }
+      let row = owners.get(stableKey);
+      if (!row) {
+        const existing = polities?.[stableKey] || null;
+        const embedded = embeddedIndex.get(String(importedOwner).toLocaleLowerCase()) || embeddedIndex.get(String(stableKey).toLocaleLowerCase()) || null;
+        const embeddedAliases = Array.isArray(embedded?.aliases) ? embedded.aliases : [];
+        const aliases = new Set([
+          stableKey,
+          importedOwner,
+          embedded?.name,
+          ...embeddedAliases,
+          existing?.name,
+          ...(Array.isArray(existing?.aliases) ? existing.aliases : []),
+        ].map((v) => String(v || "").trim()).filter(Boolean));
+        const identityCandidates = [embedded?.flagCode, embedded?.flag_code, existing?.code, stableKey, importedOwner, embedded?.name, existing?.name, ...aliases];
+        const existingFlag = firstExistingFlagForCandidates(flags, identityCandidates);
+        const explicitFlag = embeddedFlagForRecord(embedded);
+        if (existingFlag) preservedExistingFlags += 1;
+        if (!existingFlag && explicitFlag) embeddedFlags += 1;
+        row = {
+          key: stableKey,
+          name: String(embedded?.name || existing?.name || importedOwner).trim() || stableKey,
+          aliases,
+          flag: !existingFlag ? (explicitFlag || (materializeStandardFlags ? uniqueStandardFlag(identityCandidates) : null)) : null,
+          colors: new Map(),
+          regions: 0,
+        };
+        const embeddedColor = normalizeOwnerColor(embedded?.color ?? embedded?.colour ?? null);
+        if (embeddedColor === false) throw new Error(`Invalid embedded polity colour for ${row.name}. Use six-digit hex such as #8E1B34.`);
+        if (embeddedColor) row.colors.set(embeddedColor, 1);
+        owners.set(stableKey, row);
+      } else {
+        row.aliases.add(importedOwner);
+      }
+      row.regions += 1;
+      const color = normalizeOwnerColor(rawColor);
+      if (color === false) {
+        if (invalidColors.length < 8) invalidColors.push({ owner: importedOwner, value: String(rawColor), region: String(props.name || props.id || feature?.id || "").trim() });
+        continue;
+      }
+      if (color) row.colors.set(color, (row.colors.get(color) || 0) + 1);
+    }
+    if (invalidColors.length) {
+      const examples = invalidColors.map((row) => `${row.owner}${row.region ? ` (${row.region})` : ""}: ${row.value}`).join("; ");
+      throw new Error(`Invalid ownerColor value${invalidColors.length === 1 ? "" : "s"} in imported GeoJSON. Use six-digit hex colours such as #8E1B34. ${examples}`);
+    }
+    const conflicts = [];
+    for (const row of owners.values()) {
+      if (row.colors.size > 1) conflicts.push(`${row.name}: ${[...row.colors.keys()].sort().join(", ")}`);
+    }
+    if (conflicts.length) {
+      throw new Error(
+        "Conflicting ownerColor values were found for the same resolved polity. " +
+        "The importer will not choose a colour based on feature order. Fix the source GeoJSON and analyze again. " +
+        conflicts.slice(0, 8).join("; "),
+      );
+    }
+    const rows = [...owners.values()]
+      .map((row) => ({ key: row.key, name: row.name, aliases: [...row.aliases], color: row.colors.size ? [...row.colors.keys()][0] : null, flag: row.flag || null }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+    return {
+      rows,
+      owners: rows.length,
+      colors: rows.filter((row) => row.color).length,
+      flags: rows.filter((row) => row.flag).length,
+      embeddedFlags,
+      embeddedPolities: embeddedPolityRows.length,
+      preservedExistingFlags,
+      resolvedOwners,
+      colorsWithoutOwner,
+    };
+  };
+
+  const collectImportedCityPoints = (features, polities) => {
+    const resolvePolity = buildPolityResolver(polities);
+    const rows = [];
+    let skippedUnnamed = 0;
+    let skippedInvalidCoordinates = 0;
+    let resolvedOwners = 0;
+    const symbols = {};
+    for (let index = 0; index < (features || []).length; index += 1) {
+      const feature = features[index];
+      if (!isExplicitCityPoint(feature)) continue;
+      const props = feature?.properties || {};
+      const coords = feature?.geometry?.coordinates;
+      const lon = Number(coords?.[0]);
+      const lat = Number(coords?.[1]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat) || lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+        skippedInvalidCoordinates += 1;
+        continue;
+      }
+      const name = cityPointName(props);
+      if (!name) {
+        skippedUnnamed += 1;
+        continue;
+      }
+      const displaySymbol = String(props.displaySymbol ?? props.symbol ?? "square").trim().toLowerCase() || "square";
+      symbols[displaySymbol] = (symbols[displaySymbol] || 0) + 1;
+      const incomingTags = normalizeImportTagList(props.tags);
+      const isCapital = boolish(props.capital) || incomingTags.some((tag) => tag.toLowerCase() === "capital") || displaySymbol === "full-flag";
+      const tags = [...new Set(["city", ...incomingTags, ...(isCapital ? ["capital"] : [])])];
+      const importedOwner = primitiveKey(props.owner);
+      const owner = importedOwner ? resolvePolity(importedOwner) : null;
+      if (importedOwner && owner !== importedOwner) resolvedOwners += 1;
+      const explicitTier = Number(props.tier);
+      const symbolTier = CITY_SYMBOL_TIER[displaySymbol] || 1;
+      const tier = Number.isFinite(explicitTier) && explicitTier >= 1 && explicitTier <= 3 ? Math.round(explicitTier) : symbolTier;
+      const series = engine.wsCityPopulation.populationByYearField(props);
+      const population = Number(props.population) || engine.wsCityPopulation.latestPopulation(series.populationByYear);
+      const scale = Number(props.scale);
+      const labelScale = Number(props.lbSize ?? props.labelScale);
+      const sourceRegionId = primitiveKey(props.sourceRegionId ?? props.regionId ?? props.regionID);
+      const sourceId = primitiveKey(feature?.id ?? props.id ?? props.markerId ?? props.markerID);
+      rows.push({
+        sourceId: sourceId || null,
+        name,
+        type: "Coordinate",
+        symbol: displaySymbol,
+        coord: [lon, lat],
+        country: String(props.country || "").trim(),
+        owner: owner || null,
+        regionId: sourceRegionId || null,
+        sourceRegionId: sourceRegionId || null,
+        population: Number.isFinite(population) && population > 0 ? population : 0,
+        ...series,
+        tier,
+        tags,
+        ...(Number.isFinite(scale) && scale > 0 ? { scale } : {}),
+        ...(Number.isFinite(labelScale) && labelScale > 0 ? { labelScale } : {}),
+        ...(props.labelPlacement != null ? { labelPlacement: String(props.labelPlacement) } : {}),
+      });
+    }
+    return { rows, count: rows.length, skippedUnnamed, skippedInvalidCoordinates, resolvedOwners, symbols };
+  };
+
+  const analyzeImportGeoJSON = (s, { file = "", metadataFile = "", geoJoinKey = "auto", metadataJoinKey = "auto", metadataNameField = "auto", mergeAllMetadata = true, materializeStandardFlags = true } = {}) => {
+    const out = {};
+    const polities = s.doc.polities || {};
+    const flags = s.doc.flags || {};
+    try {
+      if (!clean(file)) throw new Error("Choose a GeoJSON file first.");
+      const parsed = JSON.parse(fs.readFileSync(clean(file), "utf8"));
+      if (!validFeatureCollection(parsed)) throw new Error("That file is not a GeoJSON FeatureCollection.");
+      const embeddedPolityRows = embeddedPolityRowsFromGeoJSON(parsed.polities);
+      const sourceFeatures = parsed.features.slice();
+      const polygonFeatures = sourceFeatures.filter((feature) => feature?.geometry?.type === "Polygon" || feature?.geometry?.type === "MultiPolygon");
+      if (!polygonFeatures.length) throw new Error("The GeoJSON contains no Polygon/MultiPolygon regions.");
+      const cityImport = collectImportedCityPoints(sourceFeatures, polities);
+      parsed.importCityRows = cityImport.rows;
+      parsed.features = polygonFeatures.map((feature) => ({
+        ...feature,
+        properties: feature?.properties && typeof feature.properties === "object" ? { ...feature.properties } : {},
+      }));
+      const geoFields = collectFields(parsed.features, { feature: true });
+      out.geoKeyOptions = geoFields;
+      let metadataRows = [];
+      let metaFields = [];
+      let joinPair = null;
+      let matched = 0;
+      let unmatchedGeometry = 0;
+      let metadataUnused = 0;
+      let namesImported = 0;
+      let resolvedNameField = null;
+      if (clean(metadataFile)) {
+        let metadataParsed;
+        try {
+          metadataParsed = JSON.parse(fs.readFileSync(clean(metadataFile), "utf8"));
+        } catch (error) {
+          throw new Error(`Metadata JSON could not be parsed: ${error?.message || error}`);
+        }
+        metadataRows = extractMetadataRecords(metadataParsed);
+        if (!metadataRows.length) {
+          throw new Error(
+            "The metadata JSON contains no usable records. Supported shapes: an array of objects, " +
+            "{regions:[...]}, {provinces:[...]}, a GeoJSON FeatureCollection, or an object keyed by region/province ID.",
+          );
+        }
+        metaFields = collectFields(metadataRows);
+        out.metadataKeyOptions = metaFields;
+        out.metadataFieldOptions = metaFields.filter((field) => !field.startsWith("__"));
+        joinPair = chooseJoinPair(parsed.features, metadataRows, geoFields, metaFields, geoJoinKey, metadataJoinKey);
+        if (!joinPair) {
+          throw new Error(
+            "Could not match the GeoJSON regions to the metadata JSON automatically. " +
+            "Analyze once to populate the key lists, choose the matching Geometry key and Metadata key, then Analyze again.",
+          );
+        }
+        const metadataByKey = new Map();
+        for (const row of metadataRows) {
+          const key = primitiveKey(recordFieldValue(row, joinPair.metaField));
+          if (key != null && !metadataByKey.has(key)) metadataByKey.set(key, row);
+        }
+        const usedMetadataKeys = new Set();
+        for (const feature of parsed.features) {
+          const key = primitiveKey(featureFieldValue(feature, joinPair.geoField));
+          const metadataRecord = key != null ? metadataByKey.get(key) : null;
+          if (metadataRecord) {
+            matched += 1;
+            usedMetadataKeys.add(key);
+            if (mergeAllMetadata) feature.properties = { ...(feature.properties || {}), ...cleanMetadataRecord(metadataRecord) };
+            const nameResult = normalizeFeatureName(feature, metadataNameField, metadataRecord);
+            if (nameResult.imported) {
+              namesImported += 1;
+              resolvedNameField ||= nameResult.field;
+            }
+          } else {
+            unmatchedGeometry += 1;
+            const nameResult = normalizeFeatureName(feature, "auto", null);
+            if (nameResult.imported) {
+              namesImported += 1;
+              resolvedNameField ||= nameResult.field;
+            }
+          }
+        }
+        metadataUnused = Math.max(0, metadataByKey.size - usedMetadataKeys.size);
+      } else {
+        out.metadataKeyOptions = [];
+        out.metadataFieldOptions = [];
+        for (const feature of parsed.features) {
+          const nameResult = normalizeFeatureName(feature, metadataNameField, null);
+          if (nameResult.imported) {
+            namesImported += 1;
+            resolvedNameField ||= nameResult.field;
+          }
+        }
+      }
+      const polityImport = collectImportedPolities(parsed.features, polities, flags, embeddedPolityRows, { materializeStandardFlags });
+      parsed.importPolityRows = polityImport.rows;
+      parsed.importStats = {
+        regions: parsed.features.length,
+        source: "geojson",
+        metadataRows: metadataRows.length,
+        metadataMatched: matched,
+        metadataUnmatchedGeometry: unmatchedGeometry,
+        metadataUnused,
+        geoJoinKey: joinPair?.geoField || null,
+        metadataJoinKey: joinPair?.metaField || null,
+        metadataNameField: resolvedNameField || (metadataNameField !== "auto" ? metadataNameField : null),
+        namesImported,
+        metadataMerged: Boolean(clean(metadataFile) && mergeAllMetadata),
+        polityOwners: polityImport.owners,
+        polityColors: polityImport.colors,
+        polityFlags: polityImport.flags,
+        embeddedPolities: polityImport.embeddedPolities,
+        embeddedPolityFlags: polityImport.embeddedFlags,
+        polityFlagsPreserved: polityImport.preservedExistingFlags,
+        resolvedOwnerAliases: polityImport.resolvedOwners,
+        ownerColorsWithoutOwner: polityImport.colorsWithoutOwner,
+        cityMarkers: cityImport.count,
+        cityMarkersSkippedUnnamed: cityImport.skippedUnnamed,
+        cityMarkersSkippedInvalidCoordinates: cityImport.skippedInvalidCoordinates,
+        cityOwnerAliasesResolved: cityImport.resolvedOwners,
+        citySymbols: cityImport.symbols,
+      };
+      s.importResult = parsed;
+      out.stats = parsed.importStats;
+      out.regions = parsed.features.length;
+      out.message = clean(metadataFile)
+        ? `Ready: ${parsed.features.length.toLocaleString()} regions; ${matched.toLocaleString()} metadata matches; ${polityImport.owners.toLocaleString()} owners; ${polityImport.colors.toLocaleString()} polity colours; ${polityImport.flags.toLocaleString()} scenario flags; ${cityImport.count.toLocaleString()} city markers`
+        : `Ready: ${parsed.features.length.toLocaleString()} polygon regions; ${polityImport.owners.toLocaleString()} owners; ${polityImport.colors.toLocaleString()} polity colours; ${polityImport.flags.toLocaleString()} scenario flags; ${cityImport.count.toLocaleString()} city markers`;
+    } catch (error) {
+      s.importResult = null;
+      out.error = error?.message || String(error);
+    }
+    return plain(out);
+  };
+
+  const replaceRegionsFromImport = (s, fc, { inheritOwners = true, simplifyMeters = 0 } = {}) => {
+    if (!fc || !Array.isArray(fc.features)) return { count: 0, inheritedOwners: 0 };
+    let feats;
+    try {
+      feats = fmt.readFeatures(fc, READ);
+    } catch (e) {
+      console.warn("[editor] province import GeoJSON parse failed:", e);
+      return { count: 0, inheritedOwners: 0 };
+    }
+    feats = feats.filter((f) => {
+      const type = f.getGeometry?.()?.getType?.();
+      return type === "Polygon" || type === "MultiPolygon";
+    });
+    if (!feats.length) return { count: 0, inheritedOwners: 0 };
+    if (simplifyMeters > 0) {
+      const lighter = engine.wsSimplify.simplifyShared(feats.map((f) => f.getGeometry()), { toleranceAt: engine.wsSimplify.toleranceAtLatitude(simplifyMeters) });
+      feats.forEach((f, at) => f.setGeometry(lighter[at]));
+    }
+    const usedIds = new Set();
+    let inheritedOwners = 0;
+    for (let i = 0; i < feats.length; i += 1) {
+      const f = feats[i];
+      const p = f.getProperties();
+      let fid = f.getId() ?? p.id ?? `imp-${i + 1}`;
+      fid = String(fid);
+      let unique = fid;
+      let suffix = 2;
+      while (usedIds.has(unique)) unique = `${fid}-${suffix++}`;
+      usedIds.add(unique);
+      f.setId(unique);
+      if (f.get("typeId") == null) f.set("typeId", "land");
+      if (inheritOwners && !f.get("owner") && (f.get("typeId") || "land") !== "water") {
+        const coord = interiorPoint(f.getGeometry());
+        if (coord) {
+          const epsilon = 0.01;
+          const candidates = s.source.getFeaturesInExtent([coord[0] - epsilon, coord[1] - epsilon, coord[0] + epsilon, coord[1] + epsilon]);
+          const hit = candidates.find((old) => old.getGeometry?.()?.intersectsCoordinate?.(coord));
+          if (hit) {
+            const owner = hit.get("owner") || null;
+            if (owner) {
+              f.set("owner", owner);
+              inheritedOwners += 1;
+            }
+            const claimants = hit.get("claimants");
+            if (Array.isArray(claimants) && claimants.length) f.set("claimants", claimants.slice());
+            const group = hit.get("group");
+            if (group) f.set("group", group);
+          }
+        }
+      }
+    }
+    s.undo = [];
+    s.redo = [];
+    s.source.clear();
+    s.savedRegionHashes.clear();
+    s.source.addFeatures(feats);
+    notify(s, { geometry: true });
+    return { count: feats.length, inheritedOwners };
+  };
+
+  const runEngineWorker = (data, fallback) => new Promise((resolve, reject) => {
+    const worker = new Worker(new URL(import.meta.url), { workerData: { bundle: ENGINE_BUNDLE, ...data }, stdout: true, stderr: true });
+    worker.stdout.on("data", (chunk) => process.stderr.write(chunk));
+    worker.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      void worker.terminate();
+      if (error) reject(error);
+      else resolve(result);
+    };
+    worker.on("message", (msg = {}) => {
+      if (msg.type === "done") finish(null, msg.result);
+      if (msg.type === "error") finish(new Error(msg.message || fallback));
+    });
+    worker.on("error", (error) => finish(new Error(error?.message || fallback)));
+    worker.on("exit", () => finish(new Error(fallback)));
+  });
+
+  const importProgress = (s, fraction, message) => emit("workshop.import.progress", { session: s.id, fraction, message });
+
+  const runProvinceRaster = (s, payload) => new Promise((resolve, reject) => {
+    s.importWorker?.terminate?.();
+    const worker = new Worker(new URL(import.meta.url), { workerData: { ohProvinceRaster: true, bundle: ENGINE_BUNDLE, ...payload }, stdout: true, stderr: true });
+    s.importWorker = worker;
+    worker.stdout.on("data", (chunk) => process.stderr.write(chunk));
+    worker.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      if (s.importWorker === worker) s.importWorker = null;
+      void worker.terminate();
+      if (error) reject(error);
+      else resolve(result);
+    };
+    worker.on("message", (msg = {}) => {
+      if (msg.type === "progress") {
+        importProgress(s, Number(msg.fraction || 0), msg.message || "");
+        return;
+      }
+      if (msg.type === "done") finish(null, msg.result);
+      if (msg.type === "error") finish(new Error(msg.message || "Raster vectorization failed."));
+    });
+    worker.on("error", (error) => finish(new Error(error?.message || "Province importer worker crashed.")));
+    worker.on("exit", () => finish(new Error("Province importer worker crashed.")));
+  });
+
+  const sha256Of = (text) => crypto.createHash("sha256").update(text).digest("hex");
+
+  const createLibraryBasemap = (normalized, name, thumbnail, extra = {}) => {
+    if (normalized.kind === "image") {
+      return engine.wsBasemapLibrary.createBasemap({ name, kind: "image", aspect: normalized.aspect || null, thumbnail: thumbnail || null, contentHash: sha256Of(normalized.dataUrl), payload: { dataUrl: normalized.dataUrl }, ...extra });
+    }
+    return engine.wsBasemapLibrary.createBasemap({ name, kind: "vector", thumbnail: thumbnail || null, contentHash: sha256Of(JSON.stringify(normalized.geojson)), payload: { geojson: normalized.geojson }, ...extra });
+  };
+
+  const thumbnailSource = (background) => {
+    const dir = path.join(cacheDir, "workshop-thumbnails");
+    fs.mkdirSync(dir, { recursive: true });
+    if (background?.kind === "image" && background.dataUrl) {
+      const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(background.dataUrl));
+      if (!match) return null;
+      const mime = String(match[1] || "").toLowerCase();
+      const ext = mime.includes("svg") ? "svg" : mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+      const bytes = match[2] ? Buffer.from(match[3], "base64") : Buffer.from(decodeURIComponent(match[3]), "utf8");
+      const file = path.join(dir, `${crypto.createHash("sha1").update(bytes).digest("hex")}.${ext}`);
+      if (!fs.existsSync(file)) fs.writeFileSync(file, bytes);
+      return { kind: "image", file, aspect: background.aspect || null };
+    }
+    if (background?.kind === "vector" && Array.isArray(background.geojson?.features)) {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      const squash = (lat) => (Math.atan(Math.sinh((lat * Math.PI) / 180)) * 180) / Math.PI;
+      const ringOut = (ring) => ring.map(([x, y]) => {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        return [x, squash(y)];
+      });
+      const features = background.geojson.features;
+      const shapes = features.map((feature) => {
+        const geom = feature?.geometry;
+        if (geom?.type === "Polygon") return { type: "Polygon", coordinates: geom.coordinates.map(ringOut) };
+        if (geom?.type === "MultiPolygon") return { type: "MultiPolygon", coordinates: geom.coordinates.map((poly) => poly.map(ringOut)) };
+        return null;
+      });
+      if (!Number.isFinite(minX)) return { kind: "vector", file: "", fills: [], bbox: null };
+      const text = JSON.stringify({ type: "FeatureCollection", features: shapes.map((geometry) => ({ type: "Feature", properties: {}, geometry })) });
+      const file = path.join(dir, `${sha256Of(text)}.geojson`);
+      if (!fs.existsSync(file)) {
+        fs.writeFileSync(`${file}.tmp`, text);
+        fs.renameSync(`${file}.tmp`, file);
+      }
+      return { kind: "vector", file, fills: features.map((feature) => fillRgb(feature?.properties?.fill) ?? fillRgb("#33435c")), bbox: [minX, minY, maxX, maxY] };
+    }
+    return null;
+  };
+
+  const readUploadVector = async (target, format) => {
+    let collections;
+    if (format === "geojson" || format === "json") {
+      collections = [JSON.parse(fs.readFileSync(target, "utf8"))];
+    } else if (format === "zip") {
+      const result = await engine.wsShp.default(fs.readFileSync(target));
+      collections = Array.isArray(result) ? result : [result];
+    } else {
+      const sibling = (ext) => {
+        const file = target.replace(/\.shp$/i, `.${ext}`);
+        const upper = target.replace(/\.shp$/i, `.${ext.toUpperCase()}`);
+        return fs.existsSync(file) ? file : fs.existsSync(upper) ? upper : "";
+      };
+      const dbf = sibling("dbf");
+      const prj = sibling("prj");
+      const cpg = sibling("cpg");
+      const result = await engine.wsShp.default({
+        shp: fs.readFileSync(target),
+        ...(dbf ? { dbf: fs.readFileSync(dbf) } : {}),
+        ...(prj ? { prj: fs.readFileSync(prj, "utf8") } : {}),
+        ...(cpg ? { cpg: fs.readFileSync(cpg, "utf8") } : {}),
+      });
+      collections = Array.isArray(result) ? result : [result];
+    }
+    const feats = collections.flatMap((fc) => fmt.readFeatures(fc, READ));
+    return fmt.writeFeaturesObject(feats, { ...WRITE, decimals: 6 });
+  };
+
   return {
     "workshop.open": async ({ scenarioId, world = null, gameDate = "", warSettings = null, hasWarSettings = false, review = null } = {}) => {
       if (session) closeSession(session);
@@ -2957,8 +3795,9 @@ export const register = (ctx) => {
         builtIn: builtIn.map((flag) => withFile({ code: flag.code, name: flag.name, alpha2: flag.alpha2, imageUrl: flag.imageUrl }, flag.imageUrl)),
         suggested: suggested ? withFile({ code: suggested.code, name: suggested.name, imageUrl: suggested.imageUrl }, suggested.imageUrl) : null,
         inThisMap: Object.entries(s.doc.flags || {}).map(([code, value]) => withFile({ code, value }, value)),
-        mine: (Array.isArray(mine) ? mine : []).map((flag) => withFile({ id: flag.id, name: flag.name, code: flag.code, polity: flag.polity, dataUrl: flag.dataUrl, community: Boolean(flag.source?.community) }, flag.dataUrl)),
+        mine: (Array.isArray(mine) ? mine : []).map((flag) => withFile({ id: flag.id, name: flag.name, code: flag.code, polity: flag.polity, dataUrl: flag.dataUrl, author: flag.author || "", community: Boolean(flag.source?.community), communityUrl: flag.source?.url || null }, flag.dataUrl)),
         current: s.doc.flags?.[owner] ?? null,
+        author: s.doc.metadata?.author || "",
       });
     },
     "workshop.flags.filter": async ({ query = "" } = {}) => {
@@ -2974,6 +3813,97 @@ export const register = (ctx) => {
       }
       setFlag(s, owner, dataUrl);
       return delta(s, { doc: true });
+    },
+    "workshop.flags.community": async ({ force = false } = {}) => {
+      const flagsHub = engine.ctCommunityFlags;
+      try {
+        flagPosts = list(await flagsHub.fetchCommunityFlags({ force: Boolean(force) }));
+        return plain({
+          hubUrl: flagsHub.communityFlagsHubUrl(),
+          posts: flagPosts.map((post) => ({
+            id: String(post.id ?? ""),
+            title: clean(post.title),
+            author: clean(post.author),
+            url: post.url || null,
+            pictureUrl: post.pictureUrl || "",
+            code: clean(post.code),
+            polity: clean(post.polity),
+            fromScenario: Boolean(post.fromScenario),
+            flagCount: Number(post.flagCount || 0),
+            official: Boolean(post.official),
+          })),
+        });
+      } catch (error) {
+        return { error: error?.message || "Could not load community flags." };
+      }
+    },
+    "workshop.flags.useCommunity": async ({ postId = "" } = {}) => {
+      const post = flagPosts.find((entry) => String(entry.id ?? "") === String(postId));
+      try {
+        if (!post) throw new Error("Could not download that flag.");
+        const dataUrl = await engine.ctCommunityFlags.loadCommunityFlagDataUrl(post);
+        try {
+          await engine.wsFlagLibrary.saveFlag({
+            name: post.title || post.polity || post.code || "Flag",
+            code: post.polity || post.code || "",
+            polity: post.polity || "",
+            author: post.author || "",
+            dataUrl,
+            source: { community: true, url: post.url || null },
+          });
+        } catch (error) {
+          console.warn("[editor] could not save the community flag to the library:", error);
+        }
+        return { dataUrl };
+      } catch (error) {
+        return { error: error?.message || "Could not download that flag." };
+      }
+    },
+    "workshop.flags.installPack": async ({ postId = "" } = {}) => {
+      const post = flagPosts.find((entry) => String(entry.id ?? "") === String(postId));
+      try {
+        if (!post) throw new Error("Could not install that flag pack.");
+        const flags = await engine.ctCommunityFlags.loadCommunityFlagPack(post);
+        let saved = 0;
+        for (const flag of flags) {
+          try {
+            await engine.wsFlagLibrary.saveFlag({
+              name: flag.code || post.title,
+              code: flag.code || "",
+              polity: flag.code || "",
+              author: post.author || "",
+              dataUrl: flag.dataUrl,
+              source: { community: true, url: post.url || null },
+            });
+            saved += 1;
+          } catch {
+            continue;
+          }
+        }
+        return { notice: `Added ${saved} flag${saved === 1 ? "" : "s"} from “${post.title}” to My flags — they're in the “In the game” tab now.` };
+      } catch (error) {
+        return { error: error?.message || "Could not install that flag pack." };
+      }
+    },
+    "workshop.flags.shareForm": async ({ name = "", author = "", polity = "", code = "" } = {}) => {
+      const hub = String(engine.ctCommunityFlags.communityFlagsHubUrl()).split("/issues")[0];
+      return { url: `${hub}/issues/new?${engine.ctCommunityFlags.flagPublishQuery({ name, author, polity, code })}` };
+    },
+    "workshop.flags.share": async ({ name = "", author = "", polity = "", code = "", dataUrl = "" } = {}) => {
+      const flagsHub = engine.ctCommunityFlags;
+      try {
+        const text = String(dataUrl || "");
+        if (!/^data:[^,]*;base64,/.test(text)) throw new Error("This flag has no image to share.");
+        const fileName = flagsHub.flagFileName(name || polity, text);
+        const folder = process.env.OH_NATIVE_DOWNLOADS || path.join(os.homedir(), "Downloads", "Open Historia");
+        fs.mkdirSync(folder, { recursive: true });
+        const file = path.join(folder, fileName);
+        fs.writeFileSync(file, Buffer.from(text.slice(text.indexOf(",") + 1), "base64"));
+        const hub = String(flagsHub.communityFlagsHubUrl()).split("/issues")[0];
+        return { file, url: `${hub}/issues/new?${flagsHub.flagPublishQuery({ name, author, polity, code })}`, message: `"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the flag image box, then submit.` };
+      } catch (error) {
+        return { error: `Could not prepare that flag for sharing: ${error?.message || error}` };
+      }
     },
     "workshop.flags.delete": async ({ id: flagId = "" } = {}) => {
       try {
@@ -3248,19 +4178,40 @@ export const register = (ctx) => {
         current: projection.normalizeProjection(s.doc.metadata?.projection),
         freeform: projection.FREEFORM,
         hasPicture: s.doc.metadata?.customBackground?.kind === "image",
+        pictureFile: s.doc.metadata?.customBackground?.kind === "image" ? (thumbnailSource(s.doc.metadata.customBackground)?.file || "") : "",
         blocked: convert.hasDetailedMap(s.doc) ? convert.DETAILED_MAP_CONVERSION_MESSAGE : "",
       });
     },
-    "workshop.projection.check": async ({ session: id, type = "", shape = "" } = {}) => {
+    "workshop.projection.check": async ({ session: id, type = "", shape = "", pictureAspect = 0 } = {}) => {
       const s = need(id);
       const projection = engine.wsMapProjection;
       const convert = engine.wsProjectionConvert;
       const current = projection.normalizeProjection(s.doc.metadata?.projection);
       const aspect = convert.parseAspect(shape);
       const chosen = type === projection.FREEFORM ? (aspect ? convert.projectionChoice(type, aspect) : null) : convert.projectionChoice(type);
-      return plain({ aspectOk: Boolean(aspect), chosen, changed: Boolean(chosen) && !projection.sameProjection(current, chosen), shapeText: convert.formatAspect(current.type === projection.FREEFORM ? current.aspect : 2) });
+      const picture = Number(pictureAspect) > 0 ? Number(pictureAspect) : 0;
+      return plain({ aspectOk: Boolean(aspect), chosen, changed: Boolean(chosen) && !projection.sameProjection(current, chosen), shapeText: convert.formatAspect(current.type === projection.FREEFORM ? current.aspect : picture || 2), pictureShape: picture ? convert.formatAspect(picture) : "" });
     },
-    "workshop.projection.convert": async ({ session: id, target = null, keepPicture = false } = {}) => {
+    "workshop.projection.redraw": async ({ session: id, target = null, rawFile = "", width = 0, height = 0 } = {}) => {
+      const s = need(id);
+      const projection = engine.wsMapProjection;
+      const from = projection.normalizeProjection(s.doc.metadata?.projection);
+      const to = projection.normalizeProjection(target);
+      const background = s.doc.metadata?.customBackground ?? null;
+      const raw = clean(rawFile);
+      try {
+        if (background?.kind !== "image") throw new Error("The basemap picture could not be read.");
+        const { width: outWidth, height: outHeight } = engine.wsProjectionImage.redrawnSize(Number(width), to);
+        const outFile = path.join(cacheDir, `workshop-redraw-${crypto.randomUUID()}.rgba`);
+        await runEngineWorker({ ohReproject: true, rawFile: raw, width: Number(width), height: Number(height), outFile, from, to, bounds: background.bounds ?? null, outWidth, outHeight }, "The basemap picture could not be redrawn.");
+        return plain({ rawFile: outFile, width: outWidth, height: outHeight, aspect: outWidth / outHeight, bounds: projection.sheetBounds(to), jpeg: /^data:image\/jpe?g/i.test(String(background.dataUrl || "")) });
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      } finally {
+        if (raw) fs.rm(raw, { force: true }, () => {});
+      }
+    },
+    "workshop.projection.convert": async ({ session: id, target = null, keepPicture = false, redrawn = null } = {}) => {
       const s = need(id);
       const projection = engine.wsMapProjection;
       const convert = engine.wsProjectionConvert;
@@ -3270,13 +4221,21 @@ export const register = (ctx) => {
       const background = s.doc.metadata?.customBackground ?? null;
       const plan = convert.planBasemapChange({ from, to, background, keepPicture, detailedMap: convert.hasDetailedMap(s.doc) });
       if (plan.kind === "blocked") return { ...delta(s, {}), error: plan.reason };
-      if (plan.kind === "redraw") return { ...delta(s, {}), error: "Redrawing the starting picture for another projection is not in the native Workshop yet: it paints the picture again in the browser." };
+      if (plan.kind === "redraw" && !redrawn?.file) {
+        const source = thumbnailSource(background);
+        if (!source?.file) return { ...delta(s, {}), error: "The basemap picture could not be read." };
+        return { ...delta(s, {}), redraw: { file: source.file } };
+      }
       const moveXY = (x, y) => {
         const [X, Y] = projection.convertPlane(from, to, x / EARTH, y / EARTH);
         return [X * EARTH, Y * EARTH];
       };
       let nextBg = background;
-      if (plan.kind === "bounds") nextBg = { kind: "image", dataUrl: background.dataUrl, aspect: background.aspect, bounds: plan.bounds };
+      if (plan.kind === "redraw") {
+        const bytes = fs.readFileSync(clean(redrawn.file));
+        fs.rm(clean(redrawn.file), { force: true }, () => {});
+        nextBg = { kind: "image", dataUrl: `data:${clean(redrawn.mime) || "image/png"};base64,${bytes.toString("base64")}`, aspect: Number(redrawn.aspect) || null, bounds: redrawn.bounds ?? null };
+      } else if (plan.kind === "bounds") nextBg = { kind: "image", dataUrl: background.dataUrl, aspect: background.aspect, bounds: plan.bounds };
       else if (plan.kind === "vector") nextBg = { ...background, geojson: projection.moveGeojson(background.geojson, (lon, lat) => projection.convertDisplayPoint(from, to, lon, lat)) };
       else if (plan.kind === "plain") nextBg = { kind: "plain" };
       else if (plan.kind === "tiles") nextBg = null;
@@ -3426,6 +4385,77 @@ export const register = (ctx) => {
       const s = need(id);
       const result = applyMaps(s, engine.wsScenarioMaps.setShownOver(s.doc.metadata, key, overKey, { scenarioName: s.doc.metadata?.name }));
       return { ...delta(s, { doc: true }), ...result, maps: mapsOf(s) };
+    },
+    "workshop.maps.readUpload": async ({ session: id, path: file = "", name = "", format = "" } = {}) => {
+      const s = need(id);
+      s.upload = null;
+      const target = clean(file);
+      const shown = clean(name) || path.basename(target);
+      const ext = (clean(format) || path.extname(target).slice(1)).toLowerCase();
+      const baseName = shown.replace(/\.[^.]+$/, "") || "Custom basemap";
+      try {
+        if (ext === "tif" || ext === "tiff") return { sessionOnly: true };
+        if (["png", "jpg", "jpeg", "svg"].includes(ext)) {
+          const mime = ext === "svg" ? "image/svg+xml" : ext === "png" ? "image/png" : "image/jpeg";
+          s.upload = { kind: "image", dataUrl: `data:${mime};base64,${fs.readFileSync(target).toString("base64")}`, name: baseName };
+          return { kind: "image" };
+        }
+        if (!["geojson", "json", "zip", "shp"].includes(ext)) throw new Error(`Unsupported background format: .${ext || "unknown"}`);
+        const geojson = await readUploadVector(target, ext);
+        s.upload = { kind: "vector", geojson, name: baseName };
+        return plain({ kind: "vector", thumbnail: thumbnailSource({ kind: "vector", geojson }) });
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      }
+    },
+    "workshop.maps.addUpload": async ({ session: id, thumbnail = "", aspect = null } = {}) => {
+      const s = need(id);
+      const upload = s.upload;
+      if (!upload) return { ...delta(s, {}), error: "Choose the map again." };
+      s.upload = null;
+      const normalized = upload.kind === "image" ? { kind: "image", dataUrl: upload.dataUrl, aspect: Number(aspect) || null } : { kind: "vector", geojson: upload.geojson };
+      let meta = null;
+      let libraryError = null;
+      try {
+        meta = await createLibraryBasemap(normalized, upload.name, clean(thumbnail) || null, { author: s.doc.metadata?.author || "" });
+      } catch (error) {
+        console.warn("[editor] save basemap to library failed:", error);
+        libraryError = error?.message || String(error);
+      }
+      const entry = engine.wsOwnBasemaps.ownBasemapFromLibrary(meta || { id: upload.name, name: upload.name, kind: normalized.kind }, normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl });
+      const result = entry ? applyMaps(s, engine.wsScenarioMaps.addOwnMap(s.doc.metadata, entry)) : { refused: "" };
+      return { ...delta(s, { doc: true }), added: Boolean(entry) && !result.refused, ...(result.refused ? { refused: result.refused } : {}), ...(libraryError ? { libraryError } : {}) };
+    },
+    "workshop.maps.uploadTiled": async ({ session: id, path: file = "" } = {}) => {
+      const s = need(id);
+      const target = clean(file);
+      try {
+        const blob = await fs.openAsBlob(target);
+        const meta = await engine.wsTiledBasemaps.uploadTiledBasemap(blob, { name: path.basename(target).replace(/\.pmtiles$/i, "") });
+        const current = s.doc.metadata?.customBackground;
+        if (current?.kind === "vector" && current.geojson) await engine.wsTiledBasemaps.setTiledBasemapFallback(meta.id, current.geojson).catch(() => {});
+        return plain({ basemap: meta });
+      } catch (error) {
+        const message = error?.message || String(error);
+        return { error: message, vectorTiles: /vector tiles/i.test(message) };
+      }
+    },
+    "workshop.maps.thumbnailSource": async ({ session: id, key = "" } = {}) => {
+      const s = need(id);
+      const map = engine.wsScenarioMaps.scenarioMaps(s.doc.metadata, { scenarioName: s.doc.metadata?.name }).find((row) => row.key === key);
+      return plain({ source: map?.background ? thumbnailSource(map.background) : null });
+    },
+    "workshop.maps.saveToLibrary": async ({ session: id, key = "", thumbnail = "" } = {}) => {
+      const s = need(id);
+      const map = engine.wsScenarioMaps.scenarioMaps(s.doc.metadata, { scenarioName: s.doc.metadata?.name }).find((row) => row.key === key);
+      const bg = map?.background;
+      try {
+        if (!bg) throw new Error("It has no picture or drawn map in it.");
+        await createLibraryBasemap(bg.kind === "image" ? { kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect } : { kind: "vector", geojson: bg.geojson }, map.name, clean(thumbnail) || null);
+        return { ok: true };
+      } catch (error) {
+        return { error: `Could not save that map to Your basemaps: ${error?.message || error}` };
+      }
     },
     "workshop.maps.deleteLibrary": async ({ basemapId = "" } = {}) => {
       try {
@@ -3868,6 +4898,65 @@ export const register = (ctx) => {
       s.saveError = "";
       s.saveStatus = "saved";
       return delta(s, { all: true });
+    },
+    "workshop.import.raster": async ({ session: id, rawFile = "", width = 0, height = 0, definitionFile = "", landOnly = true, ignoreBlack = true, minPixels = 1, bounds = null } = {}) => {
+      const s = need(id);
+      s.importResult = null;
+      const raw = clean(rawFile);
+      try {
+        const definitionText = clean(definitionFile) ? fs.readFileSync(clean(definitionFile), "utf8") : "";
+        const result = await runProvinceRaster(s, {
+          rawFile: raw,
+          width: Number(width),
+          height: Number(height),
+          options: { definitionText, landOnly: Boolean(landOnly && definitionText), ignoreBlack: Boolean(ignoreBlack), minPixels, bounds },
+        });
+        s.importResult = result;
+        return plain({ stats: result.importStats, regions: result.features.length });
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      } finally {
+        if (raw) fs.rm(raw, { force: true }, () => {});
+      }
+    },
+    "workshop.import.geojson": async ({ session: id, ...args } = {}) => analyzeImportGeoJSON(need(id), args),
+    "workshop.import.cancel": async ({ session: id } = {}) => {
+      const s = need(id);
+      s.importWorker?.terminate?.();
+      s.importWorker = null;
+      return { ok: true };
+    },
+    "workshop.import.apply": async ({ session: id, mode = "raster", inheritOwners = true, simplify = true, importCities = true, replaceExistingCities = false, skipBackup = false } = {}) => {
+      const s = need(id);
+      const result = s.importResult;
+      if (!validFeatureCollection(result) || !result.features.length) return { error: "Analyze the import again first." };
+      let backupFile = "";
+      if (!skipBackup) {
+        importProgress(s, 0.1, "Backing up current regions…");
+        try {
+          const backup = serializeRegions(s);
+          const pointBackups = (s.doc.features || []).map(cityFeatureToGeoJSON).filter(Boolean);
+          const folder = process.env.OH_NATIVE_DOWNLOADS || path.join(os.homedir(), "Downloads", "Open Historia");
+          fs.mkdirSync(folder, { recursive: true });
+          backupFile = path.join(folder, `open-historia-pre-province-import-${safeStamp()}.geojson`);
+          fs.writeFileSync(backupFile, JSON.stringify({ ...backup, features: [...(backup.features || []), ...pointBackups] }));
+        } catch (error) {
+          return { backupFailed: error?.message || String(error) };
+        }
+      }
+      importProgress(s, 0.45, "Replacing region geometry…");
+      const applied = replaceRegionsFromImport(s, result, { inheritOwners: Boolean(inheritOwners), simplifyMeters: mode === "geojson" && simplify ? 100 : 0 });
+      if (!applied?.count) return { ...delta(s, {}), error: "The map rejected the imported region collection." };
+      const polityImport = Array.isArray(result.importPolityRows) && result.importPolityRows.length ? importPolityRoster(s, result.importPolityRows) : null;
+      let cityImport = null;
+      if (importCities && Array.isArray(result.importCityRows) && result.importCityRows.length) {
+        const options = { replaceExisting: Boolean(replaceExistingCities), nextId: () => mapDoc.newId("feat") };
+        const merged = engine.wsCityMarkers.mergeCityMarkers(s.doc.features, result.importCityRows, options);
+        s.doc = { ...s.doc, features: merged.features };
+        dirty(s);
+        cityImport = { count: merged.count, created: merged.created, updated: merged.updated, replaced: merged.replaced, skipped: merged.skipped };
+      }
+      return { ...delta(s, { all: true }), selection: [], applied: plain({ ...applied, polityImport, cityImport }), backup: backupFile };
     },
     "workshop.documents.current": async ({ session: id } = {}) => {
       const s = need(id);

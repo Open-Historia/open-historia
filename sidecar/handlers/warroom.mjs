@@ -607,6 +607,13 @@ export const register = (ctx) => {
       const after = await read();
       return plain({ opened, fronts: frontsOf(after.world, after.game.country) });
     };
+    methods["warroom.test.operation"] = async ({ name = "", summary = "", focus = null } = {}) => {
+      const id = `test-${crypto.randomUUID()}`;
+      const entry = { id, name: clean(name), summary: clean(summary), kind: "operation", status: "active", ongoing: true };
+      if (focus && Number.isFinite(Number(focus.lng)) && Number.isFinite(Number(focus.lat))) entry.focus = { lng: Number(focus.lng), lat: Number(focus.lat) };
+      await engine.gameState.mutateWorldState((world) => ({ ...world, projects: [...list(world?.projects), entry] }));
+      return id;
+    };
     methods["warroom.test.report"] = async ({ battlefield = "", name = "", chronicle = null } = {}) => {
       const { game } = await read();
       let made = false;

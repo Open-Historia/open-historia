@@ -666,6 +666,13 @@ class GroupLabels extends Control:
 		var spacing := size * 0.08
 		var view := get_viewport_rect().size
 		var taken: Array[Rect2] = []
+		var above: Array[Rect2] = []
+		for list_name in ["war_label_rects", "city_label_rects", "room_label_rects", "war_marker_rects"]:
+			var rects: Variant = map_view.get(list_name)
+			if rects is Array:
+				for rect: Variant in rects:
+					if rect is Rect2:
+						above.append(rect)
 		for label in _labels:
 			var point := GlobeView.world_of_lonlat(float(label.get("lng", 0.0)), float(label.get("lat", 0.0)))
 			var screen := map_view.world_to_screen(point)
@@ -679,12 +686,17 @@ class GroupLabels extends Control:
 				var width := _measure(line, font_size, spacing)
 				widths.append(width)
 				widest = maxf(widest, width)
-			var box := Rect2(screen - Vector2(widest * 0.5, line_height * lines.size() * 0.5), Vector2(widest, line_height * lines.size()))
+			var box := Rect2(screen - Vector2(widest * 0.5, line_height * lines.size() * 0.5), Vector2(widest, line_height * lines.size())).grow(2.0)
 			var clash := false
 			for other in taken:
 				if other.intersects(box):
 					clash = true
 					break
+			if not clash:
+				for other in above:
+					if other.intersects(box):
+						clash = true
+						break
 			if clash:
 				continue
 			taken.append(box)

@@ -9,6 +9,8 @@ var _keep := false
 var _busy := false
 var _error := ""
 var _check := {}
+var _picture_aspect := 0.0
+var _shape_edit: LineEdit
 
 
 func _init() -> void:
@@ -22,17 +24,25 @@ func setup(workshop: Workshop) -> void:
 		_options = reply["result"]
 		var current: Dictionary = _options.get("current", {})
 		_type = str(current.get("type", "mercator"))
-	var check := await host.request_raw("workshop.projection.check", {"type": _type, "shape": ""})
+	_picture_aspect = _aspect_of(str(_options.get("pictureFile", "")))
+	var check := await host.request_raw("workshop.projection.check", {"type": _type, "shape": "", "pictureAspect": _picture_aspect})
 	if check.get("ok", false):
 		_shape = str((check["result"] as Dictionary).get("shapeText", "2:1"))
 	await _recheck()
 
 
 func _recheck() -> void:
-	var reply := await host.request_raw("workshop.projection.check", {"type": _type, "shape": _shape})
+	var reply := await host.request_raw("workshop.projection.check", {"type": _type, "shape": _shape, "pictureAspect": _picture_aspect})
 	if reply.get("ok", false):
 		_check = reply["result"]
 	_render()
+
+
+func _aspect_of(file: String) -> float:
+	var image := Image.new()
+	if file.is_empty() or image.load(file) != OK or image.get_width() <= 0 or image.get_height() <= 0:
+		return 0.0
+	return float(image.get_width()) / float(image.get_height())
 
 
 func _note(text: String, warn := false) -> Label:
@@ -40,6 +50,8 @@ func _note(text: String, warn := false) -> Label:
 
 
 func _render() -> void:
+	var typing := _shape_edit != null and is_instance_valid(_shape_edit) and _shape_edit.has_focus()
+	_shape_edit = null
 	clear_body()
 	var freeform := str(_options.get("freeform", "freeform"))
 	var projections: Array = []
@@ -58,7 +70,23 @@ func _render() -> void:
 			_recheck(), 12.0, 28.0)
 		shape.custom_minimum_size.x = 110
 		shape.size_flags_horizontal = Control.SIZE_SHRINK_END
+		_shape_edit = shape
 		body.add_child(WorkshopUI.row("Shape (width : height)", shape))
+		if typing:
+			shape.grab_focus.call_deferred()
+			shape.caret_column = shape.text.length()
+		if _picture_aspect > 0.0:
+			var own := WorkshopUI.base_button("Use the picture's own shape")
+			var own_style := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.16), 7, 1, Vector4(8, 5, 8, 5))
+			WorkshopUI._flat_styles(own, own_style, UI.box(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.22), 7, 1, Vector4(8, 5, 8, 5)), own_style, own_style)
+			WorkshopUI._ink(own, Color(1, 1, 1), 12.0, 600)
+			own.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			own.pressed.connect(func() -> void:
+				var text := str(_check.get("pictureShape", ""))
+				if not text.is_empty():
+					_shape = text
+					_recheck())
+			body.add_child(own)
 		if not bool(_check.get("aspectOk", true)):
 			body.add_child(_note("Give the shape as width : height, such as 16:9 or 2:1.", true))
 	var offers_keep := bool(_options.get("hasPicture", false)) and _type != freeform and str(current.get("type", "")) != freeform
@@ -87,7 +115,17 @@ func _render() -> void:
 		_busy = true
 		_error = ""
 		_render()
-		var reply := await host.request("workshop.projection.convert", {"target": _check.get("chosen"), "keepPicture": offers_keep and _keep})
+		var args := {"target": _check.get("chosen"), "keepPicture": offers_keep and _keep}
+		var reply := await host.request("workshop.projection.convert", args)
+		if reply.get("redraw") is Dictionary:
+			var redrawn := await _redraw(args["target"], reply["redraw"])
+			if redrawn.has("error"):
+				reply = {"error": redrawn["error"]}
+			else:
+				args["redrawn"] = redrawn
+				reply = await host.request("workshop.projection.convert", args)
+		if not is_instance_valid(self):
+			return
 		_busy = false
 		_error = str(reply.get("error", ""))
 		var options := await host.request_raw("workshop.projection.options")
@@ -100,6 +138,53 @@ func _render() -> void:
 	body.add_child(WorkshopUI.row("Disable the 3D globe", WorkshopUI.toggle(current.get("globe") == false, func(off: bool) -> void: _view({"globe": not off}))))
 	body.add_child(WorkshopUI.row("Disable map looping", WorkshopUI.toggle(current.get("wrap") == false, func(off: bool) -> void: _view({"wrap": not off}))))
 	fit()
+
+
+func _redraw(target: Variant, spec: Dictionary) -> Dictionary:
+	var image := Image.new()
+	if image.load(str(spec.get("file", ""))) != OK or image.get_width() <= 0 or image.get_height() <= 0:
+		return {"error": "The basemap picture could not be read."}
+	if image.is_compressed():
+		image.decompress()
+	image.convert(Image.FORMAT_RGBA8)
+	var stamp := Time.get_ticks_usec()
+	var raw_file := OS.get_temp_dir().path_join("oh-redraw-%d.rgba" % stamp)
+	var out := FileAccess.open(raw_file, FileAccess.WRITE)
+	if out == null:
+		return {"error": error_string(FileAccess.get_open_error())}
+	out.store_buffer(image.get_data())
+	out.close()
+	var reply := await host.request_raw("workshop.projection.redraw", {"target": target, "rawFile": raw_file, "width": image.get_width(), "height": image.get_height()})
+	if not reply.get("ok", false):
+		return {"error": str(reply.get("error", "The basemap picture could not be redrawn."))}
+	var result: Dictionary = reply["result"]
+	if result.has("error"):
+		return {"error": str(result["error"])}
+	var width := int(result.get("width", 0))
+	var height := int(result.get("height", 0))
+	var drawn_file := str(result.get("rawFile", ""))
+	var bytes := FileAccess.get_file_as_bytes(drawn_file)
+	DirAccess.remove_absolute(drawn_file)
+	if width <= 0 or height <= 0 or bytes.size() != width * height * 4:
+		return {"error": "The basemap picture could not be redrawn."}
+	var drawn := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, bytes)
+	var jpeg := bool(result.get("jpeg", false))
+	var encoded := PackedByteArray()
+	if jpeg:
+		var flat := Image.create_empty(width, height, false, Image.FORMAT_RGBA8)
+		flat.fill(Color(0, 0, 0, 1))
+		flat.blend_rect(drawn, Rect2i(0, 0, width, height), Vector2i.ZERO)
+		flat.convert(Image.FORMAT_RGB8)
+		encoded = flat.save_jpg_to_buffer(0.92)
+	else:
+		encoded = drawn.save_png_to_buffer()
+	var file := OS.get_temp_dir().path_join("oh-redrawn-%d.%s" % [stamp, "jpg" if jpeg else "png"])
+	var written := FileAccess.open(file, FileAccess.WRITE)
+	if written == null:
+		return {"error": error_string(FileAccess.get_open_error())}
+	written.store_buffer(encoded)
+	written.close()
+	return {"file": file, "mime": "image/jpeg" if jpeg else "image/png", "aspect": result.get("aspect"), "bounds": result.get("bounds")}
 
 
 func _view(patch: Dictionary) -> void:

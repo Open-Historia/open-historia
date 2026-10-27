@@ -19,7 +19,6 @@ const INTERACTIVE_RENDER_PIXELS := 48000.0
 const EARTH_RADIUS_M := 6371008.8
 const MAX_TERRAIN_ELEVATION_M := 8849.0
 const TERRAIN_EXAGGERATION := 15.0
-const WHEEL_FACTOR := 1.15
 const MAP_LAYER_BIT := 2
 const LIGHT_LAYER := 3
 const FLAT_TEXTURE_SCALE := 1.75
@@ -236,9 +235,7 @@ var _sun_refreshed := -100000
 var _frame := {}
 var _flat := {}
 var _flat_size := Vector2i.ZERO
-var _dragging := false
-var _drag_distance := 0.0
-var _press_position := Vector2.ZERO
+var held := false
 var _saved_cull_mask := -1
 var _moving_until := 0
 
@@ -405,7 +402,7 @@ func _process(_delta: float) -> void:
 
 
 func _is_moving() -> bool:
-	if _dragging:
+	if held:
 		return true
 	var fly: Variant = map_view.get("_fly")
 	if fly is Tween and (fly as Tween).is_valid() and (fly as Tween).is_running():
@@ -989,60 +986,35 @@ func _zoom_around(screen: Vector2, delta_zoom: float) -> void:
 	_set_zoom(old_zoom + zoom_adjustment(old_center_lat, lonlat_of_world(map_view.camera.position).y))
 
 
-func handle_input(event: InputEvent) -> bool:
+func pan_by(delta: Vector2) -> void:
 	if not active:
-		return false
-	if event is InputEventMouseButton:
-		var button := event as InputEventMouseButton
-		if button.pressed:
-			mark_interaction()
-		if button.button_index == MOUSE_BUTTON_WHEEL_UP and button.pressed:
-			_zoom_around(button.position, log(WHEEL_FACTOR) / log(2.0))
-			_moved()
-			return true
-		if button.button_index == MOUSE_BUTTON_WHEEL_DOWN and button.pressed:
-			_zoom_around(button.position, -log(WHEEL_FACTOR) / log(2.0))
-			_moved()
-			return true
-		if button.button_index == MOUSE_BUTTON_LEFT:
-			if button.pressed:
-				_dragging = true
-				_drag_distance = 0.0
-				_press_position = button.position
-			else:
-				var was_dragging := _dragging
-				_dragging = false
-				if was_dragging and _drag_distance < 5.0:
-					if screen_hits_globe(button.position):
-						map_view.region_clicked.emit(map_view.baker.pick(screen_to_world(button.position)))
-					else:
-						map_view.region_clicked.emit(-1)
-			return true
-		if button.button_index == MOUSE_BUTTON_RIGHT or button.button_index == MOUSE_BUTTON_MIDDLE:
-			_dragging = button.pressed
-			_drag_distance = 99.0
-			return true
-		return false
-	if event is InputEventMouseMotion and _dragging:
-		var motion := event as InputEventMouseMotion
-		_drag_distance += motion.relative.length()
-		mark_interaction()
-		_pan(motion.relative)
-		_moved()
-		return true
-	if event is InputEventMagnifyGesture:
-		var magnify := event as InputEventMagnifyGesture
-		mark_interaction()
-		_zoom_around(magnify.position, log(maxf(magnify.factor, 0.0001)) / log(2.0))
-		_moved()
-		return true
-	if event is InputEventPanGesture:
-		var gesture := event as InputEventPanGesture
-		mark_interaction()
-		_pan(-gesture.delta * 12.0)
-		_moved()
-		return true
-	return false
+		return
+	_pan(delta)
+	_moved()
+
+
+func zoom_around(screen: Vector2, delta_zoom: float) -> void:
+	if not active or absf(delta_zoom) < 1e-9:
+		return
+	_zoom_around(screen, delta_zoom)
+	_moved()
+
+
+func zoom_limits() -> Vector2:
+	var lat := lonlat_of_world(map_view.camera.position).y
+	return Vector2(MIN_ZOOM_LEVEL + zoom_adjustment(0.0, lat), log(8.0 * MapView.MAX_ZOOM) / log(2.0))
+
+
+func centre_lonlat() -> Vector2:
+	return lonlat_of_world(map_view.camera.position)
+
+
+func set_centre_zoom(lonlat: Vector2, zoom: float) -> void:
+	if not active:
+		return
+	_set_center(lonlat.x, lonlat.y)
+	_set_zoom(zoom)
+	_moved()
 
 
 func _moved() -> void:

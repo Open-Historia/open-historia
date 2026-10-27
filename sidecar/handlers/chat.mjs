@@ -12,6 +12,12 @@ const FLAGCDN_URL = /^https?:\/\/flagcdn\.com\/(?:(?:[wh]\d+|\d+x\d+)\/)?([a-z]{
 
 export const register = (ctx) => {
   const { engine, emit, storage, clean, list, repo, cacheDir, addStandIn, standIn } = ctx;
+  const chatDirection = () => {
+    const ui = String(storage.getItem("ui_language") ?? "").trim() || "en";
+    const chat = String(storage.getItem("ai_chat_language") ?? "").trim() || ui;
+    if (chat === ui) return "";
+    return ["ar", "he", "fa", "ur"].includes(chat) ? "rtl" : "ltr";
+  };
   const copy = (value) => JSON.parse(JSON.stringify(value ?? null));
   const gs = engine.gameState;
   const threads = engine.chatThreads;
@@ -404,6 +410,7 @@ export const register = (ctx) => {
         generating: engine.simulationStatus.isChatGenerationLikely() === true,
         puppetMarkers: puppetMarkersFor(world, player),
         seen: readStored(SEEN_KEY),
+        chatDir: chatDirection(),
       };
     },
     "chat.seen.set": async ({ seen = {} } = {}) => writeStored(SEEN_KEY, seen),

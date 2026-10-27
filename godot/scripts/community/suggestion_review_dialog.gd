@@ -59,6 +59,16 @@ func _review_map() -> void:
 		if is_instance_valid(layer):
 			layer.queue_free())
 	workshop.call("setup", engine, {"tiles_cache": data_root.path_join("native-cache").path_join("tiles")})
+	workshop.connect("play_game", func(game_id: String) -> void:
+		var main := get_tree().root.get_node_or_null("Main")
+		close()
+		if main and main.has_method("_open_game"):
+			main.call("_open_game", game_id))
+	workshop.connect("failed", func(message: String) -> void:
+		_phase = "error"
+		_error = message
+		if is_instance_valid(self):
+			_render())
 	workshop.connect("review_saved", func(_record: Dictionary) -> void:
 		var again := await engine.request("community.review.open", {"scenarioId": scenario_id, "refId": _ref_id, "file": _file})
 		if is_instance_valid(self) and again.get("ok", false):

@@ -140,13 +140,14 @@ func state_applied(previous_owners: PackedInt32Array, previous_names: PackedStri
 		_canonical[region] = [colors.get_pixel(region % COLUMNS, region / COLUMNS), ids.get_pixel(region % COLUMNS, region / COLUMNS)]
 	var animate := _snapshot_colors != null and previous_owners.size() == count and count > 0 and _allowed()
 	var changes: Array[Dictionary] = []
+	var quiet: Dictionary = map_view.call("war_quiet_regions") if map_view.has_method("war_quiet_regions") else {}
 	if animate:
 		for index in range(count):
 			var before_slot := previous_owners[index]
 			var after_slot := owners[index]
 			var before := previous_names[before_slot] if before_slot >= 0 and before_slot < previous_names.size() else ""
 			var after := names[after_slot] if after_slot >= 0 and after_slot < names.size() else ""
-			if before == after or before.is_empty() or after.is_empty():
+			if before == after or before.is_empty() or after.is_empty() or quiet.has(index):
 				continue
 			var x := index % COLUMNS
 			var y := index / COLUMNS

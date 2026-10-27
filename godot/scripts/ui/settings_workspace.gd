@@ -44,18 +44,8 @@ const STATUS_COLORS := {
 }
 const EYE_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'/><circle cx='12' cy='12' r='3'/></svg>"
 const EYE_OFF_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/><line x1='1' y1='1' x2='23' y2='23'/></svg>"
-const NATIVE_UI_LANGUAGE := "The native app's interface is in English only for now."
-const NATIVE_NO_VAULT := "The native app opens without the vault door."
-const NATIVE_NO_DISCORD := "Discord is not reachable from the native app yet."
-const NATIVE_NO_AUDIO := "The native app plays no music or sound effects yet."
-const NATIVE_ONE_BASEMAP := "The native map draws one basemap for now."
-const NATIVE_NO_DETAILED := "Detailed maps are not in the native map yet."
-const NATIVE_NO_BROWSER := "The basemap browser is not in the native app yet."
-const NATIVE_NO_WEATHER := "The native map has no seasons or weather yet."
-const NATIVE_ONE_PATH := "The native map has one way of loading for now."
-const NATIVE_FLAT := "The native map is flat for now."
-const NATIVE_NO_GLOBE := "The native map has no globe to turn."
-const NATIVE_NO_RATING := "The native app shows no rating bar yet."
+const AUDIO_UNREADABLE := "The game's sound settings could not be read."
+const SYSTEM_MOTION_NOTE := "On, following your system setting for reduced motion."
 const NATIVE_NO_CANCEL := "The native engine cannot cancel every AI request yet."
 const PLACEHOLDER_VALUE := "__oh_placeholder__"
 
@@ -77,9 +67,11 @@ var _network: Variant = null
 var _cache: Variant = null
 var _music: Variant = null
 var _audio: Variant = null
-var _basemaps: Array = []
-var _shown_pick := ""
-var _live_basemaps := false
+var _choices := {}
+var _device := {}
+var _system_reduced := false
+var _detailed_downloading := false
+var _maps_browser: Node = null
 var _agent_folder := ""
 var _last_error := ""
 
@@ -466,23 +458,17 @@ func _build_nav() -> void:
 func _load_section_data() -> void:
 	match section:
 		"general":
-			pass
+			_system_reduced = await _system_motion()
 		"sound":
 			_audio = await _req("audio.settings.get")
 			_music = await _req("settings.music")
 		"map":
+			_system_reduced = await _system_motion()
+			var device: Variant = await _req("mapextras.deviceProfile")
+			_device = device if typeof(device) == TYPE_DICTIONARY else {}
 			if _for_game():
-				var background: Variant = await _req("mapextras.background", {"globe": false})
-				_live_basemaps = typeof(background) == TYPE_DICTIONARY and typeof((background as Dictionary).get("maps")) == TYPE_ARRAY
-				if _live_basemaps:
-					_basemaps = []
-					for entry: Variant in (background as Dictionary)["maps"]:
-						if typeof(entry) == TYPE_DICTIONARY:
-							_basemaps.append({"pick": str((entry as Dictionary).get("pick", "")), "label": str((entry as Dictionary).get("name", ""))})
-					_shown_pick = str((background as Dictionary).get("shownPick", ""))
-				else:
-					var maps: Variant = await _req("settings.basemaps")
-					_basemaps = (maps as Dictionary).get("maps", []) if typeof(maps) == TYPE_DICTIONARY else []
+				var choices: Variant = await _req("mapextras.basemapChoices")
+				_choices = choices if typeof(choices) == TYPE_DICTIONARY else {}
 		"ai":
 			await _load_fallback()
 			var requests: Variant = await _req("settings.requests")
@@ -1111,14 +1097,16 @@ func _build_general() -> void:
 	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
 	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
-	var reduced := _flag("map_disable_idle_rotation") and _flag("map_disable_event_camera")
+	var reduced := _system_reduced or (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
 	_add_toggle(access, "Reduce motion", reduced, func() -> void:
 		var next := not (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
 		var reply: Variant = await _req("settings.reduceMotion", {"value": next})
 		if typeof(reply) == TYPE_DICTIONARY:
 			_values = reply
 		setting_changed.emit("map_disable_idle_rotation", next)
-		setting_changed.emit("map_disable_event_camera", next))
+		setting_changed.emit("map_disable_event_camera", next), _system_reduced)
+	if _system_reduced:
+		_add_toggle_note(access, SYSTEM_MOTION_NOTE)
 	var policy := _button("Privacy policy", func() -> void: OS.shell_open(PRIVACY_URL), "privacy")
 	var privacy := _section("Privacy", "What the game tells other services about you, and the switches for it.", policy)
 	_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
@@ -1280,9 +1268,9 @@ func _build_sound() -> void:
 	var effects_on := bool(audio.get("effects", _flag("audio_sound_effects")))
 	var effects := _add_toggle(sound, "Sound effects", effects_on, func() -> void: _audio_set({"effects": not effects_on}))
 	if not audio_ready:
-		_dim(music, NATIVE_NO_AUDIO)
-		_dim(volume_row, NATIVE_NO_AUDIO)
-		_dim(effects, NATIVE_NO_AUDIO)
+		_dim(music, AUDIO_UNREADABLE)
+		_dim(volume_row, AUDIO_UNREADABLE)
+		_dim(effects, AUDIO_UNREADABLE)
 	if typeof(_music) == TYPE_DICTIONARY and typeof((_music as Dictionary).get("usage")) == TYPE_DICTIONARY:
 		var usage: Dictionary = (_music as Dictionary)["usage"]
 		var count := int(usage.get("tracks", 0))
@@ -1353,25 +1341,7 @@ func _build_map() -> void:
 	_gap(presentation, 14.4)
 	var basemap := _section("Basemap", "The flat map drawn under the countries.")
 	if _for_game():
-		var group := VBoxContainer.new()
-		group.add_theme_constant_override("separation", 0)
-		group.add_child(_field_label("Basemap"))
-		_gap(group, 6.4)
-		var options: Array = []
-		for map: Dictionary in _basemaps:
-			options.append([str(map.get("pick", "")), str(map.get("label", ""))])
-		var only := options.size() <= 1
-		group.add_child(_select(options, _shown_pick, func(value: String) -> void:
-			if not _live_basemaps:
-				return
-			_shown_pick = value
-			await _req("mapextras.setGamePick", {"pick": value})
-			setting_changed.emit("gamePick", value)))
-		_add_helper(group, "This scenario has one map." if only else "The maps this scenario offers. Your pick is kept for this game only, and applies at once.")
-		_gap(group, 14.4)
-		basemap.add_child(group)
-		if not _live_basemaps:
-			_dim(group, NATIVE_ONE_BASEMAP)
+		basemap.add_child(_game_basemap_field())
 	else:
 		var use_default := _flag("map_basemap_default_on")
 		var stored := str(_values.get("defaultBasemap", ""))
@@ -1404,16 +1374,20 @@ func _build_map() -> void:
 		var note := _add_helper(detailed, "On: a detailed map is drawn when you have it. Off, in every game: the drawn map under it, which is lighter.", 0.0)
 		_pull_up(detailed, 0)
 		note.modulate.a = 1.0
+	else:
+		var download := _detailed_download_field()
+		if download:
+			detailed.add_child(download)
 	var browse_group := VBoxContainer.new()
 	browse_group.add_theme_constant_override("separation", 0)
-	var browse := _button("Browse and download maps…", Callable())
+	var browse := _button("Browse and download maps…", _open_maps_browser)
 	browse.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	browse.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 8, 1, Vector4(12, 8.8, 12, 8.8)))
-	browse.add_theme_stylebox_override("disabled", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 8, 1, Vector4(12, 8.8, 12, 8.8)))
+	browse.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.16), 8, 1, Vector4(12, 8.8, 12, 8.8)))
+	browse.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.16), 8, 1, Vector4(12, 8.8, 12, 8.8)))
 	browse.add_theme_font_override("font", UI.font(400))
 	browse.add_theme_font_size_override("font_size", _fs(0.82))
 	browse_group.add_child(browse)
-	_dim(browse, NATIVE_NO_BROWSER)
 	_add_helper(browse_group, "Your basemaps and detailed maps, and the community's. To use one in a scenario, open that scenario in the Map Editor.")
 	_gap(browse_group, 14.4)
 	detailed.add_child(browse_group)
@@ -1460,12 +1434,21 @@ func _build_map() -> void:
 	var modes: Array = []
 	for mode: Array in PERFORMANCE_MODES:
 		modes.append([mode[0], mode[1]])
-	performance.add_child(_select(modes, str(_values.get("deviceProfile", "")), func(_value: String) -> void: pass))
+	var current_mode := str(_device.get("mode", _values.get("deviceProfile", "")))
+	var running_line: Label
+	var mode_select := _select(modes, current_mode, func(value: String) -> void:
+		var reply: Variant = await _req("mapextras.deviceProfile", {"value": value})
+		if typeof(reply) == TYPE_DICTIONARY:
+			_device = reply
+			_values["deviceProfile"] = str((reply as Dictionary).get("mode", ""))
+			if is_instance_valid(running_line):
+				running_line.text = _running_text())
+	mode_select.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	performance.add_child(mode_select)
 	_add_helper(performance, "Auto picks Low memory in the Android app, on a touch screen with no mouse, and on a device with 4 GB of memory or less: the map loads in smaller steps with fewer workers. Full is faster on a strong tablet, and Low memory can steady a weak computer. A change applies after the game is reloaded.")
-	_add_helper(performance, "Running now: Low memory." if str(_values.get("deviceProfile", "")) == "constrained" else "Running now: Full.")
+	running_line = _add_helper(performance, _running_text())
 	_gap(performance, 14.4)
 	labels.add_child(performance)
-	_dim(performance, NATIVE_ONE_PATH)
 	var three := _section("3D map", "Globe and terrain rendering are presentation features; they do not change world state.")
 	var pill_row := HBoxContainer.new()
 	var pill := PanelContainer.new()
@@ -1474,19 +1457,117 @@ func _build_map() -> void:
 	pill_row.add_child(pill)
 	three.add_child(pill_row)
 	_gap(three, 9.6)
-	var globe := _add_toggle(three, "3D Globe", bool(_values.get("globe", false)), func() -> void:
+	var no_globe := _for_game() and bool(_choices.get("noGlobe", false))
+	_add_toggle(three, "3D Globe", bool(_values.get("globe", false)) and not no_globe, func() -> void:
 		var next := not bool(_values.get("globe", false))
 		_values["globe"] = next
 		_req("settings.window", {"key": "Globe", "value": next})
-		setting_changed.emit("Globe", next))
+		setting_changed.emit("Globe", next), no_globe, "The 3D globe is disabled for this scenario's map." if no_globe else "")
 	_add_toggle(three, "3D Terrain", bool(_values.get("terrain", true)), func() -> void:
 		var next := not bool(_values.get("terrain", true))
 		_values["terrain"] = next
 		_req("settings.window", {"key": "Terrain", "value": next})
 		setting_changed.emit("Terrain", next))
 	var camera := _section("Camera behavior", "Fine-grained controls for automatic map movement.")
-	_add_toggle(camera, "Disable idle globe rotation", _flag("map_disable_idle_rotation"), func() -> void: _set_flag("map_disable_idle_rotation", not _flag("map_disable_idle_rotation")))
-	_add_toggle(camera, "Disable camera movement during events", _flag("map_disable_event_camera"), func() -> void: _set_flag("map_disable_event_camera", not _flag("map_disable_event_camera")))
+	_add_toggle(camera, "Disable idle globe rotation", _system_reduced or _flag("map_disable_idle_rotation"), func() -> void: _set_flag("map_disable_idle_rotation", not _flag("map_disable_idle_rotation")), _system_reduced)
+	_add_toggle(camera, "Disable camera movement during events", _system_reduced or _flag("map_disable_event_camera"), func() -> void: _set_flag("map_disable_event_camera", not _flag("map_disable_event_camera")), _system_reduced)
+	if _system_reduced:
+		_add_toggle_note(camera, SYSTEM_MOTION_NOTE)
+
+
+func _running_text() -> String:
+	return "Running now: Low memory." if bool(_device.get("running", false)) else "Running now: Full."
+
+
+func _game_basemap_field() -> VBoxContainer:
+	var group := VBoxContainer.new()
+	group.add_theme_constant_override("separation", 0)
+	group.add_child(_field_label("Basemap"))
+	_gap(group, 6.4)
+	var options: Array = []
+	var header := 0
+	for entry: Variant in _choices.get("options", []):
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var option: Dictionary = entry
+		if option.has("header"):
+			header += 1
+			options.append(["__group_%d" % header, str(option["header"]), true])
+		else:
+			options.append([str(option.get("pick", "")), str(option.get("label", ""))])
+	var only := bool(_choices.get("only", options.size() <= 1))
+	var select := _select(options, str(_choices.get("shownPick", "")), func(value: String) -> void:
+		if value.begins_with("__group_"):
+			return
+		_choices["shownPick"] = value
+		await _req("mapextras.setGamePick", {"pick": value})
+		setting_changed.emit("gamePick", value)
+		_refresh_choices())
+	if only:
+		select.disabled = true
+		select.modulate.a = 0.6
+		select.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN
+	group.add_child(select)
+	_add_helper(group, "This scenario has one map." if only else "The maps this scenario offers. Your pick is kept for this game only, and applies at once.")
+	_gap(group, 14.4)
+	return group
+
+
+func _refresh_choices() -> void:
+	var choices: Variant = await _req("mapextras.basemapChoices")
+	if typeof(choices) == TYPE_DICTIONARY:
+		_choices = choices
+		_rerender()
+
+
+func _detailed_download_field() -> Control:
+	var offers: Array = _choices.get("offers", []) if typeof(_choices.get("offers")) == TYPE_ARRAY else []
+	if offers.is_empty():
+		return null
+	var group := VBoxContainer.new()
+	group.add_theme_constant_override("separation", 0)
+	if _detailed_downloading:
+		var offer := DetailedMapsOffer.new()
+		offer.title = "Download detailed maps"
+		offer.intro = "Large terrain maps, sharp up close. Each downloads once, and every scenario on it shares it. Your basemap pick stays as it is."
+		group.add_child(offer)
+		offer.setup_list(engine, offers)
+		offer.done.connect(func() -> void:
+			_detailed_downloading = false
+			await _refresh_choices()
+			setting_changed.emit("gamePick", str(_choices.get("shownPick", ""))))
+	else:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		var line := _helper(str(_choices.get("line", "")))
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(line)
+		row.add_child(_button("Download…", func() -> void:
+			_detailed_downloading = true
+			_rerender()))
+		group.add_child(row)
+	_gap(group, 14.4)
+	return group
+
+
+func _open_maps_browser() -> void:
+	if _maps_browser and is_instance_valid(_maps_browser):
+		return
+	var browser := MapsBrowser.new()
+	_maps_browser = browser
+	get_tree().root.add_child(browser)
+	browser.setup(engine, export_dir)
+	browser.closed.connect(func() -> void:
+		_maps_browser = null
+		if _for_game():
+			await _refresh_choices()
+			setting_changed.emit("gamePick", str(_choices.get("shownPick", ""))))
+
+
+func _system_motion() -> bool:
+	var reply: Variant = await _req("mapextras.systemMotion")
+	return typeof(reply) == TYPE_DICTIONARY and bool((reply as Dictionary).get("reduced", false))
 
 
 func _entries() -> Array:

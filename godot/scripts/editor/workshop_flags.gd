@@ -3,8 +3,6 @@ extends WorkshopOverlay
 
 const MIN_CARD := 128.0
 const GAP := 11.0
-const COMMUNITY_REASON := "The community's flags are not in the native Workshop yet."
-const SHARE_REASON := "Sharing a flag with the community is not in the native Workshop yet."
 
 var host: Workshop
 var polity_key := ""
@@ -15,6 +13,15 @@ var _error := ""
 var _queue: Array = []
 var _serial := 0
 var _remove_holder: Control
+var _tab := "mine"
+var _tab_buttons := {}
+var _community: Array = []
+var _community_loading := false
+var _community_loaded := false
+var _community_error := ""
+var _community_notice := ""
+var _hub_url := ""
+var _busy_id := ""
 
 
 func _init() -> void:
@@ -31,10 +38,12 @@ func setup(workshop: Workshop, key: String) -> void:
 
 func _build_header() -> void:
 	title("Flags — %s" % polity_key if not polity_key.is_empty() else "Flags")
-	header.add_child(WorkshopOverlay.tab_button("In the game", true, Color(0, 0, 0, 0.5), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.12), Vector4(13, 6, 13, 6), 400))
-	var community := WorkshopOverlay.tab_button("Community", false, Color(0, 0, 0, 0.5), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.12), Vector4(13, 6, 13, 6), 400)
-	UI.set_disabled_look(community, COMMUNITY_REASON)
-	header.add_child(community)
+	for pair in [["mine", "In the game"], ["community", "Community"]]:
+		var id: String = pair[0]
+		var tab := WorkshopOverlay.tab_button(str(pair[1]), id == _tab, Color(0, 0, 0, 0.5), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.12), Vector4(13, 6, 13, 6), 400)
+		tab.pressed.connect(func() -> void: _set_tab(id))
+		_tab_buttons[id] = tab
+		header.add_child(tab)
 	var search := LineEdit.new()
 	search.placeholder_text = "Search…"
 	search.custom_minimum_size = Vector2(144, 30)
@@ -179,6 +188,10 @@ func _render() -> void:
 		var error := WorkshopOverlay.dim_text(_error, Color("#fecaca"))
 		body.add_child(error)
 		body.add_child(WorkshopOverlay.gap(10))
+	if _tab == "community":
+		_render_community()
+		_layout()
+		return
 	if _catalog.is_empty():
 		_layout()
 		return
@@ -189,7 +202,7 @@ func _render() -> void:
 	for entry in mine:
 		var flag: Dictionary = entry
 		if bool(flag.get("community", false)) and not str(flag.get("dataUrl", "")).is_empty():
-			community_by_image[str(flag["dataUrl"])] = true
+			community_by_image[str(flag["dataUrl"])] = str(flag.get("communityUrl", "")) if flag.get("communityUrl") != null else ""
 	var suggested: Variant = _catalog.get("suggested")
 	if suggested is Dictionary and q.is_empty():
 		var row: Dictionary = suggested
@@ -205,7 +218,8 @@ func _render() -> void:
 		for entry in in_map:
 			var row: Dictionary = entry
 			var value := str(row.get("value", ""))
-			grid.add_child(_card(str(row.get("code", "")), "uploaded", value, str(row.get("file", "")), current != null and str(current) == value, value, value.begins_with("data:"), community_by_image.has(value), false))
+			var map_code := str(row.get("code", ""))
+			grid.add_child(_card(map_code, "uploaded", value, str(row.get("file", "")), current != null and str(current) == value, value, value.begins_with("data:"), community_by_image.has(value), false, {"name": "%s flag" % map_code, "polity": map_code, "dataUrl": value}, str(community_by_image.get(value, ""))))
 		body.add_child(grid)
 		body.add_child(WorkshopOverlay.gap(16))
 	if not mine.is_empty():
@@ -218,7 +232,8 @@ func _render() -> void:
 				continue
 			var value := str(flag.get("dataUrl", ""))
 			var code := str(flag.get("code", "")) if flag.get("code") != null else ""
-			var card := _card(str(flag.get("name", "")), code if not code.is_empty() else "saved", value, str(flag.get("file", "")), current != null and str(current) == value, value, value.begins_with("data:"), bool(flag.get("community", false)), true)
+			var share := {"name": str(flag.get("name", "")), "polity": str(flag.get("polity", "")) if flag.get("polity") != null else "", "code": code, "dataUrl": value, "author": str(flag.get("author", ""))}
+			var card := _card(str(flag.get("name", "")), code if not code.is_empty() else "saved", value, str(flag.get("file", "")), current != null and str(current) == value, value, value.begins_with("data:"), bool(flag.get("community", false)), true, share, str(flag.get("communityUrl", "")) if flag.get("communityUrl") != null else "")
 			card.set_meta("flag", flag)
 			grid.add_child(card)
 		body.add_child(grid)
@@ -244,7 +259,7 @@ func _render() -> void:
 	_layout()
 
 
-func _card(name: String, subtitle: String, image_value: String, file: String, active: bool, pick_value: String, can_publish: bool, from_community: bool, deletable: bool) -> MarginContainer:
+func _card(name: String, subtitle: String, image_value: String, file: String, active: bool, pick_value: String, can_publish: bool, from_community: bool, deletable: bool, share_fields := {}, community_url := "") -> MarginContainer:
 	var root := MarginContainer.new()
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -319,17 +334,25 @@ func _card(name: String, subtitle: String, image_value: String, file: String, ac
 			if flag is Dictionary:
 				_delete(flag))
 	if from_community:
-		var tag := WorkshopOverlay.badge("Community", Color(0, 0, 0, 0.6), 999, 9.6, Vector4(7, 2, 7, 2), Color(1, 1, 1, 0.2))
-		tag.tooltip_text = "Installed from the community hub"
-		tag.mouse_filter = Control.MOUSE_FILTER_PASS
-		WorkshopOverlay.pin(tag, layer, "bottom-left")
+		var source := WorkshopUI.base_button("Community ↗" if not community_url.is_empty() else "Community")
+		var source_style := UI.box(Color(0, 0, 0, 0.6), Color(1, 1, 1, 0.2), 999, 1, Vector4(7, 2, 7, 2))
+		WorkshopUI._flat_styles(source, source_style, source_style, source_style, source_style)
+		WorkshopUI._ink(source, Color(1, 1, 1), 9.6, 700)
+		source.tooltip_text = "Installed from the community hub. Open its post" if not community_url.is_empty() else "Installed from the community hub"
+		if community_url.is_empty():
+			source.mouse_filter = Control.MOUSE_FILTER_PASS
+			source.mouse_default_cursor_shape = Control.CURSOR_ARROW
+		else:
+			source.pressed.connect(func() -> void: host.open_url(community_url))
+		WorkshopOverlay.pin(source, layer, "bottom-left")
 	elif can_publish:
 		var share := WorkshopUI.base_button("⤴")
 		var share_style := UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 6, 0, Vector4(5, 2, 5, 2))
 		WorkshopUI._flat_styles(share, share_style, share_style, share_style, share_style)
 		WorkshopUI._ink(share, Color(1, 1, 1), 11.0, 400)
+		share.tooltip_text = "Share this flag with the community"
+		share.pressed.connect(func() -> void: _share(share_fields))
 		WorkshopOverlay.pin(share, layer, "bottom-left")
-		UI.set_disabled_look(share, SHARE_REASON)
 	root.gui_input.connect(func(event: InputEvent) -> void:
 		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
 			if pick_value.is_empty():
@@ -337,6 +360,236 @@ func _card(name: String, subtitle: String, image_value: String, file: String, ac
 			else:
 				_pick(pick_value))
 	return root
+
+
+func _set_tab(id: String) -> void:
+	_tab = id
+	for key in _tab_buttons:
+		var button: Button = _tab_buttons[key]
+		var style := UI.box(Color(0, 0, 0, 0.5) if key == id else Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 999, 1, Vector4(13, 6, 13, 6))
+		WorkshopUI._flat_styles(button, style, style, style, style)
+	if id == "community" and not _community_loaded and not _community_loading:
+		_load_community(false)
+	_render()
+
+
+func _load_community(force: bool) -> void:
+	_community_loading = true
+	_community_error = ""
+	_render()
+	var reply := await host.request_raw("workshop.flags.community", {"force": force})
+	if not is_instance_valid(self):
+		return
+	_community_loading = false
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {"error": str(reply.get("error", "Could not load community flags."))}
+	if result.has("error"):
+		_community_error = str(result["error"])
+	else:
+		_community = result.get("posts", [])
+		_hub_url = str(result.get("hubUrl", ""))
+		_community_loaded = true
+	_render()
+
+
+func _tool_button(text: String, bg := Color(1, 1, 1, 0.06), radius := 999) -> Button:
+	var node := WorkshopUI.base_button(text)
+	var style := UI.box(bg, Color(1, 1, 1, 0.12) if radius == 999 else Color(1, 1, 1, 0.14), radius, 1, Vector4(13, 6, 13, 6) if radius == 999 else Vector4(11, 6, 11, 6))
+	WorkshopUI._flat_styles(node, style, UI.box(Color(bg.r, bg.g, bg.b, minf(1.0, bg.a + 0.06)), Color(1, 1, 1, 0.2), radius, 1, Vector4(13, 6, 13, 6) if radius == 999 else Vector4(11, 6, 11, 6)), style, style)
+	WorkshopUI._ink(node, Color(1, 1, 1), 13.0, 400)
+	node.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return node
+
+
+func _render_community() -> void:
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 8)
+	var share := _tool_button("⬆ Share a flag", Color(1, 1, 1, 0.1), 8)
+	share.tooltip_text = "Opens the hub's flag form — drag your image in and submit"
+	share.pressed.connect(_share_form)
+	bar.add_child(share)
+	var hub := _tool_button("Open hub ↗")
+	hub.pressed.connect(func() -> void:
+		if not _hub_url.is_empty():
+			host.open_url(_hub_url))
+	bar.add_child(hub)
+	var refresh := _tool_button("↻ Refresh")
+	refresh.pressed.connect(func() -> void: _load_community(true))
+	bar.add_child(refresh)
+	body.add_child(bar)
+	body.add_child(WorkshopOverlay.gap(10))
+	if not _community_error.is_empty():
+		body.add_child(WorkshopOverlay.dim_text(_community_error, Color("#fecaca")))
+		body.add_child(WorkshopOverlay.gap(8))
+	if not _community_notice.is_empty():
+		body.add_child(WorkshopOverlay.dim_text(_community_notice, Color("#86efac")))
+		body.add_child(WorkshopOverlay.gap(8))
+	var q := _query.strip_edges().to_lower()
+	var shown: Array = []
+	for entry in _community:
+		var post: Dictionary = entry
+		var haystack := ("%s %s %s %s" % [str(post.get("title", "")), str(post.get("author", "")), str(post.get("code", "")), str(post.get("polity", ""))]).to_lower()
+		if q.is_empty() or haystack.contains(q):
+			shown.append(post)
+	if _community_loading:
+		body.add_child(WorkshopOverlay.dim_text("Loading community flags…", Color(1, 1, 1, 0.6)))
+		return
+	if shown.is_empty():
+		body.add_child(WorkshopOverlay.dim_text("No community flags yet — “⬆ Share a flag” posts one to the hub for everyone." if _community.is_empty() else "No community flag matches “%s”." % _query, Color(1, 1, 1, 0.6)))
+		return
+	var saved_by_post := {}
+	for entry in _catalog.get("mine", []):
+		var flag: Dictionary = entry
+		if bool(flag.get("community", false)) and flag.get("communityUrl") != null and not str(flag.get("communityUrl", "")).is_empty() and not str(flag.get("dataUrl", "")).is_empty():
+			saved_by_post[str(flag["communityUrl"])] = flag
+	var grid := _grid()
+	for post in shown:
+		grid.add_child(_community_card(post, saved_by_post))
+	body.add_child(grid)
+
+
+func _community_card(post: Dictionary, saved_by_post: Dictionary) -> PanelContainer:
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 10, 1, Vector4(1, 1, 1, 1)))
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	card.add_child(column)
+	var image_box := PanelContainer.new()
+	var image_style := UI.box(Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 0, 0)
+	image_style.corner_radius_top_left = 9
+	image_style.corner_radius_top_right = 9
+	image_box.add_theme_stylebox_override("panel", image_style)
+	image_box.custom_minimum_size.y = floorf(_card_width() * 2.0 / 3.0)
+	var picture := TextureRect.new()
+	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	image_box.add_child(picture)
+	var layer := Control.new()
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	image_box.add_child(layer)
+	column.add_child(image_box)
+	var picture_url := str(post.get("pictureUrl", ""))
+	if picture_url.is_empty():
+		picture.texture = WorkshopUI.icon("flag", 32, Color(1, 1, 1, 0.6))
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	else:
+		_ensure_images()
+		HubImages.fetch(self, picture_url, func(texture: Variant) -> void:
+			if is_instance_valid(picture) and texture is Texture2D:
+				picture.texture = texture)
+	var from_scenario := bool(post.get("fromScenario", false))
+	var count := int(post.get("flagCount", 0))
+	if from_scenario:
+		WorkshopOverlay.pin(WorkshopOverlay.badge("%d flag%s · scenario" % [count, "" if count == 1 else "s"], Color(1, 1, 1, 0.28), 6, 9.9, Vector4(5, 2, 5, 2)), layer, "top-left")
+	var texts := MarginContainer.new()
+	for pair in [["margin_left", 8], ["margin_right", 8], ["margin_top", 6], ["margin_bottom", 8]]:
+		texts.add_theme_constant_override(pair[0], pair[1])
+	var lines := VBoxContainer.new()
+	lines.add_theme_constant_override("separation", 1)
+	var heading := UI.label(("✓ " if bool(post.get("official", false)) else "") + str(post.get("title", "")), 12, Color(1, 1, 1), 700)
+	heading.clip_text = true
+	heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	heading.custom_minimum_size.x = 40
+	if bool(post.get("official", false)):
+		heading.tooltip_text = "Posted by the project"
+		heading.mouse_filter = Control.MOUSE_FILTER_PASS
+	lines.add_child(heading)
+	var byline := UI.label("by %s" % str(post.get("author", "")), 11, Color(1, 1, 1, 0.55))
+	byline.clip_text = true
+	byline.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	byline.custom_minimum_size.x = 40
+	lines.add_child(byline)
+	var id := str(post.get("id", ""))
+	var url := str(post.get("url", "")) if post.get("url") != null else ""
+	var saved: Variant = saved_by_post.get(url) if not url.is_empty() else null
+	var busy := _busy_id == id
+	var label := ("Adding…" if from_scenario else "Applying…") if busy else ("⬇ Add %d flag%s" % [count, "" if count == 1 else "s"] if from_scenario else "Use this flag")
+	var action := _tool_button(label)
+	action.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action.clip_text = true
+	action.custom_minimum_size.x = 40
+	action.disabled = busy
+	if from_scenario:
+		action.tooltip_text = "Save this scenario's custom flags into My flags"
+	elif saved is Dictionary:
+		action.tooltip_text = "Already in My flags, so it is used from there"
+	action.pressed.connect(func() -> void:
+		if from_scenario:
+			_install_pack(post)
+		elif saved is Dictionary:
+			_pick(str((saved as Dictionary).get("dataUrl", "")))
+		else:
+			_use_post(post))
+	var gap := Control.new()
+	gap.custom_minimum_size.y = 5
+	lines.add_child(gap)
+	lines.add_child(action)
+	texts.add_child(lines)
+	column.add_child(texts)
+	return card
+
+
+func _ensure_images() -> void:
+	if not HubImages.cache_dir.is_empty():
+		return
+	var tiles := str(host.context.get("tiles_cache", ""))
+	if not tiles.is_empty():
+		HubImages.use_data_root(tiles.get_base_dir().get_base_dir())
+
+
+func _use_post(post: Dictionary) -> void:
+	_busy_id = str(post.get("id", ""))
+	_community_error = ""
+	_render()
+	var reply := await host.request_raw("workshop.flags.useCommunity", {"postId": _busy_id})
+	if not is_instance_valid(self):
+		return
+	_busy_id = ""
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {"error": str(reply.get("error", "Could not download that flag."))}
+	if result.has("error"):
+		_community_error = str(result["error"])
+		_render()
+		return
+	await _pick(str(result.get("dataUrl", "")))
+
+
+func _install_pack(post: Dictionary) -> void:
+	_busy_id = str(post.get("id", ""))
+	_community_error = ""
+	_community_notice = ""
+	_render()
+	var reply := await host.request_raw("workshop.flags.installPack", {"postId": _busy_id})
+	if not is_instance_valid(self):
+		return
+	_busy_id = ""
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {"error": str(reply.get("error", "Could not install that flag pack."))}
+	if result.has("error"):
+		_community_error = str(result["error"])
+	else:
+		_community_notice = str(result.get("notice", ""))
+	await _load()
+
+
+func _share_form() -> void:
+	var reply := await host.request_raw("workshop.flags.shareForm", {"name": ("%s flag" % polity_key) if not polity_key.is_empty() else "", "author": str(_catalog.get("author", "")), "polity": polity_key})
+	if reply.get("ok", false) and reply["result"] is Dictionary:
+		host.open_url(str((reply["result"] as Dictionary).get("url", "")))
+
+
+func _share(fields: Dictionary) -> void:
+	var args := fields.duplicate()
+	if str(args.get("author", "")).is_empty():
+		args["author"] = str(_catalog.get("author", ""))
+	var reply := await host.request_raw("workshop.flags.share", args)
+	if not is_instance_valid(self):
+		return
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {"error": "Could not prepare that flag for sharing: %s" % str(reply.get("error", ""))}
+	if result.has("error"):
+		await host.alert(str(result["error"]))
+		return
+	host.open_url(str(result.get("url", "")))
+	await host.alert(str(result.get("message", "")))
 
 
 func _process(_delta: float) -> void:

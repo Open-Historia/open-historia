@@ -17,6 +17,10 @@ const SHADE_COLOURS := [
 	Color(210 / 255.0, 53 / 255.0, 61 / 255.0, 0.4),
 ]
 const CASING := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.82)
+const HALO := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.92)
+const SYMBOL_SPACING := 250.0
+const TILE_PX := 512.0
+const TEXT_PADDING := 2.0
 const FLEET_COLOURS := {"fleet": Color("#c9a54c"), "picked": Color("#e9b949"), "course": Color("#f4f7fb")}
 
 var map: MapView
@@ -26,6 +30,10 @@ var _held: Dictionary = {}
 var _draft: Variant = null
 var _fitted := ""
 var _seen := Vector3.ZERO
+var last_labels := PackedStringArray()
+var label_rects: Array[Rect2] = []
+var _taken: Array[Rect2] = []
+var _war_seen: Array[Rect2] = []
 
 
 func _init() -> void:
@@ -56,6 +64,7 @@ func _on_store(keys: PackedStringArray) -> void:
 		_draft = null
 	if "open" in keys and not bool(store.value("open")):
 		_fitted = ""
+		_publish([])
 	if "fit" in keys or "open" in keys or "battlefield" in keys:
 		_fit_if_asked()
 	queue_redraw()
@@ -69,6 +78,8 @@ func _process(_delta: float) -> void:
 	var seen := Vector3(centre.x, centre.y, float(view[1]))
 	if seen != _seen:
 		_seen = seen
+		queue_redraw()
+	elif map.war_label_rects != _war_seen:
 		queue_redraw()
 
 
@@ -169,13 +180,38 @@ func _zoom_value(stops: Array) -> float:
 
 
 func _draw() -> void:
+	last_labels = PackedStringArray()
 	if not map or not store or not bool(store.value("open")):
+		_publish([])
 		return
+	_war_seen = map.war_label_rects.duplicate()
+	_taken = _war_seen.duplicate()
+	var plan_labels := _place_plan_labels()
+	var line_labels := _place_line_labels()
+	var own: Array[Rect2] = []
+	for index in range(_war_seen.size(), _taken.size()):
+		own.append(_taken[index])
+	_publish(own)
 	_draw_shade()
-	_draw_lines()
+	_draw_lines(line_labels)
 	_draw_plans()
+	_draw_plan_labels(plan_labels)
 	_draw_fleets()
 	_draw_tool()
+
+
+func _publish(rects: Array[Rect2]) -> void:
+	label_rects = rects
+	if map:
+		map.room_set_label_rects(rects)
+
+
+func _fits(boxes: Array[Rect2]) -> bool:
+	for box in boxes:
+		for other in _taken:
+			if other.intersects(box):
+				return false
+	return true
 
 
 func _draw_shade() -> void:
@@ -207,13 +243,171 @@ func _casing_width(level: int) -> float:
 	return _zoom_value([[3, 3.0 + 0.22 * level], [8, 4.5 + 0.5 * level]])
 
 
-func _draw_lines() -> void:
+func _draw_lines(labels: Array) -> void:
+	for entry in labels:
+		_draw_text_at(entry[0], float(entry[1]), str(entry[2]), entry[3], int(entry[4]))
 	var draft: Variant = store.value("draft")
 	if draft is Array and (draft as Array).size() >= 2:
 		var level := int(store.value("level"))
 		var points := _project_way(draft)
 		_draw_round_polyline(points, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.8), _casing_width(level))
 		_draw_dots(points, WarRoomWords.line_colour(level), _line_width(level), 0.3, 1.6)
+
+
+func _world_way(points: Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var shift := 0.0
+	for index in range(points.size()):
+		var lng := float(points[index][0])
+		var world := MapView.CityLayer.ohproject(lng, float(points[index][1]))
+		world.x = (lng + 180.0) / 360.0 * MapView.WORLD_WIDTH
+		if index == 0:
+			shift = MapView.WORLD_WIDTH * round((map.camera.position.x - world.x) / MapView.WORLD_WIDTH)
+		out.append(world + Vector2(shift, 0))
+	return out
+
+
+static func _clip_pieces(line: PackedVector2Array, box: Rect2) -> Array:
+	var pieces: Array = []
+	var current := PackedVector2Array()
+	for index in range(line.size() - 1):
+		var a := line[index]
+		var b := line[index + 1]
+		var t0 := 0.0
+		var t1 := 1.0
+		var d := b - a
+		var inside := true
+		for edge in [[-d.x, a.x - box.position.x], [d.x, box.end.x - a.x], [-d.y, a.y - box.position.y], [d.y, box.end.y - a.y]]:
+			var p: float = edge[0]
+			var q: float = edge[1]
+			if absf(p) < 1e-12:
+				if q < 0.0:
+					inside = false
+					break
+				continue
+			var r := q / p
+			if p < 0.0:
+				t0 = maxf(t0, r)
+			else:
+				t1 = minf(t1, r)
+			if t0 > t1:
+				inside = false
+				break
+		if not inside:
+			if current.size() >= 2:
+				pieces.append(current)
+			current = PackedVector2Array()
+			continue
+		var start := a + d * t0
+		var finish := a + d * t1
+		if current.is_empty() or t0 > 0.0:
+			if current.size() >= 2:
+				pieces.append(current)
+			current = PackedVector2Array([start])
+		current.append(finish)
+		if t1 < 1.0:
+			pieces.append(current)
+			current = PackedVector2Array()
+	if current.size() >= 2:
+		pieces.append(current)
+	return pieces
+
+
+static func _anchors(line: PackedVector2Array, offset: float, spacing: float, label_length: float, continued: bool, middle: bool, extent: float) -> Array:
+	var total := 0.0
+	for index in range(1, line.size()):
+		total += line[index].distance_to(line[index - 1])
+	var half := label_length / 2.0
+	var distance := 0.0
+	var marked := offset - spacing
+	var found: Array = []
+	for index in range(line.size() - 1):
+		var a := line[index]
+		var b := line[index + 1]
+		var segment := a.distance_to(b)
+		while marked + spacing < distance + segment:
+			marked += spacing
+			var at := a.lerp(b, (marked - distance) / segment)
+			if at.x >= 0.0 and at.x < extent and at.y >= 0.0 and at.y < extent and marked - half >= 0.0 and marked + half <= total:
+				found.append([at, (b - a).angle()])
+		distance += segment
+	if not middle and found.is_empty() and not continued:
+		found = _anchors(line, distance / 2.0, spacing, label_length, continued, true, extent)
+	return found
+
+
+static func _upright(angle: float) -> float:
+	return angle + PI if angle > PI / 2.0 or angle < -PI / 2.0 else angle
+
+
+func _line_label_boxes(at: Vector2, angle: float, width: float, size: int) -> Array[Rect2]:
+	var upright := _upright(angle)
+	var along := Vector2.from_angle(upright)
+	var across := Vector2(-along.y, along.x)
+	var count := maxi(1, int(ceil(width / float(size))))
+	var half := float(size) * 0.5 + TEXT_PADDING
+	var boxes: Array[Rect2] = []
+	for index in range(count):
+		var centre := at + along * ((float(index) + 0.5) / float(count) - 0.5) * width - across * 1.1 * float(size)
+		boxes.append(Rect2(centre - Vector2(half, half), Vector2(half, half) * 2.0))
+	return boxes
+
+
+func _draw_text_at(at: Vector2, angle: float, label: String, colour: Color, size: int) -> void:
+	var font := UI.font(700)
+	var upright := _upright(angle)
+	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var baseline := -1.1 * size + (font.get_ascent(size) - font.get_descent(size)) * 0.5
+	last_labels.append(label)
+	draw_set_transform(at, upright)
+	draw_string_outline(font, Vector2(-width * 0.5, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, HALO)
+	draw_string(font, Vector2(-width * 0.5, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, colour)
+	draw_set_transform(Vector2.ZERO, 0.0)
+
+
+func _place_line_labels() -> Array:
+	var placed: Array = []
+	var level := map.zoom_level()
+	var tile_zoom := floorf(level)
+	var tile_world := MapView.WORLD_WIDTH / pow(2.0, tile_zoom)
+	var size := int(round(_zoom_value([[4, 10.0], [8, 13.0]])))
+	var font := UI.font(700)
+	var half_view := map.get_viewport_rect().size * 0.5
+	for mark in record.get("marks", []):
+		var entry: Dictionary = mark
+		var label := str(entry.get("label", ""))
+		if label.is_empty() or str(entry.get("what", "")) == "draft":
+			continue
+		var world := _world_way(entry.get("points", []))
+		if world.size() < 2:
+			continue
+		var label_length := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		var spacing := SYMBOL_SPACING
+		if spacing - label_length < spacing / 4.0:
+			spacing = label_length + spacing / 4.0
+		var bounds := Rect2(world[0], Vector2.ZERO)
+		for point in world:
+			bounds = bounds.expand(point)
+		var colour := Color(str(entry.get("colour", "#e09440")))
+		for tx in range(int(floor(bounds.position.x / tile_world)), int(floor(bounds.end.x / tile_world)) + 1):
+			for ty in range(int(floor(bounds.position.y / tile_world)), int(floor(bounds.end.y / tile_world)) + 1):
+				var tile := Rect2(Vector2(tx, ty) * tile_world, Vector2(tile_world, tile_world))
+				for piece in _clip_pieces(world, tile):
+					var local := PackedVector2Array()
+					for point in piece:
+						local.append((point - tile.position) / tile_world * TILE_PX)
+					var first: Vector2 = local[0]
+					var continued := first.x <= 0.0001 or first.y <= 0.0001 or first.x >= TILE_PX - 0.0001 or first.y >= TILE_PX - 0.0001
+					var offset := fmod(spacing / 2.0, spacing) if continued else fmod(label_length / 2.0 + 26.0, spacing)
+					for anchor in _anchors(local, offset, spacing, label_length, continued, false, TILE_PX):
+						var spot: Vector2 = tile.position + (anchor[0] as Vector2) / TILE_PX * tile_world
+						var screen := map.world_to_screen(spot) if map.is_globe() else (spot - map.camera.position) * map.camera.zoom.x + half_view
+						var boxes := _line_label_boxes(screen, float(anchor[1]), font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x, size)
+						if not _fits(boxes):
+							continue
+						_taken.append_array(boxes)
+						placed.append([screen, float(anchor[1]), label, colour, size])
+	return placed
 
 
 func _draw_round_polyline(points: PackedVector2Array, colour: Color, width: float) -> void:
@@ -277,6 +471,21 @@ static func smooth_way(way: Array, rounds := 2) -> Array:
 	return points
 
 
+static func middle_of(way: Array) -> Array:
+	var half := length_of(way) / 2.0
+	var walked := 0.0
+	for index in range(1, way.size()):
+		var shrink := cos(((float(way[index][1]) + float(way[index - 1][1])) / 2.0) * RAD)
+		var dx := (float(way[index][0]) - float(way[index - 1][0])) * shrink
+		var dy := float(way[index][1]) - float(way[index - 1][1])
+		var step := sqrt(dx * dx + dy * dy)
+		if walked + step >= half and step > 0.0:
+			var part := (half - walked) / step
+			return [float(way[index - 1][0]) + (float(way[index][0]) - float(way[index - 1][0])) * part, float(way[index - 1][1]) + (float(way[index][1]) - float(way[index - 1][1])) * part]
+		walked += step
+	return way[way.size() - 1]
+
+
 static func length_of(way: Array) -> float:
 	var total := 0.0
 	for index in range(1, way.size()):
@@ -324,14 +533,7 @@ func _plan_casing(pointed: bool) -> float:
 
 func _draw_plans() -> void:
 	var pointed := str(store.value("pointed"))
-	var drawn: Array = []
-	for plan in store.value("plans"):
-		var entry: Dictionary = plan
-		if (not bool(entry.get("begun", false)) and not bool(entry.get("done", false))) or str(entry.get("id", "")) == pointed:
-			drawn.append([entry, false])
-	for plan in store.value("known"):
-		drawn.append([plan, true])
-	for pair in drawn:
+	for pair in _drawn_plans():
 		var plan: Dictionary = pair[0]
 		var theirs: bool = pair[1]
 		var tone := WarRoomWords.plan_tone(plan, theirs)
@@ -368,6 +570,82 @@ func _draw_plans() -> void:
 					var outline := shape.duplicate()
 					outline.append(shape[0])
 					draw_polyline(outline, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.9), 1.0, true)
+
+
+func _drawn_plans() -> Array:
+	var pointed := str(store.value("pointed"))
+	var drawn: Array = []
+	for plan in store.value("plans"):
+		var entry: Dictionary = plan
+		if (not bool(entry.get("begun", false)) and not bool(entry.get("done", false))) or str(entry.get("id", "")) == pointed:
+			drawn.append([entry, false])
+	for plan in store.value("known"):
+		drawn.append([plan, true])
+	return drawn
+
+
+func _place_plan_labels() -> Array:
+	var placed: Array = []
+	var font := UI.font(700)
+	var size := int(round(_zoom_value([[3, 10.0], [8, 13.0]])))
+	var most := 12.0 * size
+	var height := font.get_height(size)
+	for pair in _drawn_plans():
+		var plan: Dictionary = pair[0]
+		var tone := WarRoomWords.plan_tone(plan, pair[1])
+		if tone == "deploy" and str(plan.get("form", "")) == "swarm":
+			continue
+		var label := str(plan.get("name", "")).strip_edges() if str(plan.get("kind", "")) == "project" or not str(plan.get("project", "")).is_empty() else ""
+		if label.is_empty():
+			continue
+		var middle: Array = []
+		for raw in plan.get("ways", []):
+			if (raw as Array).size() >= 2:
+				middle = middle_of(smooth_way(raw))
+				break
+		if middle.is_empty():
+			continue
+		var at := _project_way([middle])[0]
+		var rows: Array[String] = []
+		var row := ""
+		for word in label.split(" ", false):
+			var trial: String = word if row.is_empty() else row + " " + word
+			if not row.is_empty() and font.get_string_size(trial, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > most:
+				rows.append(row)
+				row = word
+			else:
+				row = trial
+		if not row.is_empty():
+			rows.append(row)
+		var top := at.y - 1.1 * size - height * rows.size() * 0.5
+		var widest := 0.0
+		for text in rows:
+			widest = maxf(widest, font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x)
+		var box := Rect2(at.x - widest * 0.5, top, widest, height * rows.size()).grow(TEXT_PADDING)
+		var boxes: Array[Rect2] = [box]
+		if not _fits(boxes):
+			continue
+		_taken.append(box)
+		placed.append([at, rows, top, WarRoomTheme.PLAN_COLOURS[tone], size, label])
+	return placed
+
+
+func _draw_plan_labels(labels: Array) -> void:
+	var font := UI.font(700)
+	for entry in labels:
+		var at: Vector2 = entry[0]
+		var rows: Array = entry[1]
+		var top: float = entry[2]
+		var colour: Color = entry[3]
+		var size: int = entry[4]
+		var height := font.get_height(size)
+		last_labels.append(str(entry[5]))
+		for index in range(rows.size()):
+			var text: String = rows[index]
+			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+			var spot := Vector2(at.x - width * 0.5, top + height * index + font.get_ascent(size))
+			draw_string_outline(font, spot, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, HALO)
+			draw_string(font, spot, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, colour)
 
 
 static func ring_around(lng: float, lat: float, km: float, count := 48) -> Array:

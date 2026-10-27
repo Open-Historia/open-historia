@@ -1093,6 +1093,16 @@ func fit_to_data() -> void:
 			map.fit_bounds(bounds, 20.0, 0.3)
 
 
+func import_regions(args: Dictionary) -> Dictionary:
+	var reply := await request_raw("workshop.import.apply", args)
+	if reply.get("ok", false) and reply["result"] is Dictionary and (reply["result"] as Dictionary).has("session"):
+		map.clear_import_preview()
+		await apply(reply["result"])
+		if (reply["result"] as Dictionary).get("applied") is Dictionary:
+			fit_to_data()
+	return reply
+
+
 func locate(lonlat: Vector2) -> void:
 	map.locate(lonlat, 6.0)
 
@@ -1460,6 +1470,20 @@ func _finish_close() -> void:
 
 func alert(text: String) -> void:
 	await EditorKit.tell(self, text)
+
+
+func open_url(url: String) -> void:
+	if url.is_empty():
+		return
+	var log_file := OS.get_environment("OH_EDITOR_OPEN_LOG")
+	if log_file.is_empty():
+		OS.shell_open(url)
+		return
+	var out := FileAccess.open(log_file, FileAccess.READ_WRITE if FileAccess.file_exists(log_file) else FileAccess.WRITE)
+	if out:
+		out.seek_end()
+		out.store_line(url)
+		out.close()
 
 
 func confirm(text: String) -> bool:

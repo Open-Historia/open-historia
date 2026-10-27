@@ -13,6 +13,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	only = OS.get_environment("OH_MAPX_ONLY")
 	started = Time.get_ticks_msec()
+	root.mouse_passthrough = true
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.add_child(main)
 	_watchdog.call_deferred()
@@ -169,7 +170,168 @@ func _run() -> void:
 		await _style_checks()
 	if _wants("offers"):
 		await _offer_checks()
+	if _wants("nav"):
+		await _navigation_checks()
+	if _wants("settings"):
+		await _settings_checks()
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _texts(node: Node, into: PackedStringArray) -> void:
+	if node is CanvasItem and not (node as CanvasItem).visible:
+		return
+	if node is Label:
+		into.append((node as Label).text)
+	elif node is Button and not (node as Button).text.is_empty():
+		into.append("[%s]" % (node as Button).text)
+	elif node is OptionButton:
+		into.append((node as OptionButton).text)
+	for child in node.get_children():
+		_texts(child, into)
+
+
+func _all_text(node: Node) -> String:
+	var found := PackedStringArray()
+	_texts(node, found)
+	return " | ".join(found).replace("
+", " / ")
+
+
+func _settings_checks() -> void:
+	var menu: Node = main.game_menu
+	if menu == null:
+		_check(false, "the game menu is mounted")
+		return
+	await menu.open()
+	await _wait(0.5)
+	await menu._open_workspace("map", "game", menu._card_rect())
+	await _wait(1.5)
+	var workspace: Node = menu._workspace
+	var text := _all_text(workspace)
+	_check(text.contains("Ocean (starting map)"), "the game's basemap list names the starting map as React does")
+	_check(text.contains("Browse and download maps…") and not text.contains("not in the native app"), "the maps browser button is live")
+	_check(text.contains("Running now: Full.") or text.contains("Running now: Low memory."), "performance mode says what is running")
+	await _shoot("set-1-map")
+	var choices: Dictionary = workspace._choices
+	var options: Array = choices.get("options", [])
+	_check(options.size() > 10, "every map the scenario offers is listed (%d)" % options.size())
+	var reply: Dictionary = await main.engine.request("mapextras.deviceProfile", {"value": "constrained"})
+	_check(str((reply.get("result", {}) as Dictionary).get("mode", "")) == "constrained", "performance mode writes oh_device_profile")
+	await main.engine.request("mapextras.deviceProfile", {"value": ""})
+	workspace._open_maps_browser()
+	await _wait(2.0)
+	var browser: MapsBrowser = workspace._maps_browser
+	_check(browser != null, "the maps window opens")
+	if browser:
+		await _shoot("set-2-my-maps")
+		browser._set_tab("community")
+		await _until(func() -> bool: return not browser._official_loading and not browser._community_loading, 30.0)
+		await _wait(2.5)
+		var browser_text := _all_text(browser)
+		_check(browser_text.contains("Community maps") and browser_text.contains("[All]") and browser_text.contains("[Detailed maps]"), "the Community tab lists its maps")
+		await _shoot("set-3-community")
+		browser.close()
+		await _wait(0.5)
+	menu.close()
+	await _wait(0.5)
+
+
+func _button(view: MapView, at: Vector2, index: MouseButton, pressed: bool, shift := false, factor := 1.0) -> void:
+	var event := InputEventMouseButton.new()
+	event.position = at
+	event.global_position = at
+	event.button_index = index
+	event.pressed = pressed
+	event.shift_pressed = shift
+	event.factor = factor
+	view._unhandled_input(event)
+
+
+func _move(view: MapView, at: Vector2, relative: Vector2, shift := false) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = at
+	event.global_position = at
+	event.relative = relative
+	event.shift_pressed = shift
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT
+	view._unhandled_input(event)
+
+
+func _key(view: MapView, code: Key, shift := false) -> void:
+	var event := InputEventKey.new()
+	event.keycode = code
+	event.pressed = true
+	event.shift_pressed = shift
+	view._unhandled_input(event)
+
+
+func _navigation_checks() -> void:
+	var view: MapView = main.map_view
+	extras.apply_map_settings({"Globe": false})
+	view.fly_to_lonlat(10.0, 48.0, 4.0, 0.0)
+	await _wait(1.0)
+	var start := view.camera.position
+	var at := Vector2(600, 450)
+	_button(view, at, MOUSE_BUTTON_LEFT, true)
+	for step in range(6):
+		await _frames(1)
+		at += Vector2(40, 0)
+		_move(view, at, Vector2(40, 0))
+	var released := view.camera.position
+	_button(view, at, MOUSE_BUTTON_LEFT, false)
+	_check(absf((start.x - released.x) * view.camera.zoom.x - 240.0) < 1.0, "a drag moves the map with the pointer (%.1f px)" % ((start.x - released.x) * view.camera.zoom.x))
+	await _wait(0.12)
+	var gliding := view.camera.position
+	await _wait(1.2)
+	var settled := view.camera.position
+	_check((released.x - gliding.x) * view.camera.zoom.x > 2.0 and settled.x <= gliding.x, "the map keeps gliding after the drag and comes to rest (%.1f px more)" % ((released.x - settled.x) * view.camera.zoom.x))
+	await _wait(0.3)
+	var before_zoom := view.zoom_level()
+	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true)
+	await _wait(0.35)
+	var wheel_step := view.zoom_level() - before_zoom
+	_check(absf(wheel_step - log(2.0 / (1.0 + exp(-100.0 / 450.0))) / log(2.0)) < 0.01, "one wheel notch zooms as MapLibre does (%.4f)" % wheel_step)
+	root.gui_release_focus()
+	var key_from := view.camera.position
+	_key(view, KEY_RIGHT)
+	await _wait(0.45)
+	_check(absf((view.camera.position.x - key_from.x) * view.camera.zoom.x - 100.0) < 1.5, "the right arrow pans 100 px east (%.1f)" % ((view.camera.position.x - key_from.x) * view.camera.zoom.x))
+	var key_zoom := view.zoom_level()
+	_key(view, KEY_EQUAL)
+	await _wait(0.45)
+	_check(absf(view.zoom_level() - key_zoom - 1.0) < 0.01, "+ zooms in one level (%.3f)" % (view.zoom_level() - key_zoom))
+	_key(view, KEY_MINUS)
+	await _wait(0.45)
+	var box_zoom := view.zoom_level()
+	_button(view, Vector2(600, 350), MOUSE_BUTTON_LEFT, true, true)
+	_move(view, Vector2(700, 420), Vector2(100, 70), true)
+	_move(view, Vector2(840, 550), Vector2(140, 130), true)
+	await _shoot("nav-1-box")
+	_button(view, Vector2(840, 550), MOUSE_BUTTON_LEFT, false, true)
+	await _wait(0.8)
+	_check(absf(view.zoom_level() - box_zoom - log(4.5) / log(2.0)) < 0.05, "a shift-drag box zooms to fit it (%.3f levels)" % (view.zoom_level() - box_zoom))
+	extras.apply_map_settings({"Globe": true})
+	await _frames(3)
+	view.fly_to_lonlat(10.0, 40.0, 3.0, 0.0)
+	await _wait(1.0)
+	var globe_zoom := view.zoom_level()
+	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true)
+	await _wait(0.35)
+	_check(absf(view.zoom_level() - globe_zoom - log(2.0 / (1.0 + exp(-100.0 / 450.0))) / log(2.0)) < 0.02, "the globe takes the same wheel step (%.4f)" % (view.zoom_level() - globe_zoom))
+	var globe_from := extras.globe.centre_lonlat()
+	at = Vector2(600, 450)
+	_button(view, at, MOUSE_BUTTON_LEFT, true)
+	for step in range(6):
+		await _frames(1)
+		at += Vector2(40, 0)
+		_move(view, at, Vector2(40, 0))
+	_button(view, at, MOUSE_BUTTON_LEFT, false)
+	var globe_released := extras.globe.centre_lonlat()
+	await _wait(1.0)
+	var globe_settled := extras.globe.centre_lonlat()
+	_check(GlobeView.difference_of_angles(globe_released.x, globe_settled.x) < -0.05 and globe_released.x < globe_from.x, "the globe keeps turning after a drag (%.2f deg more)" % GlobeView.difference_of_angles(globe_released.x, globe_settled.x))
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
 
 
 func _flat_checks() -> void:
@@ -357,7 +519,12 @@ func _style_checks() -> void:
 		await main.engine.request("mapextras.setGamePick", {"pick": pick})
 		extras.apply_map_settings({"gamePick": pick})
 		await extras.refresh_background()
-		await _wait(3.5)
+		await _wait(0.5)
+		await _until(func() -> bool: return not extras.offers._cover.visible and not extras.natgeo.busy(), 40.0)
+		await _wait(1.5)
+		if pick == "natgeo-dark":
+			_check(extras.natgeo.enabled and not extras.natgeo._shown.is_empty(), "National Geographic Dark draws its vector map (%d tiles)" % extras.natgeo._shown.size())
+			_check(extras.natgeo.visible_labels().size() > 0, "and its reference names (%d)" % extras.natgeo.visible_labels().size())
 		await _shoot("style-%s" % (pick if not pick.is_empty() else "starting"))
 	extras.apply_map_settings({"Terrain": false})
 	await _wait(2.0)

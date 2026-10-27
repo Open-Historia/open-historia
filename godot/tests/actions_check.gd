@@ -14,6 +14,7 @@ func _initialize() -> void:
 	downloads = OS.get_environment("OH_NATIVE_DOWNLOADS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -118,6 +119,27 @@ func _focus_owner() -> Control:
 	return root.gui_get_focus_owner()
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
@@ -127,6 +149,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	await _wait(0.4)
 	main.picker._choose("France")
@@ -182,6 +205,26 @@ func _actions_checks() -> void:
 	panel._composer.set_caret_column(panel._composer.text.length())
 	panel._composer.gui_input.emit(_key(KEY_ENTER, true))
 	_check(panel._composer.text.contains("\n"), "Shift+Enter adds a new line instead of sending")
+	var holder: Control = panel._composer.get_parent()
+	var grip: Control = holder.get_child(1) as Control
+	var tall_before: float = holder.size.y
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.global_position = Vector2(0, 500)
+	grip._gui_input(press)
+	var drag := InputEventMouseMotion.new()
+	drag.global_position = Vector2(0, 560)
+	grip._gui_input(drag)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	grip._gui_input(release)
+	await _frames(3)
+	_check(holder.size.y >= tall_before + 55.0, "the composer's corner grip drags it taller, as the released textarea resizes (%.0f -> %.0f)" % [tall_before, holder.size.y])
+	await _shoot("actions-composer-resized")
+	holder.custom_minimum_size.y = 62
+	await _frames(2)
 	panel._composer.text = "Raise taxes on luxury goods"
 	panel._composer.text_changed.emit()
 	panel._composer.gui_input.emit(_key(KEY_ENTER))

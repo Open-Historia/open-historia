@@ -1204,11 +1204,35 @@ func _send_report(incident: Dictionary, state: Dictionary) -> void:
 		var text := str(result.get("text", ""))
 		if outcome == "copied" and not text.is_empty():
 			DisplayServer.clipboard_set(text)
+		if outcome == "saved" and not str(result.get("path", "")).is_empty():
+			state["where"] = str(result.get("path", ""))
 	state["report"] = outcome
 	_show_report_state(state)
+	_show_report_where(state)
 	await get_tree().create_timer(3.0).timeout
 	state["report"] = "idle"
 	_show_report_state(state)
+
+
+func _show_report_where(state: Dictionary) -> void:
+	var button: Variant = state.get("report_button")
+	var where := str(state.get("where", ""))
+	if where.is_empty() or not is_instance_valid(button) or not button is Button:
+		return
+	var holder := (button as Button).get_parent()
+	if holder == null:
+		return
+	var caption: Variant = state.get("report_where")
+	if not is_instance_valid(caption) or not caption is Label:
+		caption = UI.wrapped("", 10, Color(1, 1, 1, 0.45))
+		(caption as Label).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		(caption as Label).custom_minimum_size.x = 180
+		holder.add_child(caption)
+		holder.move_child(caption, (button as Button).get_index() + 1)
+		state["report_where"] = caption
+	(caption as Label).text = "Saved to %s" % where
+	(caption as Label).tooltip_text = where
+	(caption as Label).mouse_filter = Control.MOUSE_FILTER_PASS
 
 
 func _bullet_line(bbcode: String, size: int, color: Color) -> Control:

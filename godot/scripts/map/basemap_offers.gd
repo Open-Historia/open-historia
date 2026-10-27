@@ -180,6 +180,11 @@ func _layout_transition() -> void:
 	_card_bar.size = Vector2(width * maxf(4.0, _transition_progress) / 100.0, 3)
 
 
+func _reference_busy() -> bool:
+	var reference: Variant = extras.get("natgeo") if extras else null
+	return reference is NatGeoReference and (reference as NatGeoReference).busy()
+
+
 func set_loading(loading: bool) -> void:
 	if loading and not _loading:
 		_loading_since = Time.get_ticks_msec()
@@ -198,6 +203,9 @@ func _process(_delta: float) -> void:
 			_cover.visible = false
 			_transition_finishing = 0
 		elif now - _transition_started >= TRANSITION_WATCHDOG_MS:
+			finish_transition()
+		elif _transition_finishing == 0 and now - _transition_started >= 300 and not _loading and not _reference_busy():
+			note_transition(84.0)
 			finish_transition()
 	var showing := _loading and not _cover.visible and now - _loading_since >= LOADING_TOAST_DELAY_MS and now - _loading_since < LOADING_TOAST_DELAY_MS + LOADING_TOAST_LIMIT_MS
 	if showing != _toast.visible:

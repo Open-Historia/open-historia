@@ -52,6 +52,10 @@ var review_shapes: Array = []
 var review_points: Array = []
 var review_focus := {}
 var draw_points: Array = []
+var reference := {}
+var reference_adjust := false
+var _reference_drag := {}
+var import_preview := {}
 var snap_marker: Variant = null
 var edit_rings: Array = []
 var diagnostics: Array = []
@@ -430,6 +434,132 @@ func add_draw_points(points: Array) -> void:
 	_overlay.queue_redraw()
 
 
+func set_reference(texture: Texture2D, aspect: float) -> void:
+	var width := _viewport.size.x / map.camera.zoom.x * 0.6
+	var height := width / (aspect if aspect > 0.0 else 1.5)
+	var centre := map.camera.position
+	reference = {"texture": texture, "aspect": aspect, "rect": Rect2(centre - Vector2(width, height) * 0.5, Vector2(width, height)), "opacity": float(reference.get("opacity", 0.5)), "visible": bool(reference.get("visible", true))}
+	_overlay.queue_redraw()
+
+
+func center_reference() -> void:
+	if reference.is_empty():
+		return
+	var rect: Rect2 = reference["rect"]
+	var width := _viewport.size.x / map.camera.zoom.x * 0.6
+	var aspect := float(reference.get("aspect", 1.5))
+	var height := width / (aspect if aspect > 0.0 else 1.5)
+	rect = Rect2(map.camera.position - Vector2(width, height) * 0.5, Vector2(width, height))
+	reference["rect"] = rect
+	_overlay.queue_redraw()
+
+
+func set_import_preview(texture: Texture2D, bounds: Dictionary, opacity: float) -> void:
+	import_preview = {"texture": texture, "bounds": bounds, "opacity": opacity}
+	_overlay.queue_redraw()
+
+
+func clear_import_preview() -> void:
+	if import_preview.is_empty():
+		return
+	import_preview = {}
+	_overlay.queue_redraw()
+
+
+func _draw_import_preview(canvas: Control) -> void:
+	if import_preview.is_empty() or not (import_preview.get("texture") is Texture2D):
+		return
+	var texture: Texture2D = import_preview["texture"]
+	var bounds: Dictionary = import_preview["bounds"]
+	var west := float(bounds.get("west", -180.0))
+	var east := float(bounds.get("east", 180.0))
+	var north := clampf(float(bounds.get("north", 85.05112878)), -85.05112878, 85.05112878)
+	var south := clampf(float(bounds.get("south", -85.05112878)), -85.05112878, 85.05112878)
+	if not (east > west and north > south):
+		return
+	var tint := Color(1, 1, 1, clampf(float(import_preview.get("opacity", 0.46)), 0.05, 0.95))
+	var columns := 24
+	var rows := 48
+	var grid: Array[PackedVector2Array] = []
+	for row in range(rows + 1):
+		var line := PackedVector2Array()
+		var lat := north - (north - south) * float(row) / rows
+		for column in range(columns + 1):
+			line.append(screen_of(Vector2(west + (east - west) * float(column) / columns, lat)))
+		grid.append(line)
+	var colors := PackedColorArray([tint, tint, tint, tint])
+	for row in range(rows):
+		var top := float(row) / rows
+		var bottom := float(row + 1) / rows
+		for column in range(columns):
+			var left := float(column) / columns
+			var right := float(column + 1) / columns
+			var points := PackedVector2Array([grid[row][column], grid[row][column + 1], grid[row + 1][column + 1], grid[row + 1][column]])
+			var uvs := PackedVector2Array([Vector2(left, top), Vector2(right, top), Vector2(right, bottom), Vector2(left, bottom)])
+			canvas.draw_primitive(points, colors, uvs, texture)
+
+
+func _reference_corners() -> Array:
+	var rect: Rect2 = reference.get("rect", Rect2())
+	return [rect.position + Vector2(0, rect.size.y), rect.position + rect.size, rect.position + Vector2(rect.size.x, 0), rect.position]
+
+
+func _reference_press(point: Vector2) -> bool:
+	if reference.is_empty():
+		return false
+	var corners := _reference_corners()
+	for index in range(corners.size()):
+		if map.world_to_screen(corners[index]).distance_to(point) <= 11.0:
+			_reference_drag = {"mode": "resize", "anchor": corners[(index + 2) % 4]}
+			return true
+	var world := screen_to_world(point)
+	var rect: Rect2 = reference["rect"]
+	if rect.has_point(world):
+		_reference_drag = {"mode": "move", "last": world}
+		return true
+	return false
+
+
+func _reference_move(point: Vector2) -> void:
+	if _reference_drag.is_empty() or reference.is_empty():
+		return
+	var world := screen_to_world(point)
+	var rect: Rect2 = reference["rect"]
+	if str(_reference_drag.get("mode", "")) == "move":
+		var last: Vector2 = _reference_drag["last"]
+		rect.position += world - last
+		_reference_drag["last"] = world
+	else:
+		var anchor: Vector2 = _reference_drag["anchor"]
+		var least := 8.0 / map.camera.zoom.x
+		var top_left := Vector2(minf(anchor.x, world.x), minf(anchor.y, world.y))
+		var bottom_right := Vector2(maxf(maxf(anchor.x, world.x), top_left.x + least), maxf(maxf(anchor.y, world.y), top_left.y + least))
+		rect = Rect2(top_left, bottom_right - top_left)
+	reference["rect"] = rect
+	_overlay.queue_redraw()
+
+
+func _draw_reference(canvas: Control) -> void:
+	if reference.is_empty():
+		return
+	var rect: Rect2 = reference["rect"]
+	var top_left := map.world_to_screen(rect.position)
+	var bottom_right := map.world_to_screen(rect.position + rect.size)
+	var area := Rect2(top_left, bottom_right - top_left)
+	if bool(reference.get("visible", true)) and reference.get("texture") is Texture2D:
+		canvas.draw_texture_rect(reference["texture"], area, false, Color(1, 1, 1, clampf(float(reference.get("opacity", 0.5)), 0.0, 1.0)))
+	if not reference_adjust:
+		return
+	var frame := PackedVector2Array([area.position, area.position + Vector2(area.size.x, 0), area.position + area.size, area.position + Vector2(0, area.size.y), area.position])
+	_dashed(canvas, frame, Color("#22d3ee"), 1.5, 6.0)
+	for corner in [area.position, area.position + Vector2(area.size.x, 0), area.position + area.size, area.position + Vector2(0, area.size.y)]:
+		var at: Vector2 = corner
+		var diamond := PackedVector2Array([at + Vector2(0, -7), at + Vector2(7, 0), at + Vector2(0, 7), at + Vector2(-7, 0)])
+		canvas.draw_colored_polygon(diamond, Color("#22d3ee"))
+		diamond.append(diamond[0])
+		canvas.draw_polyline(diamond, Color("#083344"), 1.5, true)
+
+
 func _finish_draw() -> void:
 	if draw_points.size() < 3:
 		return
@@ -552,6 +682,9 @@ func _press(button: InputEventMouseButton) -> void:
 	_drag_start = button.position
 	_drag_last = button.position
 	_drag_distance = 0.0
+	if reference_adjust and _reference_press(button.position):
+		_drag = "reference"
+		return
 	if button.double_click:
 		if tool == "draw":
 			_finish_draw()
@@ -637,6 +770,8 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			_edit_drag["now"] = motion.position
 			_halo = _shared_halo(motion.position)
 			_overlay.queue_redraw()
+		"reference":
+			_reference_move(motion.position)
 	_drag_last = motion.position
 
 
@@ -681,6 +816,8 @@ func _release(button: InputEventMouseButton) -> void:
 		"click":
 			if _drag_distance < 5.0:
 				_click(button)
+		"reference":
+			_reference_drag = {}
 		"vertex":
 			var handle := _edit_drag
 			_edit_drag = {}
@@ -792,6 +929,8 @@ func _draw_overlay(canvas: Control) -> void:
 	var zoom := ol_zoom()
 	var font := UI.font(600)
 	var bold := UI.font(700)
+	_draw_import_preview(canvas)
+	_draw_reference(canvas)
 	if layers.get("labels", true) and zoom >= 4.0:
 		var taken: Array[Rect2] = []
 		for index in range(mini(ids.size(), centroids.size())):

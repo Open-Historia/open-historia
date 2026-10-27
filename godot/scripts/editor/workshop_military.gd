@@ -161,8 +161,6 @@ func _typed(field: String, text: String, edit: LineEdit) -> void:
 
 func _add_chart() -> void:
 	if not ResourceLoader.exists(CHART_SCRIPT):
-		var note := WorkshopUI.small_label("The mustering chart is not in the native Workshop yet.")
-		_body.add_child(note)
 		return
 	var script: Script = load(CHART_SCRIPT)
 	var defaults: Variant = _view.get("defaults")

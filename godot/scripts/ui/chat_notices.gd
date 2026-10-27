@@ -30,6 +30,8 @@ var _center_title: Label
 var _center_list: VBoxContainer
 var _center_scroll: ScrollContainer
 var _sound_button: Button
+var _desktop_button: Button
+var _desktop_permission := "unsupported"
 var _audio: AudioStreamPlayer
 var _chime: AudioStreamWAV
 
@@ -71,6 +73,9 @@ func setup(engine_link: EngineLink, setup_context: Dictionary = {}) -> void:
 	var reply := await engine.request("chat.sound.get")
 	if reply.get("ok", false):
 		_sound = _dict(reply.get("result", {})).get("enabled", true) != false
+	var desktop_reply := await engine.request("notify.desktop.get")
+	if desktop_reply.get("ok", false):
+		_desktop_permission = _s(_dict(desktop_reply.get("result", {})).get("permission", "unsupported"))
 	_render()
 	_check()
 
@@ -122,6 +127,9 @@ func _right_inset() -> float:
 
 
 func _on_engine_event(event_name: String, data: Variant) -> void:
+	if event_name == "notify.activated":
+		_desktop_activated(_dict(data))
+		return
 	if event_name != "chat.changed":
 		return
 	if _dict(data).get("reason", "") == "game":
@@ -169,7 +177,17 @@ func _push(item: Dictionary) -> void:
 	timer.timeout.connect(func() -> void: _remove_toast(id))
 	if _sound:
 		_play_chime()
+	if engine and _desktop_permission == "granted":
+		_send_desktop(entry)
 	_render()
+
+
+func _send_desktop(entry: Dictionary) -> void:
+	var reply := await engine.request("notify.desktop", {"sender": _s(entry.get("sender", "")), "preview": _s(entry.get("preview", "")), "chatId": _s(entry.get("chatId", "")), "notice": int(entry.get("id", 0))})
+	var permission := _s(_dict(reply.get("result", {})).get("permission", ""))
+	if not permission.is_empty() and permission != _desktop_permission:
+		_desktop_permission = permission
+		_render()
 
 
 func _remove_toast(id: int) -> void:
@@ -218,6 +236,7 @@ func _render() -> void:
 	_center_title.text = "Diplomatic messages (%d)" % _items.size()
 	_sound_button.text = "🔊" if _sound else "🔇"
 	_sound_button.tooltip_text = "Mute diplomacy notification sound" if _sound else "Enable diplomacy notification sound"
+	_style_desktop()
 	for child in _center_list.get_children():
 		_center_list.remove_child(child)
 		child.queue_free()
@@ -266,6 +285,11 @@ func _toast(item: Dictionary) -> Control:
 	var has_chat := not _s(item.get("chatId", "")).is_empty()
 	toast.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if has_chat else Control.CURSOR_ARROW
 	toast.tooltip_text = "Open diplomatic chat" if has_chat else "Notification test"
+	toast.focus_mode = Control.FOCUS_ALL if has_chat else Control.FOCUS_NONE
+	var resting: StyleBox = toast.get_theme_stylebox("panel")
+	var ringed := UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.85), 14, 2, Vector4(14, 12, 38, 12))
+	toast.focus_entered.connect(func() -> void: toast.add_theme_stylebox_override("panel", ringed))
+	toast.focus_exited.connect(func() -> void: toast.add_theme_stylebox_override("panel", resting))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 4)
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -276,7 +300,7 @@ func _toast(item: Dictionary) -> Control:
 	toast.add_child(column)
 	var close := Button.new()
 	close.text = "✕"
-	close.focus_mode = Control.FOCUS_NONE
+	close.focus_mode = Control.FOCUS_ALL
 	close.tooltip_text = "Dismiss"
 	close.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	close.add_theme_font_override("font", UI.font(400))
@@ -287,8 +311,8 @@ func _toast(item: Dictionary) -> Control:
 		close.add_theme_color_override(state, UI.WHITE)
 	var normal := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1), 7, 1)
 	var hover := UI.box(Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.1), 7, 1)
-	for state in ["normal", "focus"]:
-		close.add_theme_stylebox_override(state, normal)
+	close.add_theme_stylebox_override("normal", normal)
+	close.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.85), 7, 2))
 	for state in ["hover", "pressed", "hover_pressed"]:
 		close.add_theme_stylebox_override(state, hover)
 	var close_holder := Control.new()
@@ -304,7 +328,12 @@ func _toast(item: Dictionary) -> Control:
 	var id := int(item.get("id", 0))
 	close.pressed.connect(func() -> void: _remove_toast(id))
 	toast.gui_input.connect(func(event: InputEvent) -> void:
-		if has_chat and event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
+		if not has_chat:
+			return
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
+			_open_item(item)
+		elif event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo and (event as InputEventKey).keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+			toast.accept_event()
 			_open_item(item))
 	return toast
 
@@ -349,10 +378,10 @@ func _build_bell() -> void:
 	_sound_button = _plain_button("🔊", 13, Color(1, 1, 1, 0.72))
 	_sound_button.pressed.connect(_toggle_sound)
 	row.add_child(_sound_button)
-	var desktop := _plain_button("Desktop", 11, Color(1, 1, 1, 0.55))
-	desktop.tooltip_text = "Desktop notification permission"
-	UI.set_disabled_look(desktop, "Desktop notifications are not in the native app yet.")
-	row.add_child(desktop)
+	_desktop_button = _plain_button("Desktop", 11, Color(1, 1, 1, 0.55))
+	_desktop_button.tooltip_text = "Desktop notification permission"
+	_desktop_button.pressed.connect(_enable_desktop)
+	row.add_child(_desktop_button)
 	var clear_button := _plain_button("Clear", 11, Color("#93c5fd"))
 	clear_button.pressed.connect(func() -> void:
 		_items.clear()
@@ -447,6 +476,37 @@ func _plain_button(text: String, font_px: int, color: Color) -> Button:
 	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 		button.add_theme_stylebox_override(state, empty)
 	return button
+
+
+func _style_desktop() -> void:
+	if not _desktop_button:
+		return
+	var granted := _desktop_permission == "granted"
+	_desktop_button.text = "Desktop ✓" if granted else "Desktop"
+	var color := Color("#86efac") if granted else Color(1, 1, 1, 0.55)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color", "font_disabled_color"]:
+		_desktop_button.add_theme_color_override(state, color)
+	_desktop_button.mouse_default_cursor_shape = Control.CURSOR_ARROW if _desktop_permission == "unsupported" else Control.CURSOR_POINTING_HAND
+
+
+func _enable_desktop() -> void:
+	if not engine or _desktop_permission == "unsupported":
+		return
+	var reply := await engine.request("notify.desktop.request")
+	if reply.get("ok", false):
+		_desktop_permission = _s(_dict(reply.get("result", {})).get("permission", _desktop_permission))
+	_render()
+
+
+func _desktop_activated(data: Dictionary) -> void:
+	var window_id := get_window().get_window_id() if is_inside_tree() else DisplayServer.MAIN_WINDOW_ID
+	if DisplayServer.window_get_mode(window_id) == DisplayServer.WINDOW_MODE_MINIMIZED:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED, window_id)
+	DisplayServer.window_move_to_foreground(window_id)
+	var chat_id := _s(data.get("chatId", ""))
+	if chat_id.is_empty() or data.get("sameGame", true) == false:
+		return
+	_open_item({"id": int(data.get("notice", 0)), "chatId": chat_id})
 
 
 func _toggle_sound() -> void:

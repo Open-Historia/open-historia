@@ -64,6 +64,7 @@ var player := "your nation"
 var game_date := ""
 var game_id := ""
 var espionage := true
+var chat_dir := ""
 var generating_now := false
 var puppets: Dictionary = {}
 var seen: Variant = null
@@ -513,6 +514,7 @@ func _apply_load(data: Dictionary) -> void:
 		game_date = next_date
 	game_id = t(data.get("gameId", ""))
 	espionage = data.get("espionage", true) != false
+	chat_dir = t(data.get("chatDir", ""))
 	puppets = d(data.get("puppetMarkers", {}))
 	var next_generating: bool = data.get("generating", false) == true
 	if next_generating != generating_now:
@@ -1050,10 +1052,6 @@ func _style_tabs() -> void:
 func _update_tab_visibility() -> void:
 	var spy: Button = _tab_buttons["spy"]
 	spy.visible = espionage
-	if not ResourceLoader.exists(INSTITUTIONS_VIEW):
-		UI.set_disabled_look(_tab_buttons["institutions"], "Institutions are not in the native app yet.")
-	if not ResourceLoader.exists(INTELLIGENCE_VIEW):
-		UI.set_disabled_look(spy, "Intelligence is not in the native app yet.")
 
 
 func current_view() -> String:
@@ -2504,6 +2502,27 @@ static func style_text_edit(edit: TextEdit, px: int, bg: Color, border: Color, f
 	edit.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.35))
 	edit.add_theme_color_override("background_color", Color(0, 0, 0, 0))
 	edit.add_theme_constant_override("line_spacing", 5)
+
+
+static func set_direction(root: Control, rtl: bool) -> void:
+	_direct_tree(root, rtl)
+	root.tree_entered.connect(func() -> void:
+		(func() -> void:
+			if is_instance_valid(root):
+				_direct_tree.call_deferred(root, rtl)).call_deferred(), CONNECT_ONE_SHOT)
+
+
+static func _direct_tree(node: Node, rtl: bool) -> void:
+	if not is_instance_valid(node):
+		return
+	if node is Control:
+		(node as Control).layout_direction = Control.LAYOUT_DIRECTION_RTL if rtl else Control.LAYOUT_DIRECTION_LTR
+	if node is Label:
+		(node as Label).text_direction = Control.TEXT_DIRECTION_RTL if rtl else Control.TEXT_DIRECTION_LTR
+	elif node is RichTextLabel:
+		(node as RichTextLabel).text_direction = Control.TEXT_DIRECTION_RTL if rtl else Control.TEXT_DIRECTION_LTR
+	for child in node.get_children():
+		_direct_tree(child, rtl)
 
 
 static func normalize_markdown(source: String) -> String:
@@ -4451,6 +4470,8 @@ class Conversation extends VBoxContainer:
 			var rendered := ChatPanel.markdown_view(text, 14)
 			natural = float(rendered.get_meta("natural_width", 0.0)) * (1.04 if text.contains("**") else 1.0)
 			inner.add_child(rendered)
+			if not is_error and not panel.chat_dir.is_empty():
+				ChatPanel.set_direction(inner, panel.chat_dir == "rtl")
 		bubble.add_child(inner)
 		var bubble_width := clampf(maxf(natural + 32.0, label_width), 40.0, max_width)
 		column.custom_minimum_size.x = bubble_width
@@ -4543,7 +4564,10 @@ class Conversation extends VBoxContainer:
 			var names: PackedStringArray = []
 			for member in members:
 				names.append(ChatPanel.t(member["name"]))
-			chip.tooltip_text = "\n".join(names)
+			chip.tooltip_text = ", ".join(names)
+			chip.mouse_entered.connect(_show_reactors.bind(chip, members))
+			chip.mouse_exited.connect(_hide_reactors.bind(chip))
+			chip.tree_exiting.connect(_hide_reactors.bind(chip))
 			var row := HBoxContainer.new()
 			row.add_theme_constant_override("separation", 4)
 			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4558,6 +4582,47 @@ class Conversation extends VBoxContainer:
 			chip.add_child(row)
 			strip.add_child(chip)
 		return strip
+
+
+	func _show_reactors(chip: Control, members: Array) -> void:
+		_hide_reactors(chip)
+		var tip := PanelContainer.new()
+		tip.top_level = true
+		tip.z_index = 4000
+		tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tip_style := UI.box(Color(18 / 255.0, 18 / 255.0, 21 / 255.0, 0.98), Color(1, 1, 1, 0.12), 8, 1, Vector4(8, 5, 8, 5))
+		tip_style.shadow_color = Color(0, 0, 0, 0.35)
+		tip_style.shadow_size = 12
+		tip_style.shadow_offset = Vector2(0, 8)
+		tip.add_theme_stylebox_override("panel", tip_style)
+		var list := VBoxContainer.new()
+		list.add_theme_constant_override("separation", 3)
+		list.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for member in members:
+			var line := HBoxContainer.new()
+			line.add_theme_constant_override("separation", 5)
+			line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			line.add_child(panel.flag_box(ChatPanel.t(member["name"]), Vector2(10, 10)))
+			line.add_child(UI.label(ChatPanel.t(member["name"]), 11, Color(1, 1, 1, 0.82)))
+			list.add_child(line)
+		tip.add_child(list)
+		chip.add_child(tip)
+		chip.set_meta("reactors", tip)
+		var wide := tip.get_combined_minimum_size()
+		tip.size = wide
+		var anchor := chip.get_global_rect()
+		var room := chip.get_viewport_rect().size.x
+		var centre := clampf(anchor.get_center().x, 8.0 + wide.x * 0.5, room - 8.0 - wide.x * 0.5)
+		tip.global_position = Vector2(centre - wide.x * 0.5, anchor.position.y - 5.0 - wide.y)
+
+
+	func _hide_reactors(chip: Control) -> void:
+		if not is_instance_valid(chip) or not chip.has_meta("reactors"):
+			return
+		var tip: Variant = chip.get_meta("reactors")
+		chip.remove_meta("reactors")
+		if is_instance_valid(tip):
+			(tip as Node).queue_free()
 
 
 	func _date_separator(value: String) -> Control:

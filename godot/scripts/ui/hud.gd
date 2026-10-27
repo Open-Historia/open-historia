@@ -42,6 +42,11 @@ var after_action: Node
 var _inset_tween: Tween
 var _map: MapView
 var _game: Dictionary = {}
+var _game_name := ""
+var _typing_timer: Timer
+var _typing_dots := 1
+var _advisor_button: Button
+var _flag_info: Dictionary = {}
 
 
 func _ready() -> void:
@@ -55,6 +60,13 @@ func _ready() -> void:
 	date_widget.panel_changed.connect(_on_date_panel)
 	date_widget.turn_landed.connect(func(view: Dictionary) -> void: turn_landed.emit(view))
 	date_widget.open_interactive.connect(func() -> void: open_interactive.emit())
+	_typing_timer = Timer.new()
+	_typing_timer.wait_time = 0.45
+	_typing_timer.timeout.connect(func() -> void:
+		_typing_dots = (_typing_dots % 3) + 1
+		if _chat_badge_label:
+			_chat_badge_label.text = ".".repeat(_typing_dots))
+	add_child(_typing_timer)
 
 
 func setup(engine: EngineLink, map: MapView) -> void:
@@ -131,6 +143,7 @@ func _build_top_left() -> void:
 	pill.add_child(row)
 	var exit := _glass(UI.HUD_PILL, 11, Rect2(328, 8, 92, 46))
 	var exit_button := _flat_button("⌂ Exit Game", 11, 600)
+	exit_button.tooltip_text = "Leave this game and return to the main menu"
 	exit_button.pressed.connect(func() -> void: exit_game.emit())
 	exit.add_child(exit_button)
 
@@ -200,14 +213,20 @@ func set_chat_badge(count: int, generating := false) -> void:
 	if not _chat_badge:
 		return
 	_chat_badge.visible = active_panel != "chat" and (generating or count > 0)
-	_chat_badge_label.text = "…" if generating else ("9+" if count > 9 else str(count))
-	_chat_badge.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.35) if generating else Color("#dc2626"), Color(1, 1, 1, 0.35), 999, 1, Vector4(3, 0, 3, 0)))
+	if generating:
+		if _typing_timer.is_stopped():
+			_typing_dots = 1
+			_typing_timer.start()
+		_chat_badge_label.text = ".".repeat(_typing_dots)
+	else:
+		_typing_timer.stop()
+		_chat_badge_label.text = "9+" if count > 9 else str(count)
+	_chat_badge_label.add_theme_font_size_override("font_size", 11 if generating else 10)
+	_chat_badge.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.35) if generating else Color("#dc2626"), Color(1, 1, 1, 0.35), 999, 1, Vector4(5, 0, 5, 0) if generating else Vector4(3, 0, 3, 0)))
 	_launchers["chat"].tooltip_text = "Chat — diplomacy in progress" if generating else "Chat"
 
 
 func toggle_dock(name: String) -> void:
-	if date_widget.is_loading and name != "skip" and not (name == "history" and date_widget.skip_in_flight):
-		return
 	set_active_panel("" if active_panel == name else name)
 
 
@@ -231,8 +250,11 @@ func set_active_panel(name: String) -> void:
 			dock_panel.emit(launcher, false)
 	if _launchers.has(name) and previous != name:
 		dock_panel.emit(name, true)
-	if _chat_badge and name == "chat":
-		_chat_badge.visible = false
+	if _chat_badge:
+		if name == "chat":
+			_chat_badge.visible = false
+		elif previous == "chat":
+			set_chat_badge(_chat_unread, _chat_generating)
 
 
 func _on_date_panel(name: String) -> void:
@@ -273,11 +295,15 @@ func _build_bottom_right() -> void:
 	flag_button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
 	flag_button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
 	flag_button.pressed.connect(func() -> void:
+		if open_drawer == "country":
+			close_drawer()
+			return
 		open_country.emit()
 		show_country(str(_game.get("country", ""))))
 	_flag_frame.add_child(flag_button)
 	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer)
 	var advisor := _flat_button("", 12)
+	_advisor_button = advisor
 	advisor.tooltip_text = "Advisor"
 	advisor.icon = UI.icon("advisor", 22)
 	advisor.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -328,14 +354,40 @@ func set_map_mode(mode: String, announce := false) -> void:
 
 
 func set_game(view: Dictionary, game_name: String) -> void:
-	var country := str(view.get("country", ""))
-	_pill_subtitle.text = "%s / %s / %s" % [game_name, country, str(view.get("gameDate", ""))]
+	_game_name = game_name
+	var country := str(view.get("countryName", ""))
+	if country.is_empty():
+		country = str(view.get("country", ""))
+	var date := str(view.get("gameDate", ""))
+	_pill_subtitle.text = "%s / %s / %s" % [game_name, country if not country.is_empty() else "No country", date if not date.is_empty() else "No date"]
+	if not str(view.get("country", "")).is_empty():
+		_game["country"] = str(view.get("country", ""))
+		if view.has("countryName"):
+			_game["countryName"] = str(view.get("countryName", ""))
 
 
-func set_flag(texture: Texture2D) -> void:
+func set_flag(texture: Texture2D, emoji := "") -> void:
 	_flag.texture = texture
+	_flag_fallback.text = emoji if texture == null and not emoji.is_empty() else "🏳️"
+	_flag_fallback.add_theme_font_size_override("font_size", 22 if texture == null and not emoji.is_empty() else 16)
 	_flag_fallback.visible = texture == null
+	var fallback_box: StyleBox = StyleBoxEmpty.new() if not emoji.is_empty() else UI.box(Color(1, 1, 1, 0.063), Color(1, 1, 1, 0.12), 5, 1)
+	_flag_fallback.add_theme_stylebox_override("normal", fallback_box)
 	_refresh_flag_badge()
+
+
+func set_flag_info(info: Dictionary) -> void:
+	_flag_info = info
+	var path := str(info.get("flag", ""))
+	var texture: Texture2D = null
+	if not path.is_empty():
+		texture = UI.flag(path, 48) if path.get_extension().to_lower() == "svg" else _image_texture(path)
+	set_flag(texture, str(info.get("emoji", "")))
+
+
+func _image_texture(path: String) -> Texture2D:
+	var image := Image.load_from_file(path)
+	return ImageTexture.create_from_image(image) if image and not image.is_empty() else null
 
 
 func enter_game() -> void:
@@ -635,7 +687,7 @@ func _reload_flag_and_map() -> void:
 		return
 	var flag := await _engine.request("game.flag", {"country": str(_game.get("country", ""))})
 	if flag.get("ok", false):
-		set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+		set_flag_info(flag["result"])
 	if war and is_instance_valid(war) and war.has_method("refresh"):
 		await war.call("refresh")
 		return
@@ -659,7 +711,11 @@ func _refresh_flag_badge() -> void:
 		return
 	var open := open_drawer == "country"
 	_flag_frame.set_tint(Color(75 / 255.0, 143 / 255.0, 251 / 255.0, 0.17) if open else UI.HUD_BUTTON)
-	var name := str(date_widget.status.get("playerCountry", _game.get("country", "")))
+	if _advisor_frame:
+		_advisor_frame.set_tint(Color(1, 1, 1, 0.085) if open_drawer == "advisor" else UI.HUD_BUTTON)
+	var name := str(_game.get("countryName", ""))
+	if name.is_empty():
+		name = str(date_widget.status.get("playerCountry", _game.get("country", "")))
 	for child in _flag_frame.get_children():
 		if child is Button:
 			(child as Button).tooltip_text = "%s · Open country panel" % name

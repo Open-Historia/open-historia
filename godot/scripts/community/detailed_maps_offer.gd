@@ -15,6 +15,8 @@ const DEFAULT_TITLE := "This scenario has detailed maps"
 const DEFAULT_INTRO := "Large terrain maps, sharp up close. Tick the ones to download now; you can get the others later by picking them in Settings → Map. Without one, you see the drawn map under it. Each downloads once, and every scenario on it shares it."
 
 var engine: EngineLink
+var title := DEFAULT_TITLE
+var intro := DEFAULT_INTRO
 var _single := {}
 var _offers: Array = []
 var _ticked := {}
@@ -207,8 +209,8 @@ func _render_list(stack: VBoxContainer) -> void:
 				engine.cancel(_call))
 		stack.add_child(cancel)
 		return
-	stack.add_child(CommunityKit.margin_below(_line(DEFAULT_TITLE, 600), 4))
-	stack.add_child(CommunityKit.margin_below(_line(DEFAULT_INTRO, 400, 0.8), 10))
+	stack.add_child(CommunityKit.margin_below(_line(title, 600), 4))
+	stack.add_child(CommunityKit.margin_below(_line(intro, 400, 0.8), 10))
 	var choices := CommunityKit.column(6)
 	var total := 0.0
 	for entry in _offers:

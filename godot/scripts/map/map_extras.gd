@@ -5,7 +5,7 @@ signal settings_changed(settings: Dictionary)
 signal globe_changed(active: bool)
 signal world_refreshed(world: Dictionary)
 
-const SLOTS := ["flood", "under", "season", "ice", "top"]
+const SLOTS := ["natgeo_fills", "flood", "under", "natgeo_lines", "season", "ice", "top"]
 const LAT_NORTH := 85.0
 const LAT_SOUTH := -80.0
 const KEY_ALIASES := {
@@ -52,6 +52,8 @@ var overlays: RegionOverlays
 var season: SeasonTint
 var flood: OwnershipFlood
 var offers: BasemapOffers
+var navigator: MapNavigator
+var natgeo: NatGeoReference
 var _layer: CanvasLayer
 var _ui: Control
 var _slots: Array[Dictionary] = []
@@ -91,6 +93,12 @@ func setup(link: EngineLink, context: Dictionary) -> void:
 		_layer.add_child(_ui)
 	_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	navigator = MapNavigator.new()
+	add_child(navigator)
+	navigator.setup(self, map_view, globe, _ui)
+	natgeo = NatGeoReference.new()
+	add_child(natgeo)
+	natgeo.setup(self, map_view)
 	offers = BasemapOffers.new()
 	_ui.add_child(offers)
 	offers.setup(self)
@@ -111,6 +119,9 @@ func setup(link: EngineLink, context: Dictionary) -> void:
 		var reply: Dictionary = await engine.request("mapextras.settings")
 		if bool(reply.get("ok", false)) and reply.get("result") is Dictionary:
 			_merge_settings(reply["result"])
+		var motion: Dictionary = await engine.request("mapextras.systemMotion")
+		if bool(motion.get("ok", false)) and motion.get("result") is Dictionary:
+			settings["reduceMotion"] = bool((motion["result"] as Dictionary).get("reduced", false))
 	_apply_all()
 	await refresh()
 
@@ -149,7 +160,20 @@ func apply_map_settings(values: Dictionary) -> void:
 			break
 	if changed.has("seasonsWeather"):
 		season.refresh()
+	if changed.has("seasonsWeather") or changed.has("weatherEffects"):
+		var war := war_layers()
+		if war and war.has_method("refresh"):
+			war.call("refresh")
 	settings_changed.emit(map_settings())
+
+
+func war_layers() -> Node:
+	if map_view == null:
+		return null
+	for child in map_view.get_children():
+		if child.has_method("set_war_room") and child.has_method("refresh"):
+			return child
+	return null
 
 
 func map_settings() -> Dictionary:
@@ -201,6 +225,22 @@ func refresh() -> void:
 	_refreshing = false
 
 
+func refresh_world() -> void:
+	if not engine or not map_view:
+		return
+	_world_request += 1
+	var ticket := _world_request
+	var reply: Dictionary = await engine.request("mapextras.world")
+	if ticket != _world_request or not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
+		return
+	world = reply["result"]
+	overlays.set_world(world)
+	world_refreshed.emit(world)
+
+
+var _world_request := 0
+
+
 func _refresh_once() -> void:
 	var stored: Dictionary = await engine.request("mapextras.settings")
 	if bool(stored.get("ok", false)) and stored.get("result") is Dictionary:
@@ -234,6 +274,8 @@ func refresh_background() -> void:
 	_basemap_shown = shown
 	if map_view.basemap and map_view.basemap.has_method("apply_style"):
 		map_view.basemap.call("apply_style", background, engine)
+	if natgeo:
+		natgeo.set_enabled(str(background.get("kind", "builtin")) == "builtin" and str(background.get("basemapId", "")) == "natgeo-dark")
 	_apply_all()
 	offers.set_background(background)
 	map_view.call("_after_camera_move")
@@ -270,6 +312,8 @@ static func political_fill_opacity(level: float) -> float:
 
 func _on_baked(_info: Dictionary) -> void:
 	_build_slots()
+	if natgeo:
+		natgeo.rebuild()
 	overlays.rebuild()
 	season.rebuild()
 	flood.rebuild()
@@ -300,16 +344,23 @@ func order_slots() -> void:
 		var copy: Node2D = entry["copy"]
 		if not is_instance_valid(copy):
 			continue
+		var natgeo_fills_slot: Node2D = entry["natgeo_fills"]
 		var flood_slot: Node2D = entry["flood"]
 		var under_slot: Node2D = entry["under"]
+		var natgeo_lines_slot: Node2D = entry["natgeo_lines"]
 		var season_slot: Node2D = entry["season"]
 		var ice_slot: Node2D = entry["ice"]
 		var top_slot: Node2D = entry["top"]
 		var fill_index := map_view.extras_child_index(copy, "fill")
+		if fill_index >= 0 and natgeo_fills_slot.get_index() != fill_index - 1:
+			_place_before(copy, natgeo_fills_slot, fill_index)
+			fill_index = map_view.extras_child_index(copy, "fill")
 		if fill_index >= 0 and flood_slot.get_index() != fill_index + 1:
 			_place_after(copy, flood_slot, fill_index)
 		if under_slot.get_index() != flood_slot.get_index() + 1:
 			_place_after(copy, under_slot, flood_slot.get_index())
+		if natgeo_lines_slot.get_index() != under_slot.get_index() + 1:
+			_place_after(copy, natgeo_lines_slot, under_slot.get_index())
 		var shadow_index := map_view.extras_child_index(copy, "shadow")
 		if shadow_index >= 0 and ice_slot.get_index() != shadow_index - 1:
 			_place_before(copy, ice_slot, shadow_index)
@@ -336,6 +387,8 @@ func _process(_delta: float) -> void:
 	if now - _ordered_at > 500 and not _slots.is_empty():
 		_ordered_at = now
 		order_slots()
+		if natgeo:
+			natgeo.keep_labels_under()
 
 
 func slots(name: String) -> Array[Node2D]:
@@ -381,19 +434,17 @@ func render_view() -> Array:
 func after_camera_move(level: float) -> void:
 	if globe and globe.active:
 		globe.after_camera_move()
+	if natgeo:
+		natgeo.update_view()
 	overlays.on_zoom(level)
 	season.on_zoom(level)
 	flood.on_zoom(level)
 
 
 func map_input(event: InputEvent) -> bool:
-	if globe == null:
+	if navigator == null:
 		return false
-	if event is InputEventMouseButton or event is InputEventMagnifyGesture or event is InputEventPanGesture:
-		globe.mark_interaction()
-	if globe.active:
-		return globe.handle_input(event)
-	return false
+	return navigator.handle(event)
 
 
 func globe_world_to_screen(point: Vector2) -> Vector2:
@@ -419,5 +470,11 @@ func set_rotation_paused(paused: bool) -> void:
 
 
 func _on_engine_event(name: String, data: Variant) -> void:
+	if name == "warmap.shown":
+		refresh_world()
+		return
+	if name == "mapextras.systemMotion" and data is Dictionary:
+		apply_map_settings({"reduceMotion": bool((data as Dictionary).get("reduced", false))})
+		return
 	if name == "mapextras.install" and data is Dictionary:
 		offers.on_install_progress(data)

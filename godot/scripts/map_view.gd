@@ -653,7 +653,10 @@ class CityLayer extends Control:
 		var view := map.get_viewport_rect().size
 		var font := UI.font(700)
 		var star := UI.icon("star", 13)
-		var taken: Array[Rect2] = []
+		var taken: Array[Rect2] = map.war_label_rects.duplicate()
+		taken.append_array(map.room_label_rects)
+		taken.append_array(map.war_marker_rects)
+		var own: Array[Rect2] = []
 		for index in _order:
 			var city: Array = _cities[index]
 			var capital := int(city[3]) == 1
@@ -683,8 +686,10 @@ class CityLayer extends Control:
 				if clash:
 					continue
 				taken.append(box)
+				own.append(box)
 				draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 4, Color(0.02, 0.03, 0.05, 0.92))
 				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0.98, 0.98, 0.96))
+		map.city_label_rects = own
 
 
 func set_label_engine(link: EngineLink) -> void:
@@ -945,3 +950,55 @@ func editor_set_view(world_centre: Vector2, zoom: float) -> void:
 func editor_apply_basemap(style: Dictionary, link: EngineLink) -> void:
 	if basemap and basemap.has_method("apply_style"):
 		basemap.apply_style(style, link)
+
+
+var war_quiet: Dictionary = {}
+
+
+func war_quiet_regions() -> Dictionary:
+	return war_quiet
+
+
+var war_label_rects: Array[Rect2] = []
+var city_label_rects: Array[Rect2] = []
+
+
+func war_set_label_rects(rects: Array[Rect2]) -> void:
+	if rects == war_label_rects:
+		return
+	war_label_rects = rects
+	if _cities:
+		_cities.queue_redraw()
+
+
+func war_city_label_rects() -> Array[Rect2]:
+	return city_label_rects
+
+
+func war_cancel_globe_drag() -> void:
+	var globe_node: Variant = extras.get("globe") if extras else null
+	if globe_node is Object:
+		(globe_node as Object).set("_dragging", false)
+		(globe_node as Object).set("_drag_distance", 99.0)
+
+
+var room_label_rects: Array[Rect2] = []
+
+
+func room_set_label_rects(rects: Array[Rect2]) -> void:
+	if rects == room_label_rects:
+		return
+	room_label_rects = rects
+	if _cities:
+		_cities.queue_redraw()
+
+
+var war_marker_rects: Array[Rect2] = []
+
+
+func war_set_marker_rects(rects: Array[Rect2]) -> void:
+	if rects == war_marker_rects:
+		return
+	war_marker_rects = rects
+	if _cities:
+		_cities.queue_redraw()

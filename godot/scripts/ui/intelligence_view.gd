@@ -459,7 +459,7 @@ static func _dot(color: Color, size: int) -> Control:
 static func _flag_rect(path: String, box: Vector2) -> Control:
 	var texture: Texture2D = null
 	if not path.is_empty():
-		texture = UI.flag(path, int(ceil(box.y * 2.0)))
+		texture = ChatPanel.flag_texture(path, int(ceil(box.y * 2.0)))
 	if texture == null:
 		var blank := UI.label("🏳", maxi(8, int(box.y * 0.9)), UI.WHITE)
 		blank.custom_minimum_size = box
@@ -821,7 +821,7 @@ func _dossier() -> Control:
 	var flag_path := str(dossier.get("flag", ""))
 	var texture: Texture2D = null
 	if not flag_path.is_empty():
-		texture = UI.flag(flag_path, _sp(1.75) * 2)
+		texture = ChatPanel.flag_texture(flag_path, int(_sp(1.75) * 2))
 	if texture:
 		var flag := TextureRect.new()
 		flag.texture = texture

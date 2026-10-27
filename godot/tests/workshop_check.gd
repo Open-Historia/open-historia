@@ -189,10 +189,12 @@ func _run() -> void:
 	await _countries()
 	await _city()
 	await _edit_tools()
+	await _reference()
 	await _side_panels()
 	await _save()
 	await _exit()
 	await _review()
+	await _import()
 	_finish()
 
 
@@ -386,7 +388,7 @@ func _edit_tools() -> void:
 	_check("the two neighbours share a border vertex on screen", shared_screen.x >= 0)
 	if shared_screen.x >= 0:
 		var undo_before := bool((workshop.state.get("history", {}) as Dictionary).get("canUndo", false))
-		await _drag_mouse(shared_screen, shared_screen + Vector2(12, 9))
+		await _drag_mouse(shared_screen, shared_screen + Vector2(6, 5))
 		await _wait(3.0)
 		await _until(func() -> bool: return not workshop._rebaking, 15.0)
 		var a_keys := {}
@@ -406,6 +408,60 @@ func _edit_tools() -> void:
 		await _shoot("ws-21-shared-border")
 	workshop.set_tool("select")
 	workshop.set_selection([])
+
+
+func _reference() -> void:
+	var picture := Image.create(320, 200, false, Image.FORMAT_RGBA8)
+	picture.fill(Color(0.9, 0.2, 0.2))
+	for x in range(0, 320, 20):
+		for y in range(200):
+			picture.set_pixel(x, y, Color(1, 1, 1))
+	var file := OS.get_environment("OH_NATIVE_ROOT").path_join("reference-test.png")
+	picture.save_png(file)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + file)
+	workshop.zoom_to(["FRA.8_1"], 6.0)
+	await _wait(1.0)
+	workshop.open_panel_named("reference")
+	await _frames(4)
+	var panel := workshop._panel as WorkshopReference
+	_check("the Reference panel opened", panel != null and _find_button(panel, "⬆ Upload reference image") != null)
+	if panel == null:
+		return
+	await panel._upload()
+	await _frames(4)
+	var reference: Dictionary = workshop.map.reference
+	_check("an image is placed on the view", not reference.is_empty() and (reference.get("rect", Rect2()) as Rect2).size.x > 0.0 and _find_button(panel, "⬆ Replace image") != null)
+	if reference.is_empty():
+		return
+	var rect: Rect2 = reference["rect"]
+	var centre := workshop.map.global_position + workshop.map.map.world_to_screen(rect.get_center())
+	await _drag_mouse(centre, centre + Vector2(60, 40))
+	var moved: Rect2 = workshop.map.reference["rect"]
+	_check("dragging inside moves the image", moved.position.distance_to(rect.position) > 0.0 and is_equal_approx(moved.size.x, rect.size.x), "%s -> %s" % [str(rect.position), str(moved.position)])
+	var corner := workshop.map.global_position + workshop.map.map.world_to_screen(moved.position + moved.size)
+	await _drag_mouse(corner, corner + Vector2(50, 30))
+	var resized: Rect2 = workshop.map.reference["rect"]
+	_check("dragging a corner resizes it", resized.size.x > moved.size.x and is_equal_approx(resized.position.x, moved.position.x), "%s -> %s" % [str(moved.size), str(resized.size)])
+	var edits := _find_type(panel, "LineEdit")
+	if not edits.is_empty():
+		var field: LineEdit = edits[0]
+		field.text = "0.7"
+		field.text_changed.emit("0.7")
+	_check("the opacity follows its field", is_equal_approx(float(workshop.map.reference.get("opacity", 0.0)), 0.7), str(workshop.map.reference.get("opacity")))
+	await _shoot("ws-22-reference")
+	workshop.close_panel()
+	await _frames(3)
+	_check("closing the panel ends the adjusting", not workshop.map.reference_adjust and not workshop.map.reference.is_empty())
+	await _shoot("ws-23-reference-traced")
+	workshop.open_panel_named("reference")
+	await _frames(4)
+	var remove := _find_button(workshop._panel, "Remove")
+	if remove:
+		remove.pressed.emit()
+	await _frames(2)
+	_check("Remove takes the image away", workshop.map.reference.is_empty())
+	workshop.close_panel()
+	OS.set_environment("OH_EDITOR_PICK", "")
 
 
 func _city() -> void:
@@ -535,7 +591,7 @@ func _save() -> void:
 	workshop._cleanup.answered.emit("quick")
 	await _wait(1.5)
 	await _shoot("ws-12-cleanup-progress")
-	var done := await _until(func() -> bool: return workshop._busy_action.is_empty(), 240.0)
+	var done := await _until(func() -> bool: return not saved_details.is_empty(), 240.0)
 	_check("the save finished", done and not saved_details.is_empty(), str(saved_details.size()))
 	var status: Dictionary = workshop.state.get("status", {})
 	_check("the scenario is saved", not bool(status.get("scenarioDirty", true)))
@@ -633,6 +689,361 @@ func _review() -> void:
 	second.request_close(true)
 	await _until(func() -> bool: return shut[0], 10.0)
 	_check("the review Workshop closed", shut[0])
+
+
+func _answer(host: Node, starts: String) -> bool:
+	var found := await _until(func() -> bool:
+		for child in host.get_children():
+			if child is ConfirmationDialog and (child as ConfirmationDialog).dialog_text.begins_with(starts):
+				return true
+		return false, 10.0)
+	if not found:
+		return false
+	for child in host.get_children():
+		if child is ConfirmationDialog and (child as ConfirmationDialog).dialog_text.begins_with(starts):
+			(child as ConfirmationDialog).confirmed.emit()
+	await _frames(2)
+	return true
+
+
+func _accept(host: Node, starts: String) -> bool:
+	var found := await _until(func() -> bool:
+		for child in host.get_children():
+			if child is AcceptDialog and not (child is ConfirmationDialog) and (child as AcceptDialog).dialog_text.begins_with(starts):
+				return true
+		return false, 20.0)
+	for child in host.get_children():
+		if child is AcceptDialog and not (child is ConfirmationDialog) and (child as AcceptDialog).dialog_text.begins_with(starts):
+			(child as AcceptDialog).confirmed.emit()
+	await _frames(2)
+	return found
+
+
+func _library_entry(picker: WorkshopBasemaps, name: String) -> Dictionary:
+	for entry in picker._data.get("mine", []):
+		if str((entry as Dictionary).get("name", "")) == name:
+			return entry
+	return {}
+
+
+func _scenario_map(picker: WorkshopBasemaps, name: String) -> Dictionary:
+	for entry in picker._data.get("maps", []):
+		if str((entry as Dictionary).get("name", "")) == name:
+			return entry
+	return {}
+
+
+func _save_thumbnail(url: String, shot_name: String) -> bool:
+	if not url.begins_with("data:image/jpeg;base64,"):
+		return false
+	var image := Image.new()
+	if image.load_jpg_from_buffer(Marshalls.base64_to_raw(url.substr(23))) != OK:
+		return false
+	if not shots.is_empty():
+		image.save_png(shots.path_join(shot_name + ".png"))
+	return image.get_width() > 0
+
+
+func _projection_redraw(w: Workshop) -> void:
+	var maps := await w.request_raw("workshop.maps")
+	var key := ""
+	for entry in (maps["result"] as Dictionary).get("maps", []):
+		if str((entry as Dictionary).get("name", "")) == "Old Chart":
+			key = str((entry as Dictionary).get("key", ""))
+	await w.request("workshop.maps.makeStarting", {"key": key})
+	w.open_panel_named("projection")
+	await _frames(3)
+	var panel := w._panel as WorkshopProjection
+	await _until(func() -> bool: return not panel._check.is_empty(), 20.0)
+	var before := str(panel._options.get("pictureFile", ""))
+	_check("the starting picture is known to the Projection panel", not key.is_empty() and bool(panel._options.get("hasPicture", false)) and is_equal_approx(panel._picture_aspect, 2.0), "%s %s" % [key, panel._picture_aspect])
+	panel._type = "robinson"
+	await panel._recheck()
+	var convert := _find_button(panel, "Convert the map")
+	if convert:
+		convert.pressed.emit()
+	await _until(func() -> bool: return panel._busy, 5.0)
+	var done := await _until(func() -> bool: return not panel._busy and str((panel._options.get("current", {}) as Dictionary).get("type", "")) == "robinson", 60.0)
+	var after := str(panel._options.get("pictureFile", ""))
+	var aspect := panel._aspect_of(after)
+	_check("converting redraws the starting picture for the new projection", done and panel._error.is_empty() and after != before and not after.is_empty() and absf(aspect - 2.0) > 0.005, "%s %s %s" % [panel._error, after.get_file(), aspect])
+	await _wait(1.0)
+	await _shoot("ws-35-picture-redrawn")
+	panel._picture_aspect = aspect
+	panel._type = "freeform"
+	await panel._recheck()
+	var own := _find_button(panel, "Use the picture's own shape")
+	if own:
+		own.pressed.emit()
+		await _frames(6)
+	_check("Freeform offers the picture's own shape", own != null and panel._shape == str(panel._check.get("pictureShape", "")) and not panel._shape.is_empty(), panel._shape)
+	w.close_panel()
+
+
+func _flag_picker(w: Workshop) -> WorkshopFlags:
+	for child in w._overlays.get_children():
+		if child is WorkshopFlags and not child.is_queued_for_deletion():
+			return child
+	return null
+
+
+func _flag_community(w: Workshop, opened: String) -> void:
+	var root_dir := OS.get_environment("OH_NATIVE_ROOT")
+	w.open_flag_picker("France")
+	await _frames(4)
+	var picker := _flag_picker(w)
+	await _until(func() -> bool: return not picker._catalog.is_empty(), 20.0)
+	picker._set_tab("community")
+	var listed := await _until(func() -> bool: return picker._community_loaded or not picker._community_error.is_empty(), 60.0)
+	_check("the flag picker's Community tab lists hub flags", listed and not picker._community.is_empty() and _find_button(picker, "Use this flag") != null, picker._community_error)
+	var pack_button: Button = null
+	for button in _find_type(picker, "Button"):
+		if (button as Button).text.begins_with("⬇ Add "):
+			pack_button = button
+	_check("scenario flag packs are offered", pack_button != null)
+	await _wait(2.0)
+	await _shoot("ws-34-flags-community")
+	picker._share_form()
+	await _until(func() -> bool: return FileAccess.get_file_as_string(opened).contains("template=flag.yml"), 10.0)
+	_check("⬆ Share a flag opens the hub's flag form", FileAccess.get_file_as_string(opened).contains("title=%5BFlag%5D%20France%20flag"))
+	var single := {}
+	for entry in picker._community:
+		if not bool((entry as Dictionary).get("fromScenario", false)):
+			single = entry
+			break
+	await picker._use_post(single)
+	var applied := await _until(func() -> bool:
+		var flag := str(((w.state.get("doc", {}) as Dictionary).get("flags", {}) as Dictionary).get("France", ""))
+		return flag.begins_with("data:image/"), 30.0)
+	_check("Use this flag applies it and keeps it in My flags", applied and _flag_picker(w) == null)
+	var picture := Image.create(60, 40, false, Image.FORMAT_RGB8)
+	picture.fill(Color8(20, 120, 60))
+	var file := root_dir.path_join("Green Banner.png")
+	picture.save_png(file)
+	w.open_flag_picker("Narnia")
+	await _frames(4)
+	picker = _flag_picker(w)
+	await _until(func() -> bool: return not picker._catalog.is_empty(), 20.0)
+	_check("a community flag in My flags links to its post", _find_button(picker, "Community ↗") != null)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + file)
+	await picker._upload()
+	OS.set_environment("OH_EDITOR_PICK", "")
+	w.open_flag_picker("Narnia")
+	await _frames(4)
+	picker = _flag_picker(w)
+	await _until(func() -> bool: return not picker._catalog.is_empty(), 20.0)
+	var mine := {}
+	for entry in picker._catalog.get("mine", []):
+		if str((entry as Dictionary).get("name", "")) == "Green Banner":
+			mine = entry
+	picker._share({"name": "Green Banner", "polity": "Narnia", "code": "Narnia", "dataUrl": str(mine.get("dataUrl", "")), "author": ""})
+	_check("⤴ shares a flag: file saved, hub form opened", not mine.is_empty() and await _accept(w, "\"green-banner.png\" was downloaded.") and FileAccess.get_file_as_string(opened).contains("Flag-Polity%3A%20Narnia"))
+	var downloads := OS.get_environment("OH_NATIVE_DOWNLOADS")
+	_check("the shared files are in the downloads folder", FileAccess.file_exists(downloads.path_join("green-banner.png")) and FileAccess.file_exists(downloads.path_join("old-chart.png")))
+	OS.set_environment("OH_EDITOR_OPEN_LOG", "")
+	picker.closed.emit()
+	await _frames(2)
+
+
+func _basemaps(w: Workshop) -> void:
+	var root_dir := OS.get_environment("OH_NATIVE_ROOT")
+	w.open_basemaps()
+	await _frames(4)
+	var picker: WorkshopBasemaps = null
+	for child in w._overlays.get_children():
+		if child is WorkshopBasemaps:
+			picker = child
+	_check("the Maps window opens", picker != null)
+	if picker == null:
+		return
+	await _until(func() -> bool: return not picker._loading, 20.0)
+	_check("Add basemap is offered", picker._add_button != null and not picker._add_button.disabled and picker._add_button.tooltip_text.begins_with("A basemap:"))
+	var drawn := {"type": "FeatureCollection", "features": [
+		{"type": "Feature", "properties": {"fill": "#2f6b3a"}, "geometry": {"type": "Polygon", "coordinates": [[[-20, 20], [40, 20], [40, 60], [-20, 60], [-20, 20]], [[0, 35], [15, 35], [15, 45], [0, 45], [0, 35]]]}},
+		{"type": "Feature", "properties": {"fill": "#c9a25b"}, "geometry": {"type": "Polygon", "coordinates": [[[3, 38], [12, 38], [12, 42], [3, 42], [3, 38]]]}},
+	]}
+	var drawn_file := root_dir.path_join("Test Biomes.geojson")
+	var out := FileAccess.open(drawn_file, FileAccess.WRITE)
+	out.store_string(JSON.stringify(drawn))
+	out.close()
+	OS.set_environment("OH_EDITOR_PICK", "*=" + drawn_file)
+	await picker._add()
+	var biomes := _library_entry(picker, "Test Biomes")
+	_check("a painted map joins Your basemaps and the scenario", not biomes.is_empty() and not _scenario_map(picker, "Test Biomes").is_empty() and str(picker._notice.get("text", "")) == "Added to this scenario's maps. To draw on it, make it the starting map (★).")
+	_check("its card picture is drawn natively", _save_thumbnail(str(biomes.get("thumbnail", "")), "ws-29-thumb-drawn"))
+	var picture := Image.create(300, 150, false, Image.FORMAT_RGB8)
+	picture.fill(Color8(40, 90, 160))
+	picture.fill_rect(Rect2i(100, 40, 100, 70), Color8(230, 200, 90))
+	var picture_file := root_dir.path_join("Old Chart.png")
+	picture.save_png(picture_file)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + picture_file)
+	await picker._add()
+	var chart := _library_entry(picker, "Old Chart")
+	_check("a picture joins Your basemaps with its thumbnail", not chart.is_empty() and _save_thumbnail(str(chart.get("thumbnail", "")), "ws-30-thumb-picture") and not _scenario_map(picker, "Old Chart").is_empty())
+	var kml_file := root_dir.path_join("Coast.kml")
+	out = FileAccess.open(kml_file, FileAccess.WRITE)
+	out.store_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><kml xmlns=\"http://www.opengis.net/kml/2.2\"><Document><Folder><Placemark id=\"p1\"><name>Isle &amp; Bay</name><Polygon><outerBoundaryIs><LinearRing><coordinates>-5,50,0 5,50,0 5,55,0 -5,55,0 -5,50,0</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Folder></Document></kml>")
+	out.close()
+	OS.set_environment("OH_EDITOR_PICK", "*=" + kml_file)
+	await picker._add()
+	_check("a KML map is read and added", not _library_entry(picker, "Coast").is_empty() and not _scenario_map(picker, "Coast").is_empty())
+	await _shoot("ws-31-maps-added")
+	var tif_file := root_dir.path_join("survey.tif")
+	FileAccess.open(tif_file, FileAccess.WRITE).store_string("II*")
+	OS.set_environment("OH_EDITOR_PICK", "*=" + tif_file)
+	picker._add()
+	_check("a GeoTIFF is refused honestly", await _accept(w, "Could not add that map: the native Workshop cannot show GeoTIFF"))
+	await _until(func() -> bool: return not picker._busy, 10.0)
+	OS.set_environment("OH_EDITOR_PICK", "")
+	var reply := await w.request_raw("workshop.maps.deleteLibrary", {"basemapId": str(biomes.get("id", ""))})
+	await picker._refresh()
+	var row := _scenario_map(picker, "Test Biomes")
+	_check("a scenario map missing from Your basemaps offers Save", reply.get("ok", false) and bool(row.get("canSaveToLibrary", false)) and _find_button(picker, "Save to Your basemaps") != null)
+	await picker._save_to_library(row)
+	var again := _library_entry(picker, "Test Biomes")
+	_check("Save to Your basemaps keeps a copy with a native picture", not again.is_empty() and str(again.get("thumbnail", "")).begins_with("data:image/jpeg;base64,") and not bool(_scenario_map(picker, "Test Biomes").get("canSaveToLibrary", true)))
+	await _shoot("ws-32-maps-saved")
+	var opened := root_dir.path_join("opened-urls.txt")
+	OS.set_environment("OH_EDITOR_OPEN_LOG", opened)
+	var chart_entry := _library_entry(picker, "Old Chart")
+	picker._publish(chart_entry)
+	_check("⤴ shares a basemap: file saved, hub form opened", await _accept(w, "\"old-chart.png\" was downloaded.") and FileAccess.get_file_as_string(opened).contains("template=basemap.yml"))
+	picker._set_tab("community")
+	var listed := await _until(func() -> bool: return picker._community_loaded and picker._official_loaded and not picker._community_loading and not picker._official_loading, 60.0)
+	_check("the Community tab lists the hub's maps", listed and not picker._community.is_empty() and _find_button(picker, "⬇ Install") != null and _find_label(picker, "Community maps") != null, picker._community_error)
+	_check("detailed maps are offered with their size", _find_type(picker, "Button").any(func(button: Button) -> bool: return button.text.begins_with("⬇ Download (") or button.text.begins_with("✓ Downloaded")))
+	await _wait(2.0)
+	await _shoot("ws-33-maps-community")
+	var target := {}
+	for entry in picker._community:
+		var post: Dictionary = entry
+		if bool(post.get("installable", false)) and not bool(post.get("installed", false)) and not bool(post.get("fromScenario", false)):
+			target = post
+			break
+	if not target.is_empty():
+		await picker._install(target)
+		var installed := _library_entry(picker, str(target.get("title", "")))
+		_check("⬇ Install brings a community basemap into Your basemaps", picker._tab == "mine" and not installed.is_empty() and bool(installed.get("community", false)), str(target.get("title", "")))
+	picker.closed.emit()
+	await _frames(2)
+	await _flag_community(w, opened)
+	await _projection_redraw(w)
+
+
+func _import() -> void:
+	var tiles := str(main.info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+	var third := Workshop.new()
+	main.ui.add_child(third)
+	var shut := [false]
+	third.closed.connect(func() -> void: shut[0] = true)
+	third.setup(main.engine, {"tiles_cache": tiles})
+	third.open({"id": "default", "name": "Modern Day"}, {})
+	var ready := await _until(func() -> bool: return third.hydrated, 180.0)
+	_check("a fresh Workshop opens for the importer", ready)
+	if not ready:
+		return
+	var root_dir := OS.get_environment("OH_NATIVE_ROOT")
+	var picture := Image.create(80, 50, false, Image.FORMAT_RGB8)
+	var palette := [Color8(200, 30, 30), Color8(30, 200, 30), Color8(30, 30, 200), Color8(200, 200, 30)]
+	for y in range(50):
+		for x in range(80):
+			picture.set_pixel(x, y, palette[(0 if x < 40 else 1) + (0 if y < 25 else 2)])
+	var raster := root_dir.path_join("provinces.png")
+	picture.save_png(raster)
+	third.open_panel_named("province-import")
+	await _frames(4)
+	var panel := third._panel as WorkshopImport
+	_check("the Province Map Importer opens", panel != null and _find_button(panel, "Vectorize / analyze") != null and _find_label(panel, "Geographic fit") != null)
+	if panel == null:
+		return
+	OS.set_environment("OH_EDITOR_PICK", "*=" + raster)
+	_find_button(panel, "Choose file…").pressed.emit()
+	await _until(func() -> bool: return not panel.raster_file.is_empty(), 5.0)
+	var edits := _find_type(panel, "LineEdit")
+	var values := ["-5", "15", "52", "40"]
+	for index in range(mini(4, edits.size())):
+		var field: LineEdit = edits[index]
+		field.text = values[index]
+		field.text_changed.emit(values[index])
+	await _frames(2)
+	_check("the picture is laid over the map within its bounds", not third.map.import_preview.is_empty() and is_equal_approx(float((third.map.import_preview["bounds"] as Dictionary)["east"]), 15.0))
+	third.zoom_to(["FRA.8_1"], 4.0)
+	await _wait(1.0)
+	await _shoot("ws-24-import-preview")
+	_find_button(panel, "Vectorize / analyze").pressed.emit()
+	var analyzed := await _until(func() -> bool: return panel.ready_regions > 0 or not panel.status.is_empty(), 60.0)
+	_check("vectorizing finds the four provinces", analyzed and panel.ready_regions == 4 and int(panel.stats.get("width", 0)) == 80, "%d %s" % [panel.ready_regions, panel.status])
+	_check("the progress ends on the worker's last step", str(panel.progress.get("message", "")) == "Ready: 4 regions", str(panel.progress.get("message", "")))
+	await _shoot("ws-25-import-analyzed")
+	var downloads := OS.get_environment("OH_NATIVE_DOWNLOADS")
+	var before_backups := DirAccess.get_files_at(downloads).size() if DirAccess.dir_exists_absolute(downloads) else 0
+	_find_button(panel, "Import / replace regions").pressed.emit()
+	_check("Import asks first", await _answer(third, "Replace the current region geometry with 4 imported regions?"))
+	var replaced := await _until(func() -> bool: return panel.status.contains("regions imported") and third.map.ids.size() == 4 and not third._rebaking, 60.0)
+	_check("the map is replaced by the imported provinces", replaced, "%s %d" % [panel.status, third.map.ids.size()])
+	_check("ownership is inherited by centroid", _owner_in(third, "imp-rgb-C81E1E") == "France" and panel.status.contains("inherited existing polity ownership"), _owner_in(third, "imp-rgb-C81E1E"))
+	_check("a backup of the old map was written first", DirAccess.dir_exists_absolute(downloads) and DirAccess.get_files_at(downloads).size() == before_backups + 1)
+	_check("the import cleared the preview and the undo", third.map.import_preview.is_empty() and not bool((third.state.get("history", {}) as Dictionary).get("canUndo", true)))
+	await _wait(0.8)
+	await _shoot("ws-26-imported")
+	var regions := {"type": "FeatureCollection", "features": [
+		{"type": "Feature", "id": "a", "properties": {"code": "A1", "owner": "France"}, "geometry": {"type": "Polygon", "coordinates": [[[0, 45], [2, 45], [2, 47], [0, 47], [0, 45]]]}},
+		{"type": "Feature", "id": "b", "properties": {"code": "B1", "owner": "Narnia", "ownerColor": "#2BC1F3"}, "geometry": {"type": "Polygon", "coordinates": [[[2, 45], [4, 45], [4, 47], [2, 47], [2, 45]]]}},
+		{"type": "Feature", "properties": {"markerType": "city", "name": "Probeville", "owner": "Narnia", "population": 12000}, "geometry": {"type": "Point", "coordinates": [3, 46]}},
+	]}
+	var geojson := root_dir.path_join("regions.geojson")
+	var out := FileAccess.open(geojson, FileAccess.WRITE)
+	out.store_string(JSON.stringify(regions))
+	out.close()
+	var meta := root_dir.path_join("regions-meta.json")
+	out = FileAccess.open(meta, FileAccess.WRITE)
+	out.store_string(JSON.stringify({"A1": {"region_name": "Alpha"}, "B1": {"region_name": "Beta"}, "C9": {"region_name": "Unused"}}))
+	out.close()
+	_find_button(panel, "Region GeoJSON + metadata").pressed.emit()
+	await _frames(3)
+	_check("the GeoJSON tab drops the picture", third.map.import_preview.is_empty() and _find_label(panel, "Region geometry GeoJSON") != null)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + geojson)
+	var choosers: Array = []
+	for button in _find_type(panel, "Button"):
+		if (button as Button).text == "Choose file…":
+			choosers.append(button)
+	(choosers[0] as Button).pressed.emit()
+	await _until(func() -> bool: return not panel.geojson_file.is_empty(), 5.0)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + meta)
+	choosers.clear()
+	for button in _find_type(panel, "Button"):
+		if (button as Button).text == "Choose file…":
+			choosers.append(button)
+	(choosers[1] as Button).pressed.emit()
+	await _until(func() -> bool: return not panel.metadata_file.is_empty(), 5.0)
+	OS.set_environment("OH_EDITOR_PICK", "")
+	_check("a metadata file opens the join options", _find_label(panel, "Metadata join") != null and _find_button(panel, "Join metadata / analyze") != null)
+	_find_button(panel, "Join metadata / analyze").pressed.emit()
+	await _until(func() -> bool: return panel.ready_regions > 0 or not panel.status.is_empty(), 30.0)
+	_check("the join matches both regions", panel.ready_regions == 2 and int(panel.stats.get("metadataMatched", 0)) == 2 and str(panel.stats.get("metadataJoinKey", "")) == "__objectKey", "%s %s" % [panel.status, JSON.stringify(panel.stats)])
+	_check("the city marker is detected", _find_label(panel, "City markers detected: 1") != null)
+	_check("the join keys are listed for choosing", panel.geo_key_options.has("code") and panel.metadata_key_options.has("__objectKey"))
+	await _shoot("ws-27-import-geojson")
+	_find_button(panel, "Import / replace regions").pressed.emit()
+	_check("Import names the city too", await _answer(third, "Replace the current region geometry with 2 imported regions?\nAlso import 1 city marker (merging with existing city markers)."))
+	var joined := await _until(func() -> bool: return panel.status.contains("regions imported") and third.map.ids.size() == 2 and not third._rebaking, 60.0)
+	_check("the GeoJSON regions replace the map", joined, panel.status)
+	var named := third.map.region_name(int(third.map.index_of.get("a", -1))) == "Alpha" and third.map.region_name(int(third.map.index_of.get("b", -1))) == "Beta"
+	_check("names come from the metadata", named)
+	var polities: Dictionary = (third.state.get("doc", {}) as Dictionary).get("polities", {})
+	_check("the new owner is registered", polities.has("Narnia") and _owner_in(third, "b") == "Narnia" and panel.status.contains("polities resolved/registered"))
+	var city := false
+	for row in third.state.get("features", []):
+		if str((row as Dictionary).get("name", "")) == "Probeville":
+			city = true
+	_check("the city marker is imported", city and panel.status.contains("1 city markers imported"), panel.status)
+	await _wait(0.6)
+	await _shoot("ws-28-imported-geojson")
+	third.close_panel()
+	await _basemaps(third)
+	third.request_close(true)
+	await _until(func() -> bool: return shut[0], 20.0)
+	_check("the importer's Workshop closed", shut[0])
 
 
 func _finish() -> void:

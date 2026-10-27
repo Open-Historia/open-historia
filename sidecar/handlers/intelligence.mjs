@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import { flagFile } from "./country.mjs";
 
 const asText = (value) => String(value ?? "").trim();
 const fold = (value) => asText(value).toLowerCase();
@@ -87,7 +86,8 @@ const officeholderLabel = (holder) => {
 
 const capitalizeWords = (text) => String(text ?? "").replace(/(^|\s)(\S)/g, (_match, space, letter) => space + letter.toUpperCase());
 
-export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => {
+export const register = (ctx) => {
+  const { engine, emit, plain, repo, addStandIn, standIn } = ctx;
   const S = () => engine.spycraft;
   let pendingChange = null;
   const changed = (reason) => {
@@ -157,16 +157,46 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
   const readable = (reports, player) => need("reportDelivery", "documentsReadableBy")(reports, player);
   const documentExchange = (exchange) => need("reportDelivery", "isDocumentExchange")(exchange);
 
-  const flagsDir = path.join(repo, "public", "flags");
-  const flagFileFor = (code) => {
-    const value = asText(code);
-    if (!value) return "";
-    const url = engine.flagImageUrlFromGid(value);
-    const alpha2 = /\/([a-z]{2}(?:-[a-z]{2,3})?)\.svg$/i.exec(String(url ?? ""))?.[1]?.toLowerCase();
-    if (!alpha2) return "";
-    const file = path.join(flagsDir, `${alpha2}.svg`);
-    return fs.existsSync(file) ? file : "";
+  let communityPosts = null;
+  const communityFlagPosts = () => {
+    if (!communityPosts) communityPosts = Promise.resolve(engine.ctCommunityFlags.fetchCommunityFlags()).catch(() => []);
+    return communityPosts;
   };
+  const communityFlagPost = (posts, { code, name }) => {
+    const normalizedCode = asText(code).toUpperCase();
+    const normalizedName = asText(name).toLowerCase();
+    return asArray(posts).find((post) => {
+      if (post.fromScenario || !post.imageUrl) return false;
+      if (post.polity && post.polity === asText(name)) return true;
+      if (normalizedCode && post.code && String(post.code).toUpperCase() === normalizedCode) return true;
+      return normalizedName && asText(post.title).toLowerCase() === normalizedName;
+    }) ?? null;
+  };
+  const resolveFlagUrl = async ({ code, name }) => {
+    if (!code && !name) return "";
+    const stock = () => engine.flagImageUrlFromGid(code) ?? engine.flagImageUrlFromGid(name) ?? "";
+    const promise = (async () => {
+      const [flags, world] = await Promise.all([
+        engine.assets.getNationFlags().catch(() => ({})),
+        engine.gameState.readWorldStateView().catch(() => ({})),
+      ]);
+      try {
+        const resolved = engine.ctPolityFlags.resolvePolityFlag({ polity: { name, code }, world: world || {}, flags: flags || {} });
+        if (resolved?.imageUrl) return resolved.imageUrl;
+      } catch {
+        return stock();
+      }
+      const builtIn = stock();
+      if (builtIn) return builtIn;
+      const scenarioFlag = code && flags?.[code];
+      if (scenarioFlag) return scenarioFlag;
+      const match = communityFlagPost(await communityFlagPosts(), { code, name });
+      if (!match) return "";
+      return Promise.resolve(engine.ctCommunityFlags.loadCommunityFlagDataUrl(match)).catch(() => "");
+    })().catch(() => stock());
+    return promise;
+  };
+  const flagFor = async (record) => flagFile(ctx, await resolveFlagUrl({ code: asText(record?.code), name: asText(record?.name) }));
 
   const assess = (target, reason) => {
     const name = asText(target);
@@ -247,7 +277,7 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
     const sourceLabel = sourceQualityLabel(assessment?.confidence, clarity, Boolean(selectedSpy));
     return {
       name: name || "Unknown polity",
-      flag: flagFileFor(record?.code),
+      flag: "",
       subtitle: selectedSpy ? `Active network · since ${selectedSpy.deployedAt || "an earlier date"}` : "No active network · public sources only",
       network: networkQualityLabel(clarity, Boolean(selectedSpy)),
       political: politicalKnowledgeLabel(knowledge),
@@ -332,6 +362,8 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
       .filter((exchange) => !documentExchange(exchange))
       .map((exchange) => ({ target, exchangeId: exchange.id, counterpart: exchange.counterpart, clarity: clarityFor(target), title: `${target} ↔ ${exchange.counterpart}`, sub: `${exchange.subject}${exchange.date ? ` · ${exchange.date}` : ""}` })));
 
+    const shown = dossier(world, intercepts, openedAssessments, spies, myIntel, player, countryByName(chosen));
+    shown.flag = await flagFor(countryByName(chosen));
     return plain({
       player,
       gameDate,
@@ -345,7 +377,7 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
       countries: countryRows.map((country) => ({ name: asText(country.name), network: spies.some((spy) => sameCountry(spy.target, country.name)) })),
       countriesLoaded: countries.length > 0,
       selected: chosen,
-      dossier: dossier(world, intercepts, openedAssessments, spies, myIntel, player, countryByName(chosen)),
+      dossier: shown,
       max: MAX,
       full: spies.length >= MAX,
       networks: spies.map((spy) => ({
@@ -434,7 +466,9 @@ export const register = ({ engine, emit, plain, repo, addStandIn, standIn }) => 
       }
       const candidates = engine.countryList.pickableCountries(countryRows, holders)
         .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
-      return plain(engine.countryList.dedupeByName(candidates).map((country) => ({ name: asText(country.name), code: asText(country.code), flag: flagFileFor(country.code) })));
+      const rows = engine.countryList.dedupeByName(candidates);
+      const flags = await Promise.all(rows.map((country) => flagFor(country)));
+      return plain(rows.map((country, index) => ({ name: asText(country.name), code: asText(country.code), flag: flags[index] })));
     },
     "intelligence.intercept": async ({ target = "", exchangeId = "", read = false } = {}) => {
       const { world, intercepts, player } = await readState();

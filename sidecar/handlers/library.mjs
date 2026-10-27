@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 export const register = (ctx) => {
-  const { engine, clean, list } = ctx;
+  const { engine, clean, list, api } = ctx;
   const lib = engine.library;
 
   const bytesOf = (file) => {
@@ -46,8 +46,24 @@ export const register = (ctx) => {
       return true;
     },
     "library.cloneGame": async ({ id, name }) => {
-      await lib.createGame({ name: `${clean(name)} Copy`, seedGameId: clean(id), setActive: true });
-      return true;
+      const details = await lib.createGame({ name: `${clean(name)} Copy`, seedGameId: clean(id), setActive: true });
+      await engine.refreshLibraryCatalog({ force: true });
+      return { id: clean(details?.game?.id) };
+    },
+    "library.importMissingScenario": async ({ id }) => {
+      const catalog = await api("/api/library");
+      const game = list(catalog?.games).find((entry) => clean(entry?.id) === clean(id));
+      if (!game) throw new Error("That game is no longer in the library.");
+      const origin = game.importedScenarioOrigin;
+      let scenarioId = clean(engine.cmProvenance.scenarioCopyOfHubFile(origin, list(catalog?.scenarios))?.id);
+      if (!scenarioId) {
+        const bundle = await engine.hubPosts.downloadHubScenario({ postId: origin?.postId, bundleUrl: origin?.bundleUrl, syncedAt: origin?.syncedAt });
+        const imported = await lib.importScenarioBundle(bundle);
+        scenarioId = clean(imported?.scenario?.id);
+      }
+      await lib.saveGame(clean(game.id), { scenarioId });
+      await engine.refreshLibraryCatalog({ force: true });
+      return { id: clean(game.id) };
     },
     "library.exportGame": async ({ id, path: target, carry = null }) => {
       let question = null;

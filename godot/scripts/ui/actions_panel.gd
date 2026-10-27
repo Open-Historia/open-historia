@@ -15,7 +15,6 @@ const TURN_RUNNING_NOTE := "A turn is running. This can be changed once it ends.
 const ORDER_NOT_SAVED := "Your order could not be saved, so the next time skip would not see it. Try again."
 const ORDER_NOT_REMOVED := "The order could not be removed, so the next time skip would still carry it out. Try again."
 const COMPOSER_HINT := "Enter your action…  (Shift+Enter for a new line)"
-const ADVISOR_MISSING := "The advisor is not in the native app yet."
 const REPORT_SAVE_TIP := "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
 const REPORT_COPY_TIP := "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."
 const REPORT_SAVE_LABELS := {"working": "Saving…", "saved": "✓ Saved — attach the file to your report", "copied": "✓ Log copied — paste it into your report", "failed": "Couldn't save — try again", "idle": "💾 Save logging file"}
@@ -72,6 +71,7 @@ var _notes: VBoxContainer
 var _save_error := ""
 var _improve_failure := {}
 var _report_states := {}
+var _report_paths := {}
 var _composer: TextEdit
 var _composer_style: StyleBoxFlat
 var _improve_button: Button
@@ -173,7 +173,6 @@ func set_open(open: bool) -> void:
 func refresh(force := true) -> void:
 	if engine == null:
 		return
-	_sync_advisor()
 	var reply: Dictionary = await engine.request("actions.read", {"force": force})
 	if reply.get("ok", false):
 		_apply_view(reply["result"])
@@ -198,17 +197,6 @@ func _restyle_close() -> void:
 		close_button.add_theme_color_override(slot, Color(1, 1, 1, 0.5))
 	for slot in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
 		close_button.add_theme_color_override(slot, UI.WHITE)
-
-
-func _sync_advisor() -> void:
-	var wired := not open_advisor.get_connections().is_empty()
-	if wired:
-		_brainstorm.disabled = false
-		_brainstorm.modulate = Color(1, 1, 1, 1)
-		_brainstorm.tooltip_text = ""
-		_brainstorm.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	else:
-		UI.set_disabled_look(_brainstorm, ADVISOR_MISSING)
 
 
 func _height() -> float:
@@ -415,6 +403,11 @@ func _build_composer() -> Control:
 	_composer.text_changed.connect(_update_composer)
 	_composer.gui_input.connect(_on_composer_key)
 	holder.add_child(_composer)
+	var grip := ActionsResizeGrip.new()
+	grip.target = holder
+	grip.minimum = 48.0
+	grip.ceiling = func() -> float: return maxf(62.0, size.y * 0.6)
+	holder.add_child(grip)
 	_improve_button = Button.new()
 	_improve_button.flat = true
 	_improve_button.focus_mode = Control.FOCUS_NONE
@@ -476,6 +469,8 @@ func _update_composer() -> void:
 
 
 func _on_composer_key(event: InputEvent) -> void:
+	if _composer.has_ime_text():
+		return
 	var kind := _send_key(event)
 	if kind == 1:
 		_composer.accept_event()
@@ -513,6 +508,14 @@ func _failure_note(text: String, kind: String, title: String, failure: Dictionar
 	row.add_child(words)
 	if not failure.is_empty():
 		row.add_child(_report_button(kind, title, failure))
+		var where := str(_report_paths.get(kind, ""))
+		if not where.is_empty():
+			var caption := UI.wrapped("Saved to %s" % where, 10, Color(1, 1, 1, 0.45))
+			caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			caption.custom_minimum_size.x = 180
+			caption.tooltip_text = where
+			caption.mouse_filter = Control.MOUSE_FILTER_PASS
+			row.add_child(caption)
 	return row
 
 
@@ -543,6 +546,8 @@ func _send_report(kind: String, title: String, failure: Dictionary) -> void:
 		var text := str(result.get("text", ""))
 		if state == "copied" and not text.is_empty():
 			DisplayServer.clipboard_set(text)
+		if state == "saved" and not str(result.get("path", "")).is_empty():
+			_report_paths[kind] = str(result.get("path", ""))
 	_report_states[kind] = state
 	_render_reports()
 	await get_tree().create_timer(3.0).timeout
@@ -661,6 +666,11 @@ func _goal_editor(goal: String) -> Control:
 	_goal_edit.text_changed.connect(_on_goal_typed)
 	_goal_edit.gui_input.connect(_on_goal_key)
 	column.add_child(_goal_edit)
+	var goal_grip := ActionsResizeGrip.new()
+	goal_grip.target = _goal_edit
+	goal_grip.minimum = 34.0
+	goal_grip.ceiling = func() -> float: return maxf(58.0, size.y * 0.5)
+	_goal_edit.add_child(goal_grip)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	if not goal.is_empty():
@@ -728,6 +738,8 @@ func _on_goal_typed() -> void:
 
 
 func _on_goal_key(event: InputEvent) -> void:
+	if _goal_edit.has_ime_text():
+		return
 	var kind := _send_key(event)
 	if kind == 1:
 		_goal_edit.accept_event()
@@ -1127,6 +1139,43 @@ class ActionsSpinner extends Control:
 		var width := side * 2.2 / 24.0
 		draw_arc(centre, ring, 0.0, TAU, 32, Color(1, 1, 1, 0.2), width, true)
 		draw_arc(centre, ring, angle - PI * 0.5, angle, 12, tone, width, true)
+
+
+class ActionsResizeGrip extends Control:
+	var target: Control
+	var minimum := 48.0
+	var ceiling: Callable
+	var _dragging := false
+	var _from := 0.0
+	var _start := 0.0
+
+	func _init() -> void:
+		anchor_left = 1.0
+		anchor_right = 1.0
+		anchor_top = 1.0
+		anchor_bottom = 1.0
+		offset_left = -13.0
+		offset_right = -2.0
+		offset_top = -13.0
+		offset_bottom = -2.0
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		mouse_default_cursor_shape = Control.CURSOR_VSIZE
+
+	func _draw() -> void:
+		var ink := Color(1, 1, 1, 0.3)
+		draw_line(Vector2(size.x - 1.0, size.y - 8.0), Vector2(size.x - 8.0, size.y - 1.0), ink, 1.0, true)
+		draw_line(Vector2(size.x - 1.0, size.y - 4.0), Vector2(size.x - 4.0, size.y - 1.0), ink, 1.0, true)
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			_dragging = (event as InputEventMouseButton).pressed
+			_from = (event as InputEventMouseButton).global_position.y
+			_start = target.size.y if target else 0.0
+			accept_event()
+		elif event is InputEventMouseMotion and _dragging and target:
+			var most := float(ceiling.call()) if ceiling.is_valid() else 100000.0
+			target.custom_minimum_size.y = clampf(_start + (event as InputEventMouseMotion).global_position.y - _from, minimum, maxf(minimum, most))
+			accept_event()
 
 
 class ActionsDashedButton extends Button:

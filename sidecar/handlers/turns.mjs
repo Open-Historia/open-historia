@@ -10,6 +10,42 @@ export const register = (ctx) => {
   });
   const PARKED_TURN_STALE_NOTE = engine.simulationStatus.PARKED_TURN_STALE_NOTE;
 
+  const log = (message, detail, options) => {
+    try {
+      engine.debugLog.logDebugEvent("turn", message, detail, options);
+    } catch {}
+  };
+  const seconds = (startedAt) => Math.round((Date.now() - startedAt) / 1000);
+  const activity = (snapshot) => engine.requestActivity.describeRequestActivity(snapshot);
+
+  const jumps = new Set();
+  const beginJump = (signal) => {
+    const controller = new AbortController();
+    const entry = { signal: controller.signal, startedAt: Date.now(), cancelledRequest: null };
+    entry.stop = () => {
+      if (controller.signal.aborted) return;
+      entry.cancelledRequest = engine.requestActivity.requestActivity.current();
+      controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    };
+    entry.check = () => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+    };
+    if (signal?.aborted) entry.stop();
+    else signal?.addEventListener("abort", entry.stop, { once: true });
+    entry.release = () => {
+      signal?.removeEventListener("abort", entry.stop);
+      jumps.delete(entry);
+    };
+    jumps.add(entry);
+    return entry;
+  };
+  const cancelled = (entry, error) => entry.signal.aborted || error?.name === "AbortError";
+  const asAbort = (error) => (error?.name === "AbortError" ? error : new DOMException("Timeline jump cancelled.", "AbortError"));
+  globalThis.addEventListener?.(engine.aiRequestControl?.AI_REQUEST_CONTROL_EVENT || "ai:request-control", (event) => {
+    if (!event?.detail || !("cancelled" in event.detail)) return;
+    for (const entry of [...jumps]) entry.stop();
+  });
+
   let live = null;
   ctx.turnLive = () => live;
   let lastStreamed = [];
@@ -177,6 +213,13 @@ export const register = (ctx) => {
       if (carried && ids.length) {
         revealed = Math.max(1, Math.min(ids.length, engine.turnReveal.resolveRevealCarry(carried, record.events)));
         engine.unseenEvents.unseenEvents.markSeenThrough(ids, revealed);
+        if (carried.streamed !== ids.length) {
+          log(`Live skip: ${carried.streamed} event(s) were written on screen, ${ids.length} survived the engine's checks.`, {
+            streamed: carried.streamed,
+            written: ids.length,
+            revealed,
+          });
+        }
       } else {
         revealed = Math.max(1, ids.length - engine.unseenEvents.unseenEvents.unseenInTurn(ids).size);
       }
@@ -319,7 +362,44 @@ export const register = (ctx) => {
     const availability = engine.fallbackRunner.fallbackAvailability({ entries, store });
     if (!list(entries).length || availability.canAnswer) return "";
     const reason = engine.fallbackRunner.describeUnavailable({ entries, store });
+    log("Timeline jump not started: nothing in the Fallback list can answer.", {
+      firstBack: availability.nextEntry?.label ?? "(none — every model is Unusable)",
+      ...(availability.nextResetAt ? { at: new Date(availability.nextResetAt).toISOString() } : {}),
+    });
     return availability.nextEntry ? `${reason} Add a backup in Settings → AI to keep playing now.` : reason;
+  };
+
+  const turnEventsOf = (result) => {
+    const lastTurn = list(result?.world?.simulationHistory)[0] ?? null;
+    const ids = new Set(list(lastTurn?.eventIds).map(String));
+    return { lastTurn, events: ids.size ? list(result?.events).filter((event) => ids.has(String(event?.id))) : [] };
+  };
+
+  const logLanded = (result, startedAt) => {
+    const elapsed = `${seconds(startedAt)}s`;
+    const { lastTurn, events } = turnEventsOf(result);
+    if (result?.generation?.source === "fallback") {
+      log(`Turn FELL BACK after ${elapsed}: ${result.generation.fallbackReason || "structured AI output was unavailable"}`, {
+        round: result.game?.round ?? 0,
+        toDate: result.game?.gameDate || "",
+      });
+    } else {
+      log(`Turn finished in ${elapsed} — now ${result?.game?.gameDate || "unknown"}.`, {
+        round: result?.game?.round ?? 0,
+        events: events.length,
+        totalEvents: result?.events?.length ?? 0,
+        source: result?.generation?.source || "ai",
+      });
+    }
+    const changeCount = (key) => events.reduce((total, event) => total + (event?.impacts?.[key]?.length ?? 0), 0);
+    log(`Turn ${result?.game?.round ?? 0} world changes.`, {
+      events: events.map((event) => event?.title || "(untitled)"),
+      ...Object.fromEntries(list(engine.eventImpactKeys?.EVENT_IMPACT_KEYS).map((key) => [key, changeCount(key)])),
+      units: result?.world?.units?.length ?? 0,
+      pendingUnitOrders: result?.world?.pendingUnitOrders?.length ?? 0,
+      projects: result?.world?.projects?.length ?? 0,
+      summary: lastTurn?.summary || "",
+    }, { verbose: true });
   };
 
   const beginLive = async ({ from, to }) => {
@@ -374,60 +454,110 @@ export const register = (ctx) => {
     "turn.skip": async ({ days, mode = "jump", retryDirective = "", live: watched = true }, { signal, id }) => {
       const blocked = fallbackBlock();
       if (blocked) throw new Error(blocked);
-      const run = mode === "auto" ? engine.gameplay.simulateAutoJump : engine.gameplay.simulateTimelineJump;
-      const gameNow = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
-      const raw = clean(gameNow?.gameDate || gameNow?.startDate);
-      const originDate = engine.gameDates.isGameDate(raw) ? engine.gameDates.normalizeGameDate(raw) : raw;
-      const target = mode === "auto" ? "" : engine.jumpTargetDate(originDate, Number(days) || 0);
-      ctx.expectJump?.({ origin: originDate, target: target || engine.jumpTargetDate(originDate, 30), country: clean(gameNow?.country) });
-      live = null;
-      stagedBases.clear();
-      if (watched) emit("turn.live", { call: id, ...(await beginLive({ from: originDate, to: target })) });
-      let result;
+      const entry = beginJump(signal);
       try {
-        result = await run({ days: Number(days) || 0, retryDirective, signal, onProgress: progress(id), onEvents: watched ? streamed(id) : undefined });
-      } catch (error) {
-        throw playerError(error);
-      } finally {
+        const run = mode === "auto" ? engine.gameplay.simulateAutoJump : engine.gameplay.simulateTimelineJump;
+        const gameNow = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
+        const raw = clean(gameNow?.gameDate || gameNow?.startDate);
+        const originDate = engine.gameDates.isGameDate(raw) ? engine.gameDates.normalizeGameDate(raw) : raw;
+        const target = mode === "auto" ? "" : engine.jumpTargetDate(originDate, Number(days) || 0);
+        ctx.expectJump?.({ origin: originDate, target: target || engine.jumpTargetDate(originDate, 30), country: clean(gameNow?.country) });
         live = null;
+        stagedBases.clear();
+        if (watched) emit("turn.live", { call: id, ...(await beginLive({ from: originDate, to: target })) });
+        log(`Timeline ${mode === "auto" ? "auto-jump" : "jump"} started: ${Number(days) || 0} day(s) from ${clean(gameNow?.gameDate) || "unknown"}.`, {
+          round: gameNow?.round ?? 0,
+        });
+        let result;
+        try {
+          entry.check();
+          result = await run({ days: Number(days) || 0, retryDirective, signal: entry.signal, onProgress: progress(id), onEvents: watched ? streamed(id) : undefined });
+          logLanded(result, entry.startedAt);
+        } catch (error) {
+          if (cancelled(entry, error)) {
+            log(`Turn cancelled by the player after ${seconds(entry.startedAt)} s; ${activity(entry.cancelledRequest)}.`);
+            throw asAbort(error);
+          }
+          if (error?.heldKind) log(`Turn HELD after ${seconds(entry.startedAt)}s (${error.heldKind}); nothing was written.`, error.message);
+          else console.error("Failed to simulate jump:", error);
+          throw playerError(error);
+        } finally {
+          live = null;
+        }
+        return { ...landed(result), fallbackReason: clean(result?.generation?.fallbackReason ?? result?.fallbackReason), view: await ctx.gameView() };
+      } finally {
+        entry.release();
       }
-      return { ...landed(result), fallbackReason: clean(result?.generation?.fallbackReason ?? result?.fallbackReason), view: await ctx.gameView() };
     },
     "turn.liveRange": async () => (live ? { from: live.from, to: live.to, round: live.round, rangeLabel: formatRange(live.from, live.to) } : null),
     "turn.retry": async ({ kind, keep = false, withoutFailedChecks = false, live: watched = false }, { signal, id }) => {
-      const options = { signal, onProgress: progress(id) };
       const segment = kind === engine.simulationStatus.HELD_TURN.segment;
-      if (segment && watched) {
-        const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
-        emit("turn.live", { call: id, ...(await beginLive({ from: clean(game?.gameDate), to: "" })) });
-      }
+      const entry = beginJump(signal);
+      const options = { signal: entry.signal, onProgress: progress(id) };
       let result;
       try {
+        if (segment && watched) {
+          const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
+          emit("turn.live", { call: id, ...(await beginLive({ from: clean(game?.gameDate), to: "" })) });
+        }
+        entry.check();
         if (segment) result = await engine.gameplay.retryPendingJumpSegment({ ...options, onEvents: watched ? streamed(id) : undefined });
-        else if (kind === engine.simulationStatus.HELD_TURN.board) result = await engine.gameplay.retryPendingProjectsJump({ signal });
+        else if (kind === engine.simulationStatus.HELD_TURN.board) result = await engine.gameplay.retryPendingProjectsJump({ signal: entry.signal });
         else if (kind === engine.simulationStatus.HELD_TURN.events) result = await engine.gameplay.retryHeldPlayerEvents({ ...options, keep });
         else result = await engine.gameplay.retryPendingChecksJump({ ...options, withoutFailedChecks });
+        log(`Held turn (${kind}) finished ${withoutFailedChecks ? "without its failed checks " : keep ? "as it was " : ""}in ${seconds(entry.startedAt)}s — now ${result?.game?.gameDate || "unknown"}.`, {
+          round: result?.game?.round ?? 0,
+          events: result?.events?.length ?? 0,
+        });
       } catch (error) {
+        if (cancelled(entry, error)) {
+          log(`Retry of the held turn (${kind}) cancelled by the player after ${seconds(entry.startedAt)} s; ${activity(entry.cancelledRequest)}. The turn is still held.`);
+          throw asAbort(error);
+        }
         throw playerError(error);
       } finally {
+        entry.release();
         live = null;
       }
       return { ...landed(result), view: await ctx.gameView() };
     },
-    "turn.rerun": async () => plain(await engine.gameplay.heldSkipToRerun()),
+    "turn.rerun": async () => {
+      const rerun = await engine.gameplay.heldSkipToRerun();
+      if (rerun) {
+        log("The whole skip is run again after the player's events failed.", {
+          events: list(rerun.failures?.events).map((event) => event.title),
+          orders: list(rerun.failures?.orders).map((order) => order.title),
+        });
+      }
+      return plain(rerun);
+    },
     "turn.discardHeld": async ({ kind }) => {
       engine.simulationStatus.discardHeldTurn(kind);
       return true;
     },
     "turn.applyParked": async (_args, { signal }) => {
+      const entry = beginJump(signal);
       let result;
       try {
-        result = await engine.gameplay.applyParkedTurn({ signal });
+        entry.check();
+        result = await engine.gameplay.applyParkedTurn({ signal: entry.signal });
+        if (result) {
+          log(`Kept skip applied in ${seconds(entry.startedAt)}s — now ${result.game?.gameDate || "unknown"}.`, {
+            round: result.game?.round ?? 0,
+            events: result.events?.length ?? 0,
+          });
+        }
       } catch (error) {
+        if (cancelled(entry, error)) {
+          log("Applying the kept skip was cancelled.");
+          throw asAbort(error);
+        }
         const wrapped = playerError(error);
         wrapped.parked = Boolean(engine.simulationStatus.getParkedTurn?.());
-        if (!error?.heldKind && error?.name !== "AbortError") wrapped.message = error?.message || "Failed to apply the time skip that finished while another campaign was open.";
+        if (!error?.heldKind) wrapped.message = error?.message || "Failed to apply the time skip that finished while another campaign was open.";
         throw wrapped;
+      } finally {
+        entry.release();
       }
       return result ? { ...landed(result), view: await ctx.gameView() } : null;
     },
@@ -437,16 +567,44 @@ export const register = (ctx) => {
       return true;
     },
     "turn.undo": async () => {
-      const result = await engine.gameplay.rollBackToSnapshot(0);
+      const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true }).catch(() => ({}));
+      const index = await engine.assets.loadRollbackSnapshotIndex().catch(() => null);
+      log("Undoing the last turn.", { round: game?.round ?? 0, undoCount: engine.turnCommit.undoableTurns(index, { round: game?.round || 1 }) });
+      let result;
+      try {
+        result = await engine.gameplay.rollBackToSnapshot(0);
+      } catch (error) {
+        console.error("Failed to undo turn:", error);
+        throw error;
+      }
+      if (result) {
+        log(`Undo complete — back to ${result.bundle?.game?.gameDate || "unknown"}.`, {
+          round: result.bundle?.game?.round ?? 0,
+          remaining: result.remaining,
+        });
+      }
       landedBase = null;
       stagedBases.clear();
       return result ? { remaining: result.remaining, view: await ctx.gameView() } : null;
     },
     "turn.intervene": async ({ keep }) => {
-      const result = await engine.gameplay.interveneAfterEvent(Math.max(1, Number(keep) || 1));
+      const kept = Math.max(1, Number(keep) || 1);
+      const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true }).catch(() => ({}));
+      log(`Intervening after event ${kept} of the last turn.`, { round: game?.round ?? 0 });
+      let result;
+      try {
+        result = await engine.gameplay.interveneAfterEvent(kept);
+      } catch (error) {
+        console.error("Failed to intervene:", error);
+        throw error;
+      }
       landedBase = null;
       stagedBases.clear();
       if (!result) return null;
+      log(`Intervention complete — the round now stops on ${result.closingDate}.`, {
+        kept: result.kept,
+        dropped: result.dropped,
+      });
       return { kept: result.kept, dropped: result.dropped, closingDate: clean(result.closingDate), ...landed(result), view: await ctx.gameView() };
     },
     "turn.declineOffer": async () => {

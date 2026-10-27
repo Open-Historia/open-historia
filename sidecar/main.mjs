@@ -42,7 +42,7 @@ const freePort = () => new Promise((resolve, reject) => {
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
 const serverWorker = new Worker(path.join(here, "serverWorker.mjs"), {
-  workerData: { repo, dataDir, assetsDir, channel: process.env.OH_CHANNEL || "native", port, discord: false },
+  workerData: { repo, dataDir, assetsDir, channel: process.env.OH_CHANNEL || "native", port, discord: process.env.OH_STANDIN_MODEL !== "1" && process.env.OH_DISCORD_PRESENCE !== "0" },
   stdout: true,
   stderr: true,
 });
@@ -78,7 +78,10 @@ if (process.env.OH_STANDIN_MODEL === "1") {
 
 const enginePath = path.join(here, "dist", "engine.mjs");
 const engine = await import(pathToFileURL(enginePath).href);
-engine.setDebugLogPersistence(false);
+engine.setDebugLogPersistence(true);
+engine.debugLog.installDebugLogCapture();
+engine.debugLog.setDebugLogContext({ build: "native", language: String(globalThis.navigator?.language ?? "") });
+engine.debugLog.logDebugEvent("app", "Open Historia started.");
 engine.subscribeToDebugLog?.((entry) => {
   if (entry && (entry.problem || entry.category === "turn")) emit("log", { category: entry.category, message: entry.message });
 });
@@ -295,7 +298,7 @@ const methods = {
         id: clean(game?.id),
         name: clean(game?.name),
         scenarioId: clean(game?.scenarioId),
-        scenarioName: scenarioName.get(clean(game?.scenarioId)) || clean(game?.heroTitle),
+        scenarioName: scenarioName.get(clean(game?.scenarioId)) || clean(game?.scenarioName) || clean(game?.heroTitle),
         country: clean(game?.country),
         gameDate: clean(game?.currentDate ?? game?.gameDate),
         round: Number(game?.round ?? game?.currentRound) || 1,
@@ -314,6 +317,8 @@ const methods = {
         eyebrow: clean(game?.eyebrow),
         canDelete: game?.canDelete === true,
         scenarioMissing: game?.scenarioMissing === true,
+        importedScenarioName: clean(game?.importedScenarioName),
+        importedScenarioOrigin: game?.importedScenarioOrigin && typeof game.importedScenarioOrigin === "object" ? game.importedScenarioOrigin : null,
       })),
       scenarios: scenarios.map((scenario) => ({
         id: clean(scenario?.id),
@@ -327,6 +332,11 @@ const methods = {
         fromHub: Boolean(scenario?.hubOrigin),
         games: games.filter((game) => clean(game?.scenarioId) === clean(scenario?.id)).length,
         updatedAt: clean(scenario?.updatedAt),
+        createdAt: clean(scenario?.createdAt),
+        heroTitle: clean(scenario?.heroTitle),
+        gameCount: Number(scenario?.gameCount) || 0,
+        playCount: Number(scenario?.playCount) || 0,
+        hubEdited: Boolean(scenario?.hubOrigin?.editedAt),
       })),
     };
   },

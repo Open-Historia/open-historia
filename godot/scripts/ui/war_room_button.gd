@@ -13,6 +13,9 @@ const SWORDS := "<svg viewBox='0 0 24 24' fill='none' stroke-linecap='round' str
 var engine: EngineLink
 var at_war := false
 var room_open := false
+var in_game := true
+var _menu: Control
+var _hud: Control
 var _swords: Texture2D
 var _tween: Tween
 
@@ -38,11 +41,41 @@ func setup(engine_link: EngineLink, _context: Dictionary = {}) -> void:
 	engine = engine_link
 
 
+func set_in_game(value: bool) -> void:
+	in_game = value
+	_apply()
+	if value:
+		refresh()
+
+
+func _game_shown() -> bool:
+	if not in_game:
+		return false
+	if not _menu or not is_instance_valid(_menu) or not _hud or not is_instance_valid(_hud):
+		_menu = null
+		_hud = null
+		var parent := get_parent()
+		if parent:
+			for child in parent.get_children():
+				if child is MainMenu and not _menu:
+					_menu = child
+				elif child is Hud and not _hud:
+					_hud = child
+			for watched in [_menu, _hud]:
+				if watched and not (watched as Control).visibility_changed.is_connected(_apply):
+					(watched as Control).visibility_changed.connect(_apply)
+	if _menu and _menu.visible:
+		return false
+	return room_open or not _hud or _hud.visible
+
+
 func refresh() -> void:
-	if not engine:
+	if not engine or not in_game:
+		_apply()
 		return
 	var reply: Dictionary = await engine.request("warroom.fronts")
 	if not reply.get("ok", false):
+		_apply()
 		return
 	var result: Dictionary = reply.get("result", {})
 	var next := bool(result.get("atWar", false))
@@ -60,7 +93,7 @@ func set_room_open(value: bool) -> void:
 
 
 func _apply() -> void:
-	visible = at_war or room_open
+	visible = _game_shown() and (at_war or room_open)
 	if _tween and _tween.is_valid():
 		_tween.kill()
 	var left := OPEN_INSET if room_open else BESIDE_DOCK_LEFT

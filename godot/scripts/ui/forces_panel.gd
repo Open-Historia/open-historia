@@ -153,6 +153,25 @@ func _line_edit(text: String, placeholder: String, changed: Callable) -> LineEdi
 	return field
 
 
+func _number_field(value: String, changed: Callable) -> SpinBox:
+	var field := SpinBox.new()
+	field.min_value = 1
+	field.max_value = 100
+	field.step = 1
+	field.rounded = true
+	field.value = clampf(float(value) if value.is_valid_float() else 100.0, 1.0, 100.0)
+	field.custom_minimum_size.x = 64
+	field.size_flags_horizontal = Control.SIZE_SHRINK_END
+	field.tooltip_text = "Strength, as a percentage of the formation's established strength"
+	var line := field.get_line_edit()
+	line.add_theme_font_size_override("font_size", 12)
+	line.add_theme_color_override("font_color", UI.WHITE)
+	line.add_theme_stylebox_override("normal", _field_style())
+	line.add_theme_stylebox_override("focus", _field_style())
+	field.value_changed.connect(func(number: float) -> void: changed.call(str(int(number))))
+	return field
+
+
 func _select(options: Array, labels: Dictionary, current: String, changed: Callable) -> OptionButton:
 	var select := OptionButton.new()
 	select.focus_mode = Control.FOCUS_NONE
@@ -231,11 +250,7 @@ func _render() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 5)
 	row.add_child(_select(_available_types(), TYPE_LABEL, deploy_type, func(value: String) -> void: deploy_type = value))
-	var strength := _line_edit(deploy_strength, "", func(value: String) -> void: deploy_strength = value)
-	strength.custom_minimum_size.x = 64
-	strength.size_flags_horizontal = Control.SIZE_SHRINK_END
-	strength.tooltip_text = "Strength, as a percentage of the formation's established strength"
-	row.add_child(strength)
+	row.add_child(_number_field(deploy_strength, func(value: String) -> void: deploy_strength = value))
 	deploy_column.add_child(row)
 	deploy_column.add_child(_line_edit(deploy_name, "Unit name (optional)", func(value: String) -> void: deploy_name = value))
 	deploy_column.add_child(_line_edit(deploy_composition, "Composition, e.g. 2 frigates (optional)", func(value: String) -> void: deploy_composition = value))
@@ -387,11 +402,7 @@ func _unit_editor(unit: Dictionary) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 5)
 	row.add_child(_select(types, TYPE_LABEL, str(_editor.get("type", "")), func(value: String) -> void: _editor["type"] = value))
-	var strength := _line_edit(str(_editor.get("strength", "")), "", func(value: String) -> void: _editor["strength"] = value)
-	strength.custom_minimum_size.x = 64
-	strength.size_flags_horizontal = Control.SIZE_SHRINK_END
-	strength.tooltip_text = "Strength, as a percentage of the formation's established strength"
-	row.add_child(strength)
+	row.add_child(_number_field(str(_editor.get("strength", "")), func(value: String) -> void: _editor["strength"] = value))
 	column.add_child(row)
 	column.add_child(_select(statuses, STATUS_LABEL, str(_editor.get("status", "")), func(value: String) -> void: _editor["status"] = value))
 	var note := _line_edit(str(_editor.get("note", "")), "Note (optional)", func(value: String) -> void: _editor["note"] = value)

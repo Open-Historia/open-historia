@@ -16,8 +16,6 @@ const BRIEF_FOREIGN_OWNER := "Brief me on {{owner}}'s %s \"{{name}}\". What do w
 const BRIEF_FOREIGN := "Brief me on the foreign %s \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence."
 const COUNTER_OWNER := "What can we actually do about {{owner}}'s \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort."
 const COUNTER := "What can we actually do about this \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort."
-const ADVISOR_MISSING := "The advisor is not in the native app yet."
-const MAP_MISSING := "The map cannot fly to a project in the native app yet."
 const STATUS_TONES := {
 	"proposed": ["Proposed", Color("#93c5fd"), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16)],
 	"active": ["Active", Color("#4ade80"), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.16)],
@@ -64,6 +62,7 @@ var context := {}
 var _view := {}
 var _last_json := ""
 var _stamp := ""
+var _stamp_key := ""
 var _loaded := false
 var _seq := 0
 var _polling := false
@@ -227,7 +226,11 @@ func _height() -> float:
 
 
 func _args(force := false, reload := false) -> Dictionary:
-	return {"force": force, "reload": reload, "stamp": _stamp if reload else "", "query": _query, "owner": _owner, "tags": _tags, "showClosed": _show_closed, "sort": _sort, "expanded": _expanded}
+	return {"force": force, "reload": reload, "stamp": _stamp if reload and _stamp_key == _view_key() else "", "query": _query, "owner": _owner, "tags": _tags, "showClosed": _show_closed, "sort": _sort, "expanded": _expanded}
+
+
+func _view_key() -> String:
+	return JSON.stringify([_query, _owner, _tags, _show_closed, _sort, _expanded])
 
 
 func _on_poll() -> void:
@@ -243,6 +246,7 @@ func _request_view(force := false, reload := false) -> void:
 		return
 	_seq += 1
 	var mine := _seq
+	var key := _view_key()
 	var reply: Dictionary = await engine.request("projects.read", _args(force, reload))
 	if mine != _seq:
 		return
@@ -252,6 +256,7 @@ func _request_view(force := false, reload := false) -> void:
 			_render()
 		return
 	_apply(reply["result"])
+	_stamp_key = key
 
 
 func _apply(result: Variant) -> void:
@@ -419,15 +424,8 @@ static func _step_tag_focus(key: String, index: int, count: int, columns: int) -
 	return -1
 
 
-func _advisor_ready() -> bool:
-	return not open_advisor.get_connections().is_empty()
-
-
 func _advisor_button(button: Button, text: String) -> Button:
-	if _advisor_ready():
-		button.pressed.connect(func() -> void: open_advisor.emit(text))
-	else:
-		UI.set_disabled_look(button, ADVISOR_MISSING)
+	button.pressed.connect(func() -> void: open_advisor.emit(text))
 	return button
 
 
@@ -875,10 +873,7 @@ func _card(card: Dictionary) -> Control:
 		actions.add_child(_advisor_button(_ghost("⚖ Our options", Color(249 / 255.0, 115 / 255.0, 22 / 255.0, 0.25)), _fill(COUNTER_OWNER if not owner_label.is_empty() else COUNTER, {"name": title_text, "owner": owner_label})))
 	if bool(card.get("hasFocus", false)):
 		var locate := _ghost("📍 Show on map", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.25))
-		if show_on_map.get_connections().is_empty():
-			UI.set_disabled_look(locate, MAP_MISSING)
-		else:
-			locate.pressed.connect(func() -> void: _locate(id))
+		locate.pressed.connect(func() -> void: _locate(id))
 		actions.add_child(locate)
 	var event_count := int(card.get("eventCount", 0))
 	if event_count > 0:

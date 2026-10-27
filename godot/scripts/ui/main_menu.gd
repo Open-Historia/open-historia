@@ -45,6 +45,11 @@ var _updates: Node
 var _suggestions: Control
 var _creating := false
 var _editing_enabled := false
+var loaded := false
+var _missing_game := {}
+var _missing_error := ""
+var _missing_busy := false
+var _missing_layer: Control
 
 
 func _ready() -> void:
@@ -68,6 +73,7 @@ func set_origin(origin: String) -> void:
 
 func set_library(data: Dictionary) -> void:
 	_library = data
+	loaded = true
 	if _page == "community" and is_instance_valid(_community):
 		_community.call("refresh_library")
 		return
@@ -348,11 +354,18 @@ func _build_lobbies_page() -> void:
 	page.call("setup", engine, {"hosting": _lobby_hosting})
 	page.connect("hosting_changed", func(open: bool) -> void: _lobby_hosting = open)
 	page.connect("enter_game", func() -> void: enter_active_game.emit())
+	var skeleton := MenuSkeleton.lobbies()
+	_page_root.add_child(skeleton)
+	page.visible = false
 	_page_root.add_child(page)
 	var host: Variant = page.call("make_host_button")
 	if host is Control:
 		_actions.add_child(host)
-	page.call("open")
+	await page.call("open")
+	if is_instance_valid(skeleton):
+		skeleton.queue_free()
+	if is_instance_valid(page):
+		page.visible = true
 
 
 func _touched_at(game: Dictionary) -> String:
@@ -369,7 +382,7 @@ func _build_games_page() -> void:
 	var visible_games := games.filter(func(game: Dictionary) -> bool: return not game.get("archived", false))
 	var archived := games.filter(func(game: Dictionary) -> bool: return game.get("archived", false))
 	archived.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.get("lastPlayedAt", "")) > str(b.get("lastPlayedAt", "")))
-	if visible_games.is_empty() and archived.is_empty():
+	if loaded and visible_games.is_empty() and archived.is_empty():
 		_page_root.add_child(_empty_state())
 	else:
 		var recent := visible_games.duplicate()
@@ -449,6 +462,11 @@ func _refill_games_grid() -> void:
 	if empty:
 		_page_root.remove_child(empty)
 		empty.queue_free()
+	if not loaded:
+		for skeleton in MenuSkeleton.cards("game", 8, CARD_WIDTH):
+			grid.add_child(skeleton)
+		_fit_grids.call_deferred()
+		return
 	if games.is_empty():
 		var note := PanelContainer.new()
 		note.name = "GamesEmpty"
@@ -731,66 +749,147 @@ func _empty_state() -> Control:
 
 
 func _build_scenarios_page() -> void:
-	var scenarios: Array = _library.get("scenarios", [])
-	var recent := scenarios.filter(func(scenario: Dictionary) -> bool: return int(scenario.get("games", 0)) > 0)
+	var recent := _recent_scenarios()
 	if not recent.is_empty():
-		_page_root.add_child(_section_header("Recently Used", "The scenarios behind your latest games and edits.", "clock"))
+		_page_root.add_child(_menu_row("🕐", "Recently Used", "The scenarios behind your latest games and edits.", null))
 		var recent_grid := _grid()
 		recent_grid.name = "RecentGrid"
 		_page_root.add_child(recent_grid)
 		_refill_recent_grid()
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	header.add_child(_section_header("Scenario Library", "Everything you can start a new game from, in one place.", ""))
-	header.add_child(UI.spacer())
-	var controls := HBoxContainer.new()
-	controls.add_theme_constant_override("separation", 6)
-	controls.size_flags_vertical = Control.SIZE_SHRINK_END
-	var search := LineEdit.new()
-	search.placeholder_text = "Search scenarios..."
-	search.text = _search
-	search.custom_minimum_size = Vector2(200, 30)
-	search.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 8, 1, Vector4(10, 0, 10, 0)))
-	search.add_theme_stylebox_override("focus", UI.box(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.22), 8, 1, Vector4(10, 0, 10, 0)))
-	search.add_theme_font_override("font", UI.font(400))
-	search.add_theme_font_size_override("font_size", 12)
-	search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
-	search.text_changed.connect(func(text: String) -> void:
-		_search = text
-		_refill_library_grid())
-	controls.add_child(search)
-	for chip in [["all", "All"], ["yours", "Yours"], ["community", "Community"], ["updates", "Updates"]]:
-		var key: String = chip[0]
-		var button := UI.button(chip[1], "small")
-		button.custom_minimum_size.y = 30
-		if key == _filter:
-			button.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.16), Color(1, 1, 1, 0.3), 9, 1, Vector4(12, 0, 12, 0)))
-		button.pressed.connect(func() -> void:
-			_filter = key
-			_show_page("scenarios"))
-		controls.add_child(button)
-	var sort := OptionButton.new()
-	sort.add_item("Recently used")
-	sort.add_item("Name")
-	sort.selected = 0 if _sort == "recent" else 1
-	sort.custom_minimum_size = Vector2(130, 30)
-	sort.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 8, 1, Vector4(10, 0, 10, 0)))
-	sort.add_theme_font_override("font", UI.font(600))
-	sort.add_theme_font_size_override("font_size", 12)
-	sort.item_selected.connect(func(index: int) -> void:
-		_sort = "recent" if index == 0 else "name"
-		_refill_library_grid())
-	controls.add_child(sort)
-	header.add_child(controls)
-	_page_root.add_child(header)
+		_page_root.add_child(_gap(18))
+	_page_root.add_child(_collection_header("Scenario Library", "Everything you can start a new game from, in one place.", _scenario_controls()))
 	var grid := _grid()
 	grid.name = "LibraryGrid"
 	_page_root.add_child(grid)
 	_refill_library_grid()
+	_page_root.add_child(_gap(24))
 	var deleted := _deleted_row("scenario")
 	if deleted:
-		_page_root.add_child(_gap(24))
 		_page_root.add_child(deleted)
+
+
+func _scenario_controls() -> Control:
+	var controls := HBoxContainer.new()
+	controls.add_theme_constant_override("separation", 7)
+	controls.size_flags_vertical = Control.SIZE_SHRINK_END
+	var search := _search_box("Search scenarios…", _search, 256)
+	search.text_changed.connect(func(text: String) -> void:
+		_search = text
+		_refill_library_grid())
+	controls.add_child(search)
+	for entry in [["all", "All"], ["yours", "Yours"], ["community", "Community"], ["updates", "Updates"]]:
+		var key: String = entry[0]
+		var pill := _browse_pill(entry[1], key == _filter)
+		pill.pressed.connect(func() -> void:
+			_filter = key
+			_show_page("scenarios"))
+		controls.add_child(pill)
+	var keys := ["recent", "updated", "played", "name"]
+	var sort := _select(["Recently used", "Recently updated", "Most played", "Name"], keys.find(_sort))
+	sort.item_selected.connect(func(index: int) -> void:
+		_sort = keys[index]
+		_refill_library_grid())
+	controls.add_child(sort)
+	return controls
+
+
+func _stable_sorted(items: Array, compare: Callable) -> Array:
+	var indexed: Array = []
+	for index in range(items.size()):
+		indexed.append([items[index], index])
+	indexed.sort_custom(func(x: Array, y: Array) -> bool:
+		var order: int = compare.call(x[0], y[0])
+		if order != 0:
+			return order < 0
+		return int(x[1]) < int(y[1]))
+	return indexed.map(func(pair: Array) -> Variant: return pair[0])
+
+
+func _last_played_games() -> Array:
+	var active := str(_library.get("activeGameId", ""))
+	var visible_games := (_library.get("games", []) as Array).filter(func(game: Dictionary) -> bool: return not game.get("archived", false))
+	return _stable_sorted(visible_games, func(a: Dictionary, b: Dictionary) -> int:
+		if str(a.get("id", "")) == active:
+			return -1
+		if str(b.get("id", "")) == active:
+			return 1
+		return _touched_at(b).casecmp_to(_touched_at(a)))
+
+
+func _by_updated(scenarios: Array) -> Array:
+	return _stable_sorted(scenarios, func(a: Dictionary, b: Dictionary) -> int: return str(b.get("updatedAt", "")).casecmp_to(str(a.get("updatedAt", ""))))
+
+
+func _recent_scenarios() -> Array:
+	var scenarios: Array = _library.get("scenarios", [])
+	var by_id := {}
+	for scenario in scenarios:
+		by_id[str(scenario.get("id", ""))] = scenario
+	var seen := {}
+	var recent: Array = []
+	for game in _last_played_games():
+		var scenario: Variant = by_id.get(str(game.get("scenarioId", "")))
+		if scenario == null or seen.has(str(scenario.get("id", ""))):
+			continue
+		seen[str(scenario.get("id", ""))] = true
+		recent.append(scenario)
+		if recent.size() >= 6:
+			break
+	for scenario in _by_updated(scenarios):
+		if seen.has(str(scenario.get("id", ""))):
+			continue
+		seen[str(scenario.get("id", ""))] = true
+		recent.append(scenario)
+		if recent.size() >= 6:
+			break
+	return recent
+
+
+func _is_yours(scenario: Dictionary) -> bool:
+	var linked: bool = scenario.get("fromHub", false) and not scenario.get("hubEdited", false)
+	var untouched_stock := str(scenario.get("id", "")) == "default" and str(scenario.get("updatedAt", "")) == str(scenario.get("createdAt", ""))
+	return not linked and not untouched_stock
+
+
+func _browsed_scenarios() -> Array:
+	var scenarios: Array = _library.get("scenarios", [])
+	var query := _search.strip_edges().to_lower()
+	var base: Array = scenarios
+	match _filter:
+		"yours":
+			base = scenarios.filter(func(scenario: Dictionary) -> bool: return _is_yours(scenario))
+		"community":
+			base = scenarios.filter(func(scenario: Dictionary) -> bool: return bool(scenario.get("fromHub", false)))
+		"updates":
+			base = scenarios.filter(func(scenario: Dictionary) -> bool: return _updates != null and not str(_updates.call("reason_for", str(scenario.get("id", "")))).is_empty())
+	var filtered: Array = base.duplicate()
+	if not query.is_empty():
+		filtered = base.filter(func(scenario: Dictionary) -> bool:
+			for key in ["name", "heroTitle", "subtitle", "description"]:
+				if str(scenario.get(key, "")).to_lower().contains(query):
+					return true
+			return false)
+	match _sort:
+		"name":
+			return _stable_sorted(filtered, func(a: Dictionary, b: Dictionary) -> int: return str(a.get("name", "")).nocasecmp_to(str(b.get("name", ""))))
+		"played":
+			return _stable_sorted(filtered, func(a: Dictionary, b: Dictionary) -> int:
+				var games := int(b.get("gameCount", b.get("games", 0))) - int(a.get("gameCount", a.get("games", 0)))
+				if games != 0:
+					return games
+				return int(b.get("playCount", 0)) - int(a.get("playCount", 0)))
+		"updated":
+			return _by_updated(filtered)
+	var rank := {}
+	var recent := _recent_scenarios()
+	for index in range(recent.size()):
+		rank[str(recent[index].get("id", ""))] = index
+	return _stable_sorted(filtered, func(a: Dictionary, b: Dictionary) -> int:
+		var rank_a := int(rank.get(str(a.get("id", "")), 1 << 53))
+		var rank_b := int(rank.get(str(b.get("id", "")), 1 << 53))
+		if rank_a != rank_b:
+			return -1 if rank_a < rank_b else 1
+		return str(b.get("updatedAt", "")).casecmp_to(str(a.get("updatedAt", ""))))
 
 
 func _refill_recent_grid() -> void:
@@ -798,11 +897,11 @@ func _refill_recent_grid() -> void:
 	if not grid:
 		return
 	for child in grid.get_children():
+		grid.remove_child(child)
 		child.queue_free()
-	var scenarios: Array = _library.get("scenarios", [])
-	var recent := scenarios.filter(func(scenario: Dictionary) -> bool: return int(scenario.get("games", 0)) > 0)
-	for scenario in recent.slice(0, 4):
+	for scenario in _recent_scenarios():
 		grid.add_child(_scenario_card(scenario))
+	_fit_grids.call_deferred()
 
 
 func _refill_library_grid() -> void:
@@ -810,40 +909,32 @@ func _refill_library_grid() -> void:
 	if not grid:
 		return
 	for child in grid.get_children():
+		grid.remove_child(child)
 		child.queue_free()
-	grid.add_child(_create_card())
-	var scenarios: Array = (_library.get("scenarios", []) as Array).duplicate()
-	var needle := _search.strip_edges().to_lower()
-	scenarios = scenarios.filter(func(scenario: Dictionary) -> bool:
-		if not needle.is_empty() and not str(scenario.get("name", "")).to_lower().contains(needle):
-			return false
-		match _filter:
-			"yours":
-				return not scenario.get("builtIn", false) and not scenario.get("fromHub", false)
-			"community":
-				return scenario.get("fromHub", false)
-			"updates":
-				return _updates != null and not str(_updates.call("reason_for", str(scenario.get("id", "")))).is_empty()
-		return true)
-	if _sort == "name":
-		scenarios.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.get("name", "")).naturalnocasecmp_to(str(b.get("name", ""))) < 0)
-	else:
-		scenarios.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.get("updatedAt", "")) > str(b.get("updatedAt", "")))
+	var empty := _page_root.get_node_or_null("LibraryEmpty")
+	if empty:
+		_page_root.remove_child(empty)
+		empty.queue_free()
+	var with_create := (_filter == "all" or _filter == "yours") and _search.strip_edges().is_empty()
+	if with_create:
+		grid.add_child(_create_card())
+	if not loaded:
+		for skeleton in MenuSkeleton.cards("scenario", 7, CARD_WIDTH):
+			grid.add_child(skeleton)
+		_fit_grids.call_deferred()
+		return
+	var scenarios := _browsed_scenarios()
+	if scenarios.is_empty() and not with_create:
+		var note := PanelContainer.new()
+		note.name = "LibraryEmpty"
+		note.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.12), 16, 1, Vector4(16, 16, 16, 16)))
+		note.add_child(UI.label("No scenarios match your search." if not _search.is_empty() else "No scenarios in this view.", 14, Color(1, 1, 1, 0.48)))
+		_page_root.add_child(note)
+		_page_root.move_child(note, grid.get_index() + 1)
+		return
 	for scenario in scenarios:
 		grid.add_child(_scenario_card(scenario))
-
-
-func _section_header(title: String, subtitle: String, icon_name: String) -> Control:
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 3)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	if not icon_name.is_empty():
-		row.add_child(UI.icon_rect(icon_name, 14, Color(1, 1, 1, 0.7)))
-	row.add_child(UI.label(title, 16, UI.WHITE, 800))
-	column.add_child(row)
-	column.add_child(UI.label(subtitle, 12, UI.SOFT))
-	return column
+	_fit_grids.call_deferred()
 
 
 func _grid() -> GridContainer:
@@ -982,7 +1073,6 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	chips.add_child(_count_chip("Actions", int(game.get("pendingActions", 0))))
 	chips.add_child(_count_chip("Events", int(game.get("eventCount", 0))))
 	stack.add_child(chips)
-	var id := str(game.get("id", ""))
 	var play := UI.button("Current" if active else "Play", "current" if active else "accent", "" if active else "play")
 	if not active:
 		var accent_style := UI.box(accent, accent, 11, 1, Vector4(16, 0, 16, 0))
@@ -991,7 +1081,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		var accent_hover := UI.box(accent.lightened(0.12), accent.lightened(0.12), 11, 1, Vector4(16, 0, 16, 0))
 		play.add_theme_stylebox_override("hover", accent_hover)
 		play.add_theme_stylebox_override("pressed", accent_hover)
-	play.pressed.connect(func() -> void: play_game.emit(id))
+	play.pressed.connect(func() -> void: _activate_game(game))
 	stack.add_child(play)
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 7)
@@ -1109,11 +1199,136 @@ func _clone_game(game: Dictionary) -> void:
 	if _busy:
 		return
 	_busy = true
+	set_status("")
 	var reply := await engine.request("library.cloneGame", {"id": str(game.get("id", "")), "name": str(game.get("name", ""))})
 	_busy = false
 	if not reply.get("ok", false):
 		set_status(str(reply.get("error", "")), true)
-	refresh_requested.emit()
+		refresh_requested.emit()
+		return
+	var copy := str((reply.get("result", {}) as Dictionary).get("id", "")) if reply.get("result") is Dictionary else ""
+	if copy.is_empty():
+		refresh_requested.emit()
+		return
+	play_game.emit(copy)
+
+
+func _activate_game(game: Dictionary) -> void:
+	if game.get("scenarioMissing", false):
+		_missing_error = ""
+		_missing_game = game
+		_render_missing_prompt(true)
+		return
+	play_game.emit(str(game.get("id", "")))
+
+
+func _close_missing_prompt() -> void:
+	_missing_game = {}
+	_missing_error = ""
+	if _missing_layer and is_instance_valid(_missing_layer):
+		_missing_layer.queue_free()
+	_missing_layer = null
+
+
+func _render_missing_prompt(fade := false) -> void:
+	if _missing_layer and is_instance_valid(_missing_layer):
+		_missing_layer.queue_free()
+	_missing_layer = null
+	if _missing_game.is_empty():
+		return
+	var game := _missing_game
+	var origin: Variant = game.get("importedScenarioOrigin")
+	var fetchable := origin is Dictionary and not (origin as Dictionary).is_empty()
+	var layer := Control.new()
+	layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			_close_missing_prompt())
+	layer.add_child(dim)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(centre)
+	var card := PanelContainer.new()
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.add_theme_stylebox_override("panel", UI.box(UI.CARD, Color(1, 1, 1, 0.09), 16, 1, Vector4(17.6, 17.6, 17.6, 17.6)))
+	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
+	card.custom_minimum_size.x = minf(430.0, view.x * 0.92)
+	centre.add_child(card)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	card.add_child(column)
+	column.add_child(UI.label("This game's scenario isn't here", 16, UI.WHITE, 800))
+	var scenario_name := str(game.get("importedScenarioName", ""))
+	if scenario_name.is_empty():
+		scenario_name = str(game.get("scenarioName", ""))
+	var ending := " It's on the community hub, so it can be fetched now." if fetchable else " Ask whoever sent you the game for the scenario file, then import it from the Scenarios tab."
+	var body := UI.rich("", 13, Color(1, 1, 1, 0.62))
+	body.add_theme_constant_override("line_separation", 5)
+	body.text = "“%s” was played on [b][color=#ffffffdb]%s[/color][/b], which isn't in your library — so there is no map to open it on.%s" % [str(game.get("name", "")).replace("[", "[lb]"), scenario_name.replace("[", "[lb]"), ending]
+	var spaced := MarginContainer.new()
+	spaced.add_theme_constant_override("margin_top", 8)
+	spaced.add_theme_constant_override("margin_bottom", 16)
+	spaced.add_child(body)
+	column.add_child(spaced)
+	if not _missing_error.is_empty():
+		var alert := PanelContainer.new()
+		alert.add_theme_stylebox_override("panel", UI.box(Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.12), Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.34), 12, 1, Vector4(12, 9.6, 12, 9.6)))
+		var words := UI.wrapped(_missing_error, 13, Color("#fecaca"))
+		words.add_theme_constant_override("line_spacing", 4)
+		alert.add_child(words)
+		var alert_space := MarginContainer.new()
+		alert_space.add_theme_constant_override("margin_bottom", 13)
+		alert_space.add_child(alert)
+		column.add_child(alert_space)
+	var buttons := VBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 7)
+	if fetchable:
+		var fetch := UI.button("Getting the scenario…" if _missing_busy else "Import & play", "hero")
+		fetch.custom_minimum_size.y = 42
+		fetch.disabled = _missing_busy
+		fetch.pressed.connect(func() -> void: _import_missing_scenario(game))
+		buttons.add_child(fetch)
+	var go := UI.button("Browse the community hub" if fetchable else "Go to scenarios", "header")
+	go.custom_minimum_size.y = 42
+	go.pressed.connect(func() -> void:
+		_close_missing_prompt()
+		_show_page("community" if fetchable else "scenarios"))
+	buttons.add_child(go)
+	var later := UI.button("Not now", "header")
+	later.custom_minimum_size.y = 42
+	later.pressed.connect(_close_missing_prompt)
+	buttons.add_child(later)
+	column.add_child(buttons)
+	add_child(layer)
+	_missing_layer = layer
+	if fade:
+		layer.modulate.a = 0.0
+		create_tween().tween_property(layer, "modulate:a", 1.0, 0.16)
+
+
+func _import_missing_scenario(game: Dictionary) -> void:
+	if _missing_busy:
+		return
+	_missing_error = ""
+	_missing_busy = true
+	set_status("")
+	_render_missing_prompt()
+	var reply := await engine.request("library.importMissingScenario", {"id": str(game.get("id", ""))})
+	_missing_busy = false
+	if not reply.get("ok", false):
+		var message := str(reply.get("error", ""))
+		set_status(message, true)
+		if str(_missing_game.get("id", "")) == str(game.get("id", "")):
+			_missing_error = message
+			_render_missing_prompt()
+		return
+	_close_missing_prompt()
+	play_game.emit(str(game.get("id", "")))
 
 
 func _pick_file(save: bool, default_name: String, filters: PackedStringArray) -> String:

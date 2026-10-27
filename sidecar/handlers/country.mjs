@@ -1149,7 +1149,7 @@ export const register = (ctx) => {
     };
   };
 
-  const view = async ({ target: requested = "" } = {}) => {
+  const view = async ({ target: requested = "", tab = "economy" } = {}) => {
     const extras = await loadExtras(ctx);
     const player = await readPlayer();
     const { definition, indexRows, error: definitionError } = await readDefinition();
@@ -1242,7 +1242,7 @@ export const register = (ctx) => {
       groups: await groupsView(extras, { world, target, isPlayer: Boolean(player.code) && target === player.code }),
       diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code }) : null,
       economy: economyView(extras, { sheet, definition, indexRows, intelligence }),
-      military: world && sheet ? militaryView(extras, world, resolvedKey || target) : null,
+      military: world && sheet && tab === "economy" ? militaryView(extras, world, resolvedKey || target) : null,
       tracking: trackingSummary(extras, settings, identity),
       generating: generating.has(target),
     };

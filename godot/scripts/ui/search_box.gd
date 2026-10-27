@@ -464,15 +464,10 @@ func _fly_to_entry(entry: Dictionary) -> void:
 	var payload: Variant = entry.get("payload")
 	if typeof(payload) == TYPE_DICTIONARY:
 		var data: Dictionary = payload
-		var cards: Object = context.get("map_cards") as Object
 		if str(data.get("source", "")) == "unit":
 			focus_unit.emit(data)
-			if cards and cards.has_method("focus_unit"):
-				cards.call("focus_unit", data)
 		else:
 			focus_feature.emit(data)
-			if cards and cards.has_method("focus_feature"):
-				cards.call("focus_feature", data)
 	close()
 
 
@@ -488,8 +483,6 @@ func _fly_to_query(place: String) -> void:
 	var results: Array = (reply.get("result", {}) as Dictionary).get("results", []) if reply.get("ok", false) else []
 	if results.is_empty():
 		status = "error"
-		_input.text = ""
-		query = ""
 		_input.placeholder_text = "Place not found..."
 		_input.add_theme_color_override("font_color", Color("#f87171"))
 		_input.add_theme_color_override("font_placeholder_color", Color("#f87171"))

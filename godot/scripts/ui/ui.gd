@@ -306,8 +306,19 @@ static func markdown_to_bbcode(text: String) -> String:
 	var out: PackedStringArray = []
 	var bold := RegEx.create_from_string("\\*\\*(.+?)\\*\\*")
 	var italic := RegEx.create_from_string("(?<![*\\w])\\*(?!\\s)(.+?)(?<!\\s)\\*(?![*\\w])")
-	for raw in lines:
-		var line: String = raw
+	var index := 0
+	while index < lines.size():
+		if index + 1 < lines.size() and _table_row(lines[index]) and _table_rule(lines[index + 1], _table_cells(lines[index]).size()):
+			var header := _table_cells(lines[index])
+			var rows: Array[PackedStringArray] = []
+			var cursor := index + 2
+			while cursor < lines.size() and _table_row(lines[cursor]):
+				rows.append(_table_cells(lines[cursor]))
+				cursor += 1
+			out.append(_table_bbcode(header, rows, bold, italic))
+			index = cursor
+			continue
+		var line: String = lines[index]
 		var stripped := line.strip_edges()
 		if stripped.begins_with("### ") or stripped.begins_with("## ") or stripped.begins_with("# "):
 			line = "[b]%s[/b]" % stripped.lstrip("#").strip_edges()
@@ -316,7 +327,59 @@ static func markdown_to_bbcode(text: String) -> String:
 		line = bold.sub(line, "[b]$1[/b]", true)
 		line = italic.sub(line, "[i]$1[/i]", true)
 		out.append(line)
+		index += 1
 	return "\n".join(out)
+
+
+static func _table_row(line: String) -> bool:
+	var stripped := line.strip_edges()
+	return not stripped.is_empty() and stripped.replace("\\|", "").contains("|")
+
+
+static func _table_rule(line: String, columns: int) -> bool:
+	var cells := _table_cells(line)
+	if cells.is_empty() or cells.size() != columns:
+		return false
+	var rule := RegEx.create_from_string("^:?-+:?$")
+	for cell in cells:
+		if rule.search(cell.replace(" ", "")) == null:
+			return false
+	return true
+
+
+static func _table_cells(line: String) -> PackedStringArray:
+	var stripped := line.strip_edges()
+	if stripped.begins_with("|"):
+		stripped = stripped.substr(1)
+	if stripped.ends_with("|") and not stripped.ends_with("\\|"):
+		stripped = stripped.substr(0, stripped.length() - 1)
+	var cells: PackedStringArray = []
+	for part in stripped.replace("\\|", "\u0001").split("|"):
+		cells.append(part.replace("\u0001", "|").strip_edges())
+	return cells
+
+
+static func _table_bbcode(header: PackedStringArray, rows: Array[PackedStringArray], bold: RegEx, italic: RegEx) -> String:
+	var columns := header.size()
+	var border := "border=#ffffff1a padding=8,5,8,5"
+	var cells: PackedStringArray = []
+	for value in header:
+		cells.append("[cell expand=1 bg=#649cf833 %s][color=#fffffff2][b]%s[/b][/color][/cell]" % [border, _table_inline(value, bold, italic)])
+	for row_index in range(rows.size()):
+		var row: PackedStringArray = rows[row_index]
+		var shade := " bg=#ffffff0a" if row_index % 2 == 1 else ""
+		for column in range(columns):
+			var value := _table_inline(row[column] if column < row.size() else "", bold, italic)
+			if column == 0 and not value.is_empty():
+				value = "[color=#ffffffe6][b]%s[/b][/color]" % value
+			cells.append("[cell expand=1%s %s]%s[/cell]" % [shade, border, value])
+	return "[table=%d]%s[/table]" % [columns, "".join(cells)]
+
+
+static func _table_inline(value: String, bold: RegEx, italic: RegEx) -> String:
+	var text := value.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+	text = bold.sub(text, "[b]$1[/b]", true)
+	return italic.sub(text, "[i]$1[/i]", true)
 
 
 static func rich(text: String, size := 13, color := MUTED) -> RichTextLabel:

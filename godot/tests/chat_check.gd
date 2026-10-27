@@ -12,6 +12,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -61,6 +62,65 @@ func _roles(messages: Array) -> String:
 	return ", ".join(parts)
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
+
+func _find_tip(node: Node, text: String) -> Control:
+	if node is Control and (node as Control).tooltip_text == text and node is PanelContainer:
+		return node
+	for child in node.get_children():
+		var found := _find_tip(child, text)
+		if found:
+			return found
+	return null
+
+
+func _labels(node: Node) -> PackedStringArray:
+	var out: PackedStringArray = []
+	if node is Label:
+		out.append((node as Label).text)
+	for child in node.get_children():
+		out.append_array(_labels(child))
+	return out
+
+
+func _find_class(node: Node, type_name: String) -> bool:
+	if node.is_class(type_name):
+		return true
+	for child in node.get_children():
+		if _find_class(child, type_name):
+			return true
+	return false
+
+
+func _leader_inner(node: Node) -> Control:
+	if node is MarginContainer and (node as Control).layout_direction != Control.LAYOUT_DIRECTION_INHERITED and node.get_parent() is PanelContainer:
+		return node
+	for child in node.get_children():
+		var found := _leader_inner(child)
+		if found:
+			return found
+	return null
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
@@ -69,6 +129,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
@@ -147,6 +208,24 @@ func _run() -> void:
 	_check("the reply's reaction lands on the player's line", (first.get("reactions", {}) as Dictionary).has("Germany"))
 	_check("the reply carries the thread memory", not str(last.get("memorySummary", "")).is_empty())
 	await _shoot("chat-3-conversation-reply")
+	var chip: Control = _find_tip(view, "Germany")
+	if chip:
+		chip.mouse_entered.emit()
+		await _frames(3)
+	var tip: Variant = chip.get_meta("reactors") if chip and chip.has_meta("reactors") else null
+	_check("hovering a reaction lists who reacted, each with a flag", tip is Control and _labels(tip as Node).has("Germany") and _find_class(tip as Node, "TextureRect"))
+	await _shoot("chat-3c-reaction-tip")
+	if chip:
+		chip.mouse_exited.emit()
+	panel.chat_dir = "rtl"
+	view.render_messages(false)
+	await _frames(4)
+	var leader_inner := _leader_inner(view)
+	_check("a leader's reply reads right to left when the chat language is", leader_inner != null and leader_inner.layout_direction == Control.LAYOUT_DIRECTION_RTL)
+	await _shoot("chat-3d-leader-rtl")
+	panel.chat_dir = ""
+	view.render_messages(false)
+	await _frames(2)
 
 	panel.leave_active()
 	await _wait(0.6)

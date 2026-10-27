@@ -81,6 +81,12 @@ var _events_scroll_anchor: Control = null
 var _pill: GlassPanel
 var _pill_tween: Tween
 var _focus_event := ""
+var _caption_label: Label
+var _fronts_state := ""
+var _fronts_pending := false
+var _fronts_running := false
+var _fronts_timer: Timer
+var _offer_serial := 0
 
 
 func _ready() -> void:
@@ -100,12 +106,16 @@ func _ready() -> void:
 	_clock.start()
 	_caption_timer = Timer.new()
 	_caption_timer.wait_time = 60.0
-	_caption_timer.timeout.connect(func() -> void:
-		if visible and not is_loading:
-			await refresh_status()
-			_render_timeline())
+	_caption_timer.timeout.connect(_refresh_caption)
 	add_child(_caption_timer)
 	_caption_timer.start()
+	_fronts_timer = Timer.new()
+	_fronts_timer.wait_time = 2.0
+	_fronts_timer.timeout.connect(func() -> void:
+		if _fronts_state == "later":
+			_try_fronts())
+	add_child(_fronts_timer)
+	_fronts_timer.start()
 
 
 func setup(link: EngineLink, map: MapView) -> void:
@@ -214,6 +224,8 @@ func enter_game() -> void:
 	older = {}
 	_camera_event = ""
 	_staged = false
+	_fronts_state = ""
+	_fronts_pending = false
 	set_panel("", true)
 	await refresh_status()
 	var on_open: Variant = status.get("held")
@@ -221,6 +233,9 @@ func enter_game() -> void:
 		held = {"kind": str(on_open.get("kind", "")), "message": str(on_open.get("message", "")), "failures": on_open.get("failures"), "retries": 0}
 	parked_held = bool(status.get("parked", false))
 	await load_history()
+	var peek := await engine.request("timeline.fronts", {"peek": true})
+	if peek.get("ok", false) and typeof(peek.get("result")) == TYPE_DICTIONARY and peek["result"].get("pending") != null:
+		_fronts_pending = bool(peek["result"]["pending"])
 	var entered := await engine.request("turn.enter")
 	if entered.get("ok", false):
 		var parked := str(entered["result"].get("parked", "none"))
@@ -234,6 +249,92 @@ func enter_game() -> void:
 		else:
 			parked_held = false
 	_render_all()
+	_try_fronts()
+
+
+func reload_history() -> void:
+	if not engine or not engine.is_ready() or busy() or current_call != 0:
+		return
+	await load_history()
+	await refresh_status()
+	_render_all()
+	_try_fronts()
+
+
+func _on_pregame() -> void:
+	if not engine or not engine.is_ready() or busy() or current_call != 0:
+		return
+	await load_history()
+	await refresh_status()
+	_staged = true
+	_camera_event = ""
+	_render_all()
+	await _announce_world()
+	_try_fronts()
+
+
+func _announce_world() -> void:
+	var view := await engine.request("game.view")
+	if view.get("ok", false) and typeof(view.get("result")) == TYPE_DICTIONARY:
+		turn_landed.emit(view["result"])
+
+
+func _try_fronts() -> void:
+	if _fronts_running or _fronts_state == "done" or not engine or not engine.is_ready():
+		return
+	if not is_visible_in_tree():
+		_fronts_state = "later"
+		return
+	_fronts_running = true
+	var reply := await engine.request("timeline.fronts")
+	_fronts_running = false
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var result: Dictionary = reply["result"]
+	var outcome: Variant = result.get("outcome")
+	var was_pending := _fronts_pending
+	if result.get("pending") != null:
+		_fronts_pending = bool(result["pending"])
+	if outcome is String and str(outcome) in ["later", "waiting"]:
+		_fronts_state = str(outcome)
+	else:
+		_fronts_state = "done"
+	if (outcome is bool and bool(outcome)) or (was_pending and not _fronts_pending):
+		_staged = true
+		_stage_map()
+		await _announce_world()
+
+
+func _load_offer() -> void:
+	_offer_serial += 1
+	var serial := _offer_serial
+	var reply := await engine.request("timeline.offer")
+	if serial != _offer_serial or not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	offer = reply["result"].get("offer")
+	scene_in_progress = bool(reply["result"].get("sceneInProgress", false))
+
+
+func _refresh_offer() -> void:
+	if not engine or not engine.is_ready():
+		return
+	var before := [offer, scene_in_progress]
+	await _load_offer()
+	if [offer, scene_in_progress] == before:
+		return
+	_render_timeline()
+	if open_panel == "history" and not skip_in_flight:
+		_render_events()
+	_try_fronts()
+
+
+func _refresh_caption() -> void:
+	if not engine or not engine.is_ready() or not is_visible_in_tree():
+		return
+	var reply := await engine.request("timeline.caption")
+	if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY:
+		status["caption"] = reply["result"]
+		_apply_caption()
 
 
 func refresh_status() -> void:
@@ -258,6 +359,7 @@ func load_history(carry: Variant = null) -> void:
 	scene_in_progress = bool(result.get("sceneInProgress", false))
 	tag_order = result.get("tagOrder", [])
 	visible_count = max(1, int(result.get("revealed", 1)))
+	await _load_offer()
 	if turn_index > 0:
 		await _load_older(turn_index)
 
@@ -305,8 +407,16 @@ func _war_ready() -> bool:
 
 
 func _watch_strikes(event: Dictionary) -> void:
+	if not _war_ready():
+		return
+	var id := str(event.get("id", ""))
+	var reply := await engine.request("timeline.strikeBounds", {"eventId": id})
+	var bounds: Variant = (reply["result"] as Dictionary).get("bounds") if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY else null
+	if bounds is Array and (bounds as Array).size() >= 2 and map_view:
+		map_view.fit_lonlat_bounds(bounds)
+		await get_tree().create_timer(0.9).timeout
 	if _war_ready():
-		war.call("replay_strikes", str(event.get("id", "")))
+		war.call("replay_strikes", id)
 
 
 func close_panels() -> void:
@@ -343,6 +453,17 @@ func _on_engine_event(name: String, data: Variant) -> void:
 	if name == "turn.request":
 		request_state = data if typeof(data) == TYPE_DICTIONARY else {}
 		_refresh_progress_rows()
+		return
+	if name == "timeline.caption":
+		if typeof(data) == TYPE_DICTIONARY:
+			status["caption"] = data
+			_apply_caption()
+		return
+	if name == "turn.pregame":
+		_on_pregame()
+		return
+	if name == "interactive.changed":
+		_refresh_offer()
 		return
 	if typeof(data) != TYPE_DICTIONARY or int(data.get("call", -1)) != current_call or current_call == 0:
 		return
@@ -483,7 +604,7 @@ func _render_timeline() -> void:
 	if scene_in_progress:
 		ladder.add_child(_centered(_yellow_box("⚡ A scene is in progress. Time stands still until it ends or is set aside.", "", "Return to the scene", 0.1, 0.5)))
 		ladder.add_child(_gap(10))
-	elif typeof(offer) == TYPE_DICTIONARY and not skip_in_flight:
+	elif typeof(offer) == TYPE_DICTIONARY:
 		ladder.add_child(_centered(_yellow_box("⚡ An interactive event is on offer: ", str(offer.get("title", "")), "Play it out", 0.07, 0.35)))
 		ladder.add_child(_gap(10))
 	var undo_count := int(status.get("undoCount", 0))
@@ -676,13 +797,22 @@ func _run_custom() -> void:
 	run_jump(days, "jump")
 
 
-func _caption() -> Control:
-	var caption: Dictionary = status.get("caption", {})
+func _apply_caption() -> void:
+	if not _caption_label or not is_instance_valid(_caption_label):
+		return
+	var caption: Dictionary = status.get("caption", {}) if typeof(status.get("caption")) == TYPE_DICTIONARY else {}
 	var near: bool = caption.get("nearlyOut", false)
 	var lines := "%s of %s AI requests used today\n%s" % [str(int(caption.get("used", 0))), str(int(caption.get("limit", 0))), str(caption.get("second", ""))]
 	if caption.get("lastUsed") != null:
 		lines += " · the last used %s" % str(int(caption["lastUsed"]))
-	var label := UI.label(lines, 11, Color("#fbbf24") if near else Color(1, 1, 1, 0.42))
+	_caption_label.text = lines
+	_caption_label.add_theme_color_override("font_color", Color("#fbbf24") if near else Color(1, 1, 1, 0.42))
+
+
+func _caption() -> Control:
+	var label := UI.label("", 11, Color(1, 1, 1, 0.42))
+	_caption_label = label
+	_apply_caption()
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.custom_minimum_size.x = 200
@@ -1306,6 +1436,7 @@ func _land(view: Variant, panel := "history") -> void:
 	_render_all()
 	if typeof(view) == TYPE_DICTIONARY:
 		turn_landed.emit(view)
+	_try_fronts()
 
 
 func _settle(panel := "") -> void:

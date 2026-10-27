@@ -11,6 +11,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_watchdog.call_deferred()
 	_run.call_deferred()
@@ -125,6 +126,27 @@ func _region_of(owner: String, preferred: String) -> int:
 	return best
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
@@ -133,6 +155,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
@@ -223,19 +246,68 @@ func _country_panel() -> void:
 	_check(panel._modal != null and _has_text(panel._modal, "Historical tracking") and _has_text(panel._modal, "Auto-refresh cadence"), "historical tracking modal")
 	await _shoot("11-country-tracking")
 	panel._close_modal()
+	var busy_script := GDScript.new()
+	busy_script.source_code = "extends EngineLink
+func request(method: String, args: Dictionary = {}) -> Dictionary:
+	return {\"ok\": true, \"result\": {\"busy\": method == \"country.busy\"}}
+"
+	busy_script.reload()
+	var busy_link: Node = busy_script.new()
+	var live_link: EngineLink = panel.engine
+	panel.engine = busy_link
+	await panel._poll_busy()
+	await _wait(0.2)
+	_check(bool(panel.data.get("turnRunning", false)) and _has_text(panel, str(panel.data.get("turnRunningNote", "?"))), "the tracking button dims as soon as a turn runs")
+	panel.scroll.scroll_vertical = 4000
+	await _wait(0.2)
+	await _shoot("11b-country-tracking-dimmed")
+	panel.engine = live_link
+	busy_link.free()
+	await panel._poll_busy()
+	await _wait(0.2)
+	_check(not bool(panel.data.get("turnRunning", true)), "and lights again when the turn ends")
+	panel.scroll.scroll_vertical = 0
 
 	await panel.set_tab("ranking")
 	await _wait(1.2)
 	_check(_has_text(panel, "RANKED BY") and _has_text(panel, "Land held"), "ranking chips")
 	await _shoot("12-country-ranking")
 	var before: String = panel.target
+	panel.ranking_all = true
+	await panel._load_ranking(panel._sequence)
+	var rows_before: int = (panel.ranking.get("rows", []) as Array).size()
 	panel._retarget("Germany")
+	await _frames(2)
+	_check(not panel.ranking.is_empty() and panel.ranking_all, "a ranking pick keeps the list on screen while the panel moves")
 	await _until(func() -> bool: return panel.target == "Germany", 10.0)
 	await _wait(0.8)
 	_check(before == "France" and panel.target == "Germany", "a ranking row retargets the panel")
+	_check(panel.ranking_all and (panel.ranking.get("rows", []) as Array).size() == rows_before, "the ranking stays expanded after a pick (%d rows)" % rows_before)
 	await _shoot("13-country-ranking-germany")
 	main.hud.close_drawer()
 	await _wait(0.5)
+	var spy_script := GDScript.new()
+	spy_script.source_code = "extends EngineLink
+var calls: Array = []
+func request(method: String, args: Dictionary = {}) -> Dictionary:
+	calls.append(method)
+	return {\"ok\": false}
+"
+	spy_script.reload()
+	var spy: Node = spy_script.new()
+	var real: EngineLink = panel.engine
+	panel.engine = spy
+	await panel.refresh()
+	panel._background("ensureCountryAssessed", panel._sequence)
+	panel._poll_busy()
+	await panel.set_tab("economy")
+	await panel.set_tab("politics")
+	await panel.on_region_selected("Germany")
+	await _wait(1.2)
+	var asked: Array = spy.get("calls")
+	_check(asked.is_empty(), "the closed drawer asks the engine nothing (%s)" % ", ".join(PackedStringArray(asked)))
+	panel.engine = real
+	spy.free()
 
 
 func _map_cards() -> void:

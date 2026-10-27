@@ -8,13 +8,13 @@ var room: WarRoom
 var button: WarRoomButton
 var reports: AfterActionReports
 var forces: ForcesPanel
-var opened_chat := ""
 
 
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -88,6 +88,53 @@ func _until(condition: Callable, seconds: float) -> bool:
 	return bool(condition.call())
 
 
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+		_say("vault door opened for the test")
+	if not shell.notice_updates.is_empty():
+		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
+		await _frames(5)
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+	await _frames(3)
+
+
+func _close_notice() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.notice != null and is_instance_valid(shell.notice) and shell.notice.is_visible_in_tree():
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+		await _frames(3)
+
+
+func _find(node: Node, kind: String) -> Array:
+	var out: Array = []
+	if node.is_class(kind) and (not (node is CanvasItem) or (node as CanvasItem).is_visible_in_tree()):
+		out.append(node)
+	for child in node.get_children():
+		out.append_array(_find(child, kind))
+	return out
+
+
+func _mounted() -> bool:
+	button = main.get("war_room_button") as WarRoomButton
+	room = main.get("war_room") as WarRoom
+	reports = main.get("after_action") as AfterActionReports
+	forces = main.get("forces") as ForcesPanel
+	_check("the app mounts the war room, its button, the reports and Forces", button != null and room != null and reports != null and forces != null)
+	if room == null or button == null or reports == null or forces == null:
+		return false
+	await _until(func() -> bool: return room.engine != null and button.engine != null and reports.engine != null and forces.engine != null, 60.0)
+	await _wait(0.5)
+	return room.engine != null
+
+
 func _screen_of(place: Array) -> Vector2:
 	return main.map_view.world_to_screen(MapView.CityLayer.ohproject(float(place[0]), float(place[1])))
 
@@ -131,6 +178,10 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
+	if not await _mounted():
+		_finish(1)
+		return
 	if not OS.get_environment("OH_WARROOM_COMPARE").is_empty():
 		await _compare()
 		return
@@ -139,10 +190,8 @@ func _run() -> void:
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
 	_say("game open")
+	await _close_notice()
 	await _wait(1.0)
-	button = WarRoomButton.new()
-	main.ui.add_child(button)
-	button.setup(main.engine)
 	await button.refresh()
 	_check("no war, no war room button", not button.visible)
 	var war: Dictionary = await main.engine.request("warroom.test.war", {"fronts": [{"against": "Germany", "name": "Rhine Front", "generals": ["Pierre de Villiers", "Bruno Dary", "Elrick Irastorza"]}, {"against": "Italy", "name": "Alpine Front", "generals": ["Jean-Pierre Bosser"]}]})
@@ -152,14 +201,6 @@ func _run() -> void:
 	await button.refresh()
 	_check("the war room button shows at war", button.visible)
 	await _shoot("wr-00-button")
-	room = WarRoom.new()
-	main.ui.add_child(room)
-	await room.setup(main.engine, {"map_view": main.map_view})
-	room.shown_changed.connect(func(open: bool) -> void:
-		main.hud.visible = not open
-		button.set_room_open(open))
-	room.open_chat.connect(func(country: String) -> void: opened_chat = country)
-	button.pressed.connect(room.toggle)
 	button.pressed.emit()
 	await _until(func() -> bool: return not room._record.is_empty(), 20.0)
 	await _wait(1.6)
@@ -253,6 +294,13 @@ func _run() -> void:
 	room.store.take_tool("deploy")
 	await _wait(0.3)
 	_check("the deploy hint reads as React's", _shows(room.rail, "Formations to call up") and _shows(room.rail, "Empty calls up as many as a usual draft; 0 calls up none."))
+	var most := int(room._view.get("reinforceMost", 60))
+	var count_box: LineEdit = room.rail._count_input
+	count_box.text = "9999"
+	count_box.text_changed.emit("9999")
+	_check("the call-up box stops at the most a call-up can bring", count_box.text == str(most) and str(room.store.value("deploy_count")) == str(most), "%s of %d" % [count_box.text, most])
+	count_box.text = ""
+	count_box.text_changed.emit("")
 	await _shoot("wr-09-deploy-tool")
 	var line: Array = []
 	for step in range(10):
@@ -276,6 +324,67 @@ func _run() -> void:
 	_check("the line is ordered built", _shows(room, "FORTIFIED LINES") and _shows(room, "Ligne Moselle"), room._notice)
 	await _shoot("wr-12-line-built")
 	room.store.set_values({"draft": null})
+	await _idle()
+	var operation: Dictionary = await main.engine.request("warroom.test.operation", {"name": "Operation Black Forest", "summary": "Strike across the Rhine at Saarbrucken, Karlsruhe, Freiburg im Breisgau, Kaiserslautern, Trier, Mannheim and Stuttgart."})
+	_check("an operation is put on the Board", operation.get("ok", false), str(operation.get("error", "")))
+	await room.refresh()
+	await _wait(0.6)
+	var plan_points: Array = []
+	for plan in room._record.get("mapPlans", []):
+		if str((plan as Dictionary).get("name", "")) == "Operation Black Forest":
+			for plan_way in (plan as Dictionary).get("ways", []):
+				plan_points.append_array(plan_way)
+	_check("the operation is a planned movement with a way", not plan_points.is_empty())
+	main.map_view.fly_to_lonlat(6.185, 48.5, 8.0, 0.0)
+	await _wait(0.8)
+	room.map_layer.queue_redraw()
+	await _frames(3)
+	_check("the fortified line is named along it at zoom 8", "Ligne Moselle" in room.map_layer.last_labels, ", ".join(room.map_layer.last_labels))
+	await _shoot("wr-12b-line-label")
+	if not plan_points.is_empty():
+		var west := 180.0
+		var south := 90.0
+		var east := -180.0
+		var north := -90.0
+		for point in plan_points:
+			west = minf(west, float(point[0]))
+			east = maxf(east, float(point[0]))
+			south = minf(south, float(point[1]))
+			north = maxf(north, float(point[1]))
+		main.map_view.fit_lonlat_bounds([[west - 0.3, south - 0.3], [east + 0.3, north + 0.3]], 8.0, 0.0)
+		await _wait(0.8)
+		room.map_layer.queue_redraw()
+		await _frames(3)
+	_check("the operation is named on its arrow", "Operation Black Forest" in room.map_layer.last_labels, ", ".join(room.map_layer.last_labels))
+	await _shoot("wr-12c-plan-label")
+	await _frames(3)
+	var room_rects: Array[Rect2] = room.map_layer.label_rects
+	_check("the War Room publishes where its names stand", not room_rects.is_empty() and main.map_view.room_label_rects == room_rects, "%d boxes" % room_rects.size())
+	var clashes := 0
+	for room_box in room_rects:
+		for other in room.map_layer._war_seen:
+			if room_box.intersects(other):
+				clashes += 1
+	_check("no War Room name stands over a war label placed before it", clashes == 0, "%d clashes with %d war labels" % [clashes, room.map_layer._war_seen.size()])
+	var city_clashes := 0
+	for room_box in main.map_view.room_label_rects:
+		for other in main.map_view.city_label_rects:
+			if room_box.intersects(other):
+				city_clashes += 1
+	_check("city names yield to the War Room's names", city_clashes == 0, "%d clashes, %d city names shown" % [city_clashes, main.map_view.city_label_rects.size()])
+	var saved: Array[Rect2] = main.map_view.war_label_rects.duplicate()
+	var cover: Array[Rect2] = [Rect2(Vector2(-10000, -10000), Vector2(20000, 20000))]
+	main.map_view.war_set_label_rects(cover)
+	room.map_layer.queue_redraw()
+	await _frames(2)
+	_check("a War Room name over a war label placed before it is hidden", room.map_layer.last_labels.is_empty(), ", ".join(room.map_layer.last_labels))
+	main.map_view.war_set_label_rects(saved)
+	room.map_layer.queue_redraw()
+	await _frames(2)
+	_check("the names come back when the war label goes", "Operation Black Forest" in room.map_layer.last_labels, ", ".join(room.map_layer.last_labels))
+	main.map_view.fly_to_lonlat(6.185, 48.5, 8.0, 0.0)
+	await _wait(0.8)
+	await _shoot("wr-12d-line-label-collide")
 	room.store.set_values({"fleets": true})
 	await _wait(0.6)
 	_check("the fleets plate commands a fleet", room.plates._fleets.visible and _shows(room.plates, "POSTURE") and _shows(room.plates, "BLOCKADE A COUNTRY"))
@@ -312,12 +421,11 @@ func _run() -> void:
 	room._input(esc)
 	await _wait(0.6)
 	_check("Esc shuts the room", not room.is_open() and main.hud.visible)
+	await _frames(3)
+	_check("a shut room gives the city names their room back", main.map_view.room_label_rects.is_empty())
 	await _shoot("wr-17-closed")
 	var report: Dictionary = await main.engine.request("warroom.test.report", {"battlefield": "Rhine Front", "name": "Ardennes Front"})
 	_check("a closed battlefield is set up for its report", report.get("ok", false) and bool(report.get("result", false)), str(report.get("error", "")))
-	reports = AfterActionReports.new()
-	main.ui.add_child(reports)
-	reports.setup(main.engine)
 	await reports.refresh()
 	await _wait(0.6)
 	_check("the report of a war just over is put before the player", reports.is_showing() and _shows(reports, "AFTER-ACTION REPORT") and _shows(reports, "TURNING POINTS") and _shows(reports, "WHAT EACH SIDE CAME TO"))
@@ -330,12 +438,12 @@ func _run() -> void:
 	await _wait(0.4)
 	_check("the report opens again when asked", reports.is_showing())
 	await reports._close()
-	forces = ForcesPanel.new()
-	main.ui.add_child(forces)
-	forces.setup(main.engine, {"map_view": main.map_view})
 	await forces.set_open(true)
 	await _wait(0.6)
 	_check("the Forces panel lists units", _shows(forces, "Your units (") and _shows(forces, "Deploy a unit"))
+	var spins: Array = _find(forces, "SpinBox")
+	var strength: SpinBox = spins[0] if not spins.is_empty() else null
+	_check("strength is a number box from 1 to 100", strength != null and strength.min_value == 1.0 and strength.max_value == 100.0 and strength.step == 1.0)
 	await _shoot("wr-19-forces")
 	forces.deploy_name = "1re Brigade"
 	forces._start_deploy()
@@ -350,6 +458,15 @@ func _run() -> void:
 	await _shoot("wr-21-forces-placed")
 	forces.close()
 	await _wait(0.2)
+	_check("the button shows in the game at war", button.visible)
+	await main._exit_game()
+	await _wait(0.5)
+	await button.refresh()
+	await _frames(3)
+	_check("leaving the game hides the war room button", main.menu.visible and not button.visible)
+	main._refresh_war_parts()
+	await _wait(1.0)
+	_check("a refresh on the menu does not bring it back", not button.visible)
 	_say("done: %d failure(s)" % failures.size())
 	for failure in failures:
 		_say("  failed: " + failure)
@@ -358,18 +475,9 @@ func _run() -> void:
 
 func _compare() -> void:
 	await main._open_game(OS.get_environment("OH_WARROOM_COMPARE"))
+	await _close_notice()
 	await _wait(2.0)
-	button = WarRoomButton.new()
-	main.ui.add_child(button)
-	button.setup(main.engine)
 	await button.refresh()
-	room = WarRoom.new()
-	main.ui.add_child(room)
-	await room.setup(main.engine, {"map_view": main.map_view})
-	room.shown_changed.connect(func(open: bool) -> void:
-		main.hud.visible = not open
-		button.set_room_open(open))
-	button.pressed.connect(room.toggle)
 	button.pressed.emit()
 	await _until(func() -> bool: return not room._record.is_empty(), 20.0)
 	await _wait(2.5)
@@ -398,9 +506,6 @@ func _compare() -> void:
 	await _shoot("cmp-06-rehearsed")
 	room.close()
 	await _wait(0.6)
-	reports = AfterActionReports.new()
-	main.ui.add_child(reports)
-	reports.setup(main.engine)
 	await reports.refresh()
 	await _wait(0.8)
 	if reports.is_showing():

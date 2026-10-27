@@ -16,6 +16,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -119,6 +120,27 @@ func _press_enter(shift: bool) -> void:
 	Input.parse_input_event(up)
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
@@ -127,6 +149,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	await _wait(0.4)
 	main.picker._choose("France")

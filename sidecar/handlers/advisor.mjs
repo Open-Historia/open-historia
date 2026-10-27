@@ -866,13 +866,13 @@ export const register = (ctx) => {
             proposal: { type: draft.proposalType || "resolution", title: draft.title, summary: draft.summary || "" },
           });
         } else if (draft.type === "submit-proposal") {
-          await governance.commitInstitutionalPlayerVoteRequest({
+          await engine.instGovernanceRetry.commitWithVotingRuleBackfill(() => governance.commitInstitutionalPlayerVoteRequest({
             institutionId: draft.institutionId,
             proposalId: draft.proposalId,
             playerCountry,
             date,
             expectedGameId,
-          });
+          }), { institutionId: draft.institutionId, proposalId: draft.proposalId, expectedGameId });
         } else if (draft.type === "vote") {
           await governance.commitInstitutionGovernanceCommand({
             institutionId: draft.institutionId,

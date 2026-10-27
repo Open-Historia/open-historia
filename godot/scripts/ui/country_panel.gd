@@ -45,6 +45,8 @@ var _modal_kind := ""
 var _donut: StatDonut
 var _legend_rows: Array = []
 var _tabs_fitted := true
+var _sheet_target := ""
+var _busy_timer: Timer
 
 
 func _init() -> void:
@@ -57,6 +59,10 @@ func _init() -> void:
 		margin.add_theme_constant_override(side[0], side[1])
 	body.add_theme_constant_override("separation", 0)
 	scroll.get_v_scroll_bar().modulate.a = 0.0
+	_busy_timer = Timer.new()
+	_busy_timer.wait_time = 0.8
+	_busy_timer.timeout.connect(_poll_busy)
+	add_child(_busy_timer)
 
 
 func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
@@ -79,30 +85,36 @@ func show_country(name := "") -> void:
 		selected_party = ""
 		hovered_party = ""
 		peace.clear()
-		ranking.clear()
-		ranking_all = false
 		institutions_all = false
 		findings_all = false
 		sheet_status = "idle"
 		sheet_error = ""
 	if not is_open():
 		set_open(true)
+	_busy_timer.start()
 	await _load(asked)
 
 
 func open() -> void:
 	if not is_open():
 		set_open(true)
-	if data.is_empty():
-		await _load("")
+	_busy_timer.start()
+	var sequence := _sequence
+	await get_tree().process_frame
+	if sequence == _sequence and is_open():
+		await _load(target)
 
 
 func close() -> void:
 	_close_modal()
+	_busy_timer.stop()
+	_sequence += 1
 	set_open(false)
 
 
 func refresh() -> void:
+	if not is_open():
+		return
 	await _load(target)
 
 
@@ -117,6 +129,9 @@ func set_tab(next: String) -> void:
 		return
 	tab = next
 	refresh_step = ""
+	ranking.clear()
+	ranking_metric = ""
+	ranking_all = false
 	await _load(target)
 
 
@@ -230,7 +245,7 @@ func _on_engine_event(name: String, payload: Variant) -> void:
 	if name != "country.sheet_loading" or typeof(payload) != TYPE_DICTIONARY:
 		return
 	var info: Dictionary = payload
-	if str(info.get("target", "")) != target or tab != "economy":
+	if not is_open() or str(info.get("target", "")) != target or tab != "economy":
 		return
 	sheet_status = "loading"
 	sheet_waiting = bool(info.get("waiting", false))
@@ -241,49 +256,50 @@ func _cancel_sheet() -> void:
 	if _sheet_call > 0 and engine:
 		engine.cancel(_sheet_call)
 	_sheet_call = 0
+	_sheet_target = ""
 
 
 func _load(asked: String) -> void:
-	if not engine:
+	if not engine or not is_open():
 		return
 	_sequence += 1
 	var sequence := _sequence
-	var reply: Dictionary = await engine.request("country.view", {"target": asked})
-	if sequence != _sequence:
+	var reply: Dictionary = await engine.request("country.view", {"target": asked, "tab": tab})
+	if sequence != _sequence or not is_open():
 		return
 	if not reply.get("ok", false):
 		data = {"empty": str(reply.get("error", "The country could not be read."))}
 		_render()
 		return
-	var previous := target
 	data = reply.get("result", {})
 	target = str(data.get("target", ""))
-	if previous != target:
-		ranking.clear()
 	_render()
 	if target.is_empty():
 		return
 	if tab == "economy":
 		await _load_sheet(false, false, true, sequence)
-		if sequence == _sequence:
+		if sequence == _sequence and is_open():
 			_background("ensureIntelligenceRated", sequence)
 	elif tab == "ranking":
 		await _load_sheet(false, false, false, sequence)
 		await _load_ranking(sequence)
 	else:
 		var status := await _load_sheet(false, false, false, sequence)
-		if sequence == _sequence and status != "generating":
+		if sequence == _sequence and is_open() and status != "generating":
 			_background("ensureCountryAssessed", sequence)
 
 
 func _load_sheet(force: bool, reassess: bool, generate: bool, sequence: int) -> String:
-	_cancel_sheet()
+	if force or _sheet_target != target:
+		_cancel_sheet()
 	var call := engine.last_request_id() + 1
 	_sheet_call = call
+	_sheet_target = target
 	var reply: Dictionary = await engine.request("country.sheet", {"target": target, "force": force, "forceReassess": reassess, "generate": generate})
 	if _sheet_call == call:
 		_sheet_call = 0
-	if sequence != _sequence:
+		_sheet_target = ""
+	if sequence != _sequence or not is_open():
 		return "stale"
 	if not reply.get("ok", false):
 		if tab == "economy":
@@ -297,7 +313,7 @@ func _load_sheet(force: bool, reassess: bool, generate: bool, sequence: int) -> 
 		"ready":
 			sheet_status = "ready"
 			sheet_error = ""
-			var view: Dictionary = await engine.request("country.view", {"target": target})
+			var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab})
 			if sequence != _sequence or not view.get("ok", false):
 				return status
 			data = view.get("result", {})
@@ -319,14 +335,29 @@ func _load_sheet(force: bool, reassess: bool, generate: bool, sequence: int) -> 
 
 
 func _background(fn: String, sequence: int) -> void:
+	if not is_open():
+		return
 	var asked := target
 	var reply: Dictionary = await engine.request("invoke", {"module": "gameplay", "fn": fn, "args": [asked, {"reason": "stats pane"}]})
 	if sequence != _sequence or asked != target or not is_open():
 		return
 	if reply.get("ok", false):
-		var view: Dictionary = await engine.request("country.view", {"target": target})
-		if sequence == _sequence and view.get("ok", false):
+		var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab})
+		if sequence == _sequence and is_open() and view.get("ok", false):
 			data = view.get("result", {})
+			_render()
+
+
+func _poll_busy() -> void:
+	if not engine or not is_open() or tab != "economy" or data.is_empty() or data.has("empty"):
+		return
+	var reply: Dictionary = await engine.request("country.busy")
+	if not reply.get("ok", false) or not is_open() or data.is_empty():
+		return
+	var busy := bool((reply.get("result", {}) as Dictionary).get("busy", false))
+	if busy != bool(data.get("turnRunning", false)):
+		data["turnRunning"] = busy
+		if tab == "economy":
 			_render()
 
 
@@ -1289,10 +1320,7 @@ func _render_diplomacy() -> void:
 			line.add_child(words)
 			var read := link("Read the report", UI.ACCENT, 11, 700)
 			read.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			if context.get("war_reports", false):
-				read.pressed.connect(func() -> void: open_war_report.emit(str(report.get("name", ""))))
-			else:
-				UI.set_disabled_look(read, "War reports are not in the native app yet.")
+			read.pressed.connect(func() -> void: open_war_report.emit(str(report.get("name", ""))))
 			line.add_child(read)
 			inner.add_child(line)
 		body.add_child(list[0])
