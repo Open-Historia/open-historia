@@ -83,8 +83,16 @@ engine.setDebugLogPersistence(true);
 engine.debugLog.installDebugLogCapture();
 engine.debugLog.setDebugLogContext({ build: "native", language: String(globalThis.navigator?.language ?? "") });
 engine.debugLog.logDebugEvent("app", "Open Historia started.");
-engine.subscribeToDebugLog?.((entry) => {
-  if (entry && (entry.problem || entry.category === "turn")) emit("log", { category: entry.category, message: entry.message });
+const debugLogTotal = () => (engine.debugLog.getDebugLogDroppedCount?.() ?? 0) + (engine.debugLog.getDebugLogSize?.() ?? 0);
+let debugLogSeen = debugLogTotal();
+engine.subscribeToDebugLog?.(() => {
+  const total = debugLogTotal();
+  const fresh = Math.max(0, Math.min(total - debugLogSeen, engine.debugLog.getDebugLogSize?.() ?? 0));
+  debugLogSeen = total;
+  if (fresh === 0) return;
+  for (const entry of engine.getDebugLogEntries().slice(-fresh)) {
+    if (entry && (entry.problem || entry.category === "turn")) emit("log", { category: entry.category, message: entry.message });
+  }
 });
 await engine.refreshLibraryCatalog({ force: true });
 

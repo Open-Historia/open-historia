@@ -333,9 +333,7 @@ static func _flag_texture(path: String) -> Texture2D:
 	if path.to_lower().ends_with(".svg"):
 		texture = UI.flag(path, 28)
 	else:
-		var image := Image.load_from_file(path)
-		if image:
-			texture = ImageTexture.create_from_image(image)
+		texture = ImageLoader.texture_from_file(path)
 	_flag_cache[path] = texture
 	return texture
 

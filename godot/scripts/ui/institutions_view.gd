@@ -721,7 +721,12 @@ func _load_logo(url: String, picture: TextureRect, mark: Label) -> void:
 		var image := Image.new()
 		var lowered := address.to_lower().split("?")[0]
 		var status := ERR_FILE_UNRECOGNIZED
-		if lowered.ends_with(".svg"):
+		if ImageLoader.is_avif(body):
+			var converted: Image = await ImageLoader.avif_image(body)
+			if converted != null:
+				image = converted
+				status = OK
+		elif lowered.ends_with(".svg"):
 			status = image.load_svg_from_buffer(body, 2.0)
 		elif lowered.ends_with(".png"):
 			status = image.load_png_from_buffer(body)

@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -130,6 +130,10 @@ const framework = path.join(process.env.SystemRoot || "C:\\Windows", "Microsoft.
 const brand = path.join(out, "brand.exe");
 run(path.join(framework, "csc.exe"), ["/nologo", "/target:exe", "/optimize+", `/out:${brand}`, path.join(here, "installer", "Brand.cs")]);
 run(brand, [path.join(stage, "runtime", "Open Historia.exe"), path.join(stage, "runtime", "open-historia.ico"), "Open Historia"]);
+const imageCodec = await import(pathToFileURL(path.join(sidecar, "handlers", "imagecodec.mjs")).href);
+const imageCodecTarget = path.join(stage, "native", "sidecar", "imagecodec", imageCodec.IMAGE_CODEC_EXE);
+fs.mkdirSync(path.dirname(imageCodecTarget), { recursive: true });
+run(path.join(framework, "csc.exe"), imageCodec.imageCodecCompileArgs(imageCodecTarget));
 fs.writeFileSync(path.join(stage, ".oh-native-install"), `${new Date().toISOString()}\n`);
 
 const launcher = [

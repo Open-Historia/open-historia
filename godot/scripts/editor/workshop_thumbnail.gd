@@ -35,6 +35,8 @@ static func load_still(path: String) -> Image:
 	var bytes := FileAccess.get_file_as_bytes(path)
 	if ImageLoader.is_gif(bytes):
 		return ImageLoader.decode_gif(bytes)
+	if ImageLoader.is_avif(bytes):
+		return await ImageLoader.avif_image(bytes)
 	var image := Image.new()
 	return image if image.load(path) == OK else null
 

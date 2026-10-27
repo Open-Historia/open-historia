@@ -14,14 +14,20 @@ const VIEWS := [
 
 var engine: EngineLink
 var map: MapView
+var extras: MapExtras
 var shots := ""
 var started := 0
 var failures := 0
+var tilt := Vector2.ZERO
 
 
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
+	root.mouse_passthrough = true
+	var spec := OS.get_environment("OH_MAP_TILT").split(",", false)
+	if spec.size() >= 2:
+		tilt = Vector2(float(spec[0]), float(spec[1]))
 	engine = EngineLink.new()
 	root.add_child(engine)
 	map = MapView.new()
@@ -51,6 +57,9 @@ func _shoot(name: String) -> void:
 func _look(lon: float, lat: float, level: float) -> void:
 	map.camera.position = MapView.CityLayer.ohproject(lon, lat)
 	map.camera.zoom = Vector2.ONE * pow(2.0, level) / 8.0
+	if tilt != Vector2.ZERO:
+		map.pitch = tilt.x
+		map.bearing = tilt.y
 	map._after_camera_move()
 
 
@@ -144,6 +153,9 @@ func _run() -> void:
 		if file:
 			file.store_string(JSON.stringify(layer.measures_snapshot()))
 			file.close()
+	if tilt != Vector2.ZERO:
+		await _attach_extras()
+		_say("views tilted to pitch %.0f, bearing %.0f" % [tilt.x, tilt.y])
 	for view: Array in VIEWS:
 		_look(float(view[1]), float(view[2]), float(view[3]))
 		await _wait(0.3)
@@ -181,8 +193,203 @@ func _run() -> void:
 	_say("same ownership again: revision %d -> %d (no new layout expected)" % [unchanged, layer.revision])
 	if layer.revision != unchanged:
 		failures += 1
+	await _projection_checks()
 	_say("done with %d failures" % failures)
 	_finish(1 if failures > 0 else 0)
+
+
+func _check(ok: bool, what: String) -> void:
+	if ok:
+		_say("ok   " + what)
+	else:
+		_say("FAIL " + what)
+		failures += 1
+
+
+func _attach_extras() -> void:
+	if extras != null:
+		return
+	extras = MapExtras.new()
+	root.add_child(extras)
+	await extras.setup(engine, {"map_view": map})
+	extras.apply_map_settings({"map_disable_idle_rotation": true})
+
+
+func _place(lon: float, lat: float, level: float, pitch: float, bearing: float) -> void:
+	map.camera.position = MapView.CityLayer.ohproject(lon, lat)
+	map.camera.zoom = Vector2.ONE * pow(2.0, level) / 8.0
+	map.pitch = pitch
+	map.bearing = bearing
+	map._after_camera_move()
+	var globe := extras.globe
+	await _wait(0.4)
+	var deadline := Time.get_ticks_msec() + 45000
+	while Time.get_ticks_msec() < deadline and globe.relief.enabled and not (globe.relief.has_data and not globe.relief.busy()):
+		await process_frame
+	await _wait(0.4)
+	map._after_camera_move()
+
+
+func _image() -> Image:
+	for i in range(4):
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var image := root.get_viewport().get_texture().get_image()
+	image.convert(Image.FORMAT_RGBA8)
+	return image
+
+
+static func _green(pixel: Color) -> bool:
+	return pixel.g > 0.7 and pixel.r < 0.35 and pixel.b < 0.35
+
+
+static func _ink_mask(image: Image) -> PackedByteArray:
+	var data := image.get_data()
+	var mask := PackedByteArray()
+	mask.resize(data.size() / 4)
+	for index in range(mask.size()):
+		var at := index * 4
+		mask[index] = 1 if data[at + 1] > 178 and data[at] < 89 and data[at + 2] < 89 else 0
+	return mask
+
+
+static func _ink_overlap(a: PackedByteArray, b: PackedByteArray) -> Vector3:
+	var both := 0
+	var either := 0
+	var first := 0
+	for index in range(mini(a.size(), b.size())):
+		if a[index] == 1 or b[index] == 1:
+			either += 1
+			if a[index] == 1 and b[index] == 1:
+				both += 1
+		if a[index] == 1:
+			first += 1
+	return Vector3(both, either, first)
+
+
+static func _ink_within(image: Image, at: Vector2, reach: float) -> bool:
+	var span := ceili(reach)
+	for y in range(int(at.y) - span, int(at.y) + span + 1):
+		for x in range(int(at.x) - span, int(at.x) + span + 1):
+			if x < 0 or y < 0 or x >= image.get_width() or y >= image.get_height():
+				continue
+			if Vector2(x + 0.5, y + 0.5).distance_to(at) <= reach and _green(image.get_pixel(x, y)):
+				return true
+	return false
+
+
+func _full_names(level: float) -> Array[Dictionary]:
+	var found: Array[Dictionary] = []
+	for label in map.polity_text().labels_snapshot():
+		if PolityTextLayer.opacity_at(level, float(label["min_zoom"]), 6.2, 0.18, 5.0) >= 0.999:
+			found.append(label)
+	return found
+
+
+func _ink_report(image: Image, labels: Array[Dictionary], placed: Callable, other: Callable, apart: float) -> Dictionary:
+	var size := map.get_viewport_rect().size
+	var counted := 0
+	var hits := 0
+	var other_hits := 0
+	var raised := 0
+	var raised_hits := 0
+	var missed := PackedStringArray()
+	for label in labels:
+		var height := float(label["glyph_height"])
+		var glyph := -1
+		for centre: Vector2 in label["centres"]:
+			glyph += 1
+			var at: Vector2 = placed.call(centre)
+			if at.x < 24.0 or at.y < 24.0 or at.x > size.x - 24.0 or at.y > size.y - 24.0:
+				continue
+			var glyph_px := at.distance_to(placed.call(centre + Vector2(0.0, height)))
+			if glyph_px < 5.0:
+				continue
+			var reach := 0.4 * glyph_px
+			var elsewhere: Vector2 = other.call(centre) if other.is_valid() else at
+			if apart > 0.0 and at.distance_to(elsewhere) < apart * glyph_px:
+				continue
+			counted += 1
+			var hit := _ink_within(image, at, reach)
+			if hit:
+				hits += 1
+			elif missed.size() < 8:
+				missed.append("%s#%d@(%d,%d)" % [label["text"], glyph, roundi(at.x), roundi(at.y)])
+			if other.is_valid() and _ink_within(image, elsewhere, reach):
+				other_hits += 1
+			if extras.globe.height_at(centre) > 100.0:
+				raised += 1
+				if hit:
+					raised_hits += 1
+	if not missed.is_empty():
+		_say("glyph centres without ink: " + ", ".join(missed))
+	return {"counted": counted, "hits": hits, "other_hits": other_hits, "raised": raised, "raised_hits": raised_hits}
+
+
+func _projection_checks() -> void:
+	await _attach_extras()
+	var layer := map.polity_text()
+	var globe := extras.globe
+	var fill: Color = layer._fill
+	var halo: Color = layer._halo
+	layer._fill = Color(0.0, 1.0, 0.0, 1.0)
+	layer._halo = Color(0.0, 0.0, 0.0, 0.0)
+	layer._apply_colors()
+	map._cities.visible = false
+	extras.apply_map_settings({"Terrain": false, "Globe": false})
+	var on_flat := func(point: Vector2) -> Vector2: return map.world_to_screen(point)
+	var on_plane := func(point: Vector2) -> Vector2: return globe.project_label_point(point)
+	var on_relief := func(point: Vector2) -> Vector2: return globe.world_to_screen(point)
+	for spot: Array in [["p1-europe-z4", 10.0, 49.0, 4.0], ["p2-fade-in-z2-5", 20.0, 40.0, 2.5]]:
+		await _place(float(spot[1]), float(spot[2]), float(spot[3]), 0.0, 0.0)
+		_check(not globe.active and not layer.projected(), "%s: a north-up map with terrain off draws its names on the flat path" % spot[0])
+		var flat_image := await _image()
+		var flat := _ink_mask(flat_image)
+		await _shoot(str(spot[0]) + "-flat")
+		var calibrate := _ink_report(flat_image, _full_names(map.zoom_level()), on_flat, Callable(), 0.0)
+		_check(int(calibrate["counted"]) >= 20 and float(calibrate["hits"]) >= 0.97 * float(calibrate["counted"]), "%s: on the flat path the measured glyph centres sit on drawn ink (%d of %d)" % [spot[0], int(calibrate["hits"]), int(calibrate["counted"])])
+		await _place(float(spot[1]), float(spot[2]), float(spot[3]), 0.0, 0.001)
+		_check(globe.active and layer.projected() and globe.labels.painted_items() > 0, "%s: once the projector runs the names move to its screen-space pass (%d glyph runs)" % [spot[0], globe.labels.painted_items()])
+		var projected := _ink_mask(await _image())
+		await _shoot(str(spot[0]) + "-projected")
+		var overlap := _ink_overlap(flat, projected)
+		_check(overlap.z > 2000.0 and overlap.x / maxf(overlap.y, 1.0) > 0.9, "%s: the screen-space pass draws the same curves, sizes and zoom fades as the flat map (%.1f%% of %d ink pixels shared)" % [spot[0], 100.0 * overlap.x / maxf(overlap.y, 1.0), int(overlap.z)])
+	var pitch := tilt.x if tilt != Vector2.ZERO else 60.0
+	var bearing := tilt.y if tilt != Vector2.ZERO else 0.0
+	extras.apply_map_settings({"Terrain": true})
+	await _place(8.6, 45.4, 5.0, pitch, bearing)
+	var relief_ok := globe.relief_shown() and globe.relief.has_data
+	var image := await _image()
+	await _shoot("p3-alps-terrain-p%d-b%d" % [roundi(pitch), roundi(bearing)])
+	var names := _full_names(map.zoom_level())
+	var plane := _ink_report(image, names, on_plane, on_relief, 1.0)
+	_check(relief_ok and layer.projected() and int(plane["counted"]) >= 6 and float(plane["hits"]) >= 0.9 * float(plane["counted"]) and float(plane["other_hits"]) <= 0.5 * float(plane["counted"]), "over the Alps at pitch %.0f the names lie flat on the sea-level plane of React's custom layer, not draped over the relief (of %d glyphs the relief would move by more than their height, %d are on the plane and %d where draping would put them)" % [pitch, int(plane["counted"]), int(plane["hits"]), int(plane["other_hits"])])
+	var everything := _ink_report(image, names, on_plane, Callable(), 0.0)
+	_check(int(everything["raised"]) >= 20 and float(everything["raised_hits"]) >= 0.9 * float(everything["raised"]), "names stay drawn where the raised terrain stands in front of their plane, as React's layer draws without a depth test (%d of %d glyphs over raised ground)" % [int(everything["raised_hits"]), int(everything["raised"])])
+	extras.apply_map_settings({"Globe": true})
+	await _place(15.0, 45.0, 3.0, 0.0, 0.0)
+	globe._light_material.set_shader_parameter("overlay", 0.0)
+	image = await _image()
+	await _shoot("p4-globe-z3")
+	var front: Array[Dictionary] = []
+	var eye: Vector3 = globe.current_frame()["pos"]
+	for label in _full_names(map.zoom_level()):
+		var on_side := true
+		for centre: Vector2 in label["centres"]:
+			var lonlat := GlobeView.lonlat_of_world(centre)
+			if GlobeView.direction_of(lonlat.x, lonlat.y).dot(eye) < 1.02:
+				on_side = false
+		if on_side:
+			front.append(label)
+	var sphere := _ink_report(image, front, on_plane, Callable(), 0.0)
+	_check(globe.globe_shown() and layer.projected() and int(sphere["counted"]) >= 20 and float(sphere["hits"]) >= 0.9 * float(sphere["counted"]), "on the globe the names are drawn on the sphere's surface by the same pass (%d of %d glyphs)" % [int(sphere["hits"]), int(sphere["counted"])])
+	extras.apply_map_settings({"Globe": false, "Terrain": false})
+	await _place(10.0, 49.0, 4.0, 0.0, 0.0)
+	_check(not globe.active and not layer.projected(), "back to a flat north-up map the names return to the flat path")
+	layer._fill = fill
+	layer._halo = halo
+	layer._apply_colors()
+	map._cities.visible = true
 
 
 func _finish(code: int) -> void:

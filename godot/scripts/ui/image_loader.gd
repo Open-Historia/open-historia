@@ -3,6 +3,10 @@ extends Node
 
 const GIF_PIXEL_BUDGET := 24000000
 
+static var link: EngineLink
+static var avif_dir := ""
+static var avif_missing := false
+
 var origin := ""
 var _cache := {}
 var _waiting := {}
@@ -39,6 +43,10 @@ func _pump() -> void:
 					_deliver_gif.call_deferred(url, frames))
 				_pump()
 				return
+			if result == HTTPRequest.RESULT_SUCCESS and code == 200 and is_avif(body):
+				_deliver_avif(weakref(self), url, body)
+				_pump()
+				return
 			var texture: Texture2D = null
 			if result == HTTPRequest.RESULT_SUCCESS and code == 200:
 				texture = decode(body)
@@ -58,6 +66,13 @@ func _deliver_gif(url: String, frames: Dictionary) -> void:
 	_deliver(url, texture_from_gif(frames))
 
 
+static func _deliver_avif(owner: WeakRef, url: String, body: PackedByteArray) -> void:
+	var image: Image = await avif_image(body)
+	var loader := owner.get_ref() as ImageLoader
+	if loader != null:
+		loader._deliver_image(url, image)
+
+
 func _deliver(url: String, texture: Texture2D) -> void:
 	_cache[url] = texture
 	for callback in _waiting.get(url, []):
@@ -69,11 +84,122 @@ static func is_gif(body: PackedByteArray) -> bool:
 	return body.size() >= 6 and body[0] == 0x47 and body[1] == 0x49 and body[2] == 0x46 and body[3] == 0x38
 
 
+static func is_avif(body: PackedByteArray) -> bool:
+	if body.size() < 16 or body[4] != 0x66 or body[5] != 0x74 or body[6] != 0x79 or body[7] != 0x70:
+		return false
+	var box := (body[0] << 24) | (body[1] << 16) | (body[2] << 8) | body[3]
+	var end := mini(body.size(), clampi(box, 16, 256))
+	var at := 8
+	while at + 4 <= end:
+		if at != 12:
+			var brand := body.slice(at, at + 4).get_string_from_ascii()
+			if brand == "avif" or brand == "avis":
+				return true
+		at += 4
+	return false
+
+
+static func avif_size(body: PackedByteArray) -> Vector2i:
+	var limit := mini(body.size(), 65536) - 16
+	var at := body.find(0x69, 8)
+	while at >= 0 and at <= limit:
+		if body[at + 1] == 0x73 and body[at + 2] == 0x70 and body[at + 3] == 0x65:
+			var width := (body[at + 8] << 24) | (body[at + 9] << 16) | (body[at + 10] << 8) | body[at + 11]
+			var height := (body[at + 12] << 24) | (body[at + 13] << 16) | (body[at + 14] << 8) | body[at + 15]
+			if width > 0 and height > 0 and width <= 65535 and height <= 65535:
+				return Vector2i(width, height)
+		at = body.find(0x69, at + 1)
+	return Vector2i.ZERO
+
+
+static func avif_key(body: PackedByteArray) -> String:
+	var hashing := HashingContext.new()
+	hashing.start(HashingContext.HASH_SHA256)
+	hashing.update(body)
+	return hashing.finish().hex_encode()
+
+
+static func avif_cached(body: PackedByteArray) -> Image:
+	if avif_dir.is_empty():
+		return null
+	var file := avif_dir.path_join(avif_key(body) + ".png")
+	if not FileAccess.file_exists(file):
+		return null
+	var image := Image.new()
+	if image.load_png_from_buffer(FileAccess.get_file_as_bytes(file)) != OK or image.is_empty():
+		return null
+	return image
+
+
+static func avif_image(body: PackedByteArray) -> Image:
+	var cached := avif_cached(body)
+	if cached != null or avif_missing:
+		return cached
+	var engine := _avif_link()
+	if engine == null:
+		return null
+	var reply: Dictionary = await engine.request("image.avif", {"data": Marshalls.raw_to_base64(body)})
+	var result: Dictionary = reply["result"] if reply.get("ok", false) and reply.get("result") is Dictionary else {}
+	if not result.get("ok", false):
+		if result.get("missing", false):
+			avif_missing = true
+		return null
+	var png := str(result.get("png", "")).replace("\\", "/")
+	if png.is_empty():
+		return null
+	if avif_dir.is_empty():
+		avif_dir = png.get_base_dir()
+	var image := Image.new()
+	if image.load_png_from_buffer(FileAccess.get_file_as_bytes(png)) != OK or image.is_empty():
+		return null
+	return image
+
+
+static func avif_texture(body: PackedByteArray) -> Texture2D:
+	var cached := avif_cached(body)
+	if cached != null:
+		return ImageTexture.create_from_image(cached)
+	if avif_missing or _avif_link() == null:
+		return null
+	var texture := ImageTexture.create_from_image(Image.create_empty(1, 1, false, Image.FORMAT_RGBA8))
+	var size := avif_size(body)
+	if size.x > 0 and size.y > 0:
+		texture.set_size_override(size)
+	_fill_avif(texture, body)
+	return texture
+
+
+static func _fill_avif(texture: ImageTexture, body: PackedByteArray) -> void:
+	var image: Image = await avif_image(body)
+	if image != null:
+		texture.set_image(image)
+
+
+static func _avif_link() -> EngineLink:
+	if is_instance_valid(link):
+		return link
+	link = null
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return null
+	for child in tree.root.get_children():
+		var candidate: Variant = child.get("engine")
+		if is_instance_valid(candidate) and candidate is EngineLink:
+			link = candidate
+			return link
+	var found := tree.root.find_children("*", "EngineLink", true, false)
+	if not found.is_empty():
+		link = found[0] as EngineLink
+	return link
+
+
 static func decode(body: PackedByteArray) -> Texture2D:
 	if body.size() < 4:
 		return null
 	if is_gif(body):
 		return texture_from_gif(gif_frames(body))
+	if is_avif(body):
+		return avif_texture(body)
 	var image := Image.new()
 	var status := ERR_FILE_UNRECOGNIZED
 	if body[0] == 0x89 and body[1] == 0x50:
@@ -88,6 +214,9 @@ static func decode(body: PackedByteArray) -> Texture2D:
 
 
 static func decode_async(host: Node, body: PackedByteArray) -> Texture2D:
+	if is_avif(body):
+		var image: Image = await avif_image(body)
+		return ImageTexture.create_from_image(image) if image != null and is_instance_valid(host) else null
 	if not is_gif(body):
 		return decode(body)
 	var frames := [{}]
@@ -105,6 +234,8 @@ static func texture_from_file(path: String) -> Texture2D:
 	var body := FileAccess.get_file_as_bytes(path)
 	if is_gif(body):
 		return texture_from_gif(gif_frames(body))
+	if is_avif(body):
+		return avif_texture(body)
 	var image := Image.load_from_file(path)
 	return ImageTexture.create_from_image(image) if image and not image.is_empty() else null
 

@@ -31,6 +31,8 @@ static func use_data_root(data_root: String) -> void:
 		return
 	cache_dir = data_root.path_join("native-cache").path_join("hub-images")
 	DirAccess.make_dir_recursive_absolute(cache_dir)
+	if ImageLoader.avif_dir.is_empty():
+		ImageLoader.avif_dir = data_root.path_join("native-cache").path_join("avif")
 
 
 static func _ensure() -> HubImages:
@@ -116,6 +118,9 @@ func _decoded(url: String, image: Variant) -> void:
 	if _tasks.has(url):
 		WorkerThreadPool.wait_for_task_completion(int(_tasks[url]))
 		_tasks.erase(url)
+	if image is PackedByteArray:
+		_convert_avif(weakref(self), url, image)
+		return
 	_active -= 1
 	var texture: Texture2D = null
 	if image is Dictionary:
@@ -134,16 +139,36 @@ func _decoded(url: String, image: Variant) -> void:
 	_pump()
 
 
+static func _convert_avif(owner: WeakRef, url: String, body: PackedByteArray) -> void:
+	var image: Image = await ImageLoader.avif_image(body)
+	var loader := owner.get_ref() as HubImages
+	if loader != null:
+		loader._decoded(url, _fit(image) if image != null else null)
+
+
 static func _decode_any(body: PackedByteArray) -> Variant:
 	if ImageLoader.is_gif(body):
 		var frames := ImageLoader.gif_frames(body)
 		return frames if not (frames.get("frames", []) as Array).is_empty() else null
+	if ImageLoader.is_avif(body):
+		var cached := ImageLoader.avif_cached(body)
+		return _fit(cached) if cached != null else body
 	return decode_image(body)
+
+
+static func _fit(image: Image) -> Image:
+	if image.get_width() > 1600:
+		image.resize(1600, int(round(image.get_height() * 1600.0 / image.get_width())), Image.INTERPOLATE_LANCZOS)
+	image.generate_mipmaps()
+	return image
 
 
 static func decode_image(body: PackedByteArray) -> Image:
 	if ImageLoader.is_gif(body):
 		return ImageLoader.decode_gif(body)
+	if ImageLoader.is_avif(body):
+		var cached := ImageLoader.avif_cached(body)
+		return _fit(cached) if cached != null else null
 	if body.size() < 12:
 		return null
 	var image := Image.new()
@@ -156,14 +181,13 @@ static func decode_image(body: PackedByteArray) -> Image:
 		status = image.load_webp_from_buffer(body)
 	if status != OK or image.is_empty():
 		return null
-	if image.get_width() > 1600:
-		image.resize(1600, int(round(image.get_height() * 1600.0 / image.get_width())), Image.INTERPOLATE_LANCZOS)
-	image.generate_mipmaps()
-	return image
+	return _fit(image)
 
 
 static func decode(body: PackedByteArray) -> Texture2D:
 	if ImageLoader.is_gif(body):
 		return ImageLoader.texture_from_gif(ImageLoader.gif_frames(body))
+	if ImageLoader.is_avif(body):
+		return ImageLoader.avif_texture(body)
 	var image := decode_image(body)
 	return ImageTexture.create_from_image(image) if image else null

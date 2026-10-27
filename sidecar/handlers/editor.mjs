@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { convertAvif, isAvif } from "./imagecodec.mjs";
 
 const DEFAULT_ACCENT_COLOR = "#2bc1f3";
 
@@ -454,9 +455,16 @@ export const register = (ctx) => {
       const file = clean(source);
       const buffer = fs.readFileSync(file);
       const extension = path.extname(file).slice(1).toLowerCase();
-      const avif = extension === "avif" || /^ftypavi[fs]$/.test(buffer.subarray(4, 12).toString("latin1"));
+      const avif = extension === "avif" || isAvif(buffer);
       if (clean(assetKey) === "cover" && avif) {
-        throw new Error("This cover is an AVIF image, which the app cannot show. Choose a PNG, JPEG, WebP or GIF image instead.");
+        try {
+          await convertAvif({ bytes: buffer, cacheDir });
+        } catch (error) {
+          if (error?.codecMissing) {
+            throw new Error("This cover is an AVIF image, which this computer cannot show without the AV1 Video Extension from the Microsoft Store. Choose a PNG, JPEG, WebP or GIF image instead.");
+          }
+          throw new Error("This cover could not be read as an AVIF image. Choose another image.");
+        }
       }
       const type = UPLOAD_TYPES[extension] ?? "";
       const blob = new Blob([buffer], { type });

@@ -6,6 +6,9 @@ shader_type canvas_item;
 render_mode unshaded;
 uniform sampler2D cover : filter_linear_mipmap;
 uniform bool has_cover = false;
+uniform sampler2D under : filter_linear_mipmap;
+uniform bool has_under = false;
+uniform vec2 under_scale = vec2(1.0, 1.0);
 uniform vec4 accent : source_color = vec4(0.169, 0.757, 0.953, 1.0);
 uniform vec4 card : source_color = vec4(0.071, 0.078, 0.102, 1.0);
 uniform vec2 rect_size = vec2(303.0, 154.0);
@@ -15,9 +18,13 @@ uniform float glow = 1.0;
 void fragment() {
 	vec2 p = UV * rect_size;
 	vec3 colour = vec3(0.16, 0.17, 0.2);
+	if (has_under) {
+		vec4 base = texture(under, (UV - 0.5) * under_scale + 0.5);
+		colour = mix(colour, base.rgb, base.a);
+	}
 	if (has_cover) {
-		vec2 uv = (UV - 0.5) * cover_scale + 0.5;
-		colour = texture(cover, uv).rgb;
+		vec4 picture = texture(cover, (UV - 0.5) * cover_scale + 0.5);
+		colour = mix(colour, picture.rgb, picture.a);
 	}
 	colour = mix(colour, vec3(4.0, 6.0, 12.0) / 255.0, 0.56);
 	vec2 centre = vec2(0.14, 0.18) * rect_size;
@@ -42,6 +49,7 @@ void fragment() {
 static var _shader: Shader
 var _material: ShaderMaterial
 var _texture: Texture2D
+var _under: Texture2D
 
 
 func _init(accent := UI.ACCENT, glow := 1.0) -> void:
@@ -53,6 +61,10 @@ func _init(accent := UI.ACCENT, glow := 1.0) -> void:
 	_material.set_shader_parameter("accent", accent)
 	_material.set_shader_parameter("card", UI.CARD)
 	_material.set_shader_parameter("glow", glow)
+	_under = CommunityKit.placeholder_cover()
+	_material.set_shader_parameter("has_under", _under != null)
+	if _under:
+		_material.set_shader_parameter("under", _under)
 	material = _material
 	color = Color.WHITE
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -69,19 +81,27 @@ func _notification(what: int) -> void:
 
 
 func set_cover(texture: Texture2D) -> void:
+	if _texture and _texture.changed.is_connected(_fit):
+		_texture.changed.disconnect(_fit)
 	_texture = texture
 	_material.set_shader_parameter("has_cover", texture != null)
 	if texture:
 		_material.set_shader_parameter("cover", texture)
+		texture.changed.connect(_fit)
 	_fit()
 
 
 func _fit() -> void:
 	_material.set_shader_parameter("rect_size", size)
 	if _texture and size.x > 0 and size.y > 0:
-		var texture_aspect: float = float(_texture.get_width()) / maxf(1.0, float(_texture.get_height()))
-		var rect_aspect := size.x / size.y
-		if texture_aspect > rect_aspect:
-			_material.set_shader_parameter("cover_scale", Vector2(rect_aspect / texture_aspect, 1.0))
-		else:
-			_material.set_shader_parameter("cover_scale", Vector2(1.0, texture_aspect / rect_aspect))
+		_material.set_shader_parameter("cover_scale", _scale_for(_texture))
+	if _under and size.x > 0 and size.y > 0:
+		_material.set_shader_parameter("under_scale", _scale_for(_under))
+
+
+func _scale_for(texture: Texture2D) -> Vector2:
+	var texture_aspect: float = float(texture.get_width()) / maxf(1.0, float(texture.get_height()))
+	var rect_aspect := size.x / size.y
+	if texture_aspect > rect_aspect:
+		return Vector2(rect_aspect / texture_aspect, 1.0)
+	return Vector2(1.0, texture_aspect / rect_aspect)

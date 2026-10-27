@@ -58,6 +58,14 @@ func toggle_fullscreen() -> void:
 	fullscreen_toggled.emit(not fullscreen)
 
 
+static func devtools_chord(key: InputEventKey) -> bool:
+	if key.keycode != KEY_I:
+		return false
+	if OS.get_name() == "macOS":
+		return key.meta_pressed and key.alt_pressed and not key.shift_pressed and not key.ctrl_pressed
+	return key.ctrl_pressed and key.shift_pressed and not key.alt_pressed and not key.meta_pressed
+
+
 func _input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
@@ -73,6 +81,11 @@ func _input(event: InputEvent) -> void:
 	if code == KEY_F11 and not command and not key.alt_pressed and not key.shift_pressed:
 		if not key.echo:
 			toggle_fullscreen()
+		get_viewport().set_input_as_handled()
+		return
+	if devtools_chord(key):
+		if not key.echo:
+			devtools_requested.emit()
 		get_viewport().set_input_as_handled()
 		return
 	if not command or key.alt_pressed:
@@ -92,11 +105,6 @@ func _input(event: InputEvent) -> void:
 			if not key.echo:
 				reload_requested.emit(key.shift_pressed)
 			get_viewport().set_input_as_handled()
-		KEY_I:
-			if key.shift_pressed:
-				if not key.echo:
-					devtools_requested.emit()
-				get_viewport().set_input_as_handled()
 		KEY_W:
 			if not key.shift_pressed and not key.echo:
 				close_requested.emit()

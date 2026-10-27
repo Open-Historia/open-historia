@@ -1400,7 +1400,6 @@ func anchor_visibility(point: Vector2) -> float:
 
 
 func _depth_planes(frame: Dictionary) -> Vector2:
-	var size: Vector2 = frame["size"]
 	var focal: float = frame["focal"]
 	var pitch: float = frame["pitch"]
 	var per_meter: float = frame["ppm"]
@@ -1410,6 +1409,14 @@ func _depth_planes(frame: Dictionary) -> Vector2:
 	var altitude := elevation + cos(pitch) * focal / per_meter
 	var lowest := minf(elevation, minf(relief.tile_min_at(frame["cam_world"], float(frame["zoom"])), altitude - 100.0))
 	var plane := sea_level - lowest * per_meter / cos(limited) if lowest < 0.0 else sea_level
+	return _planes_from(frame, plane)
+
+
+func _planes_from(frame: Dictionary, plane: float) -> Vector2:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var limited := deg_to_rad(minf(rad_to_deg(pitch), MAX_MERCATOR_HORIZON_ANGLE))
 	var ground_angle := PI * 0.5 + pitch
 	var above := FOV * 0.5
 	var half_surface := sin(above) * plane / sin(clampf(PI - ground_angle - above, 0.01, PI - 0.01))
@@ -1419,6 +1426,43 @@ func _depth_planes(frame: Dictionary) -> Vector2:
 	var half_horizon := sin(to_horizon) * plane / sin(clampf(PI - ground_angle - to_horizon, 0.01, PI - 0.01))
 	var far := (cos(PI * 0.5 - limited) * minf(half_surface, half_horizon) + plane) * 1.01
 	return Vector2(size.y / 50.0, far)
+
+
+func label_uniforms(frame: Dictionary) -> Dictionary:
+	var pitch: float = frame["pitch"]
+	var lifted := bool(frame.get("relief", false))
+	var planes := _depth_planes(frame) if lifted else _planes_from(frame, float(frame["focal"]))
+	return {
+		"screen_size": frame["size"],
+		"cam_world": frame["cam_world"],
+		"px_per_world": frame["px_per_world"],
+		"flat_right": frame["flat_right"],
+		"flat_up": frame["flat_up"],
+		"pitch_sin": sin(pitch),
+		"pitch_cos": cos(pitch),
+		"focal": frame["focal"],
+		"sea_lift": _lift(frame, 0.0),
+		"globeness": frame["g"],
+		"cam_pos": frame["pos"],
+		"cam_right": frame["right"],
+		"cam_up": frame["up"],
+		"cam_fwd": frame["fwd"],
+		"radius_px": frame["radius"],
+		"world_width": MapView.WORLD_WIDTH,
+		"near_depth": planes.x,
+		"far_depth": planes.y,
+		"depth_clip": not enabled,
+	}
+
+
+func project_label_point(point: Vector2) -> Vector2:
+	var frame := current_frame()
+	var clip := _lifted_clip(frame, point, 0.0)
+	if clip.z <= 0.0:
+		return Vector2(-100000, -100000)
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	return Vector2(size.x * 0.5 + focal * clip.x / clip.z, size.y * 0.5 - focal * clip.y / clip.z)
 
 
 static func _ndc_depth(planes: Vector2, depth: float) -> float:
@@ -1764,7 +1808,7 @@ func after_camera_move() -> void:
 	_material.set_shader_parameter("sky_horizon_px", SKY_HORIZON_BLEND * size.y * 0.5)
 	_apply_relief(frame)
 	_space.color = Color.BLACK if enabled else FLAT_SPACE
-	labels.sync(rect)
+	labels.sync(rect, label_uniforms(frame))
 	_stars.queue_redraw()
 	_place_sun(frame)
 

@@ -912,6 +912,13 @@ func _load_preview(picture: TextureRect, url: String, filter: String) -> void:
 			status = image.load_jpg_from_buffer(bytes)
 		elif bytes.size() > 4 and bytes[0] == 0x89 and bytes[1] == 0x50:
 			status = image.load_png_from_buffer(bytes)
+		elif ImageLoader.is_avif(bytes):
+			var converted: Image = await ImageLoader.avif_image(bytes)
+			if not is_instance_valid(picture):
+				return
+			if converted != null:
+				image = converted
+				status = OK
 		if status == OK:
 			texture = ImageTexture.create_from_image(image)
 			_previews[url] = texture

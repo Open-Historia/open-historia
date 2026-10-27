@@ -129,7 +129,7 @@ func _upload() -> void:
 	if path.is_empty():
 		return
 	_error = ""
-	var image := WorkshopThumbnail.load_still(path)
+	var image: Image = await WorkshopThumbnail.load_still(path)
 	if image == null or image.get_width() <= 0 or image.get_height() <= 0:
 		_error = "That file isn't an image the browser can read."
 		_render()

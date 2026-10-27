@@ -69,7 +69,7 @@ const UNIT_TYPE_LABELS := {
 const SCENARIO_ASSETS := [["cover", "Cover Image"], ["cities", "Cities PMTiles"], ["colors", "Colors JSON"], ["countries", "Countries PMTiles"], ["regions", "Regions PMTiles"]]
 const GAME_ASSETS := [["cover", "Cover Image"]]
 const ASSET_FILTERS := {
-	"cover": "*.gif, *.jpeg, *.jpg, *.png, *.webp ; Images",
+	"cover": "*.avif, *.gif, *.jpeg, *.jpg, *.png, *.webp ; Images",
 	"cities": "*.pmtiles ; PMTiles",
 	"colors": "*.json ; JSON",
 	"countries": "*.pmtiles ; PMTiles",
@@ -1362,7 +1362,7 @@ func _render_assets() -> void:
 		texts.add_child(UI.wrapped(state_text, 12, Color(1, 1, 1, 0.58), 400))
 		if cover and not preview_url.is_empty():
 			texts.add_child(EditorKit.gap(9))
-			var image := RoundedImage.new(Vector2(138, 77), 12, COVER_BG, Color(1, 1, 1, 0.08), 1)
+			var image := RoundedImage.new(Vector2(138, 77), 12, Color(0, 0, 0, 0), Color(1, 1, 1, 0.08), 1)
 			image.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			texts.add_child(image)
 			if loader:
@@ -1514,7 +1514,7 @@ func _export_bundle(format: String) -> void:
 		if str(ask.get("kind", "image")) == "raw":
 			preview = _raw_preview(str(ask["needsPreview"]), int(ask.get("width", 0)), int(ask.get("height", 0)), float(ask.get("quality", 0.75)))
 		else:
-			preview = _thumbnail(str(ask["needsPreview"]), int(ask.get("maxDim", 320)), float(ask.get("quality", 0.7)))
+			preview = await _thumbnail(str(ask["needsPreview"]), int(ask.get("maxDim", 320)), float(ask.get("quality", 0.7)))
 		reply = await engine.request("editor.bundle.finish", {"token": str(ask.get("token", "")), "preview": preview})
 	_set_busy(false)
 	if not reply.get("ok", false):
@@ -1546,6 +1546,11 @@ func _thumbnail(source: String, max_dim: int, quality := 0.7) -> String:
 		status = image.load_jpg_from_buffer(bytes)
 	elif bytes[0] == 0x52 and bytes[1] == 0x49:
 		status = image.load_webp_from_buffer(bytes)
+	elif ImageLoader.is_avif(bytes):
+		var converted: Image = await ImageLoader.avif_image(bytes)
+		if converted != null:
+			image = converted
+			status = OK
 	if status != OK or image.get_width() <= 0 or image.get_height() <= 0:
 		return ""
 	var width := image.get_width()

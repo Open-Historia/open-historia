@@ -39,6 +39,7 @@ var forces: Node
 var map_extras: Node
 var shared_overlay: Node
 var shell_notices: Node
+var devtools: Node
 var crash: CrashScreen
 var _extras_ready := false
 var _engine_was_ready := false
@@ -471,6 +472,11 @@ func _build_boot() -> void:
 	add_child(hotkeys)
 	hotkeys.setup(engine)
 	hotkeys.reload_requested.connect(_on_reload_requested)
+	devtools = _make_node("res://scripts/devtools/devtools.gd")
+	if devtools:
+		add_child(devtools)
+		devtools.call("setup", engine, self)
+		hotkeys.devtools_requested.connect(func() -> void: _call(devtools, "toggle"))
 	shell = ShellBoot.new()
 	add_child(shell)
 	shell.map_view = map_view

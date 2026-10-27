@@ -7,7 +7,9 @@ signal engine_stopped(message: String)
 
 class PendingCall extends RefCounted:
 	signal done(reply: Dictionary)
+	var size := 0
 
+var devtools: Object
 var _sidecar: Sidecar
 var _next_id := 0
 var _pending := {}
@@ -45,14 +47,35 @@ func recent_diagnostics(count := 12) -> String:
 
 
 func request(method: String, args: Dictionary = {}) -> Dictionary:
+	if method.begins_with("devtools."):
+		return {"ok": false, "error": "Only the developer tools window can call %s." % method}
+	return await _send(method, args)
+
+
+func devtools_request(caller: Object, method: String, args: Dictionary = {}) -> Dictionary:
+	if not method.begins_with("devtools.") or (method != "devtools.close" and (caller == null or caller != devtools)):
+		return {"ok": false, "error": "The developer tools window is not open."}
+	return await _send(method, args)
+
+
+func _send(method: String, args: Dictionary) -> Dictionary:
 	_next_id += 1
 	var id := _next_id
 	var pending := PendingCall.new()
 	_pending[id] = pending
-	if not _sidecar.send(JSON.stringify({"id": id, "method": method, "args": args})):
+	var line := JSON.stringify({"id": id, "method": method, "args": args})
+	var watcher: Object = devtools if devtools != null and not method.begins_with("devtools.") else null
+	if watcher:
+		watcher.call("link_request", id, method, args, line.length())
+	if not _sidecar.send(line):
 		_pending.erase(id)
-		return {"ok": false, "error": "The game engine is not running."}
+		var failed := {"ok": false, "error": "The game engine is not running."}
+		if watcher and watcher == devtools:
+			watcher.call("link_reply", id, failed, 0)
+		return failed
 	var reply: Dictionary = await pending.done
+	if watcher and watcher == devtools:
+		watcher.call("link_reply", id, reply, pending.size)
 	return reply
 
 
@@ -78,6 +101,8 @@ func _on_message(line: String) -> void:
 		if name == "ready":
 			_started = true
 			engine_ready.emit(message.get("data", {}))
+		if devtools != null and not name.begins_with("devtools."):
+			devtools.call("link_event", name, message.get("data"), line.length())
 		engine_event.emit(name, message.get("data"))
 		return
 	var id := int(message.get("id", 0))
@@ -85,6 +110,7 @@ func _on_message(line: String) -> void:
 		return
 	var pending: PendingCall = _pending[id]
 	_pending.erase(id)
+	pending.size = line.length()
 	pending.done.emit(message)
 
 
@@ -92,6 +118,8 @@ func _on_diagnostic(line: String) -> void:
 	_diagnostics.append(line)
 	if _diagnostics.size() > 400:
 		_diagnostics = _diagnostics.slice(_diagnostics.size() - 200)
+	if devtools != null:
+		devtools.call("link_diagnostic", line)
 
 
 func _on_exited(code: int) -> void:

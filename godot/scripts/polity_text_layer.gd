@@ -58,6 +58,144 @@ void fragment() {
 	COLOR = sum / float(taps * taps);
 }
 """
+const PROJECTED_SHADER := """
+shader_type canvas_item;
+render_mode blend_mix, skip_vertex_transform;
+uniform vec4 fill_color = vec4(1.0);
+uniform vec4 halo_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float px_range = 16.0;
+uniform float halo_px = 5.0;
+uniform float max_footprint = 12.0;
+uniform vec2 screen_size = vec2(1440.0, 900.0);
+uniform vec2 cam_world = vec2(2048.0, 2048.0);
+uniform float px_per_world = 1.0;
+uniform vec2 flat_right = vec2(1.0, 0.0);
+uniform vec2 flat_up = vec2(0.0, -1.0);
+uniform float pitch_sin = 0.0;
+uniform float pitch_cos = 1.0;
+uniform float focal = 1350.0;
+uniform float sea_lift = 0.0;
+uniform float globeness = 0.0;
+uniform vec3 cam_pos = vec3(0.0, 0.0, 4.0);
+uniform vec3 cam_right = vec3(1.0, 0.0, 0.0);
+uniform vec3 cam_up = vec3(0.0, 1.0, 0.0);
+uniform vec3 cam_fwd = vec3(0.0, 0.0, -1.0);
+uniform float radius_px = 400.0;
+uniform float world_width = 4096.0;
+uniform float near_depth = 18.0;
+uniform float far_depth = 100000.0;
+uniform bool depth_clip = true;
+uniform bool wrap_glyphs = false;
+
+varying vec3 persp;
+varying float keep;
+
+const float PI_F = 3.14159265358979;
+
+vec3 dir_of_world(vec2 w) {
+	float lon = (w.x / world_width - 0.5) * 2.0 * PI_F;
+	float lat = atan(sinh(PI_F * (1.0 - 2.0 * w.y / world_width)));
+	float c = cos(lat);
+	return vec3(sin(lon) * c, sin(lat), cos(lon) * c);
+}
+
+vec3 eye_of(vec2 w) {
+	vec2 d = (w - cam_world) * px_per_world;
+	float a = dot(d, flat_right);
+	float v = dot(d, flat_up);
+	vec3 flat_c = vec3(a, v * pitch_cos + sea_lift * pitch_sin, focal + v * pitch_sin - sea_lift * pitch_cos);
+	if (globeness <= 0.0) {
+		return flat_c;
+	}
+	vec3 q = dir_of_world(w) - cam_pos;
+	return mix(flat_c, vec3(dot(q, cam_right), dot(q, cam_up), dot(q, cam_fwd)) * radius_px, globeness);
+}
+
+float keep_of(vec2 w, float depth) {
+	if (depth_clip) {
+		float ndc = (far_depth + near_depth) / (far_depth - near_depth) - 2.0 * far_depth * near_depth / ((far_depth - near_depth) * depth);
+		return min(1.0 - ndc, 1.0 + ndc);
+	}
+	if (globeness <= 0.0) {
+		return 1.0;
+	}
+	vec3 p = dir_of_world(w);
+	float plane = (dot(p, cam_pos) - 1.0) / length(cam_pos);
+	if (globeness >= 0.999) {
+		return plane;
+	}
+	float share = clamp((globeness - 0.2) / 0.8, 0.0, 1.0);
+	float globe_depth = dot(p - cam_pos, cam_fwd) * radius_px;
+	return 1.0 - share * (1.0 - plane) * globe_depth / depth;
+}
+
+void vertex() {
+	vec2 anchor = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xy;
+	vec2 world = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
+	if (wrap_glyphs) {
+		float shift = world_width * round((cam_world.x - anchor.x) / world_width);
+		anchor.x += shift;
+		world.x += shift;
+	}
+	vec3 held = eye_of(anchor);
+	vec3 eye = eye_of(world);
+	if (held.z <= near_depth) {
+		VERTEX = vec2(-100000.0, -100000.0);
+		persp = vec3(0.0, 0.0, 1.0);
+		keep = -1.0;
+	} else {
+		float depth = max(eye.z, near_depth * 0.5);
+		float q = focal / depth;
+		VERTEX = vec2(screen_size.x * 0.5 + eye.x * q, screen_size.y * 0.5 - eye.y * q);
+		persp = vec3(UV * q, q);
+		keep = keep_of(world, depth);
+	}
+}
+
+float median3(vec3 c) {
+	return max(min(c.r, c.g), min(max(c.r, c.g), c.b));
+}
+
+vec4 raster_texel(sampler2D atlas, vec2 uv) {
+	vec4 s = texture(atlas, uv);
+	float body = (min(median3(s.rgb), s.a) - 0.5) * px_range;
+	float outer = (s.a - 0.5) * px_range;
+	float fill = clamp(body + 0.5, 0.0, 1.0) * fill_color.a;
+	float halo = clamp(outer + halo_px + 0.5, 0.0, 1.0) * halo_color.a;
+	float alpha = fill + halo * (1.0 - fill);
+	vec3 color = alpha > 0.0 ? (fill_color.rgb * fill + halo_color.rgb * halo * (1.0 - fill)) / alpha : vec3(0.0);
+	return vec4(color, alpha);
+}
+
+void fragment() {
+	vec2 uv = persp.xy / persp.z;
+	vec2 texels = 1.0 / TEXTURE_PIXEL_SIZE;
+	vec2 dx = dFdx(uv);
+	vec2 dy = dFdy(uv);
+	if (keep < 0.0) {
+		discard;
+	}
+	float span_x = length(dx * texels);
+	float span_y = length(dy * texels);
+	if (span_x > max_footprint) {
+		dx *= max_footprint / span_x;
+		span_x = max_footprint;
+	}
+	if (span_y > max_footprint) {
+		dy *= max_footprint / span_y;
+		span_y = max_footprint;
+	}
+	int taps = int(clamp(ceil(max(span_x, span_y)), 1.0, 4.0));
+	vec4 sum = vec4(0.0);
+	for (int i = 0; i < taps; i++) {
+		for (int j = 0; j < taps; j++) {
+			vec2 offset = ((float(i) + 0.5) / float(taps) - 0.5) * dx + ((float(j) + 0.5) / float(taps) - 0.5) * dy;
+			sum += raster_texel(TEXTURE, uv + offset);
+		}
+	}
+	COLOR = sum / float(taps * taps);
+}
+"""
 
 var map: MapView
 var engine: EngineLink
@@ -84,6 +222,10 @@ var _states := PackedInt32Array()
 var _copies: Array[float] = []
 var _fade_keys: Array = []
 var _extent := Vector2.ZERO
+var _projected_material: ShaderMaterial
+var _projected := false
+var _projected_rect := Rect2()
+var _projected_wrap := false
 
 
 class Painter extends Node2D:
@@ -105,6 +247,12 @@ func _init() -> void:
 	_material.shader = shader
 	_material.set_shader_parameter("px_range", float(MSDF_PIXEL_RANGE))
 	_material.set_shader_parameter("halo_px", HALO_WIDTH_PX)
+	var projected_shader := Shader.new()
+	projected_shader.code = PROJECTED_SHADER
+	_projected_material = ShaderMaterial.new()
+	_projected_material.shader = projected_shader
+	_projected_material.set_shader_parameter("px_range", float(MSDF_PIXEL_RANGE))
+	_projected_material.set_shader_parameter("halo_px", HALO_WIDTH_PX)
 	_apply_colors()
 	_direct = _painter()
 	add_child(_direct)
@@ -113,14 +261,15 @@ func _init() -> void:
 func _painter() -> Painter:
 	var painter := Painter.new()
 	painter.layer = self
-	painter.material = _material
+	painter.material = _projected_material if _projected else _material
 	painter.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	return painter
 
 
 func _apply_colors() -> void:
-	_material.set_shader_parameter("fill_color", Vector4(_fill.r, _fill.g, _fill.b, _fill.a))
-	_material.set_shader_parameter("halo_color", Vector4(_halo.r, _halo.g, _halo.b, _halo.a))
+	for material: ShaderMaterial in [_material, _projected_material]:
+		material.set_shader_parameter("fill_color", Vector4(_fill.r, _fill.g, _fill.b, _fill.a))
+		material.set_shader_parameter("halo_color", Vector4(_halo.r, _halo.g, _halo.b, _halo.a))
 
 
 func setup(map_view: MapView, link: EngineLink) -> void:
@@ -373,6 +522,7 @@ func _build(entry: Dictionary) -> Dictionary:
 		"fade_key": "%s|%s|%s|%s" % [entry.get("minZoom", 0.0), entry.get("maxZoom", 6.2), entry.get("fadeInZoomSpan", 0.18), entry.get("fadeOutStartZoom", 5.0)],
 		"priority": float(entry.get("priorityScale", 0.0)),
 		"font_px_z4": float(entry.get("effectiveFontPxAtZoom4", 0.0)),
+		"ascent": float(measured["ascent"]),
 		"scale": scale,
 		"bounds": Rect2(min_point, max_point - min_point),
 		"center_x": (min_point.x + max_point.x) * 0.5,
@@ -427,7 +577,7 @@ func update_view() -> void:
 				fading[key] = [] as Array[int]
 				alphas[key] = opacity
 			(fading[key] as Array[int]).append(index)
-		copies = _copies_in_view()
+		copies = _projected_copies() if _projected else _copies_in_view()
 	if states != _states or copies != _copies or fading.keys() != _fade_keys:
 		_states = states
 		_copies = copies
@@ -452,14 +602,76 @@ func _copies_in_view() -> Array[float]:
 	return copies
 
 
+func _projected_copies() -> Array[float]:
+	var copies: Array[float] = []
+	if _projected_wrap:
+		copies.append(0.0)
+		return copies
+	for step in range(-2, 3):
+		var offset := step * WORLD_WIDTH
+		if _extent.x + offset <= _projected_rect.end.x and _extent.y + offset >= _projected_rect.position.x:
+			copies.append(offset)
+	return copies
+
+
 func _follow_camera() -> void:
 	if not map:
+		return
+	if _projected:
+		var screen := Rect2(Vector2.ZERO, map.get_viewport_rect().size)
+		for painter: Painter in _all_painters():
+			painter.transform = Transform2D.IDENTITY
+			RenderingServer.canvas_item_set_custom_rect(painter.get_canvas_item(), true, screen)
 		return
 	var zoom := map.camera.zoom.x
 	var follow := Transform2D(0.0, Vector2(zoom, zoom), 0.0, map.get_viewport_rect().size * 0.5 - map.camera.position * zoom)
 	_direct.transform = follow
 	for painter in _group_painters:
 		painter.transform = follow
+
+
+func _all_painters() -> Array[Painter]:
+	var painters: Array[Painter] = [_direct]
+	painters.append_array(_group_painters)
+	return painters
+
+
+func projected() -> bool:
+	return _projected
+
+
+func project(uniforms: Dictionary, rect: Rect2, wrap: bool) -> void:
+	for key: String in uniforms:
+		_projected_material.set_shader_parameter(key, uniforms[key])
+	_projected_material.set_shader_parameter("wrap_glyphs", wrap)
+	_projected_rect = rect
+	_projected_wrap = wrap
+	if not _projected:
+		_projected = true
+		for painter: Painter in _all_painters():
+			painter.material = _projected_material
+	update_view()
+
+
+func unproject() -> void:
+	if not _projected:
+		return
+	_projected = false
+	for painter: Painter in _all_painters():
+		painter.material = _material
+		RenderingServer.canvas_item_set_custom_rect(painter.get_canvas_item(), false)
+		painter.queue_redraw()
+	update_view()
+
+
+func projected_items() -> int:
+	if not _projected or not is_visible_in_tree():
+		return 0
+	var total := _direct.items.size() * _direct.copies.size()
+	for index in range(_groups.size()):
+		if _groups[index].visible:
+			total += _group_painters[index].items.size() * _group_painters[index].copies.size()
+	return total
 
 
 func _assign(fading: Dictionary, direct: Array[int], copies: Array[float]) -> void:
@@ -527,8 +739,22 @@ func labels_snapshot() -> Array[Dictionary]:
 			"font_px_z4": label["font_px_z4"],
 			"bounds": label["bounds"],
 			"glyphs": (label["anchors"] as PackedVector2Array).size(),
+			"centres": _ink_centres(label),
+			"glyph_height": float(label["ascent"]) * float(label["scale"]),
 		})
 	return snapshot
+
+
+static func _ink_centres(label: Dictionary) -> PackedVector2Array:
+	var anchors: PackedVector2Array = label["anchors"]
+	var angles: PackedFloat32Array = label["angles"]
+	var offsets: PackedVector2Array = label["offsets"]
+	var size := float(label["scale"])
+	var centres := PackedVector2Array()
+	for index in range(anchors.size()):
+		var local := Vector2(0.0, offsets[index].y - float(label["ascent"]) * 0.5)
+		centres.append(anchors[index] + local.rotated(angles[index]) * size)
+	return centres
 
 
 static func css_color(text: String, fallback: Color) -> Color:

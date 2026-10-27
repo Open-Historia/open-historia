@@ -190,7 +190,7 @@ func _scenario_flow() -> void:
 	avif_file.store_buffer(PackedByteArray([0, 0, 0, 28, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]))
 	avif_file.close()
 	var avif_reply: Dictionary = await main.engine.request("editor.asset.upload", {"kind": "scenario", "id": "default", "assetKey": "cover", "path": avif_path})
-	_check(not avif_reply.get("ok", false) and str(avif_reply.get("error", "")).contains("AVIF"), "an AVIF cover is refused with a reason (%s)" % str(avif_reply.get("error", "")))
+	_check(not avif_reply.get("ok", false) and str(avif_reply.get("error", "")).contains("AVIF"), "an unreadable AVIF cover is refused with a reason (%s)" % str(avif_reply.get("error", "")))
 	await _wait(1.0)
 	await _shoot("ed-01-overview")
 	_check(_label(editor._content, "On its card") != null and _label(editor._content, "Its headline") != null, "the overview shows both cards")

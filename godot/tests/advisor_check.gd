@@ -341,8 +341,8 @@ func _run() -> void:
 	_check("Retry is offered on the last error", retry != null)
 	if retry:
 		retry.pressed.emit()
-		await _frames(3)
 		_check("Retry says it is retrying", _find_button(panel, "Retrying…") != null)
+		await _frames(3)
 		await _shoot("advisor-11-retrying")
 		_check("the retry ends", await _until(func() -> bool: return not panel._loading, 90.0))
 		await _wait(0.4)

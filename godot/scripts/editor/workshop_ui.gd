@@ -127,6 +127,10 @@ static func flag_texture(value: String, file := "", height := 40) -> Texture2D:
 				var animated := ImageLoader.texture_from_gif(ImageLoader.gif_frames(raw))
 				_flag_cache[key] = animated
 				return animated
+			if ImageLoader.is_avif(raw):
+				var converted := ImageLoader.avif_texture(raw)
+				_flag_cache[key] = converted
+				return converted
 			var image := Image.new()
 			var status := ERR_FILE_UNRECOGNIZED
 			if raw.size() > 4 and raw[0] == 0x89 and raw[1] == 0x50:
