@@ -41,6 +41,7 @@ var shared_overlay: Node
 var shell_notices: Node
 var devtools: Node
 var crash: CrashScreen
+var app_update: Node
 var _extras_ready := false
 var _engine_was_ready := false
 var _fatal_message := ""
@@ -97,6 +98,10 @@ func _ready() -> void:
 	_build_boot()
 	_show("boot")
 	_build_crash()
+	app_update = _make_node("res://scripts/shell/app_update.gd")
+	if app_update:
+		add_child(app_update)
+		app_update.call("setup", engine)
 	engine.engine_ready.connect(_on_engine_ready)
 	engine.engine_stopped.connect(_on_engine_stopped)
 	engine.engine_event.connect(_on_engine_event)
@@ -399,6 +404,8 @@ func _check_minimized() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if app_update:
+			await app_update.call("install_on_quit")
 		engine.stop()
 		get_tree().quit()
 
@@ -568,6 +575,8 @@ func _on_engine_ready(_data: Dictionary) -> void:
 		menu.set_origin(str(info.get("origin", "")))
 		map_view.basemap.cache_dir = str(info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
 		picker.context = {"tiles_cache": map_view.basemap.cache_dir}
+	if app_update and bool(await app_update.call("run_launch")):
+		return
 	await i18n.start(engine)
 	await shell.prepare()
 	_show("menu")

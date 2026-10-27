@@ -273,7 +273,10 @@ static func _ink_within(image: Image, at: Vector2, reach: float) -> bool:
 		for x in range(int(at.x) - span, int(at.x) + span + 1):
 			if x < 0 or y < 0 or x >= image.get_width() or y >= image.get_height():
 				continue
-			if Vector2(x + 0.5, y + 0.5).distance_to(at) <= reach and _green(image.get_pixel(x, y)):
+			if Vector2(x + 0.5, y + 0.5).distance_to(at) > reach:
+				continue
+			var pixel := image.get_pixel(x, y)
+			if pixel.g - maxf(pixel.r, pixel.b) > 0.25:
 				return true
 	return false
 
@@ -337,6 +340,12 @@ func _projection_checks() -> void:
 	layer._apply_colors()
 	map._cities.visible = false
 	extras.apply_map_settings({"Terrain": false, "Globe": false})
+	await _place(10.0, 49.0, 4.0, 0.0, 0.0)
+	map.basemap.visible = false
+	extras._ui.visible = false
+	var untouched := await _image()
+	map.basemap.visible = true
+	extras._ui.visible = true
 	var on_flat := func(point: Vector2) -> Vector2: return map.world_to_screen(point)
 	var on_plane := func(point: Vector2) -> Vector2: return globe.project_label_point(point)
 	var on_relief := func(point: Vector2) -> Vector2: return globe.world_to_screen(point)
@@ -385,7 +394,21 @@ func _projection_checks() -> void:
 	_check(globe.globe_shown() and layer.projected() and int(sphere["counted"]) >= 20 and float(sphere["hits"]) >= 0.9 * float(sphere["counted"]), "on the globe the names are drawn on the sphere's surface by the same pass (%d of %d glyphs)" % [int(sphere["hits"]), int(sphere["counted"])])
 	extras.apply_map_settings({"Globe": false, "Terrain": false})
 	await _place(10.0, 49.0, 4.0, 0.0, 0.0)
-	_check(not globe.active and not layer.projected(), "back to a flat north-up map the names return to the flat path")
+	map.basemap.visible = false
+	extras._ui.visible = false
+	var returned := await _image()
+	map.basemap.visible = true
+	extras._ui.visible = true
+	var changed := 0
+	var before_bytes := untouched.get_data()
+	var after_bytes := returned.get_data()
+	for index in range(mini(before_bytes.size(), after_bytes.size())):
+		if before_bytes[index] != after_bytes[index]:
+			changed += 1
+	if changed > 0 and not shots.is_empty():
+		untouched.save_png(shots.path_join("p5-flat-before-projector.png"))
+		returned.save_png(shots.path_join("p5-flat-after-projector.png"))
+	_check(not globe.active and not layer.projected() and before_bytes.size() == after_bytes.size() and changed == 0, "back to a flat north-up map the names return to the flat path, pixel for pixel as before the projector ran (%d bytes differ)" % changed)
 	layer._fill = fill
 	layer._halo = halo
 	layer._apply_colors()

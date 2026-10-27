@@ -18,6 +18,7 @@ var _updates: Array = []
 var _viewing: UpdateNotice
 var _scroll: ScrollContainer
 var _timeline: VBoxContainer
+var _version: Label
 
 
 class Timeline extends Container:
@@ -158,6 +159,9 @@ func _init() -> void:
 	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	titles.add_child(UpdateKit.text("Update history", UpdateKit.px(1.05), INK, FONT, 850))
 	titles.add_child(UpdateKit.text("Every update to Open Historia, newest first.", UpdateKit.px(0.74), FAINT, FONT))
+	_version = UpdateKit.text("", UpdateKit.px(0.66), FAINT, FONT)
+	_version.visible = false
+	titles.add_child(_version)
 	row.add_child(titles)
 	var close := UpdateKit.chrome_button("×", {"bg": Color(1, 1, 1, 0.06), "border": LINE, "ink": INK, "radius": 999.0, "size": UpdateKit.px(1.1), "weight": 400, "pad": Vector2.ZERO, "min_width": UpdateKit.px(2.3), "min_height": UpdateKit.px(2.3), "font": UpdateKit.BASE_FONT}, {})
 	close.custom_minimum_size = Vector2(UpdateKit.px(2.3), UpdateKit.px(2.3))
@@ -201,6 +205,11 @@ func setup(engine: EngineLink, prefs: Dictionary) -> void:
 		return
 	_updates = (reply.get("result", {}) as Dictionary).get("updates", [])
 	_build()
+	var told: Dictionary = await engine.request("update.state")
+	var state: Variant = told.get("result")
+	if bool(told.get("ok", false)) and state is Dictionary and is_instance_valid(_version):
+		_version.text = str((state as Dictionary).get("versionText", ""))
+		_version.visible = not _version.text.is_empty()
 
 
 func _build() -> void:

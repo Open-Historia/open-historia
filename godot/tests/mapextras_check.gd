@@ -467,7 +467,7 @@ func _globe_checks() -> void:
 	_check(back.distance_to(centre) < 1.5, "a point on the globe projects back where it was picked (%.2f px)" % back.distance_to(centre))
 	_check(not extras.globe.screen_hits_globe(Vector2(4, 4)), "the corner of the screen is space, not the globe")
 	var polity := view.polity_text()
-	_check(polity != null and polity.visibility_layer == GlobeView.MAP_LAYER_BIT and extras.globe.labels.visible and extras.globe.labels.painted_items() > 0, "the country names are drawn on the globe's surface (%d names)" % extras.globe.labels.painted_items())
+	_check(polity != null and polity.projected() and polity.visibility_layer == 1 and extras.globe.labels.active() and extras.globe.labels.painted_items() > 0, "the country names are drawn on the globe by the screen-space pass, as React's custom layer projects them (%d glyph runs)" % extras.globe.labels.painted_items())
 	var pole := view.world_to_screen(GlobeView.world_of_lonlat(0.0, 84.0))
 	var below := view.world_to_screen(GlobeView.world_of_lonlat(0.0, 78.0))
 	if pole.x > 0.0 and below.x > 0.0:
@@ -514,7 +514,7 @@ func _globe_checks() -> void:
 	await _frames(3)
 	var lifted := extras.globe.relief_shown() or extras.globe.tilted()
 	_check(not extras.globe.globe_shown() and extras.globe.active == lifted and view.is_globe() == lifted, "the globe switches off again")
-	_check(polity == null or polity.visibility_layer == (GlobeView.MAP_LAYER_BIT if lifted else 1), "the flat map's names are back on screen")
+	_check(polity == null or (polity.visibility_layer == 1 and polity.projected() == lifted), "the flat map's names are back on screen, projected only while terrain or a tilt keeps the projector running")
 	await _wait(1.0)
 	await _shoot("globe-6-flat-again")
 
@@ -1103,6 +1103,8 @@ func _terrain_checks() -> void:
 	view.call("_after_camera_move")
 	await _frames(2)
 	_check(globe.tilted() or not globe.active, "a flat-facing map with terrain off draws straight, without the projector")
+	var names := view.polity_text()
+	_check(names == null or globe.tilted() or not names.projected(), "and its country names are drawn by the flat path again")
 	extras.apply_map_settings({"Terrain": true})
 	view.pitch = 0.0
 	view.bearing = 0.0
@@ -1112,6 +1114,91 @@ func _terrain_checks() -> void:
 	_check(globe.active and shifted > 1.0, "the terrain comes back and raises a north-up, flat-facing map too, as MapLibre's terrain does (%.1f px)" % shifted)
 	mark.queue_free()
 	await _frames(1)
+	await _terrain_names_checks(view)
+
+
+static func _ink_within(image: Image, at: Vector2, reach: float) -> bool:
+	var span := ceili(reach)
+	for y in range(int(at.y) - span, int(at.y) + span + 1):
+		for x in range(int(at.x) - span, int(at.x) + span + 1):
+			if x < 0 or y < 0 or x >= image.get_width() or y >= image.get_height():
+				continue
+			if Vector2(x + 0.5, y + 0.5).distance_to(at) > reach:
+				continue
+			var pixel := image.get_pixel(x, y)
+			if pixel.g - maxf(pixel.r, pixel.b) > 0.25:
+				return true
+	return false
+
+
+func _terrain_names_checks(view: MapView) -> void:
+	var globe := extras.globe
+	var layer := view.polity_text()
+	if layer == null:
+		_check(false, "the map has its country names")
+		return
+	var pitch := tilt.x if tilt != Vector2.ZERO else 55.0
+	var bearing := tilt.y if tilt != Vector2.ZERO else 0.0
+	view.fly_to_lonlat(8.6, 45.4, 5.0, 0.0)
+	view.pitch = pitch
+	view.bearing = bearing
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	await _shoot("terrain-3-names")
+	var fill: Color = layer._fill
+	var halo: Color = layer._halo
+	layer._fill = Color(0.0, 1.0, 0.0, 1.0)
+	layer._halo = Color(0.0, 0.0, 0.0, 0.0)
+	layer._apply_colors()
+	view._cities.visible = false
+	main.hud.visible = false
+	await _close_notice()
+	await _frames(3)
+	await RenderingServer.frame_post_draw
+	var image := root.get_viewport().get_texture().get_image()
+	var size := view.get_viewport_rect().size
+	var level := view.zoom_level()
+	var apart := 0
+	var on_plane := 0
+	var on_relief := 0
+	var raised := 0
+	var raised_drawn := 0
+	for label in layer.labels_snapshot():
+		if PolityTextLayer.opacity_at(level, float(label["min_zoom"]), 6.2, 0.18, 5.0) < 0.999:
+			continue
+		var height := float(label["glyph_height"])
+		for centre: Vector2 in label["centres"]:
+			var sea := globe.project_label_point(centre)
+			if sea.x < 24.0 or sea.y < 24.0 or sea.x > size.x - 24.0 or sea.y > size.y - 24.0:
+				continue
+			var glyph_px := sea.distance_to(globe.project_label_point(centre + Vector2(0.0, height)))
+			if glyph_px < 5.0:
+				continue
+			var reach := 0.4 * glyph_px
+			var hit := _ink_within(image, sea, reach)
+			if globe.height_at(centre) > 100.0:
+				raised += 1
+				if hit:
+					raised_drawn += 1
+			var draped := globe.world_to_screen(centre)
+			if sea.distance_to(draped) < glyph_px:
+				continue
+			apart += 1
+			if hit:
+				on_plane += 1
+			if _ink_within(image, draped, reach):
+				on_relief += 1
+	layer._fill = fill
+	layer._halo = halo
+	layer._apply_colors()
+	view._cities.visible = true
+	main.hud.visible = true
+	_check(layer.projected() and apart >= 6 and float(on_plane) >= 0.9 * apart and float(on_relief) <= 0.5 * apart, "over the Alps at pitch %.0f the country names stay a flat plane at sea level, as React's polity text layer draws them, instead of following the relief (of %d glyphs the relief would move by more than their height, %d are on the plane, %d where draping would put them)" % [pitch, apart, on_plane, on_relief])
+	_check(raised >= 20 and float(raised_drawn) >= 0.9 * raised, "and they are not hidden where the raised ground stands in front of them, since React draws that layer without a depth test (%d of %d glyphs over raised ground)" % [raised_drawn, raised])
+	view.pitch = 0.0
+	view.bearing = 0.0
+	view.call("_after_camera_move")
+	await _frames(2)
 
 
 func _finish(code: int) -> void:

@@ -17,7 +17,6 @@ const WIKI_URL := "https://openhistoria.com/wiki/"
 const PRIVACY_URL := "https://openhistoria.com/privacy/"
 const DISCORD_BLURPLE := Color("#5865f2")
 const REDDIT_ORANGERED := Color("#ff4500")
-const NATIVE_NO_UPDATES := "Updates for the native app come later."
 const WorkspaceScript := preload("res://scripts/ui/settings_workspace.gd")
 const TABS := [["game", "Game"], ["tools", "Tools"], ["settings", "Settings"], ["help", "Help"]]
 const TONES := {
@@ -49,6 +48,9 @@ var _prompt: ApiSetupPrompt
 var _ai_setup_answered_for := "__none__"
 var _marks := {}
 var _shared_role := ""
+var _update_check := {}
+var _version_text := ""
+var _version_loading := false
 
 
 func _ready() -> void:
@@ -74,6 +76,12 @@ func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
 
 
 func _on_engine_event(event_name: String, data: Variant) -> void:
+	if event_name == "update.state" and data is Dictionary:
+		var told := str((data as Dictionary).get("versionText", ""))
+		if not told.is_empty() and told != _version_text:
+			_version_text = told
+			_refresh_help()
+		return
 	if event_name != "multiplayer.shared" or not (data is Dictionary):
 		return
 	var state: Dictionary = data
@@ -409,9 +417,8 @@ func _show_tab(key: String) -> void:
 			panel = _quick_panel("Help", "Guides, bug reporting and community links.")
 			var grid := _grid()
 			grid.add_child(_quick_action("Wiki", "How-to pages and setup help", "?", "neutral", func() -> void: OS.shell_open(WIKI_URL)))
-			var updates := _quick_action("Check for updates", "Check the installed app for a newer build right now.", "↻", "blue", Callable())
-			updates.set_disabled(NATIVE_NO_UPDATES)
-			grid.add_child(updates)
+			var checking := str(_update_check.get("status", "")) == "checking"
+			grid.add_child(_quick_action("Checking for updates…" if checking else "Check for updates", _update_check_text(), "↻", "blue", _check_for_updates))
 			grid.add_child(_quick_action("Report a Bug", "Open the issue/report page", "!", "amber", func() -> void: OS.shell_open(REPORT_BUG_URL)))
 			grid.add_child(_quick_action("Privacy", "What the game keeps and sends", "§", "neutral", func() -> void: OS.shell_open(PRIVACY_URL)))
 			panel.add_child(grid)
@@ -424,6 +431,10 @@ func _show_tab(key: String) -> void:
 			for link: Array in [["Discord", DISCORD_URL], ["Reddit", REDDIT_URL], ["GitHub", GITHUB_URL]]:
 				row.add_child(_social_link(str(link[0]), str(link[1])))
 			panel.add_child(row)
+			if _version_text.is_empty():
+				_load_version()
+			else:
+				panel.add_child(UI.label(_version_text, _fs(0.6), Color(1, 1, 1, 0.24)))
 		_:
 			panel = _quick_panel("Tools", "High-frequency in-game tools should stay one click away.")
 			var grid := _grid()
@@ -448,6 +459,51 @@ func _show_tab(key: String) -> void:
 func _run_and_close(action: Signal) -> void:
 	action.emit()
 	close()
+
+
+func _update_check_text() -> String:
+	match str(_update_check.get("status", "")):
+		"checking":
+			return "Checking the release channel right now…"
+		"available":
+			return "Update available — use the update banner above to install it."
+		"current":
+			return "You are up to date."
+		"unsupported":
+			return "This build does not support in-app update checks."
+		"error":
+			return "Could not check for updates. Try again."
+	return "Check the installed app for a newer build right now."
+
+
+func _check_for_updates() -> void:
+	if str(_update_check.get("status", "")) == "checking":
+		return
+	_update_check = {"status": "checking"}
+	_refresh_help()
+	var reply: Dictionary = await engine.request("update.check", {"manual": true}) if engine else {"ok": false}
+	var result: Variant = reply.get("result")
+	_update_check = result if bool(reply.get("ok", false)) and result is Dictionary else {"status": "error"}
+	_refresh_help()
+
+
+func _refresh_help() -> void:
+	if _open and _card and _card.visible and tab == "help":
+		_show_tab("help")
+
+
+func _load_version() -> void:
+	if _version_loading or engine == null or not engine.is_ready():
+		return
+	_version_loading = true
+	var reply: Dictionary = await engine.request("update.state")
+	_version_loading = false
+	var result: Variant = reply.get("result")
+	if bool(reply.get("ok", false)) and result is Dictionary:
+		var told := str((result as Dictionary).get("versionText", ""))
+		if not told.is_empty() and told != _version_text:
+			_version_text = told
+			_refresh_help()
 
 
 func _quick_panel(title: String, description: String) -> VBoxContainer:

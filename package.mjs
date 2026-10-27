@@ -11,9 +11,21 @@ const out = path.resolve(process.argv[2] || path.join(here, "out"));
 const godotExe = process.env.OH_GODOT_EXE || "";
 const stage = path.join(out, "stage");
 const appName = "Open Historia Native";
+const nativeUpdate = await import(pathToFileURL(path.join(here, "sidecar", "handlers", "update.mjs")).href);
 
 if (process.platform !== "win32") throw new Error("The installer is built on Windows.");
 if (!fs.existsSync(godotExe)) throw new Error("Set OH_GODOT_EXE to the Godot 4.7 windowed executable (Godot_v4.7.2-stable_win64.exe).");
+
+const version = fs.readFileSync(path.join(here, "VERSION"), "utf8").trim();
+if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("native/VERSION must hold a version such as 0.1.0.");
+const stampedAt = new Date();
+const head = spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" });
+const stamp = {
+  version,
+  build: stampedAt.toISOString().replace(/\D/g, "").slice(0, 14),
+  commit: head.status === 0 ? head.stdout.trim() : "",
+};
+console.log(`stamping ${appName} ${stamp.version} build ${stamp.build} (${stamp.commit || "no commit"})`);
 
 const run = (command, args, options = {}) => {
   const result = spawnSync(command, args, { stdio: "inherit", shell: false, ...options });
@@ -51,6 +63,7 @@ copy(godotSource, path.join(stage, "native", "godot"), (file, isDir) => {
   return !relative.startsWith("tests/");
 });
 copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
+fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
 for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
@@ -171,7 +184,7 @@ const zip = path.join(out, "app.zip");
 run(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-a", "-c", "-f", zip, "-C", stage, "."]);
 console.log(`app.zip ${(fs.statSync(zip).size / 1048576).toFixed(1)} MB`);
 
-const target = path.join(out, `${appName} Setup.exe`);
+const target = path.join(out, nativeUpdate.NATIVE_SETUP_NAME);
 run(path.join(framework, "csc.exe"), [
   "/nologo",
   "/target:winexe",
@@ -186,4 +199,15 @@ run(path.join(framework, "csc.exe"), [
   path.join(here, "installer", "Setup.cs"),
 ]);
 console.log(`installer ${target} ${(fs.statSync(target).size / 1048576).toFixed(1)} MB`);
+const manifest = {
+  ...stamp,
+  sha256: await nativeUpdate.sha256File(target),
+  size: fs.statSync(target).size,
+  url: nativeUpdate.NATIVE_SETUP_URL,
+  notes: String(process.env.OH_NATIVE_NOTES || "A new super-experimental build of Open Historia Native."),
+  published: stampedAt.toISOString(),
+};
+const manifestFile = path.join(out, nativeUpdate.NATIVE_MANIFEST_NAME);
+fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+console.log(`update feed ${manifestFile} (build ${manifest.build}, sha256 ${manifest.sha256})`);
 console.log(`unpacked app ${path.join(stage, `${appName}.cmd`)}`);
