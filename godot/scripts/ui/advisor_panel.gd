@@ -2025,7 +2025,8 @@ func _load_picture(place: String) -> void:
 			if request.request(_origin + place) == OK:
 				var result: Array = await request.request_completed
 				if int(result[0]) == HTTPRequest.RESULT_SUCCESS and int(result[1]) == 200:
-					texture = _decode_picture(result[3])
+					var body: PackedByteArray = result[3]
+					texture = await ImageLoader.decode_async(self, body) if ImageLoader.is_gif(body) else _decode_picture(body)
 			request.queue_free()
 	_pictures[place] = texture if texture != null else false
 	var waiting: Array = _picture_waiting.get(place, [])
@@ -2053,6 +2054,8 @@ static func _decode_data_url(address: String) -> Texture2D:
 static func _decode_picture(body: PackedByteArray) -> Texture2D:
 	if body.size() < 4:
 		return null
+	if ImageLoader.is_gif(body):
+		return ImageLoader.texture_from_gif(ImageLoader.gif_frames(body))
 	var image := Image.new()
 	var status := ERR_FILE_UNRECOGNIZED
 	if body[0] == 0x89 and body[1] == 0x50 and body[2] == 0x4E and body[3] == 0x47:

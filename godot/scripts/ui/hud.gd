@@ -396,8 +396,7 @@ func set_flag_info(info: Dictionary) -> void:
 
 
 func _image_texture(path: String) -> Texture2D:
-	var image := Image.load_from_file(path)
-	return ImageTexture.create_from_image(image) if image and not image.is_empty() else null
+	return ImageLoader.texture_from_file(path)
 
 
 func enter_game() -> void:

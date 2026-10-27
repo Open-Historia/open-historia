@@ -774,10 +774,9 @@ func _flag_preview(file: String) -> Control:
 		return null
 	var texture: Texture2D = UI.flag(file, 22) if file.get_extension().to_lower() == "svg" else null
 	if texture == null:
-		var image := Image.load_from_file(file)
-		if image == null or image.is_empty():
+		texture = ImageLoader.texture_from_file(file)
+		if texture == null:
 			return null
-		texture = ImageTexture.create_from_image(image)
 	var frame := PanelContainer.new()
 	frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.25), 3, 1, Vector4(1, 1, 1, 1)))
 	frame.custom_minimum_size = Vector2(34, 22)

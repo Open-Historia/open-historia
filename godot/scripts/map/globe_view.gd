@@ -23,25 +23,35 @@ const MAP_LAYER_BIT := 2
 const LIGHT_LAYER := 3
 const FLAT_TEXTURE_SCALE := 1.75
 const LAT_MARGIN := 0.03
+const NEAR_PITCH_DEG := 20.0
+const NEAR_SPLIT := 0.3
 
 const SPHERE_SHADER := """
 shader_type canvas_item;
 render_mode unshaded, blend_mix;
 uniform sampler2D flat_map : filter_linear, repeat_disable;
+uniform sampler2D near_map : filter_linear, repeat_disable;
 uniform vec2 screen_size = vec2(1440.0, 900.0);
-uniform vec3 center_dir = vec3(0.0, 0.0, 1.0);
-uniform vec3 east_dir = vec3(1.0, 0.0, 0.0);
-uniform vec3 north_dir = vec3(0.0, 1.0, 0.0);
-uniform float cam_d = 4.0;
-uniform float tan_half = 0.3333333333;
+uniform vec3 cam_pos = vec3(0.0, 0.0, 4.0);
+uniform vec3 cam_right = vec3(1.0, 0.0, 0.0);
+uniform vec3 cam_up = vec3(0.0, 1.0, 0.0);
+uniform vec3 cam_fwd = vec3(0.0, 0.0, -1.0);
+uniform float focal = 1350.0;
+uniform vec2 flat_right = vec2(1.0, 0.0);
+uniform vec2 flat_up = vec2(0.0, -1.0);
+uniform float pitch_sin = 0.0;
+uniform float pitch_cos = 1.0;
 uniform float globeness = 1.0;
 uniform vec4 flat_rect = vec4(0.0, 0.0, 4096.0, 4096.0);
+uniform vec4 near_rect = vec4(0.0, 0.0, 0.0, 0.0);
+uniform bool use_near = false;
 uniform vec2 cam_world = vec2(2048.0, 2048.0);
 uniform float px_per_world = 1.0;
 uniform float radius_px = 400.0;
-uniform float cam_dist_px = 1350.0;
 uniform float texel_world = 1.0;
+uniform float near_texel_world = 1.0;
 uniform float world_width = 4096.0;
+uniform bool clamp_poles = true;
 
 const float PI_F = 3.14159265358979;
 const float MERC_LIMIT = 85.0511287798066;
@@ -62,66 +72,100 @@ vec3 dir_of_world(vec2 w) {
 	return vec3(sin(lon) * c, sin(lat), cos(lon) * c);
 }
 
-vec2 sample_uv(vec2 w) {
-	float shift = world_width * floor((flat_rect.x + flat_rect.z * 0.5 - w.x) / world_width + 0.5);
+vec2 rect_uv(vec2 w, vec4 rect, float texel) {
+	float shift = world_width * floor((rect.x + rect.z * 0.5 - w.x) / world_width + 0.5);
 	w.x += shift;
-	float edge = texel_world * 1.5;
-	float y = clamp(w.y, edge, world_width - edge);
-	return vec2((w.x - flat_rect.x) / flat_rect.z, (y - flat_rect.y) / flat_rect.w);
+	float edge = texel * 1.5;
+	float y = clamp_poles ? clamp(w.y, edge, world_width - edge) : w.y;
+	return vec2((w.x - rect.x) / rect.z, (y - rect.y) / rect.w);
+}
+
+vec3 sample_map(vec2 w) {
+	if (use_near) {
+		vec2 near_uv = rect_uv(w, near_rect, near_texel_world);
+		if (near_uv.x > 0.002 && near_uv.x < 0.998 && near_uv.y > 0.002 && near_uv.y < 0.998) {
+			return texture(near_map, near_uv).rgb;
+		}
+	}
+	return texture(flat_map, rect_uv(w, flat_rect, texel_world)).rgb;
+}
+
+vec2 wrapped_delta(vec2 w) {
+	vec2 d = w - cam_world;
+	d.x -= world_width * floor(d.x / world_width + 0.5);
+	return d * px_per_world;
+}
+
+vec3 flat_camera(vec2 w) {
+	vec2 d = wrapped_delta(w);
+	float a = dot(d, flat_right);
+	float v = dot(d, flat_up);
+	return vec3(a, v * pitch_cos, focal + v * pitch_sin);
+}
+
+vec3 globe_camera(vec2 w) {
+	vec3 q = dir_of_world(w) - cam_pos;
+	return vec3(dot(q, cam_right), dot(q, cam_up), dot(q, cam_fwd)) * radius_px;
 }
 
 vec2 project_mix(vec2 w) {
-	vec3 p = dir_of_world(w);
-	float gx = dot(p, east_dir) * radius_px;
-	float gy = dot(p, north_dir) * radius_px;
-	float gz = dot(p, center_dir) * radius_px - (radius_px + cam_dist_px);
-	float dx = w.x - cam_world.x;
-	dx -= world_width * floor(dx / world_width + 0.5);
-	float fx = dx * px_per_world;
-	float fy = -(w.y - cam_world.y) * px_per_world;
-	float aspect = screen_size.x / screen_size.y;
-	vec3 clip_g = vec3(gx / (tan_half * aspect), gy / tan_half, -gz);
-	vec3 clip_f = vec3(fx / (tan_half * aspect), fy / tan_half, cam_dist_px);
-	vec3 clip = mix(clip_f, clip_g, globeness);
-	vec2 ndc = clip.xy / clip.z;
-	return vec2((ndc.x * 0.5 + 0.5) * screen_size.x, (0.5 - ndc.y * 0.5) * screen_size.y);
+	vec3 c = mix(flat_camera(w), globe_camera(w), globeness);
+	return vec2(screen_size.x * 0.5 + focal * c.x / c.z, screen_size.y * 0.5 - focal * c.y / c.z);
+}
+
+vec2 flat_unproject(vec2 px) {
+	float sx = px.x - screen_size.x * 0.5;
+	float sy = screen_size.y * 0.5 - px.y;
+	float denominator = max(focal * pitch_cos - sy * pitch_sin, 1e-3);
+	float v = sy * focal / denominator;
+	float a = sx * (focal + v * pitch_sin) / focal;
+	return cam_world + (flat_right * a + flat_up * v) / px_per_world;
+}
+
+vec2 newton_step(vec2 w, vec2 error) {
+	vec2 d = wrapped_delta(w);
+	float a = dot(d, flat_right);
+	float v = dot(d, flat_up);
+	float z = focal + v * pitch_sin;
+	float dv = -error.y * z * z / (focal * focal * max(pitch_cos, 1e-3));
+	float da = (error.x + focal * a * pitch_sin / (z * z) * dv) * z / focal;
+	return (flat_right * da + flat_up * dv) / px_per_world;
 }
 
 void fragment() {
 	vec2 px = UV * screen_size;
-	float aspect = screen_size.x / screen_size.y;
-	vec2 ndc = vec2(px.x / screen_size.x * 2.0 - 1.0, 1.0 - px.y / screen_size.y * 2.0);
-	vec3 dir = normalize(east_dir * (ndc.x * tan_half * aspect) + north_dir * (ndc.y * tan_half) - center_dir);
-	vec3 origin = center_dir * cam_d;
+	vec3 dir = normalize(cam_fwd * focal + cam_right * (px.x - screen_size.x * 0.5) + cam_up * (screen_size.y * 0.5 - px.y));
+	vec3 origin = cam_pos;
 	float b = dot(origin, dir);
 	vec3 inner = origin - dir * b;
 	float disc_rtg = 1.0 - dot(inner, inner);
-	bool hit = disc_rtg >= 0.0;
+	bool hit = disc_rtg >= 0.0 && b < 0.0;
 	vec4 base = vec4(0.0);
 	if (globeness >= 0.999) {
 		if (hit) {
 			float c_term = dot(origin, origin) - 1.0;
-			float q = -b + (b < 0.0 ? 1.0 : -1.0) * sqrt(disc_rtg);
-			float t0 = c_term / q;
-			float t = min(t0, q);
+			float q = -b + sqrt(disc_rtg);
+			float t = min(c_term / q, q);
 			vec3 p = normalize(origin + dir * t);
-			base = vec4(texture(flat_map, sample_uv(world_of(p))).rgb, 1.0);
+			base = vec4(sample_map(world_of(p)), 1.0);
 		}
 	} else {
-		vec2 w = cam_world + (px - screen_size * 0.5) / px_per_world;
-		if (hit) {
-			float c_term = dot(origin, origin) - 1.0;
-			float q = -b + (b < 0.0 ? 1.0 : -1.0) * sqrt(disc_rtg);
-			float t = min(c_term / q, q);
-			vec2 g = world_of(normalize(origin + dir * t));
-			g.x += world_width * floor((w.x - g.x) / world_width + 0.5);
-			w = mix(w, g, globeness);
+		vec2 w = flat_unproject(px);
+		if (globeness > 0.001) {
+			if (hit) {
+				float c_term = dot(origin, origin) - 1.0;
+				float q = -b + sqrt(disc_rtg);
+				float t = min(c_term / q, q);
+				vec2 g = world_of(normalize(origin + dir * t));
+				g.x += world_width * floor((w.x - g.x) / world_width + 0.5);
+				w = mix(w, g, globeness);
+			}
+			for (int i = 0; i < 4; i++) {
+				vec2 s = project_mix(w);
+				w += newton_step(w, px - s);
+			}
 		}
-		for (int i = 0; i < 4; i++) {
-			vec2 s = project_mix(w);
-			w -= (s - px) / px_per_world;
-		}
-		base = vec4(texture(flat_map, sample_uv(w)).rgb, 1.0);
+		base = vec4(sample_map(w), 1.0);
 	}
 	COLOR = base;
 }
@@ -131,11 +175,11 @@ const LIGHT_SHADER := """
 shader_type canvas_item;
 render_mode unshaded, blend_mix;
 uniform vec2 screen_size = vec2(1440.0, 900.0);
-uniform vec3 center_dir = vec3(0.0, 0.0, 1.0);
-uniform vec3 east_dir = vec3(1.0, 0.0, 0.0);
-uniform vec3 north_dir = vec3(0.0, 1.0, 0.0);
-uniform float cam_d = 4.0;
-uniform float tan_half = 0.3333333333;
+uniform vec3 cam_pos = vec3(0.0, 0.0, 4.0);
+uniform vec3 cam_right = vec3(1.0, 0.0, 0.0);
+uniform vec3 cam_up = vec3(0.0, 1.0, 0.0);
+uniform vec3 cam_fwd = vec3(0.0, 0.0, -1.0);
+uniform float focal = 1350.0;
 uniform float overlay = 1.0;
 uniform vec3 sun_dir = vec3(0.0, 0.0, 1.0);
 uniform float render_pixel = 1.0;
@@ -143,14 +187,12 @@ uniform float terrain_radii = 0.0;
 
 void fragment() {
 	vec2 px = UV * screen_size;
-	float aspect = screen_size.x / screen_size.y;
-	vec2 ndc = vec2(px.x / screen_size.x * 2.0 - 1.0, 1.0 - px.y / screen_size.y * 2.0);
-	vec3 dir = normalize(east_dir * (ndc.x * tan_half * aspect) + north_dir * (ndc.y * tan_half) - center_dir);
-	vec3 origin = center_dir * cam_d;
+	vec3 dir = normalize(cam_fwd * focal + cam_right * (px.x - screen_size.x * 0.5) + cam_up * (screen_size.y * 0.5 - px.y));
+	vec3 origin = cam_pos;
 	vec4 light = vec4(0.0);
 	if (overlay > 0.0) {
 		float camera_term = dot(origin, origin) - 1.0;
-		float pixel_angle = 2.0 * tan_half / screen_size.y * render_pixel;
+		float pixel_angle = render_pixel / focal;
 		float gap_per_pixel = 2.0 * sqrt(max(0.0, camera_term)) * pixel_angle;
 		float terrain_gap = (gap_per_pixel > 0.0 && terrain_radii > 0.0) ? min(terrain_radii * (2.0 + terrain_radii), camera_term * 0.5) : 0.0;
 		float tint_fade_gap = gap_per_pixel * 0.75;
@@ -238,6 +280,11 @@ var _flat_size := Vector2i.ZERO
 var held := false
 var _saved_cull_mask := -1
 var _moving_until := 0
+var _near_viewport: SubViewport
+var _near_camera: Camera2D
+var _near_size := Vector2i.ZERO
+var _near := {}
+var _shown := false
 
 
 func setup(owner_extras: Node, view: MapView) -> void:
@@ -322,6 +369,29 @@ func _ensure_viewport() -> void:
 	_material.set_shader_parameter("flat_map", _flat_viewport.get_texture())
 
 
+func _ensure_near_viewport() -> void:
+	if _near_viewport and _near_size == _flat_size:
+		return
+	if _near_viewport:
+		_near_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		remove_child(_near_viewport)
+		_near_viewport.queue_free()
+	_near_size = _flat_size
+	_near_viewport = SubViewport.new()
+	_near_viewport.disable_3d = true
+	_near_viewport.transparent_bg = false
+	_near_viewport.handle_input_locally = false
+	_near_viewport.gui_disable_input = true
+	_near_viewport.size = _flat_size
+	_near_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
+	_near_viewport.world_2d = map_view.get_viewport().world_2d
+	_near_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(_near_viewport)
+	_near_camera = Camera2D.new()
+	_near_viewport.add_child(_near_camera)
+	_material.set_shader_parameter("near_map", _near_viewport.get_texture())
+
+
 func set_enabled(value: bool) -> void:
 	if enabled == value:
 		return
@@ -341,45 +411,55 @@ func mark_interaction() -> void:
 
 
 func _sync_active() -> void:
-	var want := enabled and map_view != null and map_view.visible and map_view.extras_ready()
-	if want == active:
+	var want := (enabled or tilted()) and map_view != null and map_view.visible and map_view.extras_ready()
+	if want != active:
+		active = want
+		map_view.globe_on = active
+		var root := map_view.get_viewport()
+		if active:
+			_ensure_viewport()
+			_flat_viewport.world_2d = root.world_2d
+			_flat_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+			map_view.visibility_layer = MAP_LAYER_BIT
+			if _saved_cull_mask < 0:
+				_saved_cull_mask = root.canvas_cull_mask
+			root.canvas_cull_mask = _saved_cull_mask & ~MAP_LAYER_BIT
+			_layer.visible = true
+			labels.set_active(true)
+			_last_interaction = Time.get_ticks_msec()
+			_last_rotate = Time.get_ticks_msec()
+		else:
+			if _flat_viewport:
+				_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			if _near_viewport:
+				_near_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			_near = {}
+			map_view.visibility_layer = 1
+			if _saved_cull_mask >= 0:
+				root.canvas_cull_mask = _saved_cull_mask
+				_saved_cull_mask = -1
+			_layer.visible = false
+			labels.set_active(false)
+	var shown := active and enabled
+	_light_layer.visible = shown
+	if shown == _shown:
 		return
-	active = want
-	map_view.globe_on = active
-	var root := map_view.get_viewport()
-	if active:
-		_ensure_viewport()
-		_flat_viewport.world_2d = root.world_2d
-		_flat_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		map_view.visibility_layer = MAP_LAYER_BIT
-		if _saved_cull_mask < 0:
-			_saved_cull_mask = root.canvas_cull_mask
-		root.canvas_cull_mask = _saved_cull_mask & ~MAP_LAYER_BIT
-		_layer.visible = true
-		_light_layer.visible = true
-		labels.set_active(true)
-		_last_interaction = Time.get_ticks_msec()
-		_last_rotate = Time.get_ticks_msec()
-	else:
-		if _flat_viewport:
-			_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		map_view.visibility_layer = 1
-		if _saved_cull_mask >= 0:
-			root.canvas_cull_mask = _saved_cull_mask
-			_saved_cull_mask = -1
-		_layer.visible = false
-		_light_layer.visible = false
-		labels.set_active(false)
+	_shown = shown
+	if not shown:
 		_sun.modulate.a = 0.0
 	if extras and extras.has_signal("globe_changed"):
-		extras.emit_signal("globe_changed", active)
+		extras.emit_signal("globe_changed", shown)
+
+
+func sync_active() -> void:
+	_sync_active()
 
 
 func _process(_delta: float) -> void:
 	if not map_view:
 		return
 	_sync_active()
-	if not active:
+	if not active or not enabled:
 		return
 	var now := Time.get_ticks_msec()
 	if now - _sun_refreshed >= LIVE_SUN_REFRESH_MS:
@@ -509,12 +589,20 @@ static func zoom_adjustment(old_lat: float, new_lat: float) -> float:
 
 
 func globeness() -> float:
-	return clampf(12.0 - map_view.zoom_level(), 0.0, 1.0)
+	return clampf(12.0 - map_view.zoom_level(), 0.0, 1.0) if enabled else 0.0
 
 
 static func transition_opacity(transition: float) -> float:
 	var progress := clampf((transition - 0.9) / 0.1, 0.0, 1.0)
 	return progress * progress * (3.0 - 2.0 * progress)
+
+
+func tilted() -> bool:
+	return map_view != null and (not is_zero_approx(map_view.bearing) or not is_zero_approx(map_view.pitch))
+
+
+func globe_shown() -> bool:
+	return active and enabled
 
 
 func _compute_frame() -> Dictionary:
@@ -525,26 +613,42 @@ func _compute_frame() -> Dictionary:
 	var lon_c := lonlat.x
 	var zoom := map_view.zoom_level()
 	var radius := globe_radius(zoom, lat_c)
-	var cam_dist := 0.5 / TAN_HALF * size.y
+	var focal := 0.5 / TAN_HALF * size.y
+	var bearing := deg_to_rad(map_view.bearing)
+	var pitch := deg_to_rad(map_view.pitch)
 	var lon_r := deg_to_rad(lon_c)
 	var lat_r := deg_to_rad(lat_c)
 	var center := direction_of(lon_c, lat_c)
 	var east := Vector3(cos(lon_r), 0.0, -sin(lon_r))
 	var north := Vector3(-sin(lat_r) * sin(lon_r), cos(lat_r), -sin(lat_r) * cos(lon_r))
-	var g := clampf(12.0 - zoom, 0.0, 1.0)
+	var ahead := north * cos(bearing) + east * sin(bearing)
+	var right := east * cos(bearing) - north * sin(bearing)
+	var fwd := ahead * sin(pitch) - center * cos(pitch)
+	var up := ahead * cos(pitch) + center * sin(pitch)
+	var pos := center * (1.0 + cos(pitch) * focal / radius) - ahead * (sin(pitch) * focal / radius)
+	var g := clampf(12.0 - zoom, 0.0, 1.0) if enabled else 0.0
 	return {
 		"size": size,
 		"lon": lon_c,
 		"lat": lat_c,
 		"zoom": zoom,
 		"radius": radius,
-		"cam_dist": cam_dist,
-		"d": 1.0 + cam_dist / radius,
+		"cam_dist": focal,
+		"focal": focal,
 		"center": center,
 		"east": east,
 		"north": north,
+		"right": right,
+		"up": up,
+		"fwd": fwd,
+		"pos": pos,
+		"d": pos.length(),
+		"bearing": bearing,
+		"pitch": pitch,
+		"flat_right": Vector2(cos(bearing), sin(bearing)),
+		"flat_up": Vector2(sin(bearing), -cos(bearing)),
 		"g": g,
-		"opacity": transition_opacity(g),
+		"opacity": transition_opacity(g) if enabled else 0.0,
 		"px_per_world": camera.zoom.x,
 		"cam_world": camera.position,
 	}
@@ -552,69 +656,94 @@ func _compute_frame() -> Dictionary:
 
 func _ray(frame: Dictionary, screen: Vector2) -> Vector3:
 	var size: Vector2 = frame["size"]
-	var aspect := size.x / size.y
-	var ndc := Vector2(screen.x / size.x * 2.0 - 1.0, 1.0 - screen.y / size.y * 2.0)
-	var east: Vector3 = frame["east"]
-	var north: Vector3 = frame["north"]
-	var center: Vector3 = frame["center"]
-	return (east * (ndc.x * TAN_HALF * aspect) + north * (ndc.y * TAN_HALF) - center).normalized()
+	var focal: float = frame["focal"]
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	return ((frame["fwd"] as Vector3) * focal + (frame["right"] as Vector3) * sx + (frame["up"] as Vector3) * sy).normalized()
 
 
 func _hit(frame: Dictionary, screen: Vector2) -> Dictionary:
-	var origin: Vector3 = (frame["center"] as Vector3) * float(frame["d"])
+	var origin: Vector3 = frame["pos"]
 	var dir := _ray(frame, screen)
 	var b := origin.dot(dir)
 	var inner := origin - dir * b
 	var disc := 1.0 - inner.dot(inner)
-	if disc < 0.0:
+	if disc < 0.0 or b >= 0.0:
 		return {"hit": false, "dir": dir, "origin": origin}
 	var c := origin.dot(origin) - 1.0
-	var q := -b + (1.0 if b < 0.0 else -1.0) * sqrt(disc)
+	var q := -b + sqrt(disc)
 	var t := minf(c / q, q)
 	return {"hit": true, "point": (origin + dir * t).normalized(), "dir": dir, "origin": origin}
 
 
 func _project_dir(frame: Dictionary, p: Vector3) -> Vector3:
 	var size: Vector2 = frame["size"]
-	var aspect := size.x / size.y
-	var radius: float = frame["radius"]
-	var x := p.dot(frame["east"]) * radius
-	var y := p.dot(frame["north"]) * radius
-	var z := p.dot(frame["center"]) * radius - (radius + float(frame["cam_dist"]))
-	var w := -z
-	if w <= 0.0:
+	var focal: float = frame["focal"]
+	var q := p - (frame["pos"] as Vector3)
+	var z := q.dot(frame["fwd"])
+	if z <= 0.0:
 		return Vector3(0, 0, -1)
-	var ndc := Vector2(x / (w * TAN_HALF * aspect), y / (w * TAN_HALF))
-	return Vector3((ndc.x * 0.5 + 0.5) * size.x, (0.5 - ndc.y * 0.5) * size.y, w)
+	return Vector3(size.x * 0.5 + focal * q.dot(frame["right"]) / z, size.y * 0.5 - focal * q.dot(frame["up"]) / z, z)
+
+
+func _wrapped_delta(frame: Dictionary, point: Vector2) -> Vector2:
+	var delta := point - (frame["cam_world"] as Vector2)
+	delta.x -= MapView.WORLD_WIDTH * roundf(delta.x / MapView.WORLD_WIDTH)
+	return delta * float(frame["px_per_world"])
+
+
+func _flat_clip(frame: Dictionary, point: Vector2) -> Vector3:
+	var delta := _wrapped_delta(frame, point)
+	var a := delta.dot(frame["flat_right"])
+	var v := delta.dot(frame["flat_up"])
+	var pitch: float = frame["pitch"]
+	return Vector3(a, v * cos(pitch), float(frame["focal"]) + v * sin(pitch))
+
+
+func _globe_clip(frame: Dictionary, point: Vector2) -> Vector3:
+	var lonlat := lonlat_of_world(point)
+	var q := direction_of(lonlat.x, lonlat.y) - (frame["pos"] as Vector3)
+	return Vector3(q.dot(frame["right"]), q.dot(frame["up"]), q.dot(frame["fwd"])) * float(frame["radius"])
 
 
 func _project_world(frame: Dictionary, point: Vector2) -> Vector2:
 	var size: Vector2 = frame["size"]
-	var aspect := size.x / size.y
 	var g: float = frame["g"]
-	var lonlat := lonlat_of_world(point)
-	var p := direction_of(lonlat.x, lonlat.y)
-	var radius: float = frame["radius"]
-	var gx := p.dot(frame["east"]) * radius
-	var gy := p.dot(frame["north"]) * radius
-	var gz := p.dot(frame["center"]) * radius - (radius + float(frame["cam_dist"]))
-	var cam_world: Vector2 = frame["cam_world"]
-	var scale: float = frame["px_per_world"]
-	var dx := point.x - cam_world.x
-	dx -= MapView.WORLD_WIDTH * roundf(dx / MapView.WORLD_WIDTH)
-	var fx := dx * scale
-	var fy := -(point.y - cam_world.y) * scale
-	var clip_g := Vector3(gx / (TAN_HALF * aspect), gy / TAN_HALF, -gz)
-	var clip_f := Vector3(fx / (TAN_HALF * aspect), fy / TAN_HALF, float(frame["cam_dist"]))
-	var clip := clip_f.lerp(clip_g, g)
+	var clip := _flat_clip(frame, point)
+	if g > 0.0:
+		clip = clip.lerp(_globe_clip(frame, point), g)
 	if clip.z <= 0.0:
 		return Vector2(-100000, -100000)
-	var ndc := Vector2(clip.x / clip.z, clip.y / clip.z)
-	return Vector2((ndc.x * 0.5 + 0.5) * size.x, (0.5 - ndc.y * 0.5) * size.y)
+	var focal: float = frame["focal"]
+	return Vector2(size.x * 0.5 + focal * clip.x / clip.z, size.y * 0.5 - focal * clip.y / clip.z)
+
+
+func _flat_unproject(frame: Dictionary, screen: Vector2) -> Vector2:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	var denominator := maxf(focal * cos(pitch) - sy * sin(pitch), 1e-3)
+	var v := sy * focal / denominator
+	var a := sx * (focal + v * sin(pitch)) / focal
+	return (frame["cam_world"] as Vector2) + ((frame["flat_right"] as Vector2) * a + (frame["flat_up"] as Vector2) * v) / float(frame["px_per_world"])
+
+
+func _newton_step(frame: Dictionary, point: Vector2, error: Vector2) -> Vector2:
+	var delta := _wrapped_delta(frame, point)
+	var a := delta.dot(frame["flat_right"])
+	var v := delta.dot(frame["flat_up"])
+	var pitch: float = frame["pitch"]
+	var focal: float = frame["focal"]
+	var z := focal + v * sin(pitch)
+	var dv := -error.y * z * z / (focal * focal * maxf(cos(pitch), 1e-3))
+	var da := (error.x + focal * a * sin(pitch) / (z * z) * dv) * z / focal
+	return ((frame["flat_right"] as Vector2) * da + (frame["flat_up"] as Vector2) * dv) / float(frame["px_per_world"])
 
 
 func _visible_on_sphere(frame: Dictionary, p: Vector3) -> bool:
-	return p.dot(frame["center"]) - 1.0 / float(frame["d"]) >= 0.0
+	return p.dot(frame["pos"]) >= 1.0
 
 
 func current_frame() -> Dictionary:
@@ -642,10 +771,10 @@ func screen_hits_globe(screen: Vector2) -> bool:
 func screen_to_world(screen: Vector2) -> Vector2:
 	var frame := current_frame()
 	var g: float = frame["g"]
-	var scale: float = frame["px_per_world"]
-	var size: Vector2 = frame["size"]
+	var world := _flat_unproject(frame, screen)
+	if g <= 0.0:
+		return Vector2(fposmod(world.x, MapView.WORLD_WIDTH), world.y)
 	var hit := _hit(frame, screen)
-	var world := (frame["cam_world"] as Vector2) + (screen - size * 0.5) / scale
 	if bool(hit["hit"]):
 		var lonlat := lonlat_of_dir(hit["point"])
 		var on_globe := world_of_lonlat(lonlat.x, lonlat.y)
@@ -658,7 +787,7 @@ func screen_to_world(screen: Vector2) -> Vector2:
 		return world_of_lonlat(horizon.x, horizon.y)
 	for _step in range(4):
 		var s := _project_world(frame, world)
-		world -= (s - screen) / scale
+		world += _newton_step(frame, world, screen - s)
 	return Vector2(fposmod(world.x, MapView.WORLD_WIDTH), clampf(world.y, 0.0, MapView.WORLD_WIDTH))
 
 
@@ -677,21 +806,21 @@ func _unproject_location(frame: Dictionary, screen: Vector2) -> Vector2:
 	if bool(hit["hit"]):
 		return lonlat_of_dir(hit["point"])
 	var d: float = frame["d"]
-	var center: Vector3 = frame["center"]
+	var axis: Vector3 = (frame["pos"] as Vector3) / d
 	var plane_d := -1.0 / d
 	var origin: Vector3 = hit["origin"]
 	var dir: Vector3 = hit["dir"]
-	var direction_dot := center.dot(dir)
-	var origin_distance := center.dot(origin) + plane_d
+	var direction_dot := axis.dot(dir)
+	var origin_distance := axis.dot(origin) + plane_d
 	var distance := -origin_distance / direction_dot if absf(direction_dot) > 1e-12 else -1.0
 	var plane_point := Vector3.ZERO
 	if distance > 0.0:
 		plane_point = origin + dir * distance
 	else:
 		var distant := origin + dir * 2.0
-		var from_plane := center.dot(distant) + plane_d
-		plane_point = distant - center * from_plane
-	var disk_center := center * (-plane_d)
+		var from_plane := axis.dot(distant) + plane_d
+		plane_point = distant - axis * from_plane
+	var disk_center := axis * (-plane_d)
 	var disk_radius := sqrt(maxf(0.0, 1.0 - plane_d * plane_d))
 	var relative := plane_point - disk_center
 	var clamped := disk_center + relative * (disk_radius / maxf(relative.length(), 1e-12))
@@ -703,10 +832,49 @@ func render_view() -> Array:
 		return []
 	_ensure_viewport()
 	_frame = _compute_frame()
-	_flat = _flat_view(_frame, Vector2(_flat_size))
+	if float(_frame["g"]) <= 0.0:
+		_flat = _plane_view(_frame, Rect2(Vector2.ZERO, _frame["size"]), Vector2(_flat_size), float(_frame["px_per_world"]))
+	else:
+		_flat = _flat_view(_frame, Vector2(_flat_size))
 	_flat_camera.position = _flat["center"]
 	_flat_camera.zoom = Vector2.ONE * float(_flat["density"])
+	_update_near()
 	return [_flat["center"], float(_flat["density"]), Vector2(_flat_size), float(_frame["px_per_world"])]
+
+
+func _plane_view(frame: Dictionary, area: Rect2, texture: Vector2, cap: float) -> Dictionary:
+	var low := Vector2(INF, INF)
+	var high := Vector2(-INF, -INF)
+	for corner in [area.position, Vector2(area.end.x, area.position.y), area.end, Vector2(area.position.x, area.end.y)]:
+		var world := _flat_unproject(frame, corner)
+		low = low.min(world)
+		high = high.max(world)
+	var span := (high - low) * (1.0 + LAT_MARGIN * 2.0) + Vector2(0.001, 0.001)
+	var center := (low + high) * 0.5
+	var density := minf(cap, minf(texture.x / span.x, texture.y / span.y))
+	var covered := texture / density
+	return {
+		"center": center,
+		"density": density,
+		"texture": Vector2i(texture),
+		"rect": Rect2(center - covered * 0.5, covered),
+	}
+
+
+func _update_near() -> void:
+	var pitch: float = _frame["pitch"]
+	if pitch > deg_to_rad(NEAR_PITCH_DEG) and float(_frame["g"]) <= 0.0:
+		_ensure_near_viewport()
+		var size: Vector2 = _frame["size"]
+		var top := size.y * NEAR_SPLIT
+		_near = _plane_view(_frame, Rect2(Vector2(0.0, top), Vector2(size.x, size.y - top)), Vector2(_flat_size), float(_frame["px_per_world"]) * 2.0)
+		_near_camera.position = _near["center"]
+		_near_camera.zoom = Vector2.ONE * float(_near["density"])
+		_near_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	else:
+		_near = {}
+		if _near_viewport:
+			_near_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 
 func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
@@ -738,15 +906,19 @@ func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
 			max_dlon = maxf(max_dlon, dlon)
 			min_lat = minf(min_lat, lonlat.y)
 			max_lat = maxf(max_lat, lonlat.y)
+	var pos: Vector3 = frame["pos"]
+	var cap_d := pos.length()
+	var axis := pos / cap_d
 	if missed:
-		var d: float = frame["d"]
-		var center: Vector3 = frame["center"]
-		var east: Vector3 = frame["east"]
-		var north: Vector3 = frame["north"]
-		var ring := sqrt(maxf(0.0, 1.0 - 1.0 / (d * d)))
+		var side := axis.cross(Vector3.UP)
+		if side.length() < 1e-6:
+			side = axis.cross(Vector3.RIGHT)
+		side = side.normalized()
+		var other := axis.cross(side)
+		var ring := sqrt(maxf(0.0, 1.0 - 1.0 / (cap_d * cap_d)))
 		for step in range(96):
 			var angle := TAU * step / 96.0
-			var p := (center / d + (east * cos(angle) + north * sin(angle)) * ring).normalized()
+			var p := (axis / cap_d + (side * cos(angle) + other * sin(angle)) * ring).normalized()
 			var screen := _project_dir(frame, p)
 			if screen.z <= 0.0 or screen.x < -64.0 or screen.y < -64.0 or screen.x > size.x + 64.0 or screen.y > size.y + 64.0:
 				continue
@@ -767,13 +939,13 @@ func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
 					max_lat = 90.0
 				else:
 					min_lat = -90.0
-	var cap_d: float = frame["d"]
+	var nadir := lonlat_of_dir(axis)
 	var cap := rad_to_deg(acos(clampf(1.0 / cap_d, -1.0, 1.0)))
-	for side: float in [1.0, -1.0]:
-		var edge_lat := lat_c + cap * side
+	for side_sign: float in [1.0, -1.0]:
+		var edge_lat := nadir.y + cap * side_sign
 		if g <= 0.0 or absf(edge_lat) >= 90.0:
 			continue
-		var edge_screen := _project_dir(frame, direction_of(lon_c, edge_lat))
+		var edge_screen := _project_dir(frame, direction_of(nadir.x, edge_lat))
 		if edge_screen.z > 0.0 and edge_screen.x > -32.0 and edge_screen.y > -32.0 and edge_screen.x < size.x + 32.0 and edge_screen.y < size.y + 32.0:
 			min_lat = minf(min_lat, edge_lat)
 			max_lat = maxf(max_lat, edge_lat)
@@ -818,24 +990,34 @@ func after_camera_move() -> void:
 	var size: Vector2 = frame["size"]
 	var rect: Rect2 = _flat["rect"]
 	var moving := _is_moving() or Time.get_ticks_msec() - _last_interaction < 200
-	var interactive := moving or (not idle_rotation_disabled and not rotation_paused)
+	var interactive := moving or (enabled and not idle_rotation_disabled and not rotation_paused)
 	var budget := INTERACTIVE_RENDER_PIXELS if interactive else REFINED_RENDER_PIXELS
 	var scale := minf(1.0, sqrt(budget / maxf(size.x * size.y, 1.0)))
+	var pitch: float = frame["pitch"]
 	for material: ShaderMaterial in [_material, _light_material]:
 		material.set_shader_parameter("screen_size", size)
-		material.set_shader_parameter("center_dir", frame["center"])
-		material.set_shader_parameter("east_dir", frame["east"])
-		material.set_shader_parameter("north_dir", frame["north"])
-		material.set_shader_parameter("cam_d", frame["d"])
-		material.set_shader_parameter("tan_half", TAN_HALF)
+		material.set_shader_parameter("cam_pos", frame["pos"])
+		material.set_shader_parameter("cam_right", frame["right"])
+		material.set_shader_parameter("cam_up", frame["up"])
+		material.set_shader_parameter("cam_fwd", frame["fwd"])
+		material.set_shader_parameter("focal", frame["focal"])
+	_material.set_shader_parameter("flat_right", frame["flat_right"])
+	_material.set_shader_parameter("flat_up", frame["flat_up"])
+	_material.set_shader_parameter("pitch_sin", sin(pitch))
+	_material.set_shader_parameter("pitch_cos", cos(pitch))
 	_material.set_shader_parameter("globeness", frame["g"])
+	_material.set_shader_parameter("clamp_poles", float(frame["g"]) > 0.0)
 	_material.set_shader_parameter("flat_rect", Vector4(rect.position.x, rect.position.y, rect.size.x, rect.size.y))
 	_material.set_shader_parameter("cam_world", frame["cam_world"])
 	_material.set_shader_parameter("px_per_world", frame["px_per_world"])
 	_material.set_shader_parameter("radius_px", frame["radius"])
-	_material.set_shader_parameter("cam_dist_px", frame["cam_dist"])
 	_material.set_shader_parameter("texel_world", 1.0 / float(_flat["density"]))
 	_material.set_shader_parameter("world_width", MapView.WORLD_WIDTH)
+	_material.set_shader_parameter("use_near", not _near.is_empty())
+	if not _near.is_empty():
+		var near_rect: Rect2 = _near["rect"]
+		_material.set_shader_parameter("near_rect", Vector4(near_rect.position.x, near_rect.position.y, near_rect.size.x, near_rect.size.y))
+		_material.set_shader_parameter("near_texel_world", 1.0 / float(_near["density"]))
 	_light_material.set_shader_parameter("overlay", frame["opacity"])
 	_light_material.set_shader_parameter("sun_dir", _sun_dir)
 	_light_material.set_shader_parameter("render_pixel", 1.0 / scale)
@@ -890,11 +1072,12 @@ func _pan(delta: Vector2) -> void:
 	var lonlat := lonlat_of_world(camera.position)
 	var lat := lonlat.y
 	var zoom := map_view.zoom_level()
+	var turned := delta.rotated(deg_to_rad(map_view.bearing))
 	var normalized_zoom := zoom + zoom_adjustment(lat, 0.0)
 	var lng_speed := lerpf(1.0 / cos(deg_to_rad(lat)), 1.0 / cos(deg_to_rad(minf(absf(lat), 60.0))), remap_saturate(normalized_zoom, 7.0, 3.0, 0.0, 1.0))
 	var degrees_per_pixel := 360.0 / (TAU * globe_radius(zoom, lat))
-	var new_lon := lonlat.x - delta.x * degrees_per_pixel * lng_speed
-	var new_lat := clampf(lat + delta.y * degrees_per_pixel, -MAX_VALID_LATITUDE, MAX_VALID_LATITUDE)
+	var new_lon := lonlat.x - turned.x * degrees_per_pixel * lng_speed
+	var new_lat := clampf(lat + turned.y * degrees_per_pixel, -MAX_VALID_LATITUDE, MAX_VALID_LATITUDE)
 	_set_center(new_lon, new_lat)
 	_set_zoom(zoom + zoom_adjustment(lat, new_lat))
 
@@ -962,7 +1145,7 @@ func _zoom_around(screen: Vector2, delta_zoom: float) -> void:
 	var d_lng_raw := difference_of_angles(lon_c, zoom_location.x)
 	var d_lng := d_lng_raw / (absf(d_lng_raw / 180.0) + 1.0)
 	var d_lat := difference_of_angles(lat_c, zoom_location.y)
-	var origin: Vector3 = (frame["center"] as Vector3) * float(frame["d"])
+	var origin: Vector3 = frame["pos"]
 	var ray := _ray(frame, screen)
 	var closest_distance := -origin.dot(ray)
 	var closest := origin + ray * closest_distance
@@ -986,21 +1169,41 @@ func _zoom_around(screen: Vector2, delta_zoom: float) -> void:
 	_set_zoom(old_zoom + zoom_adjustment(old_center_lat, lonlat_of_world(map_view.camera.position).y))
 
 
-func pan_by(delta: Vector2) -> void:
+func _globe_controls() -> bool:
+	return enabled and globeness() > 0.0
+
+
+func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
 	if not active:
 		return
-	_pan(delta)
+	if _globe_controls():
+		_pan(delta)
+	else:
+		var at := around if around.x >= 0.0 else map_view.get_viewport_rect().size * 0.5
+		var frame := _compute_frame()
+		var grabbed := _flat_unproject(frame, at - delta)
+		map_view.camera.position = grabbed - (_flat_unproject(frame, at) - map_view.camera.position)
 	_moved()
 
 
 func zoom_around(screen: Vector2, delta_zoom: float) -> void:
 	if not active or absf(delta_zoom) < 1e-9:
 		return
-	_zoom_around(screen, delta_zoom)
+	if _globe_controls():
+		_zoom_around(screen, delta_zoom)
+	else:
+		var frame := _compute_frame()
+		var location := _flat_unproject(frame, screen)
+		var limits := zoom_limits()
+		map_view.camera.zoom = Vector2.ONE * pow(2.0, clampf(map_view.zoom_level() + delta_zoom, limits.x, limits.y)) / 8.0
+		frame = _compute_frame()
+		map_view.camera.position = location - (_flat_unproject(frame, screen) - map_view.camera.position)
 	_moved()
 
 
 func zoom_limits() -> Vector2:
+	if not enabled:
+		return Vector2(log(8.0 * MapView.MIN_ZOOM) / log(2.0), log(8.0 * MapView.MAX_ZOOM) / log(2.0))
 	var lat := lonlat_of_world(map_view.camera.position).y
 	return Vector2(MIN_ZOOM_LEVEL + zoom_adjustment(0.0, lat), log(8.0 * MapView.MAX_ZOOM) / log(2.0))
 
@@ -1020,6 +1223,17 @@ func set_centre_zoom(lonlat: Vector2, zoom: float) -> void:
 func _moved() -> void:
 	_moving_until = Time.get_ticks_msec() + 120
 	map_view.call("_after_camera_move")
+
+
+func depth_at(point: Vector2) -> float:
+	if not active:
+		return 1.0
+	var frame := current_frame()
+	var clip := _flat_clip(frame, point)
+	var g: float = frame["g"]
+	if g > 0.0:
+		clip = clip.lerp(_globe_clip(frame, point), g)
+	return maxf(clip.z, 1e-3) / float(frame["focal"])
 
 
 static func sun_image() -> Image:

@@ -172,6 +172,10 @@ func _run() -> void:
 		await _offer_checks()
 	if _wants("nav"):
 		await _navigation_checks()
+	if _wants("tilt"):
+		await _tilt_checks()
+	if _wants("trackpad"):
+		await _trackpad_checks()
 	if _wants("settings"):
 		await _settings_checks()
 	_finish(0 if failures.is_empty() else 1)
@@ -525,6 +529,7 @@ func _style_checks() -> void:
 		if pick == "natgeo-dark":
 			_check(extras.natgeo.enabled and not extras.natgeo._shown.is_empty(), "National Geographic Dark draws its vector map (%d tiles)" % extras.natgeo._shown.size())
 			_check(extras.natgeo.visible_labels().size() > 0, "and its reference names (%d)" % extras.natgeo.visible_labels().size())
+			await _natgeo_detail_checks()
 		await _shoot("style-%s" % (pick if not pick.is_empty() else "starting"))
 	extras.apply_map_settings({"Terrain": false})
 	await _wait(2.0)
@@ -544,6 +549,148 @@ func _offer_checks() -> void:
 	await _shoot("offer-3-changing-basemap")
 	extras.offers.finish_transition()
 	extras.offers.set_background({})
+
+
+func _natgeo_detail_checks() -> void:
+	var view: MapView = main.map_view
+	var natgeo: NatGeoReference = extras.natgeo
+	_check(natgeo._sprite_state == "ready" and natgeo._sprite_json.size() > 100, "the style's sprite sheet is fetched (%d images)" % natgeo._sprite_json.size())
+	_check(natgeo._shelf != Vector3i.ZERO, "the style's own glyphs are in the atlas")
+	_check(natgeo.labels.glyph_count > 0, "names are drawn from those glyphs (%d glyphs)" % natgeo.labels.glyph_count)
+	_check(natgeo.labels.icon_count > 0, "city and spot icons are drawn from the sprite (%d)" % natgeo.labels.icon_count)
+	view.fly_to_lonlat(2.35, 48.85, 8.4, 0.0)
+	await _wait(1.0)
+	await _until(func() -> bool: return not natgeo.busy(), 40.0)
+	await _wait(1.5)
+	natgeo.labels.queue_redraw()
+	await _frames(3)
+	await _shoot("style-natgeo-paris")
+	_check(natgeo.labels.along_count > 0, "river and road names follow their lines (%d placed)" % natgeo.labels.along_count)
+	var repeated := 0
+	for label in natgeo.visible_labels():
+		if label.has("anchors") and (label["anchors"] as Array).size() > 1:
+			repeated += 1
+	_check(repeated > 0, "long lines carry their name again every symbol-spacing (%d lines)" % repeated)
+	view.fly_to_lonlat(-0.6, 44.9, 11.6, 0.0)
+	await _wait(1.0)
+	await _until(func() -> bool: return not natgeo.busy(), 40.0)
+	await _wait(1.5)
+	await _shoot("style-natgeo-close")
+	view.fly_to_lonlat(10.0, 45.0, 3.6, 0.0)
+	await _wait(1.0)
+
+
+func _roundtrip_gap(view: MapView) -> float:
+	var worst := 0.0
+	for at in [Vector2(200, 160), Vector2(720, 450), Vector2(1200, 700), Vector2(380, 760)]:
+		if extras.globe.globe_shown() and not extras.globe.screen_hits_globe(at):
+			continue
+		var world := view.screen_to_world(at)
+		worst = maxf(worst, view.world_to_screen(world).distance_to(at))
+	return worst
+
+
+func _tilt_checks() -> void:
+	var view: MapView = main.map_view
+	extras.apply_map_settings({"Globe": false})
+	view.fly_to_lonlat(10.0, 48.0, 4.5, 0.0)
+	await _wait(1.0)
+	root.gui_release_focus()
+	_key(view, KEY_RIGHT, true)
+	await _wait(0.45)
+	_check(is_equal_approx(view.bearing, 15.0), "Shift+Right turns the map 15 degrees as MapLibre's keyboard does (%.2f)" % view.bearing)
+	_check(extras.globe.active and view.is_globe() and not extras.globe.enabled, "a turned flat map goes through the projector")
+	var war: Node = extras.war_layers()
+	if war:
+		await _frames(2)
+		_check(bool(war.get("overlay").get("globe")), "the war overlay draws through the same projection")
+	_check(_roundtrip_gap(view) < 0.75, "screen and world agree on the turned map (%.3f px)" % _roundtrip_gap(view))
+	await _shoot("tilt-1-turned")
+	for step in range(3):
+		_key(view, KEY_UP, true)
+		await _wait(0.6)
+	_check(is_equal_approx(view.pitch, 30.0), "Shift+Up tilts the map 10 degrees at a time (%.2f)" % view.pitch)
+	_check(not (extras.globe.get("_near") as Dictionary).is_empty(), "the near half of a tilted map gets its own sharper texture")
+	_check(_roundtrip_gap(view) < 0.75, "screen and world agree on the tilted map (%.3f px)" % _roundtrip_gap(view))
+	var grab := Vector2(500, 600)
+	var grabbed := view.screen_to_world(grab)
+	var at := grab
+	_button(view, at, MOUSE_BUTTON_LEFT, true)
+	for step in range(6):
+		await _frames(1)
+		at += Vector2(30, -20)
+		_move(view, at, Vector2(30, -20))
+	_button(view, at, MOUSE_BUTTON_LEFT, false)
+	extras.navigator.stop()
+	_check(view.world_to_screen(grabbed).distance_to(at) < 1.5, "a drag keeps the grabbed place under the pointer on a turned, tilted map (%.2f px)" % view.world_to_screen(grabbed).distance_to(at))
+	var wheel_at := Vector2(900, 300)
+	var under := view.screen_to_world(wheel_at)
+	_button(view, wheel_at, MOUSE_BUTTON_WHEEL_UP, true)
+	await _wait(0.5)
+	_check(view.world_to_screen(under).distance_to(wheel_at) < 1.5, "a wheel zoom keeps the place under the pointer (%.2f px)" % view.world_to_screen(under).distance_to(wheel_at))
+	await _shoot("tilt-2-tilted")
+	for step in range(5):
+		_key(view, KEY_UP, true)
+		await _wait(0.6)
+	_check(is_equal_approx(view.pitch, 60.0), "the tilt stops at MapLibre's 60 degrees (%.2f)" % view.pitch)
+	await _shoot("tilt-3-steep")
+	extras.apply_map_settings({"Globe": true})
+	await _frames(3)
+	view.fly_to_lonlat(10.0, 40.0, 3.0, 0.0)
+	await _wait(1.0)
+	_check(extras.globe.globe_shown() and _roundtrip_gap(view) < 1.5, "the globe tilts and turns too (%.3f px)" % _roundtrip_gap(view))
+	await _shoot("tilt-4-globe")
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	view.focus_owner("France")
+	await _frames(3)
+	_check(view.bearing == 0.0 and view.pitch == 0.0 and not extras.globe.active, "opening a game frames it facing north and flat, as React's first framing does")
+
+
+func _pan_gesture(view: MapView, at: Vector2, delta_y: float) -> void:
+	var event := InputEventPanGesture.new()
+	event.position = at
+	event.delta = Vector2(0.0, delta_y)
+	view._unhandled_input(event)
+
+
+func _magnify(view: MapView, at: Vector2, factor: float) -> void:
+	var event := InputEventMagnifyGesture.new()
+	event.position = at
+	event.factor = factor
+	view._unhandled_input(event)
+
+
+func _trackpad_checks() -> void:
+	var view: MapView = main.map_view
+	extras.apply_map_settings({"Globe": false})
+	view.fly_to_lonlat(10.0, 48.0, 4.5, 0.0)
+	await _wait(1.0)
+	var navigator: MapNavigator = extras.navigator
+	var before := view.zoom_level()
+	_pan_gesture(view, Vector2(720, 450), -0.06)
+	await _frames(2)
+	var expected := log(2.0 / (1.0 + exp(-2.0 / 100.0))) / log(2.0)
+	_check(navigator.wheel_type() == "trackpad" and absf(view.zoom_level() - before - expected) < 0.002, "a two-finger scroll is read as a trackpad and zooms at once (%.4f)" % (view.zoom_level() - before))
+	before = view.zoom_level()
+	_magnify(view, Vector2(720, 450), 1.1)
+	await _frames(2)
+	expected = log(2.0 / (1.0 + exp(-100.0 * log(1.1) / 100.0))) / log(2.0)
+	_check(absf(view.zoom_level() - before - expected) < 0.003, "a pinch zooms by MapLibre's trackpad rate (%.4f)" % (view.zoom_level() - before))
+	await _wait(0.6)
+	before = view.zoom_level()
+	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true, false, 0.1)
+	await _frames(1)
+	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true, false, 0.1)
+	await _frames(2)
+	_check(navigator.wheel_type() == "trackpad" and view.zoom_level() > before, "small quick wheel steps from a precision touchpad are read as a trackpad")
+	await _wait(0.6)
+	before = view.zoom_level()
+	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true)
+	await _frames(1)
+	_check(absf(view.zoom_level() - before) < 0.0001, "a lone wheel notch waits 40 ms to learn what it is")
+	await _wait(0.4)
+	_check(navigator.wheel_type() == "wheel", "and is then treated as a mouse wheel")
 
 
 func _finish(code: int) -> void:

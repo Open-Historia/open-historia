@@ -63,8 +63,8 @@ func _upload() -> void:
 	var path := await EditorKit.pick_file(self, false, "", PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp, *.gif, *.svg ; Images"]))
 	if path.is_empty():
 		return
-	var image := Image.new()
-	if image.load(path) != OK or image.get_width() <= 0 or image.get_height() <= 0:
+	var image := WorkshopThumbnail.load_still(path)
+	if image == null or image.get_width() <= 0 or image.get_height() <= 0:
 		await host.alert("That file is not a readable image.")
 		return
 	var texture := ImageTexture.create_from_image(image)

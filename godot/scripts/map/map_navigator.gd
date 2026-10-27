@@ -12,9 +12,18 @@ const DEFAULT_ZOOM_RATE := 1.0 / 100.0
 const MAX_SCALE_PER_FRAME := 2.0
 const WHEEL_EASE_MS := 200.0
 const WHEEL_TIME_ADJUST_MS := 5.0
+const WHEEL_SINGLE_EVENT_MS := 40.0
+const WHEEL_NEW_ACTION_MS := 400.0
+const WHEEL_FINISH_MS := 200.0
 const WHEEL_PIXELS_PER_NOTCH := 100.0
-const TRACKPAD_PIXELS_PER_UNIT := 20.0
+const COCOA_PIXELS_PER_LINE := 40.0
+const COCOA_PRECISE_SCALE := 0.03
+const PINCH_PIXELS := 100.0
 const KEY_PAN_STEP := 100.0
+const KEY_BEARING_STEP := 15.0
+const KEY_PITCH_STEP := 10.0
+const MIN_PITCH := 0.0
+const MAX_PITCH := 60.0
 const KEY_EASE_MS := 300.0
 const BOX_EASE_MS := 500.0
 const BOX_FILL := Color(1, 1, 1, 0.5)
@@ -32,13 +41,19 @@ var _box_overlay: BoxOverlay
 var _inertia: Array[Array] = []
 var _ease: Dictionary = {}
 var _wheel_active := false
+var _wheel_type := ""
+var _wheel_last_value := 0.0
+var _wheel_timeout_at := -1.0
+var _wheel_timeout_around := Vector2.ZERO
+var _wheel_last_event_ms := 0.0
 var _wheel_delta := 0.0
 var _wheel_target := NAN
-var _wheel_start := 0.0
+var _wheel_start_zoom := NAN
+var _wheel_expected := NAN
 var _wheel_easing: CubicBezier
-var _wheel_last_ms := 0.0
 var _wheel_around := Vector2.ZERO
-var _wheel_finished_ms := -1.0
+var _wheel_frame_pending := false
+var _wheel_finish_at := -1.0
 var _prev_ease: Dictionary = {}
 var _default_easing := CubicBezier.new(0.25, 0.1, 0.25, 1.0)
 var _inertia_easing := CubicBezier.new(0.0, 0.0, 0.3, 1.0)
@@ -61,21 +76,14 @@ func handle(event: InputEvent) -> bool:
 		return _on_motion(event as InputEventMouseMotion)
 	if event is InputEventMagnifyGesture:
 		var magnify := event as InputEventMagnifyGesture
-		stop()
 		_mark()
-		_apply_zoom(log(maxf(magnify.factor, 0.0001)) / log(2.0), magnify.position)
+		if magnify.factor > 0.0:
+			wheel_input(-PINCH_PIXELS * log(magnify.factor), magnify.shift_pressed, magnify.position)
 		return true
 	if event is InputEventPanGesture:
 		var pan := event as InputEventPanGesture
-		stop()
 		_mark()
-		var value := pan.delta.y * TRACKPAD_PIXELS_PER_UNIT
-		if absf(value) <= 0.0:
-			return true
-		var scale := MAX_SCALE_PER_FRAME / (1.0 + exp(-absf(value * DEFAULT_ZOOM_RATE)))
-		if value > 0.0:
-			scale = 1.0 / scale
-		_apply_zoom(log(scale) / log(2.0), pan.position)
+		wheel_input(pan.delta.y / COCOA_PRECISE_SCALE, pan.shift_pressed, pan.position)
 		return true
 	if event is InputEventKey:
 		return _on_key(event as InputEventKey)
@@ -84,13 +92,23 @@ func handle(event: InputEvent) -> bool:
 
 func stop() -> void:
 	_ease = {}
-	if _wheel_active:
-		_wheel_active = false
-		_wheel_finished_ms = Time.get_ticks_msec()
+	_wheel_active = false
+	_wheel_frame_pending = false
+	_wheel_finish_at = -1.0
+	_wheel_target = NAN
+	_wheel_expected = NAN
 
 
 func busy() -> bool:
-	return _pressed or _wheel_active or not _ease.is_empty()
+	return _pressed or _wheel_active or _wheel_frame_pending or not _ease.is_empty()
+
+
+func pan_view(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+	_apply_pan(delta, around)
+
+
+func _reduced() -> bool:
+	return extras != null and bool((extras.get("settings") as Dictionary).get("reduceMotion", false))
 
 
 func _mark() -> void:
@@ -98,15 +116,17 @@ func _mark() -> void:
 		globe.mark_interaction()
 
 
+func _now() -> float:
+	return Time.get_ticks_usec() / 1000.0
+
+
 func _on_button(button: InputEventMouseButton) -> bool:
 	if button.button_index == MOUSE_BUTTON_WHEEL_UP or button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		if button.pressed:
 			_mark()
 			var notches := button.factor if button.factor > 0.0 else 1.0
-			var value := WHEEL_PIXELS_PER_NOTCH * notches * (-1.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0)
-			if button.shift_pressed:
-				value /= 4.0
-			_wheel(value, button.position)
+			var per_notch := COCOA_PIXELS_PER_LINE if OS.get_name() == "macOS" else WHEEL_PIXELS_PER_NOTCH
+			wheel_input(per_notch * notches * (-1.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0), button.shift_pressed, button.position)
 		return true
 	if button.button_index == MOUSE_BUTTON_WHEEL_LEFT or button.button_index == MOUSE_BUTTON_WHEEL_RIGHT:
 		return true
@@ -174,7 +194,7 @@ func _on_motion(motion: InputEventMouseMotion) -> bool:
 	if delta == Vector2.ZERO:
 		return true
 	_record(delta)
-	_apply_pan(delta)
+	_apply_pan(delta, point)
 	return true
 
 
@@ -184,6 +204,8 @@ func _on_key(key: InputEventKey) -> bool:
 	if map_view.get_viewport().gui_get_focus_owner() != null:
 		return false
 	var zoom_dir := 0
+	var bearing_dir := 0
+	var pitch_dir := 0
 	var x_dir := 0
 	var y_dir := 0
 	match key.keycode:
@@ -193,20 +215,24 @@ func _on_key(key: InputEventKey) -> bool:
 			zoom_dir = -1
 		KEY_LEFT:
 			if key.shift_pressed:
-				return true
-			x_dir = -1
+				bearing_dir = -1
+			else:
+				x_dir = -1
 		KEY_RIGHT:
 			if key.shift_pressed:
-				return true
-			x_dir = 1
+				bearing_dir = 1
+			else:
+				x_dir = 1
 		KEY_UP:
 			if key.shift_pressed:
-				return true
-			y_dir = -1
+				pitch_dir = 1
+			else:
+				y_dir = -1
 		KEY_DOWN:
 			if key.shift_pressed:
-				return true
-			y_dir = 1
+				pitch_dir = -1
+			else:
+				y_dir = 1
 		_:
 			return false
 	_mark()
@@ -214,7 +240,7 @@ func _on_key(key: InputEventKey) -> bool:
 	var view := map_view.get_viewport_rect().size
 	var ease := {
 		"start": Time.get_ticks_msec(),
-		"duration": KEY_EASE_MS,
+		"duration": 0.0 if _reduced() else KEY_EASE_MS,
 		"curve": "ease_out",
 		"pan": Vector2(-x_dir * KEY_PAN_STEP, -y_dir * KEY_PAN_STEP),
 		"applied": Vector2.ZERO,
@@ -224,8 +250,29 @@ func _on_key(key: InputEventKey) -> bool:
 		var limits := _zoom_limits()
 		ease["zoom_from"] = map_view.zoom_level()
 		ease["zoom_to"] = clampf(map_view.zoom_level() + zoom_dir * (2 if key.shift_pressed else 1), limits.x, limits.y)
+	if bearing_dir != 0:
+		ease["bearing_from"] = map_view.bearing
+		ease["bearing_to"] = normalize_bearing(map_view.bearing + bearing_dir * KEY_BEARING_STEP, map_view.bearing)
+	if pitch_dir != 0:
+		ease["pitch_from"] = map_view.pitch
+		ease["pitch_to"] = clampf(map_view.pitch + pitch_dir * KEY_PITCH_STEP, MIN_PITCH, MAX_PITCH)
 	_ease = ease
 	return true
+
+
+static func wrap_bearing(value: float) -> float:
+	var wrapped := fposmod(value + 180.0, 360.0) - 180.0
+	return 180.0 if wrapped == -180.0 else wrapped
+
+
+static func normalize_bearing(bearing: float, current: float) -> float:
+	var target := wrap_bearing(bearing)
+	var difference := absf(target - current)
+	if absf(target - 360.0 - current) < difference:
+		target -= 360.0
+	if absf(target + 360.0 - current) < difference:
+		target += 360.0
+	return target
 
 
 func _record(delta: Vector2) -> void:
@@ -241,7 +288,7 @@ func _drain() -> void:
 
 func _start_inertia() -> void:
 	_drain()
-	if _inertia.size() < 2:
+	if _inertia.size() < 2 or _reduced():
 		_inertia.clear()
 		return
 	var pan := Vector2.ZERO
@@ -266,77 +313,155 @@ func _start_inertia() -> void:
 	}
 
 
-func _wheel(value: float, at: Vector2) -> void:
+func wheel_input(value: float, shift: bool, at: Vector2) -> void:
 	if not _ease.is_empty():
 		_ease = {}
-	var now := float(Time.get_ticks_msec())
-	_wheel_last_ms = now
-	_wheel_delta -= value
+	var now := _now()
+	var time_delta := now - _wheel_last_event_ms
+	_wheel_last_event_ms = now
+	if value != 0.0 and fmod(value, WHEEL_ZOOM_DELTA) == 0.0:
+		_wheel_type = "wheel"
+	elif value != 0.0 and absf(value) < 4.0:
+		_wheel_type = "trackpad"
+	elif time_delta > WHEEL_NEW_ACTION_MS:
+		_wheel_type = ""
+		_wheel_last_value = value
+		_wheel_timeout_at = now + WHEEL_SINGLE_EVENT_MS
+		_wheel_timeout_around = at
+	elif _wheel_type.is_empty():
+		_wheel_type = "trackpad" if absf(time_delta * value) < 200.0 else "wheel"
+		if _wheel_timeout_at >= 0.0:
+			_wheel_timeout_at = -1.0
+			value += _wheel_last_value
+	if shift and value != 0.0:
+		value /= 4.0
+	if not _wheel_type.is_empty():
+		_wheel_delta -= value
+		if not _wheel_active:
+			_wheel_begin(at)
+
+
+func wheel_type() -> String:
+	return _wheel_type
+
+
+func _wheel_timed_out() -> void:
+	_wheel_timeout_at = -1.0
+	_wheel_type = "wheel"
+	_wheel_delta -= _wheel_last_value
 	if not _wheel_active:
-		if _wheel_delta == 0.0:
-			return
-		_wheel_active = true
-		_wheel_around = at
-		if _wheel_finished_ms < 0.0 or now - _wheel_finished_ms > 200.0:
-			_wheel_target = NAN
-	_wheel_frame()
+		_wheel_begin(_wheel_timeout_around)
+
+
+func _wheel_begin(at: Vector2) -> void:
+	if _wheel_delta == 0.0:
+		return
+	_wheel_active = true
+	_wheel_finish_at = -1.0
+	_wheel_around = at
+	_wheel_frame_pending = true
 
 
 func _wheel_frame() -> void:
+	if not _wheel_frame_pending:
+		return
+	_wheel_frame_pending = false
+	if not _wheel_active and _wheel_finish_at < 0.0:
+		return
 	var current := map_view.zoom_level()
+	if not is_nan(_wheel_expected):
+		var external := current - _wheel_expected
+		if not is_nan(_wheel_start_zoom):
+			_wheel_start_zoom += external
+		if not is_nan(_wheel_target):
+			_wheel_target += external
 	if _wheel_delta != 0.0:
-		var rate := WHEEL_ZOOM_RATE if absf(_wheel_delta) > WHEEL_ZOOM_DELTA else DEFAULT_ZOOM_RATE
+		var rate := WHEEL_ZOOM_RATE if _wheel_type == "wheel" and absf(_wheel_delta) > WHEEL_ZOOM_DELTA else DEFAULT_ZOOM_RATE
 		var scale := MAX_SCALE_PER_FRAME / (1.0 + exp(-absf(_wheel_delta * rate)))
-		if _wheel_delta < 0.0:
+		if _wheel_delta < 0.0 and scale != 0.0:
 			scale = 1.0 / scale
 		var from_zoom := current if is_nan(_wheel_target) else _wheel_target
 		var limits := _zoom_limits()
 		_wheel_target = clampf(from_zoom + log(scale) / log(2.0), limits.x, limits.y)
-		_wheel_start = current
-		_wheel_easing = _smooth_out_easing(WHEEL_EASE_MS)
+		if _wheel_type == "wheel":
+			_wheel_start_zoom = current
+			_wheel_easing = _smooth_out_easing(WHEEL_EASE_MS)
 		_wheel_delta = 0.0
-	var t := minf((float(Time.get_ticks_msec()) - _wheel_last_ms + WHEEL_TIME_ADJUST_MS) / WHEEL_EASE_MS, 1.0)
-	var zoom := lerpf(_wheel_start, _wheel_target, _wheel_easing.at(t))
-	_apply_zoom(zoom - current, _wheel_around)
-	if t >= 1.0:
+	var target := current if is_nan(_wheel_target) else _wheel_target
+	var finished := false
+	var zoom := target
+	if _wheel_type == "wheel" and not is_nan(_wheel_start_zoom) and _wheel_start_zoom != 0.0 and _wheel_easing != null:
+		var t := minf((_now() - _wheel_last_event_ms + WHEEL_TIME_ADJUST_MS) / WHEEL_EASE_MS, 1.0)
+		zoom = lerpf(_wheel_start_zoom, target, _wheel_easing.at(t))
+		if t < 1.0:
+			_wheel_frame_pending = true
+		else:
+			finished = true
+	else:
+		finished = true
+	_wheel_active = true
+	if finished:
 		_wheel_active = false
-		_wheel_finished_ms = Time.get_ticks_msec()
+		_wheel_finish_at = _now() + WHEEL_FINISH_MS
+	_wheel_expected = zoom
+	_apply_zoom(zoom - current, _wheel_around)
 
 
 func _smooth_out_easing(duration: float) -> CubicBezier:
 	var easing := _default_easing
 	if not _prev_ease.is_empty():
 		var previous: CubicBezier = _prev_ease["easing"]
-		var t := (float(Time.get_ticks_msec()) - float(_prev_ease["start"])) / float(_prev_ease["duration"])
+		var t := (_now() - float(_prev_ease["start"])) / float(_prev_ease["duration"])
 		var speed := previous.at(t + 0.01) - previous.at(t)
 		var x := 0.27 / sqrt(speed * speed + 0.0001) * 0.01
 		var y := sqrt(maxf(0.0, 0.27 * 0.27 - x * x))
 		easing = CubicBezier.new(x, y, 0.25, 1.0)
-	_prev_ease = {"start": Time.get_ticks_msec(), "duration": duration, "easing": easing}
+	_prev_ease = {"start": _now(), "duration": duration, "easing": easing}
 	return easing
 
 
 func _process(_delta: float) -> void:
 	if map_view == null:
 		return
-	if _wheel_active:
+	var now := _now()
+	if _wheel_timeout_at >= 0.0 and now >= _wheel_timeout_at:
+		_wheel_timed_out()
+	if _wheel_frame_pending:
 		_wheel_frame()
+	if _wheel_finish_at >= 0.0 and _now() >= _wheel_finish_at:
+		_wheel_finish_at = -1.0
+		_wheel_target = NAN
+		_wheel_expected = NAN
 	if _ease.is_empty():
 		return
 	var duration := float(_ease["duration"])
 	var t := 1.0 if duration <= 0.0 else clampf((float(Time.get_ticks_msec()) - float(_ease["start"])) / duration, 0.0, 1.0)
 	var k := _curve(str(_ease["curve"]), t)
+	var turned := false
+	if _ease.has("bearing_to"):
+		map_view.bearing = wrap_bearing(lerpf(float(_ease["bearing_from"]), float(_ease["bearing_to"]), k))
+		turned = true
+	if _ease.has("pitch_to"):
+		map_view.pitch = clampf(lerpf(float(_ease["pitch_from"]), float(_ease["pitch_to"]), k), MIN_PITCH, MAX_PITCH)
+		turned = true
+	var moved := false
 	if _ease.has("pan"):
 		var want: Vector2 = (_ease["pan"] as Vector2) * k
 		var step: Vector2 = want - (_ease["applied"] as Vector2)
 		_ease["applied"] = want
 		if step != Vector2.ZERO:
-			_apply_pan(step)
+			_apply_pan(step, _ease.get("around", Vector2(-1.0, -1.0)))
+			moved = true
 	if _ease.has("zoom_to"):
 		var zoom := lerpf(float(_ease["zoom_from"]), float(_ease["zoom_to"]), k)
-		_apply_zoom(zoom - map_view.zoom_level(), _ease.get("around", map_view.get_viewport_rect().size * 0.5))
+		if absf(zoom - map_view.zoom_level()) >= 1e-9:
+			_apply_zoom(zoom - map_view.zoom_level(), _ease.get("around", map_view.get_viewport_rect().size * 0.5))
+			moved = true
 	if _ease.has("centre_to"):
 		_apply_centre(_ease, k)
+		moved = true
+	if turned and not moved:
+		map_view.call("_after_camera_move")
 	if t >= 1.0:
 		_ease = {}
 
@@ -352,9 +477,11 @@ func _curve(name: String, t: float) -> float:
 	return _default_easing.at(t)
 
 
-func _apply_pan(delta: Vector2) -> void:
+func _apply_pan(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+	if globe:
+		globe.sync_active()
 	if globe and globe.active:
-		globe.pan_by(delta)
+		globe.pan_by(delta, around)
 		return
 	map_view.camera.position -= delta / map_view.camera.zoom.x
 	map_view.call("_after_camera_move")
@@ -363,6 +490,8 @@ func _apply_pan(delta: Vector2) -> void:
 func _apply_zoom(delta_zoom: float, around: Vector2) -> void:
 	if absf(delta_zoom) < 1e-9:
 		return
+	if globe:
+		globe.sync_active()
 	if globe and globe.active:
 		globe.zoom_around(around, delta_zoom)
 		return
@@ -388,22 +517,40 @@ func _fit_box(a: Vector2, b: Vector2) -> void:
 	if box.size.x <= 0.0 or box.size.y <= 0.0:
 		return
 	var limits := _zoom_limits()
-	var scale := minf(view.x / box.size.x, view.y / box.size.y)
-	var target_zoom := clampf(map_view.zoom_level() + log(scale) / log(2.0), limits.x, limits.y)
 	var ease := {
 		"start": Time.get_ticks_msec(),
-		"duration": BOX_EASE_MS,
+		"duration": 0.0 if _reduced() else BOX_EASE_MS,
 		"curve": "default",
 		"zoom_from_level": map_view.zoom_level(),
-		"zoom_to_level": target_zoom,
 	}
-	if globe and globe.active:
+	if globe and globe.globe_shown():
+		var scale := minf(view.x / box.size.x, view.y / box.size.y)
+		ease["zoom_to_level"] = clampf(map_view.zoom_level() + log(scale) / log(2.0), limits.x, limits.y)
 		ease["centre_from"] = globe.centre_lonlat()
 		ease["centre_to"] = GlobeView.lonlat_of_world(map_view.screen_to_world(box.get_center()))
 		ease["globe"] = true
 	else:
+		var first := map_view.screen_to_world(a)
+		var second := map_view.screen_to_world(b)
+		second.x += MapView.WORLD_WIDTH * roundf((first.x - second.x) / MapView.WORLD_WIDTH)
+		var low := first.min(second)
+		var high := first.max(second)
+		var angle := -deg_to_rad(map_view.bearing)
+		var turned_low := Vector2(INF, INF)
+		var turned_high := Vector2(-INF, -INF)
+		for corner: Vector2 in [low, Vector2(high.x, low.y), high, Vector2(low.x, high.y)]:
+			var turned := corner.rotated(angle)
+			turned_low = turned_low.min(turned)
+			turned_high = turned_high.max(turned)
+		var size := (turned_high - turned_low) * map_view.camera.zoom.x
+		if size.x <= 0.0 or size.y <= 0.0:
+			return
+		var scale := minf(view.x / size.x, view.y / size.y)
+		ease["zoom_to_level"] = clampf(map_view.zoom_level() + log(scale) / log(2.0), limits.x, limits.y)
+		var centre := (low + high) * 0.5
+		centre.x += MapView.WORLD_WIDTH * roundf((map_view.camera.position.x - centre.x) / MapView.WORLD_WIDTH)
 		ease["centre_from"] = map_view.camera.position
-		ease["centre_to"] = map_view.screen_to_world(box.get_center())
+		ease["centre_to"] = centre
 		ease["globe"] = false
 	_ease = ease
 
@@ -417,7 +564,8 @@ func _apply_centre(ease: Dictionary, k: float) -> void:
 		globe.set_centre_zoom(Vector2(lon, lerpf(from.y, to.y, k)), zoom)
 		return
 	map_view.camera.position = from.lerp(to, k)
-	map_view.camera.zoom = Vector2.ONE * clampf(pow(2.0, zoom) / 8.0, MapView.MIN_ZOOM, MapView.MAX_ZOOM)
+	var limits := _zoom_limits()
+	map_view.camera.zoom = Vector2.ONE * pow(2.0, clampf(zoom, limits.x, limits.y)) / 8.0
 	map_view.call("_after_camera_move")
 
 

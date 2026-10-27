@@ -269,6 +269,8 @@ func focus_owner(owner_name: String) -> void:
 	var extent := sqrt(max(_owner_area[owner], 1.0))
 	var target: float = clamp(get_viewport_rect().size.y / (extent * 2.6), MIN_ZOOM, 12.0)
 	camera.zoom = Vector2.ONE * target
+	bearing = 0.0
+	pitch = 0.0
 	_after_camera_move()
 
 
@@ -1026,3 +1028,15 @@ func editor_set_top_layer(layer: Node2D) -> void:
 	_editor_top_layer = layer
 	if layer != null:
 		add_child(layer)
+
+
+var bearing := 0.0
+var pitch := 0.0
+
+
+func view_pan(screen_delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+	if extras and extras.has_method("pan_view"):
+		extras.call("pan_view", screen_delta, around)
+		return
+	camera.position -= screen_delta / camera.zoom.x
+	_after_camera_move()

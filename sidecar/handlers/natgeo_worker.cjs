@@ -441,6 +441,38 @@ class Canvas {
     this.dirty = null;
   }
 
+  compositePattern(image, entry, opacity, originX, originY) {
+    const d = this.dirty;
+    if (!d) return;
+    const size = this.size;
+    const ratio = Number(entry.pixelRatio) || 1;
+    const shownWidth = entry.width / ratio;
+    const shownHeight = entry.height / ratio;
+    for (let y = d[1]; y <= d[3]; y += 1) {
+      const wrappedY = (((originY + y) % shownHeight) + shownHeight) % shownHeight;
+      const sourceY = entry.y + Math.min(entry.height - 1, Math.floor(wrappedY * ratio));
+      for (let x = d[0]; x <= d[2]; x += 1) {
+        const index = y * size + x;
+        const c = this.coverage[index];
+        if (c <= 0) continue;
+        this.coverage[index] = 0;
+        const wrappedX = (((originX + x) % shownWidth) + shownWidth) % shownWidth;
+        const sourceX = entry.x + Math.min(entry.width - 1, Math.floor(wrappedX * ratio));
+        const s = (sourceY * image.width + sourceX) * 4;
+        const a = c * opacity * (image.rgba[s + 3] / 255);
+        if (a <= 0) continue;
+        const o = index * 4;
+        const keep = 1 - a;
+        this.rgba[o] = (image.rgba[s] / 255) * a + this.rgba[o] * keep;
+        this.rgba[o + 1] = (image.rgba[s + 1] / 255) * a + this.rgba[o + 1] * keep;
+        this.rgba[o + 2] = (image.rgba[s + 2] / 255) * a + this.rgba[o + 2] * keep;
+        this.rgba[o + 3] = a + this.rgba[o + 3] * keep;
+        this.used = true;
+      }
+    }
+    this.dirty = null;
+  }
+
   png() {
     if (!this.used) return null;
     const size = this.size;
@@ -539,32 +571,311 @@ const dashed = (line, pattern, width) => {
   return out;
 };
 
-const lineCenter = (line) => {
-  let total = 0;
-  for (let i = 1; i < line.length; i += 1) total += Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]);
-  if (total <= 0) return { point: line[0], angle: 0, length: 0 };
-  let walked = 0;
-  for (let i = 1; i < line.length; i += 1) {
-    const [ax, ay] = line[i - 1];
-    const [bx, by] = line[i];
-    const step = Math.hypot(bx - ax, by - ay);
-    if (walked + step >= total / 2) {
-      const t = step > 0 ? (total / 2 - walked) / step : 0;
-      let angle = (Math.atan2(by - ay, bx - ax) * 180) / Math.PI;
-      if (angle > 90) angle -= 180;
-      if (angle < -90) angle += 180;
-      return { point: [ax + (bx - ax) * t, ay + (by - ay) * t], angle, length: total };
-    }
-    walked += step;
+const decodePng = (bytes) => {
+  const buf = Buffer.from(bytes);
+  if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+  let pos = 8;
+  let width = 0;
+  let height = 0;
+  let depth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  let palette = null;
+  let transparency = null;
+  const data = [];
+  while (pos + 8 <= buf.length) {
+    const length = buf.readUInt32BE(pos);
+    const type = buf.toString("ascii", pos + 4, pos + 8);
+    const body = buf.subarray(pos + 8, pos + 8 + length);
+    if (type === "IHDR") {
+      width = body.readUInt32BE(0);
+      height = body.readUInt32BE(4);
+      depth = body[8];
+      colorType = body[9];
+      interlace = body[12];
+    } else if (type === "PLTE") palette = body;
+    else if (type === "tRNS") transparency = body;
+    else if (type === "IDAT") data.push(body);
+    else if (type === "IEND") break;
+    pos += 12 + length;
   }
-  return { point: line[line.length - 1], angle: 0, length: total };
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+  if (depth !== 8 || interlace !== 0 || !channels || !width || !height) return null;
+  const raw = zlib.inflateSync(Buffer.concat(data));
+  const stride = width * channels;
+  const pixels = Buffer.alloc(stride * height);
+  let previous = Buffer.alloc(stride);
+  for (let y = 0; y < height; y += 1) {
+    const start = y * (stride + 1);
+    const filter = raw[start];
+    const out = pixels.subarray(y * stride, (y + 1) * stride);
+    for (let i = 0; i < stride; i += 1) {
+      const left = i >= channels ? out[i - channels] : 0;
+      const up = previous[i];
+      const corner = i >= channels ? previous[i - channels] : 0;
+      let value = raw[start + 1 + i];
+      if (filter === 1) value += left;
+      else if (filter === 2) value += up;
+      else if (filter === 3) value += (left + up) >> 1;
+      else if (filter === 4) {
+        const p = left + up - corner;
+        const pa = Math.abs(p - left);
+        const pb = Math.abs(p - up);
+        const pc = Math.abs(p - corner);
+        value += pa <= pb && pa <= pc ? left : pb <= pc ? up : corner;
+      }
+      out[i] = value & 0xff;
+    }
+    previous = out;
+  }
+  const rgba = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    const s = i * channels;
+    const d = i * 4;
+    if (colorType === 6) {
+      rgba[d] = pixels[s];
+      rgba[d + 1] = pixels[s + 1];
+      rgba[d + 2] = pixels[s + 2];
+      rgba[d + 3] = pixels[s + 3];
+    } else if (colorType === 2) {
+      rgba[d] = pixels[s];
+      rgba[d + 1] = pixels[s + 1];
+      rgba[d + 2] = pixels[s + 2];
+      rgba[d + 3] = 255;
+    } else if (colorType === 0 || colorType === 4) {
+      rgba[d] = pixels[s];
+      rgba[d + 1] = pixels[s];
+      rgba[d + 2] = pixels[s];
+      rgba[d + 3] = colorType === 4 ? pixels[s + 1] : 255;
+    } else if (colorType === 3 && palette) {
+      const k = pixels[s];
+      rgba[d] = palette[k * 3];
+      rgba[d + 1] = palette[k * 3 + 1];
+      rgba[d + 2] = palette[k * 3 + 2];
+      rgba[d + 3] = transparency && k < transparency.length ? transparency[k] : 255;
+    }
+  }
+  return { width, height, rgba };
 };
 
 const fieldText = (template, props) => String(template ?? "").replace(/\{\s*([^}]+?)\s*\}/g, (_, key) => (props[key] === undefined || props[key] === null ? "" : String(props[key]))).trim();
 
-let styleLayers = [];
+const zoomFunction = (value) => (
+  value && typeof value === "object" && !Array.isArray(value) && Array.isArray(value.stops) && value.property === undefined
+    ? { stops: value.stops, base: value.base ?? 1, type: value.type ?? "" }
+    : null
+);
 
-const render = ({ z, x, y, pbf }) => {
+const roundPx = (value) => Math.round(value * 100) / 100;
+
+const clipLine = (lines, x1, y1, x2, y2) => {
+  const clipped = [];
+  for (const line of lines) {
+    let current;
+    for (let i = 0; i < line.length - 1; i += 1) {
+      let p0 = line[i];
+      let p1 = line[i + 1];
+      if (p0[0] < x1 && p1[0] < x1) continue;
+      else if (p0[0] < x1) p0 = [x1, Math.round(p0[1] + (p1[1] - p0[1]) * ((x1 - p0[0]) / (p1[0] - p0[0])))];
+      else if (p1[0] < x1) p1 = [x1, Math.round(p0[1] + (p1[1] - p0[1]) * ((x1 - p0[0]) / (p1[0] - p0[0])))];
+      if (p0[1] < y1 && p1[1] < y1) continue;
+      else if (p0[1] < y1) p0 = [Math.round(p0[0] + (p1[0] - p0[0]) * ((y1 - p0[1]) / (p1[1] - p0[1]))), y1];
+      else if (p1[1] < y1) p1 = [Math.round(p0[0] + (p1[0] - p0[0]) * ((y1 - p0[1]) / (p1[1] - p0[1]))), y1];
+      if (p0[0] >= x2 && p1[0] >= x2) continue;
+      else if (p0[0] >= x2) p0 = [x2, Math.round(p0[1] + (p1[1] - p0[1]) * ((x2 - p0[0]) / (p1[0] - p0[0])))];
+      else if (p1[0] >= x2) p1 = [x2, Math.round(p0[1] + (p1[1] - p0[1]) * ((x2 - p0[0]) / (p1[0] - p0[0])))];
+      if (p0[1] >= y2 && p1[1] >= y2) continue;
+      else if (p0[1] >= y2) p0 = [Math.round(p0[0] + (p1[0] - p0[0]) * ((y2 - p0[1]) / (p1[1] - p0[1]))), y2];
+      else if (p1[1] >= y2) p1 = [Math.round(p0[0] + (p1[0] - p0[0]) * ((y2 - p0[1]) / (p1[1] - p0[1]))), y2];
+      const last = current ? current[current.length - 1] : null;
+      if (!current || last[0] !== p0[0] || last[1] !== p0[1]) {
+        current = [p0];
+        clipped.push(current);
+      }
+      current.push(p1);
+    }
+  }
+  return clipped;
+};
+
+const ringArea = (ring) => {
+  let sum = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) sum += (ring[j][0] - ring[i][0]) * (ring[i][1] + ring[j][1]);
+  return sum;
+};
+
+const classifyRings = (rings) => {
+  const polygons = [];
+  let polygon = null;
+  let ccw;
+  for (const ring of rings) {
+    const area = ringArea(ring);
+    if (area === 0) continue;
+    if (ccw === undefined) ccw = area < 0;
+    if (ccw === area < 0) {
+      polygon = [ring];
+      polygons.push(polygon);
+    } else if (polygon) polygon.push(ring);
+  }
+  return polygons;
+};
+
+const pointToSegmentSquared = (px, py, a, b) => {
+  let x = a[0];
+  let y = a[1];
+  let dx = b[0] - x;
+  let dy = b[1] - y;
+  if (dx !== 0 || dy !== 0) {
+    const t = ((px - x) * dx + (py - y) * dy) / (dx * dx + dy * dy);
+    if (t > 1) {
+      x = b[0];
+      y = b[1];
+    } else if (t > 0) {
+      x += dx * t;
+      y += dy * t;
+    }
+  }
+  dx = px - x;
+  dy = py - y;
+  return dx * dx + dy * dy;
+};
+
+const signedDistance = (x, y, polygon) => {
+  let inside = false;
+  let best = Infinity;
+  for (const ring of polygon) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const a = ring[i];
+      const b = ring[j];
+      if ((a[1] > y) !== (b[1] > y) && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+      best = Math.min(best, pointToSegmentSquared(x, y, a, b));
+    }
+  }
+  return (inside ? 1 : -1) * Math.sqrt(best);
+};
+
+const poleOfInaccessibility = (polygon, precision) => {
+  const outer = polygon[0];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of outer) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const cellSize = Math.min(width, height);
+  let h = cellSize / 2;
+  if (cellSize === 0) return [minX, minY];
+  const cell = (x, y, half) => {
+    const d = signedDistance(x, y, polygon);
+    return { x, y, h: half, d, max: d + half * Math.SQRT2 };
+  };
+  const queue = [];
+  const push = (c) => {
+    queue.push(c);
+    queue.sort((a, b) => b.max - a.max);
+  };
+  for (let x = minX; x < maxX; x += cellSize) for (let y = minY; y < maxY; y += cellSize) push(cell(x + h, y + h, h));
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0, j = outer.length - 1; i < outer.length; j = i, i += 1) {
+    const f = outer[i][0] * outer[j][1] - outer[j][0] * outer[i][1];
+    cx += (outer[i][0] + outer[j][0]) * f;
+    cy += (outer[i][1] + outer[j][1]) * f;
+    area += f * 3;
+  }
+  let best = area === 0 ? cell(outer[0][0], outer[0][1], 0) : cell(cx / area, cy / area, 0);
+  let guard = 0;
+  while (queue.length && guard < 4000) {
+    guard += 1;
+    const current = queue.shift();
+    if (current.d > best.d) best = current;
+    if (current.max - best.d <= precision) continue;
+    h = current.h / 2;
+    push(cell(current.x - h, current.y - h, h));
+    push(cell(current.x + h, current.y - h, h));
+    push(cell(current.x - h, current.y + h, h));
+    push(cell(current.x + h, current.y + h, h));
+  }
+  return [best.x, best.y];
+};
+
+const numberOf = (value, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const pairOf = (value) => (Array.isArray(value) && value.length >= 2 ? [numberOf(value[0], 0), numberOf(value[1], 0)] : [0, 0]);
+
+let styleLayers = [];
+let sprite = null;
+
+const symbolRecord = (layer, index, zoom, props, placement, text, iconName) => {
+  const layout = layer.layout ?? {};
+  const paint = layer.paint ?? {};
+  const along = placement !== "point";
+  const font = evalValue(layout["text-font"] ?? ["Open Sans Regular", "Arial Unicode MS Regular"], zoom, props);
+  const textAlignment = String(evalValue(layout["text-rotation-alignment"] ?? "auto", zoom, props));
+  const iconAlignment = String(evalValue(layout["icon-rotation-alignment"] ?? "auto", zoom, props));
+  const record = {
+    layer: index,
+    minzoom: layer.minzoom ?? 0,
+    maxzoom: layer.maxzoom ?? 24,
+    placement,
+    text,
+    transform: String(evalValue(layout["text-transform"] ?? "none", zoom, props)),
+    font: Array.isArray(font) ? font.map(String).join(",") : String(font ?? ""),
+    size: numberOf(evalValue(layout["text-size"] ?? 16, zoom, props), 16),
+    layoutSize: numberOf(evalValue(layout["text-size"] ?? 16, zoom + 1, props), 16),
+    sizeFn: zoomFunction(layout["text-size"]),
+    maxWidth: numberOf(evalValue(layout["text-max-width"] ?? 10, zoom, props), 10),
+    lineHeight: numberOf(evalValue(layout["text-line-height"] ?? 1.2, zoom, props), 1.2),
+    spacing: numberOf(evalValue(layout["text-letter-spacing"] ?? 0, zoom, props), 0),
+    justify: String(evalValue(layout["text-justify"] ?? "center", zoom, props)),
+    anchor: String(evalValue(layout["text-anchor"] ?? "center", zoom, props)),
+    offset: pairOf(evalValue(layout["text-offset"] ?? [0, 0], zoom, props)),
+    padding: numberOf(evalValue(layout["text-padding"] ?? 2, zoom, props), 2),
+    overlap: Boolean(evalValue(layout["text-allow-overlap"] ?? false, zoom, props)),
+    ignore: Boolean(evalValue(layout["text-ignore-placement"] ?? false, zoom, props)),
+    optional: Boolean(evalValue(layout["text-optional"] ?? false, zoom, props)),
+    rotate: numberOf(evalValue(layout["text-rotate"] ?? 0, zoom, props), 0),
+    maxAngle: numberOf(evalValue(layout["text-max-angle"] ?? 45, zoom, props), 45),
+    keepUpright: Boolean(evalValue(layout["text-keep-upright"] ?? true, zoom, props)),
+    alongLine: textAlignment === "map" || (textAlignment === "auto" && along),
+    color: colorOf(evalValue(paint["text-color"] ?? "#000000", zoom, props)),
+    halo: colorOf(evalValue(paint["text-halo-color"] ?? "rgba(0,0,0,0)", zoom, props)),
+    haloWidth: numberOf(evalValue(paint["text-halo-width"] ?? 0, zoom, props), 0),
+    haloBlur: numberOf(evalValue(paint["text-halo-blur"] ?? 0, zoom, props), 0),
+    opacity: numberOf(evalValue(paint["text-opacity"] ?? 1, zoom, props), 1),
+    icon: null,
+  };
+  if (iconName) {
+    record.icon = {
+      name: iconName,
+      size: numberOf(evalValue(layout["icon-size"] ?? 1, zoom, props), 1),
+      layoutSize: numberOf(evalValue(layout["icon-size"] ?? 1, zoom + 1, props), 1),
+      sizeFn: zoomFunction(layout["icon-size"]),
+      anchor: String(evalValue(layout["icon-anchor"] ?? "center", zoom, props)),
+      offset: pairOf(evalValue(layout["icon-offset"] ?? [0, 0], zoom, props)),
+      padding: numberOf(evalValue(layout["icon-padding"] ?? 2, zoom, props), 2),
+      overlap: Boolean(evalValue(layout["icon-allow-overlap"] ?? false, zoom, props)),
+      ignore: Boolean(evalValue(layout["icon-ignore-placement"] ?? false, zoom, props)),
+      optional: Boolean(evalValue(layout["icon-optional"] ?? false, zoom, props)),
+      rotate: numberOf(evalValue(layout["icon-rotate"] ?? 0, zoom, props), 0),
+      alongLine: iconAlignment === "map" || (iconAlignment === "auto" && along),
+      opacity: numberOf(evalValue(paint["icon-opacity"] ?? 1, zoom, props), 1),
+    };
+  }
+  return record;
+};
+
+const render = ({ z, x, y, pbf, labelsOnly }) => {
   const tile = decodeTile(new Uint8Array(pbf));
   const zoom = z;
   const fills = new Canvas(TILE_PX);
@@ -574,29 +885,40 @@ const render = ({ z, x, y, pbf }) => {
   for (let index = 0; index < styleLayers.length; index += 1) {
     const layer = styleLayers[index];
     if (layer.layout?.visibility === "none") continue;
-    if (layer.minzoom !== undefined && zoom < layer.minzoom) continue;
+    if (layer.minzoom !== undefined && zoom < Math.floor(layer.minzoom)) continue;
     if (layer.maxzoom !== undefined && zoom >= layer.maxzoom) continue;
     const source = tile[layer["source-layer"]];
     if (!source) continue;
     const scale = TILE_PX / source.extent;
+    if (layer.type !== "symbol" && labelsOnly) continue;
     if (layer.type === "fill") {
       const paint = layer.paint ?? {};
-      if (paint["fill-pattern"] !== undefined || paint["fill-color"] === undefined) continue;
+      const patterned = paint["fill-pattern"] !== undefined;
+      if (!patterned && paint["fill-color"] === undefined) continue;
       let painted = false;
       let color = null;
+      let entry = null;
       let opacity = 1;
+      let first = true;
       for (const feature of source.features) {
         if (feature.type !== 3) continue;
         const props = propertiesOf(source, feature);
         if (!evalFilter(layer.filter, props, feature.type, feature.id)) continue;
-        if (!color) {
-          color = colorOf(evalValue(paint["fill-color"], zoom, props));
+        if (first) {
+          first = false;
           opacity = Number(evalValue(paint["fill-opacity"] ?? 1, zoom, props));
+          if (patterned) {
+            const name = fieldText(evalValue(paint["fill-pattern"], zoom, props), props);
+            entry = sprite && sprite.json ? sprite.json[name] : null;
+          } else color = colorOf(evalValue(paint["fill-color"], zoom, props));
         }
+        if (patterned ? !entry : !color) continue;
         fills.fillRings(geometryOf(feature, scale));
         painted = true;
       }
-      if (painted && color) fills.composite(color, Number.isFinite(opacity) ? opacity : 1);
+      if (!painted) continue;
+      if (patterned && entry && sprite.image) fills.compositePattern(sprite.image, entry, Number.isFinite(opacity) ? opacity : 1, x * TILE_PX, y * TILE_PX);
+      else if (color) fills.composite(color, Number.isFinite(opacity) ? opacity : 1);
     } else if (layer.type === "line") {
       const paint = layer.paint ?? {};
       if (paint["line-pattern"] !== undefined) continue;
@@ -625,67 +947,67 @@ const render = ({ z, x, y, pbf }) => {
       if (painted && color) lines.composite(color, Number.isFinite(opacity) ? opacity : 1);
     } else if (layer.type === "symbol") {
       const layout = layer.layout ?? {};
-      const paint = layer.paint ?? {};
-      if (!layout["text-field"]) continue;
-      const placement = evalValue(layout["symbol-placement"] ?? "point", zoom, {});
+      const hasText = layout["text-field"] !== undefined;
+      const hasIcon = layout["icon-image"] !== undefined;
+      if (!hasText && !hasIcon) continue;
+      const placement = String(evalValue(layout["symbol-placement"] ?? "point", zoom, {}));
+      const extent = source.extent;
+      const toPx = TILE_PX / extent;
       for (const feature of source.features) {
         const props = propertiesOf(source, feature);
         if (!evalFilter(layer.filter, props, feature.type, feature.id)) continue;
-        const text = fieldText(evalValue(layout["text-field"], zoom, props), props);
-        if (!text) continue;
-        const parts = geometryOf(feature, 1 / source.extent);
-        if (!parts.length || !parts[0].length) continue;
-        let at = parts[0][0];
-        let angle = 0;
+        const text = hasText ? fieldText(evalValue(layout["text-field"], zoom, props), props) : "";
+        const iconName = hasIcon ? fieldText(evalValue(layout["icon-image"], zoom, props), props) : "";
+        if (!text && !iconName) continue;
         if (placement === "line" || placement === "line-center") {
-          if (feature.type !== 2) continue;
-          let best = null;
-          for (const part of parts) {
-            const center = lineCenter(part);
-            if (!best || center.length > best.length) best = center;
-          }
-          at = best.point;
-          angle = best.angle;
+          if (feature.type !== 2 && feature.type !== 3) continue;
+          const raw = geometryOf(feature, 1);
+          const parts = placement === "line" ? clipLine(raw, 0, 0, extent, extent) : raw.filter((part) => part.length > 1);
+          if (!parts.length) continue;
+          const record = symbolRecord(layer, index, zoom, props, placement, text, iconName);
+          record.lines = parts.map((part) => part.flatMap(([px, py]) => [roundPx(px * toPx), roundPx(py * toPx)]));
+          record.symbolSpacing = numberOf(evalValue(layout["symbol-spacing"] ?? 250, zoom, props), 250);
+          record.tile = [z, x, y];
+          labels.push(record);
+          continue;
         }
-        const mx = (x + at[0]) / n;
-        const my = (y + at[1]) / n;
-        if (at[0] < 0 || at[0] >= 1 || at[1] < 0 || at[1] >= 1) continue;
-        const lon = mx * 360 - 180;
-        const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180) / Math.PI;
-        const font = evalValue(layout["text-font"] ?? ["Noto Sans Regular"], zoom, props);
-        labels.push({
-          lon,
-          lat,
-          angle,
-          line: placement === "line" || placement === "line-center",
-          text,
-          size: Number(evalValue(layout["text-size"] ?? 16, zoom, props)) || 16,
-          font: Array.isArray(font) ? String(font[0] ?? "") : String(font ?? ""),
-          color: colorOf(evalValue(paint["text-color"] ?? "#000000", zoom, props)),
-          halo: colorOf(evalValue(paint["text-halo-color"] ?? "rgba(0,0,0,0)", zoom, props)),
-          haloWidth: Number(evalValue(paint["text-halo-width"] ?? 0, zoom, props)) || 0,
-          opacity: Number(evalValue(paint["text-opacity"] ?? 1, zoom, props)),
-          transform: String(evalValue(layout["text-transform"] ?? "none", zoom, props)),
-          spacing: Number(evalValue(layout["text-letter-spacing"] ?? 0, zoom, props)) || 0,
-          maxWidth: Number(evalValue(layout["text-max-width"] ?? 10, zoom, props)) || 10,
-          lineHeight: Number(evalValue(layout["text-line-height"] ?? 1.2, zoom, props)) || 1.2,
-          offset: evalValue(layout["text-offset"] ?? [0, 0], zoom, props),
-          anchor: String(evalValue(layout["text-anchor"] ?? "center", zoom, props)),
-          padding: Number(evalValue(layout["text-padding"] ?? 2, zoom, props)) || 0,
-          overlap: Boolean(evalValue(layout["text-allow-overlap"] ?? false, zoom, props)),
-          priority: index,
-          minzoom: layer.minzoom ?? 0,
-          maxzoom: layer.maxzoom ?? 24,
-        });
+        const anchors = [];
+        const parts = geometryOf(feature, 1);
+        if (feature.type === 3) {
+          for (const polygon of classifyRings(parts)) anchors.push(poleOfInaccessibility(polygon, 16 * (extent / 4096)));
+        } else if (feature.type === 2) {
+          for (const part of parts) if (part.length) anchors.push(part[0]);
+        } else {
+          for (const part of parts) for (const point of part) anchors.push(point);
+        }
+        for (const at of anchors) {
+          if (at[0] < 0 || at[0] >= extent || at[1] < 0 || at[1] >= extent) continue;
+          const mx = (x + at[0] / extent) / n;
+          const my = (y + at[1] / extent) / n;
+          const record = symbolRecord(layer, index, zoom, props, placement, text, iconName);
+          record.lon = mx * 360 - 180;
+          record.lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180) / Math.PI;
+          labels.push(record);
+        }
       }
     }
   }
-  return { fills: fills.png(), lines: lines.png(), labels };
+  return { fills: labelsOnly ? null : fills.png(), lines: labelsOnly ? null : lines.png(), labels };
 };
 
 parentPort.on("message", (message) => {
   if (message?.type === "style") {
     styleLayers = Array.isArray(message.layers) ? message.layers : [];
+    return;
+  }
+  if (message?.type === "sprite") {
+    let image = null;
+    try {
+      image = message.png ? decodePng(message.png) : null;
+    } catch {
+      image = null;
+    }
+    sprite = { json: message.json && typeof message.json === "object" ? message.json : {}, image };
     return;
   }
   if (message?.type !== "tile") return;

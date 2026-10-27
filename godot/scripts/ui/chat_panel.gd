@@ -2159,10 +2159,9 @@ static func flag_texture(path: String, height: int) -> Texture2D:
 	var key := "raster:%s" % path
 	if _cache.has(key):
 		return _cache[key]
-	var image := Image.load_from_file(path)
-	if image == null or image.is_empty():
+	var texture := ImageLoader.texture_from_file(path)
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_cache[key] = texture
 	return texture
 

@@ -361,12 +361,15 @@ func _row_toggle(panel: Node, caption: String) -> Button:
 
 func _audit_tools() -> void:
 	workshop.close_panel()
-	workshop.zoom_to(["FRA.8_1"], 6.0)
+	workshop.zoom_to(["ESP.2_1"], 6.0)
 	await _wait(1.0)
-	var centre := _screen_of_region("FRA.8_1")
+	await _until(func() -> bool: return workshop.map.ready_to_draw and not workshop._rebaking, 30.0)
+	var centre := _screen_of_region("ESP.2_1")
+	await _until(func() -> bool: return workshop.map.pick(centre - workshop.map.global_position) >= 0, 10.0)
 	workshop.set_tool("select")
+	await _hover(centre + Vector2(1, 0))
 	await _hover(centre)
-	_check("Select shows a hand over a region", workshop.map._overlay.mouse_default_cursor_shape == Control.CURSOR_POINTING_HAND)
+	_check("Select shows a hand over a region", workshop.map._overlay.mouse_default_cursor_shape == Control.CURSOR_POINTING_HAND, "pick %d ready %s drag %s" % [workshop.map.pick(centre - workshop.map.global_position), str(workshop.map.ready_to_draw), workshop.map._drag])
 	workshop.set_tool("draw")
 	await _hover(centre + Vector2(3, 0))
 	_check("drawing tools show a crosshair", workshop.map._overlay.mouse_default_cursor_shape == Control.CURSOR_CROSS)
@@ -375,11 +378,11 @@ func _audit_tools() -> void:
 	var before := _zones().size()
 	var circle: Array = []
 	var middle := centre + Vector2(140, 10)
-	for step in range(25):
-		circle.append(middle + Vector2(cos(TAU * step / 24.0), sin(TAU * step / 24.0)) * 55.0)
+	for step in range(13):
+		circle.append(middle + Vector2(cos(TAU * step / 12.0), sin(TAU * step / 12.0)) * 60.0)
 	await _shift_drag(circle)
 	var made := await _until(func() -> bool: return _zones().size() == before + 1, 10.0)
-	_check("Shift-drag draws a climate zone freehand", made and ((_zones().back() as Dictionary).get("rings", [[]])[0] as Array).size() >= 10, str(_zones().size()))
+	_check("Shift-drag draws a climate zone freehand", made and ((_zones().back() as Dictionary).get("rings", [[]])[0] as Array).size() >= 8, str(_zones().size()))
 	await _frames(4)
 	if made:
 		var zone_id := str((_zones().back() as Dictionary).get("id", ""))
@@ -411,11 +414,23 @@ func _audit_tools() -> void:
 			return false, 10.0)
 		_check("dragging a picked zone's edge adds a point", inserted)
 	await _shoot("ws-38-war-freehand")
+	if made:
+		await workshop.request("workshop.war.remove", {"kind": "climate", "rowId": str((_zones().back() as Dictionary).get("id", ""))})
+	workshop.war_selection = {}
+	workshop.war_tab = "terrain"
 	workshop.set_tool("select")
 	workshop.close_panel()
 	await _frames(3)
 	var striped := await _until(func() -> bool: return workshop.map.region_overlays.stripes.size() > 0, 20.0)
 	_check("disputed regions are striped", striped, str(workshop.map.region_overlays.stripes.size()))
+	if await _until(func() -> bool: return not workshop.map.striped.is_empty(), 10.0):
+		var striped_index: int = workshop.map.striped.keys()[0]
+		_check("a disputed region's own fill gives way to its stripes", workshop.map.fill_color(striped_index).a == 0.0)
+		workshop.zoom_to([workshop.map.ids[striped_index]], 7.0)
+		await _wait(1.4)
+		await _shoot("ws-41-stripes")
+	else:
+		_check("a disputed region's own fill gives way to its stripes", false, "no striped regions known to the map")
 	await workshop.request("workshop.group.create", {"name": "Testers", "selection": ["FRA.8_1", "FRA.1_1"]})
 	var outlined := await _until(func() -> bool: return workshop.map.region_overlays.outlines.size() > 0, 20.0)
 	_check("a group's area is outlined", outlined)
@@ -436,15 +451,19 @@ func _audit_tools() -> void:
 		await _frames(2)
 	workshop.close_panel()
 	workshop.set_tool("move")
+	await _until(func() -> bool: return workshop.map.ready_to_draw and not workshop._rebaking, 30.0)
 	await _frames(2)
-	var target := _screen_of_region("FRA.8_1")
+	workshop.zoom_to(["ESP.2_1"], 6.0)
+	await _wait(1.0)
+	var target := _screen_of_region("ESP.2_1")
+	await _until(func() -> bool: return workshop.map.pick(target - workshop.map.global_position) >= 0, 10.0)
 	_mouse(target, true)
 	await _frames(1)
 	_drag_to(target, target + Vector2(10, 6))
 	await _frames(1)
 	_drag_to(target + Vector2(10, 6), target + Vector2(24, 14))
 	var previewing := await _until(func() -> bool: return not workshop.map.move_rings.is_empty(), 10.0)
-	_check("Move shows the region while it is dragged", previewing)
+	_check("Move shows the region while it is dragged", previewing, "drag %s tool %s start %s target %s pick %d" % [workshop.map._drag, workshop.map.tool, str(workshop.map._drag_start), str(target - workshop.map.global_position), workshop.map.pick(workshop.map._drag_start)])
 	await _shoot("ws-40-move-preview")
 	_mouse(target + Vector2(24, 14), false)
 	await _wait(1.0)
@@ -467,6 +486,7 @@ func _audit_tools() -> void:
 		root.push_input(escape)
 		await _frames(3)
 		_check("Escape closes a popup even while typing in it", workshop._popup == null)
+	await workshop.request("workshop.clipboard.copy", {"ids": ["FRA.8_1"]})
 	workshop.open_panel_named("clipboard")
 	await _frames(3)
 	var simplify: CheckBox = null
@@ -481,6 +501,8 @@ func _audit_tools() -> void:
 		simplify.button_pressed = true
 	workshop.close_panel()
 	await _frames(2)
+	var animated := WorkshopUI.flag_texture("data:image/gif;base64,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", "", 40)
+	_check("an animated GIF flag plays every frame", animated is AnimatedTexture and (animated as AnimatedTexture).frames == 3 and is_equal_approx((animated as AnimatedTexture).get_frame_duration(1), 0.3))
 
 
 func _edit_tools() -> void:

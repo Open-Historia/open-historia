@@ -16,6 +16,8 @@ var form: Dictionary = {}
 
 
 func _initialize() -> void:
+	if OS.get_environment("OH_EDITOR_PICK").is_empty():
+		OS.set_environment("OH_EDITOR_PICK", "*=" + ProjectSettings.globalize_path("res://").path_join("../../public/icon-192.png").simplify_path())
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()

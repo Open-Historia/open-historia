@@ -13,7 +13,7 @@ const MAX_ANCESTOR_LEVELS = 6;
 const GAME_PICK_PREFIX = "map_basemap_pick:";
 const STARTING_PICK_STORED = "start";
 const BACKGROUND_SEA = "#0b1a2b";
-const NATGEO_CACHE_VERSION = "v1";
+const NATGEO_CACHE_VERSION = "v2";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion:reduce)";
 const BASEMAP_GROUP_LABELS = { own: "This scenario's maps", builtin: "Built-in maps" };
@@ -757,6 +757,232 @@ export const register = (ctx) => {
 
   const safeName = (name) => (clean(name) || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
 
+  let natgeoWorker = null;
+  let natgeoStyle = null;
+  let natgeoCall = 0;
+  let natgeoSprite = null;
+  const natgeoWaiting = new Map();
+  const natgeoGlyphCache = new Map();
+  const natgeoDir = () => path.join(cacheDir, "natgeo", NATGEO_CACHE_VERSION);
+  const natgeoAssets = () => path.join(cacheDir, "natgeo", "assets");
+
+  const cachedDownload = async (url, file) => {
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+    const response = await fetch(url);
+    if (!response.ok) {
+      const error = new Error(`The National Geographic map answered ${response.status}.`);
+      error.status = response.status;
+      throw error;
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+    return bytes;
+  };
+
+  const loadNatgeoStyle = async () => {
+    if (natgeoStyle) return natgeoStyle;
+    const file = path.join(natgeoAssets(), "style.json");
+    let source = null;
+    if (fs.existsSync(file)) {
+      try {
+        source = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch {
+        source = null;
+      }
+    }
+    if (!source) {
+      const response = await fetch(engine.mxNatGeo.NATGEO_VECTOR_STYLE_URL);
+      if (!response.ok) throw new Error(`The National Geographic style answered ${response.status}.`);
+      source = await response.json();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(source));
+    }
+    const built = engine.mxNatGeo.buildNatGeoDarkStyle(source);
+    const vector = Object.entries(built.sources ?? {}).find(([, value]) => value?.type === "vector");
+    const template = list(vector?.[1]?.tiles)[0] ?? "";
+    natgeoStyle = {
+      template,
+      sprite: typeof built.sprite === "string" ? built.sprite : "",
+      glyphs: typeof built.glyphs === "string" ? built.glyphs : "",
+      maxzoom: Number(vector?.[1]?.maxzoom) || 16,
+      layers: list(built.layers).filter((layer) => layer?.source === vector?.[0] && ["fill", "line", "symbol"].includes(layer?.type)),
+    };
+    return natgeoStyle;
+  };
+
+  const loadNatgeoSprite = async () => {
+    if (natgeoSprite) return natgeoSprite;
+    const style = await loadNatgeoStyle();
+    if (!style.sprite) {
+      natgeoSprite = { json: {}, png: null };
+      return natgeoSprite;
+    }
+    const [jsonBytes, png] = await Promise.all([
+      cachedDownload(`${style.sprite}.json`, path.join(natgeoAssets(), "sprite.json")),
+      cachedDownload(`${style.sprite}.png`, path.join(natgeoAssets(), "sprite.png")),
+    ]);
+    natgeoSprite = { json: JSON.parse(jsonBytes.toString("utf8")), png };
+    return natgeoSprite;
+  };
+
+  const readVarint = (buf, state) => {
+    let result = 0;
+    let mul = 1;
+    let byte = 0;
+    do {
+      byte = buf[state.pos];
+      state.pos += 1;
+      result += (byte & 0x7f) * mul;
+      mul *= 128;
+    } while (byte & 0x80 && state.pos < buf.length);
+    return result;
+  };
+
+  const skipField = (buf, state, wire) => {
+    if (wire === 0) readVarint(buf, state);
+    else if (wire === 1) state.pos += 8;
+    else if (wire === 2) {
+      const length = readVarint(buf, state);
+      state.pos += length;
+    }
+    else if (wire === 5) state.pos += 4;
+    else state.pos = buf.length;
+  };
+
+  const decodeGlyphs = (buf) => {
+    const glyphs = [];
+    const top = { pos: 0 };
+    while (top.pos < buf.length) {
+      const tag = readVarint(buf, top);
+      if (tag >> 3 !== 1 || (tag & 7) !== 2) {
+        skipField(buf, top, tag & 7);
+        continue;
+      }
+      const stackEnd = readVarint(buf, top) + top.pos;
+      while (top.pos < stackEnd) {
+        const stackTag = readVarint(buf, top);
+        if (stackTag >> 3 !== 3 || (stackTag & 7) !== 2) {
+          skipField(buf, top, stackTag & 7);
+          continue;
+        }
+        const glyphEnd = readVarint(buf, top) + top.pos;
+        const glyph = { id: 0, width: 0, height: 0, left: 0, top: 0, advance: 0, bitmap: "" };
+        while (top.pos < glyphEnd) {
+          const fieldTag = readVarint(buf, top);
+          const field = fieldTag >> 3;
+          if (field === 1) glyph.id = readVarint(buf, top);
+          else if (field === 2) {
+            const length = readVarint(buf, top);
+            glyph.bitmap = Buffer.from(buf.subarray(top.pos, top.pos + length)).toString("base64");
+            top.pos += length;
+          } else if (field === 3) glyph.width = readVarint(buf, top);
+          else if (field === 4) glyph.height = readVarint(buf, top);
+          else if (field === 5) {
+            const raw = readVarint(buf, top);
+            glyph.left = raw % 2 === 1 ? -(raw + 1) / 2 : raw / 2;
+          } else if (field === 6) {
+            const raw = readVarint(buf, top);
+            glyph.top = raw % 2 === 1 ? -(raw + 1) / 2 : raw / 2;
+          } else if (field === 7) glyph.advance = readVarint(buf, top);
+          else skipField(buf, top, fieldTag & 7);
+        }
+        top.pos = glyphEnd;
+        glyphs.push(glyph);
+      }
+      top.pos = stackEnd;
+    }
+    return glyphs;
+  };
+
+  const natgeoGlyphs = async (font, start) => {
+    const key = `${font}|${start}`;
+    if (natgeoGlyphCache.has(key)) return natgeoGlyphCache.get(key);
+    const style = await loadNatgeoStyle();
+    if (!style.glyphs) return [];
+    const range = `${start}-${start + 255}`;
+    const safe = font.replace(/[^a-zA-Z0-9 ,_-]/g, "_");
+    let glyphs = [];
+    try {
+      const bytes = await cachedDownload(style.glyphs.replace("{fontstack}", font).replace("{range}", range), path.join(natgeoAssets(), "glyphs", safe, `${range}.pbf`));
+      glyphs = decodeGlyphs(new Uint8Array(bytes));
+    } catch (error) {
+      if (error?.status !== 404) throw error;
+    }
+    natgeoGlyphCache.set(key, glyphs);
+    return glyphs;
+  };
+
+  const natgeoRender = async (message) => {
+    if (!natgeoWorker) {
+      natgeoWorker = new Worker(path.join(here, "natgeo_worker.cjs"));
+      natgeoWorker.unref();
+      natgeoWorker.on("message", (reply) => {
+        const settle = natgeoWaiting.get(reply?.id);
+        if (!settle) return;
+        natgeoWaiting.delete(reply.id);
+        settle(reply);
+      });
+      natgeoWorker.on("error", (error) => {
+        for (const settle of natgeoWaiting.values()) settle({ error: String(error?.message ?? error) });
+        natgeoWaiting.clear();
+        natgeoWorker = null;
+      });
+      natgeoWorker.postMessage({ type: "style", layers: natgeoStyle.layers });
+      let spriteData = { json: {}, png: null };
+      try {
+        spriteData = await loadNatgeoSprite();
+      } catch {
+        spriteData = { json: {}, png: null };
+      }
+      natgeoWorker.postMessage({ type: "sprite", json: spriteData.json, png: spriteData.png ? new Uint8Array(spriteData.png) : null });
+    }
+    natgeoCall += 1;
+    const id = natgeoCall;
+    return new Promise((resolve) => {
+      natgeoWaiting.set(id, resolve);
+      natgeoWorker.postMessage({ ...message, type: "tile", id }, message.pbf ? [message.pbf] : []);
+    });
+  };
+
+  const natgeoTile = async (z, x, y, labelsOnly = false) => {
+    const style = await loadNatgeoStyle();
+    const dir = path.join(natgeoDir(), String(z), String(x));
+    const base = path.join(dir, String(y));
+    if (fs.existsSync(`${base}.json`)) {
+      const labels = JSON.parse(fs.readFileSync(`${base}.json`, "utf8"));
+      if (labelsOnly) return { fills: "", lines: "", labels };
+      const read = (suffix) => (fs.existsSync(`${base}.${suffix}.png`) ? fs.readFileSync(`${base}.${suffix}.png`).toString("base64") : "");
+      return { fills: read("fills"), lines: read("lines"), labels };
+    }
+    if (labelsOnly && fs.existsSync(`${base}.labels.json`)) return { fills: "", lines: "", labels: JSON.parse(fs.readFileSync(`${base}.labels.json`, "utf8")) };
+    const url = style.template.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
+    let pbf = null;
+    const response = await fetch(url);
+    if (response.ok) pbf = new Uint8Array(await response.arrayBuffer());
+    else if (response.status !== 404) throw new Error(`The National Geographic tiles answered ${response.status}.`);
+    let result = { fills: null, lines: null, labels: [] };
+    if (pbf && pbf.byteLength) {
+      const bytes = pbf.byteOffset === 0 && pbf.byteLength === pbf.buffer.byteLength ? pbf.buffer : pbf.slice().buffer;
+      const reply = await natgeoRender({ z, x, y, pbf: bytes, labelsOnly });
+      if (reply?.error) throw new Error(reply.error);
+      result = reply;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    if (labelsOnly) {
+      fs.writeFileSync(`${base}.labels.json`, JSON.stringify(result.labels ?? []));
+      return { fills: "", lines: "", labels: result.labels ?? [] };
+    }
+    if (result.fills) fs.writeFileSync(`${base}.fills.png`, Buffer.from(result.fills));
+    if (result.lines) fs.writeFileSync(`${base}.lines.png`, Buffer.from(result.lines));
+    fs.writeFileSync(`${base}.json`, JSON.stringify(result.labels ?? []));
+    return {
+      fills: result.fills ? Buffer.from(result.fills).toString("base64") : "",
+      lines: result.lines ? Buffer.from(result.lines).toString("base64") : "",
+      labels: result.labels ?? [],
+    };
+  };
+
   return {
     "mapextras.systemMotion": async ({ fresh = false } = {}) => ({ reduced: fresh ? await refreshMotion() : systemReduced }),
     "mapextras.deviceProfile": async ({ value } = {}) => {
@@ -932,13 +1158,23 @@ export const register = (ctx) => {
         return { data: "" };
       }
     },
-    "mapextras.natgeoTile": async ({ z = 0, x = 0, y = 0 } = {}) => {
+    "mapextras.natgeoTile": async ({ z = 0, x = 0, y = 0, labelsOnly = false } = {}) => {
       const tz = Math.max(0, Math.min(16, Math.round(Number(z) || 0)));
       const count = 2 ** tz;
       const tx = ((Math.round(Number(x) || 0) % count) + count) % count;
       const ty = Math.round(Number(y) || 0);
       if (ty < 0 || ty >= count) return { fills: "", lines: "", labels: [] };
-      return natgeoTile(tz, tx, ty);
+      return natgeoTile(tz, tx, ty, Boolean(labelsOnly));
+    },
+    "mapextras.natgeoSprite": async () => {
+      const sprite = await loadNatgeoSprite();
+      return { json: sprite.json ?? {}, png: sprite.png ? Buffer.from(sprite.png).toString("base64") : "" };
+    },
+    "mapextras.natgeoGlyphs": async ({ font = "", start = 0 } = {}) => {
+      const first = Math.max(0, Math.floor((Number(start) || 0) / 256) * 256);
+      const name = String(font || "").trim();
+      if (!name || first > 65280) return { font: name, start: first, glyphs: [] };
+      return { font: name, start: first, glyphs: await natgeoGlyphs(name, first) };
     },
     "mapextras.settings": async () => settingsValues(),
     "mapextras.setGamePick": async ({ pick = "" } = {}) => {

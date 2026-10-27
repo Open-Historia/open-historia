@@ -123,6 +123,10 @@ static func flag_texture(value: String, file := "", height := 40) -> Texture2D:
 		var comma := value.find(",")
 		if comma > 0:
 			var raw := Marshalls.base64_to_raw(value.substr(comma + 1))
+			if ImageLoader.is_gif(raw):
+				var animated := ImageLoader.texture_from_gif(ImageLoader.gif_frames(raw))
+				_flag_cache[key] = animated
+				return animated
 			var image := Image.new()
 			var status := ERR_FILE_UNRECOGNIZED
 			if raw.size() > 4 and raw[0] == 0x89 and raw[1] == 0x50:

@@ -1,6 +1,8 @@
 class_name ImageLoader
 extends Node
 
+const GIF_PIXEL_BUDGET := 24000000
+
 var origin := ""
 var _cache := {}
 var _waiting := {}
@@ -33,8 +35,8 @@ func _pump() -> void:
 			request.queue_free()
 			if result == HTTPRequest.RESULT_SUCCESS and code == 200 and is_gif(body):
 				WorkerThreadPool.add_task(func() -> void:
-					var image := decode_gif(body)
-					_deliver_image.call_deferred(url, image))
+					var frames := gif_frames(body)
+					_deliver_gif.call_deferred(url, frames))
 				_pump()
 				return
 			var texture: Texture2D = null
@@ -52,6 +54,10 @@ func _deliver_image(url: String, image: Image) -> void:
 	_deliver(url, ImageTexture.create_from_image(image) if image else null)
 
 
+func _deliver_gif(url: String, frames: Dictionary) -> void:
+	_deliver(url, texture_from_gif(frames))
+
+
 func _deliver(url: String, texture: Texture2D) -> void:
 	_cache[url] = texture
 	for callback in _waiting.get(url, []):
@@ -67,8 +73,7 @@ static func decode(body: PackedByteArray) -> Texture2D:
 	if body.size() < 4:
 		return null
 	if is_gif(body):
-		var frame := decode_gif(body)
-		return ImageTexture.create_from_image(frame) if frame else null
+		return texture_from_gif(gif_frames(body))
 	var image := Image.new()
 	var status := ERR_FILE_UNRECOGNIZED
 	if body[0] == 0x89 and body[1] == 0x50:
@@ -80,6 +85,178 @@ static func decode(body: PackedByteArray) -> Texture2D:
 	if status != OK:
 		return null
 	return ImageTexture.create_from_image(image)
+
+
+static func decode_async(host: Node, body: PackedByteArray) -> Texture2D:
+	if not is_gif(body):
+		return decode(body)
+	var frames := [{}]
+	var task := WorkerThreadPool.add_task(func() -> void: frames[0] = gif_frames(body))
+	while not WorkerThreadPool.is_task_completed(task):
+		if not is_instance_valid(host) or not host.is_inside_tree():
+			WorkerThreadPool.wait_for_task_completion(task)
+			return null
+		await host.get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	return texture_from_gif(frames[0])
+
+
+static func texture_from_file(path: String) -> Texture2D:
+	var body := FileAccess.get_file_as_bytes(path)
+	if is_gif(body):
+		return texture_from_gif(gif_frames(body))
+	var image := Image.load_from_file(path)
+	return ImageTexture.create_from_image(image) if image and not image.is_empty() else null
+
+
+static func texture_from_gif(data: Dictionary) -> Texture2D:
+	var frames: Array = data.get("frames", [])
+	if frames.is_empty():
+		return null
+	if frames.size() == 1:
+		return ImageTexture.create_from_image(frames[0])
+	var delays: PackedFloat32Array = data.get("delays", PackedFloat32Array())
+	var animated := AnimatedTexture.new()
+	animated.frames = mini(frames.size(), AnimatedTexture.MAX_FRAMES)
+	for index in range(animated.frames):
+		animated.set_frame_texture(index, ImageTexture.create_from_image(frames[index]))
+		animated.set_frame_duration(index, delays[index] if index < delays.size() else 0.1)
+	return animated
+
+
+static func gif_frames(body: PackedByteArray, budget := GIF_PIXEL_BUDGET) -> Dictionary:
+	var out := {"frames": [], "delays": PackedFloat32Array()}
+	if body.size() < 13 or not is_gif(body):
+		return out
+	var width := body[6] | (body[7] << 8)
+	var height := body[8] | (body[9] << 8)
+	if width <= 0 or height <= 0:
+		return out
+	var packed := body[10]
+	var at := 13
+	var palette := PackedByteArray()
+	if packed & 0x80:
+		var count := 3 * (1 << ((packed & 7) + 1))
+		palette = body.slice(at, at + count)
+		at += count
+	var canvas := PackedByteArray()
+	canvas.resize(width * height * 4)
+	var transparent := -1
+	var delay := 0
+	var disposal := 0
+	var frames: Array = []
+	var delays := PackedFloat32Array()
+	while at < body.size():
+		var block := body[at]
+		at += 1
+		if block == 0x21:
+			if at >= body.size():
+				break
+			var label := body[at]
+			at += 1
+			if label == 0xF9 and at + 4 < body.size() and body[at] >= 4:
+				var flags := body[at + 1]
+				delay = body[at + 2] | (body[at + 3] << 8)
+				transparent = body[at + 4] if flags & 1 else -1
+				disposal = (flags >> 2) & 7
+			while at < body.size():
+				var length := body[at]
+				at += 1
+				if length == 0:
+					break
+				at += length
+		elif block == 0x2C:
+			if at + 9 > body.size():
+				break
+			var left := body[at] | (body[at + 1] << 8)
+			var top := body[at + 2] | (body[at + 3] << 8)
+			var frame_width := body[at + 4] | (body[at + 5] << 8)
+			var frame_height := body[at + 6] | (body[at + 7] << 8)
+			var frame_packed := body[at + 8]
+			at += 9
+			var frame_palette := palette
+			if frame_packed & 0x80:
+				var local_count := 3 * (1 << ((frame_packed & 7) + 1))
+				frame_palette = body.slice(at, at + local_count)
+				at += local_count
+			if at >= body.size() or frame_palette.is_empty():
+				break
+			var minimum := body[at]
+			at += 1
+			var data := PackedByteArray()
+			while at < body.size():
+				var length := body[at]
+				at += 1
+				if length == 0:
+					break
+				data.append_array(body.slice(at, at + length))
+				at += length
+			var previous := canvas.duplicate() if disposal == 3 else PackedByteArray()
+			canvas = _paint(canvas, _lzw(data, minimum, frame_width * frame_height), frame_palette, transparent, width, height, left, top, frame_width, frame_height, bool(frame_packed & 0x40))
+			frames.append(Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, canvas.duplicate()))
+			delays.append(0.1 if delay <= 1 else delay / 100.0)
+			if frames.size() >= AnimatedTexture.MAX_FRAMES or (frames.size() + 1) * width * height > budget:
+				break
+			if disposal == 2:
+				canvas = _clear(canvas, width, height, left, top, frame_width, frame_height)
+			elif disposal == 3:
+				canvas = previous
+			transparent = -1
+			delay = 0
+			disposal = 0
+		elif block == 0x3B:
+			break
+		else:
+			break
+	out["frames"] = frames
+	out["delays"] = delays
+	return out
+
+
+static func _clear(canvas: PackedByteArray, width: int, height: int, left: int, top: int, frame_width: int, frame_height: int) -> PackedByteArray:
+	for y in range(maxi(0, top), mini(height, top + frame_height)):
+		for x in range(maxi(0, left), mini(width, left + frame_width)):
+			var at := (y * width + x) * 4
+			canvas[at] = 0
+			canvas[at + 1] = 0
+			canvas[at + 2] = 0
+			canvas[at + 3] = 0
+	return canvas
+
+
+static func _paint(canvas: PackedByteArray, indices: PackedByteArray, palette: PackedByteArray, transparent: int, width: int, height: int, left: int, top: int, frame_width: int, frame_height: int, interlaced: bool) -> PackedByteArray:
+	var rows := PackedInt32Array()
+	if interlaced:
+		for pass_rule in [[0, 8], [4, 8], [2, 4], [1, 2]]:
+			var row: int = pass_rule[0]
+			while row < frame_height:
+				rows.append(row)
+				row += int(pass_rule[1])
+	else:
+		rows.resize(frame_height)
+		for row in range(frame_height):
+			rows[row] = row
+	var colors := palette.size() / 3
+	var source := 0
+	for line in range(rows.size()):
+		var y := top + rows[line]
+		if y < 0 or y >= height:
+			source += frame_width
+			continue
+		var target := (y * width + left) * 4
+		for x in range(frame_width):
+			var index := indices[source]
+			source += 1
+			if index == transparent or index >= colors or left + x >= width:
+				target += 4
+				continue
+			var from := index * 3
+			canvas[target] = palette[from]
+			canvas[target + 1] = palette[from + 1]
+			canvas[target + 2] = palette[from + 2]
+			canvas[target + 3] = 255
+			target += 4
+	return canvas
 
 
 static func decode_gif(body: PackedByteArray) -> Image:

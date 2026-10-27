@@ -738,10 +738,9 @@ func _community_picture(target: TextureRect, url: String) -> void:
 	var data := str((reply["result"] as Dictionary).get("data", "")) if reply.get("ok", false) and reply["result"] is Dictionary else ""
 	if data.is_empty():
 		return
-	var image := HubImages.decode_image(Marshalls.base64_to_raw(data))
-	if image == null or image.is_empty():
+	var texture := HubImages.decode(Marshalls.base64_to_raw(data))
+	if texture == null:
 		return
-	var texture := ImageTexture.create_from_image(image)
 	_previews[url] = texture
 	target.texture = texture
 

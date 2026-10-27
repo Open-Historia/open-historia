@@ -270,8 +270,49 @@ func _run() -> void:
 		_check(not long_preview or (button_rect.end.y <= view_rect.end.y + 0.5 and button_rect.position.y >= view_rect.position.y), "Apply stays pinned in view over a long preview", "%s in %s" % [str(button_rect), str(view_rect)])
 		await _shoot("cheats-06-gm-apply-pinned")
 	cheats.close()
+	await _console()
 	_say("done: %d failure(s) %s" % [failures.size(), ", ".join(failures)])
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _console() -> void:
+	var console: Control = (load("res://scripts/ui/debug_console.gd") as GDScript).new()
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	root.add_child(layer)
+	layer.add_child(console)
+	console.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	console.setup(main.engine, {"export_dir": OS.get_environment("OH_NATIVE_DOWNLOADS"), "reveal_saved_files": false})
+	await console.open()
+	await _wait(0.5)
+	var everything: int = (console._data.get("filtered", []) as Array).size()
+	_check(everything > 0 and not _has_text(console, "The native engine does not hand over its AI telemetry yet."), "the AI console lists this session's calls with nothing dimmed", "%d" % everything)
+	var field: LineEdit = console._search_field
+	field.grab_focus()
+	field.text = "zzqqxx-no-such-text"
+	field.caret_column = field.text.length()
+	field.text_changed.emit(field.text)
+	await _wait(0.6)
+	var narrowed: int = (console._data.get("filtered", []) as Array).size()
+	_check(narrowed == 0, "search narrows the list as you type, without Enter", "%d of %d" % [narrowed, everything])
+	_check(is_instance_valid(console._search_field) and console._search_field.has_focus() and console._search_field.caret_column == "zzqqxx-no-such-text".length() and console._search_field.text == "zzqqxx-no-such-text", "and the search field keeps the focus and caret")
+	console._search_field.text = ""
+	console._search_field.text_changed.emit("")
+	await _wait(0.6)
+	var listed: Array = console._data.get("filtered", [])
+	if not listed.is_empty():
+		console._selected = str((listed[0] as Dictionary).get("id", ""))
+		await console.refresh()
+		await _wait(0.4)
+		var prompt := str(console._detail.get("systemPrompt", ""))
+		var shown := ""
+		for node in console.find_children("*", "TextEdit", true, false):
+			if (node as TextEdit).text == prompt:
+				shown = (node as TextEdit).text
+		_check(not prompt.is_empty() and shown.length() == prompt.length(), "a prompt is shown whole, never cut", "%d chars" % prompt.length())
+		await _shoot("cheats-07-console-detail")
+	console.close()
+	layer.queue_free()
 
 
 func _finish(code: int) -> void:

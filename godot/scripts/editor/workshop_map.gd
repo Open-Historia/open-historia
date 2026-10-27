@@ -88,6 +88,7 @@ var _freehand := PackedVector2Array()
 var _move_line := PackedVector2Array()
 var move_rings: Array = []
 var region_overlays: WorkshopRegionOverlays
+var striped := {}
 var _dirty_fills := false
 var _label_names := {}
 var _last_view := Vector3.ZERO
@@ -176,6 +177,8 @@ func fill_color(index: int) -> Color:
 		color = color.lerp(Color(review_tint[index], 1.0), 0.15)
 	if selection.has(index):
 		color = color.lerp(Color(1, 1, 1), 0.38)
+	elif striped.has(index):
+		color.a = 0.0
 	return color
 
 
@@ -1228,7 +1231,7 @@ func _draw_overlay(canvas: Control) -> void:
 		canvas.draw_circle(_move_line[1], 4.0, WorkshopUI.ACCENT_GREY)
 	if _freehand.size() >= 2:
 		canvas.draw_polyline(_freehand, Color(1, 1, 1, 0.95), 2.0, true)
-	if _war_hover is Vector2 and _sketch.is_empty() and _freehand.is_empty():
+	if _war_hover is Vector2 and _sketch.is_empty() and _freehand.is_empty() and tool in ["terrain", "fortification", "climate"]:
 		canvas.draw_circle(_war_hover, 6.0, Color(1, 1, 1, 0.95))
 		canvas.draw_arc(_war_hover, 6.0, 0.0, TAU, 20, Color(0.02, 0.03, 0.05, 0.9), 1.5, true)
 	if not _sketch.is_empty():

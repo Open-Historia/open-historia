@@ -531,9 +531,7 @@ export const register = (ctx) => {
   const telemetryModule = () => engine.telemetry ?? engine.shellTelemetry ?? null;
 
   const telemetryRecords = async () => {
-    const telemetry = telemetryModule();
-    if (!telemetry?.getAiRecords) return null;
-    return list(await telemetry.getAiRecords());
+    return list(await telemetryModule().getAiRecords());
   };
 
   const summaryOf = (record) => ({
@@ -1062,18 +1060,6 @@ export const register = (ctx) => {
     },
     "telemetry.records": async ({ task = "all", model = "", status = "all", search = "", sort = "newest" } = {}) => {
       const records = await telemetryRecords();
-      if (!records) {
-        return {
-          available: false,
-          reason: "The native engine does not hand over its AI telemetry yet.",
-          count: 0,
-          completed: generationCount,
-          filtered: [],
-          tasks: [],
-          models: [],
-          analytics: analyticsOf([]),
-        };
-      }
       const filtered = filterRecords(records, { task, model, status, search, sort });
       return {
         available: true,
@@ -1112,7 +1098,6 @@ export const register = (ctx) => {
         return { path: writeExport(dir, `oh-world-state-${stamp}.json`, JSON.stringify(state, null, 2)) };
       }
       const records = await telemetryRecords();
-      if (!records) throw new Error("The native engine does not hand over its AI telemetry yet.");
       if (kind === "csv") {
         const telemetry = telemetryModule();
         const text = telemetry?.exportTelemetryCsv ? telemetry.exportTelemetryCsv(records) : exportCsv(records);

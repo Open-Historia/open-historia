@@ -815,7 +815,7 @@ func _move(point: Vector2) -> void:
 		_held["moved"] = float(_held["moved"]) + absf(point.x - last.x) + absf(point.y - last.y)
 		way.append(point)
 		_held["way"] = way
-		map.camera.position -= (point - last) / map.camera.zoom.x
+		map.view_pan(point - last, point)
 		map._after_camera_move()
 		return
 	if str(store.value("tool")) == "select":

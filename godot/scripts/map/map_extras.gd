@@ -260,7 +260,7 @@ func _refresh_once() -> void:
 func refresh_background() -> void:
 	if not engine or not map_view:
 		return
-	var reply: Dictionary = await engine.request("mapextras.background", {"globe": globe.active})
+	var reply: Dictionary = await engine.request("mapextras.background", {"globe": globe.globe_shown()})
 	if not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
 		return
 	background = reply["result"]
@@ -426,6 +426,8 @@ func constrain_camera() -> void:
 
 
 func render_view() -> Array:
+	if globe:
+		globe.sync_active()
 	if globe and globe.active:
 		return globe.render_view()
 	return []
@@ -445,6 +447,11 @@ func map_input(event: InputEvent) -> bool:
 	if navigator == null:
 		return false
 	return navigator.handle(event)
+
+
+func pan_view(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+	if navigator:
+		navigator.pan_view(delta, around)
 
 
 func globe_world_to_screen(point: Vector2) -> Vector2:

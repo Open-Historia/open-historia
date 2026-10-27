@@ -5230,7 +5230,7 @@ export const register = (ctx) => {
         if (names.length < 2) continue;
         const type = byType[f.get("typeId") || "land"];
         const alpha = owner ? (type?.opacity ?? 0.55) : (type?.unownedOpacity ?? 0.25);
-        stripes.push({ rings: outerRings(f), colors: names.map(ownerRgb), alpha: Math.max(alpha, 0.5) });
+        stripes.push({ id: String(f.getId()), rings: outerRings(f), colors: names.map(ownerRgb), alpha: Math.max(alpha, 0.5) });
       }
       const hatch = [];
       for (const rid of s.doc.freezingRegions || []) {

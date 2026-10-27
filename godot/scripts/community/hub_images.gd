@@ -88,7 +88,7 @@ func _pump() -> void:
 		if _fresh(file, url):
 			_tasks[url] = WorkerThreadPool.add_task(func() -> void:
 				var bytes := FileAccess.get_file_as_bytes(file)
-				_decoded.call_deferred(url, decode_image(bytes)))
+				_decoded.call_deferred(url, _decode_any(bytes)))
 			continue
 		var request := HTTPRequest.new()
 		request.timeout = 40.0
@@ -100,8 +100,8 @@ func _pump() -> void:
 				_decoded(url, null)
 				return
 			_tasks[url] = WorkerThreadPool.add_task(func() -> void:
-				var image := decode_image(body)
-				if image and not file.is_empty():
+				var image: Variant = _decode_any(body)
+				if image != null and not file.is_empty():
 					var handle := FileAccess.open(file, FileAccess.WRITE)
 					if handle:
 						handle.store_buffer(body)
@@ -112,12 +112,16 @@ func _pump() -> void:
 			_decoded(url, null)
 
 
-func _decoded(url: String, image: Image) -> void:
+func _decoded(url: String, image: Variant) -> void:
 	if _tasks.has(url):
 		WorkerThreadPool.wait_for_task_completion(int(_tasks[url]))
 		_tasks.erase(url)
 	_active -= 1
-	var texture: Texture2D = ImageTexture.create_from_image(image) if image else null
+	var texture: Texture2D = null
+	if image is Dictionary:
+		texture = ImageLoader.texture_from_gif(image)
+	elif image is Image:
+		texture = ImageTexture.create_from_image(image)
 	_cache[url] = texture
 	var callbacks: Array = _waiting.get(url, [])
 	_waiting.erase(url)
@@ -130,7 +134,16 @@ func _decoded(url: String, image: Image) -> void:
 	_pump()
 
 
+static func _decode_any(body: PackedByteArray) -> Variant:
+	if ImageLoader.is_gif(body):
+		var frames := ImageLoader.gif_frames(body)
+		return frames if not (frames.get("frames", []) as Array).is_empty() else null
+	return decode_image(body)
+
+
 static func decode_image(body: PackedByteArray) -> Image:
+	if ImageLoader.is_gif(body):
+		return ImageLoader.decode_gif(body)
 	if body.size() < 12:
 		return null
 	var image := Image.new()
@@ -150,5 +163,7 @@ static func decode_image(body: PackedByteArray) -> Image:
 
 
 static func decode(body: PackedByteArray) -> Texture2D:
+	if ImageLoader.is_gif(body):
+		return ImageLoader.texture_from_gif(ImageLoader.gif_frames(body))
 	var image := decode_image(body)
 	return ImageTexture.create_from_image(image) if image else null

@@ -279,6 +279,14 @@ func _refresh_overlays() -> void:
 		return
 	map.region_overlays.set_data(reply["result"])
 	map.sync_overlay_layers()
+	var striped := {}
+	for entry in (reply["result"] as Dictionary).get("stripes", []):
+		var index := int(map.index_of.get(str((entry as Dictionary).get("id", "")), -1))
+		if index >= 0:
+			striped[index] = true
+	if striped != map.striped:
+		map.striped = striped
+		map.apply_fills()
 
 
 func _apply_basemap() -> void:

@@ -184,7 +184,10 @@ static func flag(path: String) -> Texture2D:
 				var fit := 64.0 / minf(probe.get_width(), probe.get_height())
 				loaded = image.load_svg_from_string(svg, maxf(fit, 0.05)) == OK
 	else:
-		loaded = image.load(path) == OK
+		var still := ImageLoader.decode_gif(FileAccess.get_file_as_bytes(path)) if path.to_lower().ends_with(".gif") else null
+		loaded = still != null or image.load(path) == OK
+		if still != null:
+			image = still
 	if not loaded or image.get_width() == 0:
 		_flags[path] = null
 		return null

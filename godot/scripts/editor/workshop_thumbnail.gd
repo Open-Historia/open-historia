@@ -31,6 +31,14 @@ static func picture(image: Image, max_dim := 200) -> String:
 	return data_url(copy, 0.7)
 
 
+static func load_still(path: String) -> Image:
+	var bytes := FileAccess.get_file_as_bytes(path)
+	if ImageLoader.is_gif(bytes):
+		return ImageLoader.decode_gif(bytes)
+	var image := Image.new()
+	return image if image.load(path) == OK else null
+
+
 static func picture_file(file: String, max_dim := 200) -> String:
 	var image := Image.new()
 	if file.is_empty() or image.load(file) != OK or image.get_width() <= 0:

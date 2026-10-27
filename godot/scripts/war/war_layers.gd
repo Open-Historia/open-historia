@@ -35,6 +35,7 @@ var _frame_busy := false
 var _frame_again := false
 var _arrows_level := -100.0
 var _camera_key := Vector3.ZERO
+var _camera_angles := Vector2.ZERO
 var _view_size := Vector2.ZERO
 var _camera_moved_ms := 0
 var _state: Dictionary = {}
@@ -664,7 +665,9 @@ func _process(_delta: float) -> void:
 	var view := get_viewport_rect().size
 	var key := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
 	var on_globe := map.is_globe()
-	if key != _camera_key or view != _view_size or on_globe != overlay.globe:
+	var angles := Vector2(map.bearing, map.pitch)
+	if key != _camera_key or view != _view_size or on_globe != overlay.globe or angles != _camera_angles:
+		_camera_angles = angles
 		overlay.globe = on_globe
 		var zoom_changed := key.z != _camera_key.z or _camera_key == Vector3.ZERO
 		_camera_key = key

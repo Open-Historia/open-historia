@@ -33,6 +33,10 @@ var _task_filter := "all"
 var _model_filter := ""
 var _status_filter := "all"
 var _search := ""
+var _search_field: LineEdit
+var _search_focus := false
+var _search_caret := 0
+var _search_timer: Timer
 var _sort := "newest"
 var _expanded := {}
 var _copied := ""
@@ -66,6 +70,11 @@ func _ready() -> void:
 	_body.clip_contents = true
 	column.add_child(_body)
 	resized.connect(_layout)
+	_search_timer = Timer.new()
+	_search_timer.one_shot = true
+	_search_timer.wait_time = 0.12
+	_search_timer.timeout.connect(refresh)
+	add_child(_search_timer)
 	_layout()
 
 
@@ -254,6 +263,10 @@ func _render() -> void:
 	_style_tabs()
 	var count := int(_data.get("count", 0))
 	_count_pill.text = "%d generation%s" % [count, "" if count == 1 else "s"]
+	var refocus := _search_focus and is_instance_valid(_search_field) and _search_field.has_focus()
+	if is_instance_valid(_search_field) and _search_field.has_focus():
+		_search_caret = _search_field.caret_column
+	_search_field = null
 	_clear_body()
 	match active_tab:
 		"analytics":
@@ -264,6 +277,9 @@ func _render() -> void:
 			_body.add_child(_page(_export()))
 		_:
 			_body.add_child(_generations())
+	if refocus and is_instance_valid(_search_field):
+		_search_field.grab_focus()
+		_search_field.caret_column = mini(_search_caret, _search_field.text.length())
 
 
 func _page(content: Control) -> Control:
@@ -281,7 +297,10 @@ func _page(content: Control) -> Control:
 
 
 func _style_scroll(scroll: ScrollContainer) -> void:
-	var bar := scroll.get_v_scroll_bar()
+	_style_scroll_bar(scroll.get_v_scroll_bar())
+
+
+func _style_scroll_bar(bar: ScrollBar) -> void:
 	bar.add_theme_stylebox_override("scroll", StyleBoxEmpty.new())
 	bar.add_theme_stylebox_override("grabber", UI.box(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 999, 0))
 	bar.add_theme_stylebox_override("grabber_highlight", UI.box(Color(1, 1, 1, 0.28), Color(0, 0, 0, 0), 999, 0))
@@ -381,24 +400,21 @@ func _generations() -> Control:
 	search.add_theme_stylebox_override("focus", UI.box(BG, Color(1, 1, 1, 0.3), 6, 1, Vector4(8, 4.8, 8, 4.8)))
 	search.add_theme_font_size_override("font_size", 12)
 	search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
+	search.text_changed.connect(func(text: String) -> void:
+		_search = text
+		_search_focus = true
+		_search_caret = search.caret_column
+		_search_timer.start())
 	search.text_submitted.connect(func(text: String) -> void:
 		_search = text
+		_search_timer.stop()
 		refresh())
-	search.focus_exited.connect(func() -> void:
-		if search.text != _search:
-			_search = search.text
-			refresh.call_deferred())
+	search.focus_entered.connect(func() -> void: _search_focus = true)
+	_search_field = search
 	filters.add_child(search)
 	filters_bar.add_child(filters)
 	column.add_child(filters_bar)
 	column.add_child(_rule(BORDER))
-	if not bool(_data.get("available", true)):
-		UI.set_disabled_look(filters_bar, str(_data.get("reason", "")))
-		for node in filters.get_children():
-			if node is BaseButton:
-				(node as BaseButton).disabled = true
-			elif node is LineEdit:
-				(node as LineEdit).editable = false
 	var split := HBoxContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	split.add_theme_constant_override("separation", 0)
@@ -415,11 +431,6 @@ func _generations() -> Control:
 		var text := _label("No generations recorded yet — play a turn, then come back.".to_upper(), 11, MUTED, 700, false, 1)
 		text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		empty_column.add_child(text)
-		if not bool(_data.get("available", true)):
-			var reason := _label(str(_data.get("reason", "")), 11, MUTED)
-			reason.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			reason.modulate.a = 0.75
-			empty_column.add_child(reason)
 		empty.add_child(empty_column)
 		list_holder.add_child(empty)
 	else:
@@ -713,19 +724,27 @@ func _pre_block(key: String, title: String, text: String, empty_text: String, sh
 		return column
 	var frame := PanelContainer.new()
 	frame.add_theme_stylebox_override("panel", UI.box(BG, BORDER, 8, 1, Vector4(9.6, 9.6, 9.6, 9.6)))
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_style_scroll(scroll)
-	var shown := text if text.length() <= 60000 else text.substr(0, 60000)
-	var body := UI.wrapped(shown, 11, TEXT)
-	body.add_theme_font_override("font", UI.font(400, "Consolas"))
+	var body := TextEdit.new()
+	body.text = text
+	body.editable = false
+	body.context_menu_enabled = true
+	body.selecting_enabled = true
+	body.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	body.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(body)
-	scroll.custom_minimum_size.y = minf(540.0 if expanded else 160.0, maxf(40.0, float(shown.count("\n") + 1) * 16.0 + 8.0))
-	if shown.length() > 400 and scroll.custom_minimum_size.y < 160.0:
-		scroll.custom_minimum_size.y = 540.0 if expanded else 160.0
-	frame.add_child(scroll)
+	body.add_theme_font_override("font", UI.font(400, "Consolas"))
+	body.add_theme_font_size_override("font_size", 11)
+	body.add_theme_color_override("font_readonly_color", TEXT)
+	body.add_theme_color_override("font_color", TEXT)
+	body.add_theme_color_override("selection_color", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.35))
+	body.add_theme_constant_override("line_spacing", 5)
+	for slot in ["normal", "focus", "read_only"]:
+		body.add_theme_stylebox_override(slot, StyleBoxEmpty.new())
+	_style_scroll_bar(body.get_v_scroll_bar())
+	body.custom_minimum_size.y = minf(540.0 if expanded else 160.0, maxf(40.0, float(text.count("\n") + 1) * 16.0 + 8.0))
+	if text.length() > 400 and body.custom_minimum_size.y < 160.0:
+		body.custom_minimum_size.y = 540.0 if expanded else 160.0
+	frame.add_child(body)
 	column.add_child(frame)
 	return column
 
@@ -790,8 +809,6 @@ func _models() -> Control:
 
 
 func _export() -> Control:
-	var available := bool(_data.get("available", true))
-	var reason := str(_data.get("reason", ""))
 	var column := VBoxContainer.new()
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_theme_constant_override("separation", 22)
@@ -823,10 +840,6 @@ func _export() -> Control:
 	buttons.add_child(csv)
 	buttons.add_child(world)
 	buttons.add_child(clear)
-	if not available:
-		UI.set_disabled_look(json, reason)
-		UI.set_disabled_look(csv, reason)
-		UI.set_disabled_look(clear, reason)
 	section.add_child(buttons)
 	var note := UI.wrapped("The JSON export carries every recorded generation at full fidelity — system prompt, user message, raw response, token usage, model, latency, validation errors and ratings. The CSV is a flat per-call summary. Prompts contain campaign text only; API keys never enter a record.", 11, MUTED)
 	section.add_child(note)

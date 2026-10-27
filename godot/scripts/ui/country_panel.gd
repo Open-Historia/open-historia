@@ -382,10 +382,7 @@ static func texture_for(path: String, height := 32) -> Texture2D:
 		return null
 	if path.get_extension().to_lower() == "svg":
 		return UI.flag(path, height)
-	var image := Image.load_from_file(path)
-	if not image:
-		return null
-	return ImageTexture.create_from_image(image)
+	return ImageLoader.texture_from_file(path)
 
 
 static func card(bg := CARD_BG, border := CARD_BORDER, radius := 10, margins := Vector4(11, 10, 11, 10)) -> PanelContainer:

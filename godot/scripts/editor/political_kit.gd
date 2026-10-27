@@ -485,6 +485,8 @@ static func random_base36(length: int) -> String:
 static func decode_image(body: PackedByteArray, url_hint := "") -> Texture2D:
 	if body.size() < 4:
 		return null
+	if ImageLoader.is_gif(body):
+		return ImageLoader.decode(body)
 	var image := Image.new()
 	var status := ERR_FILE_UNRECOGNIZED
 	var head := body.slice(0, mini(body.size(), 512)).get_string_from_utf8().to_lower()

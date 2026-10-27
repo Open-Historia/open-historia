@@ -466,17 +466,9 @@ func _load_picture(target: TextureRect, url: String) -> void:
 	if data.is_empty():
 		return
 	var bytes := Marshalls.base64_to_raw(data)
-	var image := Image.new()
-	var failed := ERR_FILE_UNRECOGNIZED
-	if bytes.size() > 8 and bytes[0] == 0x89 and bytes[1] == 0x50:
-		failed = image.load_png_from_buffer(bytes)
-	elif bytes.size() > 3 and bytes[0] == 0xFF and bytes[1] == 0xD8:
-		failed = image.load_jpg_from_buffer(bytes)
-	elif bytes.size() > 12 and bytes.slice(8, 12).get_string_from_ascii() == "WEBP":
-		failed = image.load_webp_from_buffer(bytes)
-	if failed != OK:
+	var texture := ImageLoader.decode(bytes)
+	if texture == null:
 		return
-	var texture := ImageTexture.create_from_image(image)
 	_pictures[url] = texture
 	target.texture = texture
 
